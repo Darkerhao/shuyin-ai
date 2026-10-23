@@ -28,7 +28,10 @@
 - 可以选择本地视频。
 - 没有未解决的构建错误。
 
+M0 后补充工程能力（2026-10-23）：新增 main PR 合并后的自动语义版本、Windows x64 / macOS ARM64 与 x64 / Linux x64 构建矩阵、GitHub Release 产物汇总和版本提交回流 dev。Windows EXE 与 ZIP 已本地构建；macOS/Linux 的原生构建、安装及真实 GitHub 发布需首次远端运行验收。实现与失败恢复见 `RELEASE.md`，不等同于 M5 业务交付完成。
+
 ### M1：项目与素材管理
+
 预计 2–3 个工作日。
 
 任务：

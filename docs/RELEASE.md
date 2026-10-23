@@ -1,0 +1,102 @@
+# 跨平台自动打包、发布与版本同步
+
+## 触发与交付
+
+`.github/workflows/release.yml` 仅监听目标为 `main` 的 PR 关闭事件，并仅在 PR 已合并时运行打包任务。直接 push 到 main、push 到 dev、创建标签、关闭未合并 PR 都不打包；需要通过 GitHub PR 合并发布。
+
+使用 `pull_request_target` 是为了让已合并的外部分支 PR 也能使用仓库写权限。工作流明确检出本仓库 `main`，只执行已经合入的代码，不检出 PR head，也不把 PR 标题拼进 Shell 命令。
+
+每次生成一次版本，四个 runner 使用同一个 Git 提交构建。所有平台成功后同步分支，再创建对应版本的 GitHub Release；完整产物上传到草稿后才公开，避免用户下载不齐全的版本。版本标签 `vX.Y.Z` 指向实际打包的版本提交。
+
+| 平台 | Runner / Rust target | 分发格式 |
+| --- | --- | --- |
+| Windows x64 | `windows-2025` / `x86_64-pc-windows-msvc` | NSIS `.exe`、应用 `.zip` |
+| macOS Apple Silicon | `macos-15` / `aarch64-apple-darwin` | `.dmg`、保留 APP 包结构的 `.zip` |
+| macOS Intel | `macos-15-intel` / `x86_64-apple-darwin` | `.dmg`、保留 APP 包结构的 `.zip` |
+| Linux x64 | `ubuntu-22.04` / `x86_64-unknown-linux-gnu` | `.deb`、`.rpm`、`.AppImage`、包含 AppImage 的 `.tar.gz` |
+
+共 10 个分发文件，命名为 `shuyin-ai-<版本>-<平台>-<架构>.<格式>`，另有 `SHA256SUMS.txt`；同时在 Actions Artifacts 保存 90 天。Windows ZIP 包含程序和运行说明，需要系统已有 WebView2，数据保存在系统用户目录。Linux TAR.GZ 包含 AppImage，避免分发缺少共享库的裸可执行文件；运行环境仍需符合 Tauri/WebKitGTK 的支持范围，不承诺兼容全部 Linux 发行版。
+
+平台默认配置分别位于 `src-tauri/tauri.windows.conf.json`、`tauri.macos.conf.json`、`tauri.linux.conf.json`。Linux 产品名为 `Shuyin AI`，使 DEB/RPM 包名为 `shuyin-ai`；应用内界面和标识符保留。macOS ICNS 从已有 SVG 生成，当前配置 ad-hoc 签名（`signingIdentity: "-"`），未接入 Developer ID 与公证；Windows 也未配置签名证书。首次分发仍需完成真实系统上的安装与信任提示验收。
+
+截图中的 `.blockmap` 和更新 YAML 属于另一种更新机制。本项目使用 Tauri，当前输出实际安装包和校验清单，客户端自动更新另行接入。
+
+## 版本规则
+
+以 `package.json` 为当前版本来源，读取触发 PR 的标题，以及上一个版本标签之后尚未发布的 Git 提交说明，按实际业务影响声明取最高级别，一批发布只递增一次：
+
+| 内容 | 递增 | 示例 |
+| --- | --- | --- |
+| `feat!:`、`refactor(api)!:`，或独立行 `BREAKING CHANGE:` / `BREAKING-CHANGE:` | major | `0.1.2 → 1.0.0` |
+| `feat:`、`feat(scope):` | minor | `0.1.2 → 0.2.0` |
+| `fix:`、`docs:`、`chore:` 及其他说明 | patch | `0.1.2 → 0.1.3` |
+
+判断尺度如下：
+
+- **日常修订（patch）**：修复保存失败、优化查询性能、调整样式、重构内部代码、维护文档或流水线。即使改了很多文件或包含 100 个修复提交，`1.4.8` 也只升到 `1.4.9`。
+- **功能迭代（minor）**：新增封面导出、项目搜索、素材管理等用户可用能力，并兼容已有数据与使用方式。一个或多个新功能在同一批发布中，`1.4.8` 都只升到 `1.5.0`。
+- **不兼容升级（major）**：移除用户正在使用的能力，或改变旧资料格式、配置协议等，导致用户必须迁移或改变使用方式。即使只改一个接口，也应从 `1.4.8` 升到 `2.0.0`；提交说明必须解释影响及迁移方案。
+
+大重构、依赖主版本升级、兼容数据库迁移，以及开发时间长、修改行数多，都不是自动升 major 的依据。当前 `0.x` 阶段也不因累积若干功能就自动宣布 `1.0.0`。
+
+PR 标题和提交说明应基于实际改动选用上述格式，尤其是 rebase 合并时应在提交说明中保留变更级别。流水线解析提交标题、GitHub 合并提交中保存的 PR 标题和非空的破坏性变更声明；正文中普通的 `feat:` / `feat!:` 示例、计划以及 Markdown 围栏代码示例不参与升版。自动判断依据这些经过代码审查的影响声明，不声称能仅靠源码差异识别业务兼容性。
+
+第一个版本无需预先创建标签；之后使用当前版本对应的标签划定已发布范围。不要手动改版本或占用自动版本标签。
+
+同步更新五个文件中的六个版本字段，保留原格式和依赖解析：
+
+- `package.json`
+- `package-lock.json`（根版本及根包版本）
+- `src-tauri/tauri.conf.json`
+- `src-tauri/Cargo.toml`
+- `src-tauri/Cargo.lock`（仅 `shuyin-ai` 包）
+
+版本字段不一致时直接失败，不自动掩盖不一致。
+
+## 执行顺序
+
+1. 检出当前 main，获取 main、dev 和标签；验证触发 PR 的合并提交在 main 中。
+2. 若现有版本标签已包含该 PR，直接跳过，避免重跑或排队事件再次递增。
+3. prepare 在本地生成只修改五个版本文件的 `chore(release): vX.Y.Z` 提交，运行 lint、前端与发布测试，并用 Git bundle 导出这一个提交，尚不推送远端。
+4. build 矩阵分别下载由 artifact ID 指定的 bundle，校验并恢复预期提交；安装锁定依赖与 Rust 1.99.1，运行各平台 Rust 格式/Clippy/数据库测试和归档测试，再运行 Tauri（包含 TypeScript 检查与 Vite 构建）。
+5. 各平台整理分发文件，上传以版本提交 SHA 和平台命名的 artifact。缺失、空文件或多个候选安装包均失败。
+6. sync 只在四个平台全部成功后运行：恢复同一个提交，下载并校验所有 10 个文件、生成 SHA-256 清单，再次读取远端 main/dev。确认 main 仍是本次构建的父提交，然后在最新 dev 执行 `git cherry-pick -x <版本提交>`。
+7. 一次 `git push --atomic` 提交 main、dev 和版本标签；任意引用被拒绝则全部不更新，不使用强制推送。
+8. publish 下载同一批产物，再次校验并创建 GitHub Release 草稿，上传完整文件与校验清单，最后公开。已公开版本不替换文件；失败草稿可重跑继续上传。
+
+prepare/build 仅拥有仓库读取权限；sync/publish 才拥有 `contents: write`。构建任务不能自行修改 main/dev。
+
+main 与 dev 的版本一致，但提交 SHA 不同，dev 未发布的业务改动保留。这个流程只同步版本提交；如果其他业务分支直接合入 main，其业务代码不会通过版本 cherry-pick 自动回流 dev。
+
+同一流水线同时只运行一个任务，并保留最新的一个等待任务。每次以启动时的最新 main 为构建快照，读取全部未发布提交，可能覆盖多个已合并 PR；已被成功标签覆盖的后续事件跳过。构建期间若 main 又有新合并，本次在推送前停止，后续排队任务会构建更新后的 main；也可在 Actions 重跑失败的运行。连续合并时请把版本级别写入提交说明，保证被合并到同一次构建的变更也能参与级别判断。
+
+## 仓库设置与失败恢复
+
+- `main`、`dev` 必须已存在，仓库开启 GitHub Actions，并允许本工作流请求 `contents: write`。
+- 分支与标签保护必须允许工作流身份写入。`GITHUB_TOKEN` 不会自动绕过保护；如果组织规定必须使用具有绕过权限的 GitHub App，需要先配置该身份，再调整 checkout 的 token。不要为运行流水线关闭整个仓库的保护。
+- 本工作流需先进入仓库默认分支，GitHub 才能加载 `pull_request_target` 事件配置；应把默认分支设为 main。第一次引入工作流的合并是否产生运行需在 GitHub 检查，后续 main PR 合并按此配置触发。
+- 构建或产物上传失败：远端版本未递增，可选择 **Re-run failed jobs** 复用原版本与成功平台产物；如果 main 已前进，选择 **Re-run all jobs** 或等待下一次合并，以构建最新代码。
+- main 前进或远端拒绝写入：main/dev/标签均不由本次更新，重新运行会重新读取当前版本。已上传 artifact 是失败运行的候选产物，以**整个任务成功并存在对应标签**作为交付依据。
+- dev 冲突：自动中止 cherry-pick，保留远端分支。检查 dev 上的版本文件，把版本字段与已发布版本对齐并保留其他开发内容，再重跑；不通过覆盖 dev 解决冲突。
+- 同步成功而 Release 上传/公开失败：选择原运行的 **Re-run failed jobs**，只重跑 publish，使用保留的全部平台产物恢复草稿；不再次增加版本。此时 main/dev/标签已经同步，Git 分支与 GitHub Release API 不属于同一事务。
+- sync 若在原子推送成功后因 runner 中断被判定失败，重跑会验证相同标签与 dev cherry-pick 记录并跳过重复推送。
+- 同步成功后选择 **Re-run all jobs**：prepare 发现标签已覆盖 PR，跳过后续阶段。恢复发布失败时应选择 **Re-run failed jobs**；需要在 90 天 artifact 保留期内操作。
+
+## 本地验证
+
+```powershell
+npm run test:release
+npm run lint
+npm test
+npm run check:rust
+npm run test:rust
+npm run desktop:build -- -- --locked
+node scripts/release-assets.mjs collect windows-x64 '' output/release
+.\.tools\actionlint\actionlint.exe .github/workflows/release.yml
+```
+
+本机先按 README 载入 `.tools/env.ps1`。上面的 collect 示例用于 Windows 默认 target 输出；CI 显式传入矩阵 target。actionlint 是下载到忽略目录的本地检查工具，不是应用依赖。
+
+发布测试使用临时本地 bare 仓库，不连接或推送真实 origin。覆盖版本优先级、首发、字段一致性、版本专属提交、dev 内容保留、重跑、历史变更隔离、main 前进、cherry-pick 冲突、原子推送拒绝、标签碰撞、跨 runner bundle 恢复与重复同步。产物测试覆盖全平台清单、缺失/空/额外文件、校验和、系统归档，以及草稿发布和失败恢复；macOS/Windows 专属归档测试在对应 runner 上执行。
+
+Windows 本地实际构建及 EXE/ZIP 整理已验证；macOS/Linux 原生构建、三平台安装升级、真实 GitHub runner/权限/事件/Release 仍需远端与人工验收。本地使用测试文件验证归档和发布逻辑，不代表这些系统的原生安装包已经构建成功。
