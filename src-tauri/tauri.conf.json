@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "书引 AI · M0 技术验证", "width": 1120, "height": 900, "minWidth": 800, "minHeight": 650 }],
+    "windows": [{ "label": "main", "title": "书引 AI · 读书创作工作台", "width": 1120, "height": 900, "minWidth": 800, "minHeight": 650 }],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost",
       "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420"

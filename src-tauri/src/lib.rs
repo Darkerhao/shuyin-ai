@@ -1,3 +1,4 @@
+mod commands;
 mod database;
 
 use database::{Database, ProbeSnapshot};
@@ -23,7 +24,24 @@ pub fn run() {
             app.manage(Database::open(directory.join("shuyin.sqlite3")));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![read_probe, save_probe])
+        .invoke_handler(tauri::generate_handler![
+            read_probe,
+            save_probe,
+            commands::list_projects,
+            commands::get_project,
+            commands::save_project,
+            commands::delete_project,
+            commands::list_assets,
+            commands::link_asset,
+            commands::unlink_asset,
+            commands::open_asset,
+            commands::workspace_settings,
+            commands::set_workspace_root,
+            commands::open_project_directory,
+            commands::relocate_workspace,
+            commands::create_backup,
+            commands::restore_backup
+        ])
         .run(tauri::generate_context!())
         .expect("书引 AI 桌面容器启动失败");
 }

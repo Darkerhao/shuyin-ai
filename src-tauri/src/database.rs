@@ -1,3 +1,9 @@
+mod assets;
+mod backup;
+mod projects;
+pub use assets::Asset;
+pub use projects::{Project, ProjectInput, WorkspaceSettings};
+
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use std::{path::PathBuf, sync::Mutex, time::Duration};
@@ -32,25 +38,26 @@ fn initialize(path: &PathBuf) -> Result<Connection, String> {
     let version: u32 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|error| error.to_string())?;
-    match version {
-        0 => {
-            let transaction = connection
-                .transaction()
-                .map_err(|error| error.to_string())?;
-            transaction
-                .execute_batch(include_str!("../migrations/0001_m0_probe.sql"))
-                .map_err(|error| error.to_string())?;
-            transaction
-                .pragma_update(None, "user_version", 1)
-                .map_err(|error| error.to_string())?;
-            transaction.commit().map_err(|error| error.to_string())?;
-        }
-        1 => {}
-        _ => {
-            return Err(format!(
-                "数据库版本 {version} 高于当前支持版本 1，请使用更新的应用。"
-            ))
-        }
+    const MIGRATIONS: &[&str] = &[
+        include_str!("../migrations/0001_m0_probe.sql"),
+        include_str!("../migrations/0002_projects_assets.sql"),
+    ];
+    if version as usize > MIGRATIONS.len() {
+        return Err(format!(
+            "数据库版本 {version} 高于当前支持版本 2，请使用更新的应用。"
+        ));
+    }
+    for (index, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+        let transaction = connection
+            .transaction()
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute_batch(sql)
+            .map_err(|error| error.to_string())?;
+        transaction
+            .pragma_update(None, "user_version", (index + 1) as u32)
+            .map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
     }
     Ok(connection)
 }
@@ -59,6 +66,14 @@ impl Database {
     pub fn open(path: PathBuf) -> Self {
         let connection = Mutex::new(initialize(&path));
         Self { path, connection }
+    }
+
+    pub(super) fn with_connection<T>(
+        &self,
+        action: impl FnOnce(&mut Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut guard = self.connection.lock().map_err(|error| error.to_string())?;
+        action(guard.as_mut().map_err(|error| error.clone())?)
     }
 
     fn snapshot(&self, connection: &Connection) -> Result<ProbeSnapshot, String> {
@@ -144,7 +159,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                 .unwrap(),
-            1
+            2
         );
     }
 
@@ -200,18 +215,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("test.sqlite3");
         let connection = Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 2).unwrap();
+        connection.pragma_update(None, "user_version", 3).unwrap();
         drop(connection);
         assert!(Database::open(path.clone())
             .read()
             .unwrap_err()
-            .contains("版本 2"));
+            .contains("版本 3"));
         assert_eq!(
             Connection::open(path)
                 .unwrap()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                 .unwrap(),
-            2
+            3
         );
     }
 
@@ -223,3 +238,6 @@ mod tests {
         assert!(database.save("draft").is_err());
     }
 }
+
+#[cfg(test)]
+mod m1_tests;
