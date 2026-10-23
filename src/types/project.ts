@@ -19,7 +19,7 @@ export interface Asset {
 export interface WorkspaceSettings { root: string; databasePath: string }
 export const emptyProject = (): ProjectInput => ({
   title: '', author: '', publisher: '', isbn: '', description: '', sourceNotes: '', theme: '',
-  targetAudience: '', contentStyle: '', targetDurationSeconds: 180, status: 'draft',
+  targetAudience: '', contentStyle: '', targetDurationSeconds: 600, status: 'draft',
 })
 export function projectInput(project: Project): ProjectInput {
   const { title, author, publisher, isbn, description, sourceNotes, theme, targetAudience, contentStyle, targetDurationSeconds, status } = project

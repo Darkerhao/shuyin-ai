@@ -9,24 +9,18 @@ import { RouterLink, RouterView } from 'vue-router'
         书引 <span>AI</span>
       </div>
       <p class="muted">
-        读书创作工作台
+        读书发布助手
       </p>
       <nav aria-label="主导航">
         <RouterLink to="/projects">
-          书籍项目
-        </RouterLink>
-        <RouterLink to="/settings">
-          目录与备份
+          我的书籍
         </RouterLink>
         <RouterLink to="/settings/models">
-          文本模型
-        </RouterLink>
-        <RouterLink to="/verification">
-          工程验证
+          模型设置
         </RouterLink>
       </nav>
       <p class="scope-note">
-        本地优先 · 从一本书开始<br>资料与素材，井然有序
+        本地优先 · 从一本书开始<br>发布文案与音频提示词
       </p>
     </aside>
     <main>

@@ -64,6 +64,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_m0_probe.sql"),
     include_str!("../migrations/0002_projects_assets.sql"),
     include_str!("../migrations/0003_ai_writing.sql"),
+    include_str!("../migrations/0004_publishing.sql"),
 ];
 
 impl Database {
@@ -163,7 +164,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                 .unwrap(),
-            3
+            4
         );
     }
 
@@ -219,18 +220,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("test.sqlite3");
         let connection = Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 4).unwrap();
+        connection.pragma_update(None, "user_version", 5).unwrap();
         drop(connection);
         assert!(Database::open(path.clone())
             .read()
             .unwrap_err()
-            .contains("版本 4"));
+            .contains("版本 5"));
         assert_eq!(
             Connection::open(path)
                 .unwrap()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                 .unwrap(),
-            4
+            5
         );
     }
 

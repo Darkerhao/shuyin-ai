@@ -2,19 +2,45 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Mutex, time::Duration};
 use tokio::sync::watch;
 
-pub const PROMPT_VERSION: &str = "writing-v1";
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/writing-v1.md");
+pub mod publishing;
+pub const PROMPT_VERSION: &str = "publishing-v1";
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v1.md");
 pub const TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "format", rename_all = "lowercase", deny_unknown_fields)]
 pub enum WritingContent {
-    Markdown { text: String },
-    List { items: Vec<String> },
+    Markdown {
+        text: String,
+    },
+    List {
+        items: Vec<String>,
+    },
+    Publishing {
+        title: String,
+        description: String,
+        #[serde(rename = "audioPrompt")]
+        audio_prompt: String,
+    },
 }
 impl WritingContent {
     pub fn validate(&self, kind: &str, count: Option<usize>) -> Result<(), String> {
         let valid = match (kind, self) {
+            (
+                "publishing",
+                Self::Publishing {
+                    title,
+                    description,
+                    audio_prompt,
+                },
+            ) => {
+                !title.trim().is_empty()
+                    && title.chars().count() <= 30
+                    && !description.trim().is_empty()
+                    && description.chars().count() <= 1000
+                    && !audio_prompt.trim().is_empty()
+                    && audio_prompt.chars().count() <= 20_000
+            }
             ("outline" | "script", Self::Markdown { text }) => {
                 !text.trim().is_empty() && text.chars().count() <= 100_000
             }
@@ -38,7 +64,7 @@ impl WritingContent {
 pub fn validate_kind(kind: &str) -> Result<(), String> {
     if matches!(
         kind,
-        "outline" | "script" | "titles" | "descriptions" | "hashtags"
+        "publishing" | "outline" | "script" | "titles" | "descriptions" | "hashtags"
     ) {
         Ok(())
     } else {
