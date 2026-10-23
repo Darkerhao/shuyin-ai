@@ -62,7 +62,8 @@ export function collectAssets(cwd, platform, target, destination) {
     copy('appimage', '.AppImage')
     chmodSync(join(output, `${prefix}.AppImage`), 0o755)
     // Archive the bundled AppImage, not a raw executable missing its shared libraries.
-    execFileSync('tar', ['-czf', join(output, `${prefix}.tar.gz`), '-C', output, `${prefix}.AppImage`])
+    // GNU tar treats a colon in an archive path (such as C:) as a remote host.
+    execFileSync('tar', ['-czf', `${prefix}.tar.gz`, `${prefix}.AppImage`], { cwd: output })
   }
   for (const name of names) nonEmpty(join(output, name))
   return names
