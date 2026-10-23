@@ -29,7 +29,7 @@ function buildFixture(t, bundles) {
     mkdirSync(join(root, 'bundle', subdir), { recursive: true })
     writeFileSync(join(root, 'bundle', subdir, filename), `test package: ${filename}`)
   }
-  return { directory, root, output: join(directory, 'output') }
+  return { directory, root, output: join(directory, 'release assets') }
 }
 
 test('release requires ten correctly named packages spanning four architectures/platforms', () => {
@@ -86,8 +86,10 @@ test('Linux TAR.GZ contains the AppImage instead of an unbundled binary', t => {
     ['appimage', 'Shuyin AI_1.2.3_amd64.AppImage'],
   ])
   collectAssets(directory, 'linux-x64', 'test-target', output)
-  const contents = execFileSync('tar', ['-tzf', join(output, 'shuyin-ai-1.2.3-linux-x64.tar.gz')], { encoding: 'utf8' }).trim()
+  const archive = 'shuyin-ai-1.2.3-linux-x64.tar.gz'
+  const contents = execFileSync('tar', ['-tzf', archive], { cwd: output, encoding: 'utf8' }).trim()
   assert.equal(contents, 'shuyin-ai-1.2.3-linux-x64.AppImage')
+  assert.deepEqual(execFileSync('tar', ['-xOf', archive, contents], { cwd: output }), readFileSync(join(output, contents)))
 })
 
 test('macOS ZIP preserves the application bundle', { skip: process.platform !== 'darwin' }, t => {
