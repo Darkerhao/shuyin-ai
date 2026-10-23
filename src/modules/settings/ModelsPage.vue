@@ -22,7 +22,7 @@ onBeforeUnmount(() => { apiKey.value = ''; globalThis.removeEventListener('befor
 function edit(provider?: ModelProvider) {
   if (!canLeave()) return
   id.value = provider?.id ?? null
-  form.value = provider ? { name: provider.name, baseUrl: provider.baseUrl, modelName: provider.modelName, isEnabled: provider.isEnabled, isDefault: provider.isDefault } : emptyProvider()
+  form.value = provider ? { modelKind: provider.modelKind, name: provider.name, baseUrl: provider.baseUrl, modelName: provider.modelName, isEnabled: provider.isEnabled, isDefault: provider.isDefault } : emptyProvider()
   apiKey.value = ''; original.value = JSON.stringify(form.value); deleting.value = false
 }
 const load = () => run(async () => { providers.value = await api.listProviders() })
@@ -47,8 +47,8 @@ onMounted(() => { if (desktop) void load() })
   <header>
     <p class="eyebrow">
       AI 创作设置
-    </p><h1>文本模型</h1><p class="muted">
-      配置兼容 Chat Completions 的服务，供所有书籍项目使用。
+    </p><h1>模型设置</h1><p class="muted">
+      文本模型用于文案，图片模型用于可选的 AI 封面背景。未配置图片模型也可使用本地模板。
     </p>
   </header>
   <p
@@ -77,7 +77,7 @@ onMounted(() => { if (desktop) void load() })
       v-if="!providers.length"
       class="muted"
     >
-      尚未配置文本模型。填写下方表单后保存即可开始。
+      尚未配置模型。填写下方表单后保存即可开始。
     </p>
     <div class="actions wrap">
       <button
@@ -87,7 +87,7 @@ onMounted(() => { if (desktop) void load() })
         :disabled="busy"
         @click="edit(provider)"
       >
-        {{ provider.name }}{{ provider.isDefault ? ' · 默认' : '' }}{{ provider.isEnabled ? '' : ' · 已停用' }} · {{ { available: '密钥已保存', missing: '无密钥', unavailable: '凭据库不可用' }[provider.credentialStatus] }}
+        {{ provider.name }} · {{ provider.modelKind === 'image' ? '图片' : '文本' }}{{ provider.isDefault ? ' · 默认' : '' }}{{ provider.isEnabled ? '' : ' · 已停用' }} · {{ { available: '密钥已保存', missing: '无密钥', unavailable: '凭据库不可用' }[provider.credentialStatus] }}
       </button>
       <button
         :disabled="!desktop || busy"
@@ -110,6 +110,18 @@ onMounted(() => { if (desktop) void load() })
   >
     <h2>{{ id ? '编辑模型' : '新增模型' }}</h2>
     <fieldset :disabled="!desktop || busy">
+      <label for="model-kind">模型用途</label>
+      <select
+        id="model-kind"
+        v-model="form.modelKind"
+      >
+        <option value="text">
+          文本 · 发布文案
+        </option>
+        <option value="image">
+          图片 · AI 封面背景（可选）
+        </option>
+      </select>
       <label for="provider-name">服务名称 *</label><input
         id="provider-name"
         v-model="form.name"
@@ -124,7 +136,13 @@ onMounted(() => { if (desktop) void load() })
         placeholder="https://可信服务/v1"
       >
       <p class="muted">
-        填写 API 根地址，系统会追加 /chat/completions。密钥和书籍资料将发送到此地址，请仅连接可信服务。本机服务支持 HTTP。
+        填写 API 根地址，系统会追加 {{ form.modelKind === 'image' ? '/images/generations' : '/chat/completions' }}。密钥和书籍资料将发送到此地址，请仅连接可信服务。本机服务支持 HTTP。
+      </p>
+      <p
+        v-if="form.modelKind === 'image'"
+        class="muted"
+      >
+        支持兼容 GPT Image、返回 base64 PNG 的服务。保存后到书籍封面页生成背景验证，生成可能产生服务费用。
       </p>
       <label for="model-name">模型名 *</label><input
         id="model-name"
@@ -154,12 +172,13 @@ onMounted(() => { if (desktop) void load() })
         v-model="form.isDefault"
         type="checkbox"
         :disabled="!form.isEnabled"
-      >设为默认文本模型</label>
+      >设为默认{{ form.modelKind === 'image' ? '图片' : '文本' }}模型</label>
       <div class="actions wrap">
         <button type="submit">
           保存模型
         </button>
         <button
+          v-if="form.modelKind === 'text'"
           type="button"
           class="secondary"
           :disabled="!id || dirty"

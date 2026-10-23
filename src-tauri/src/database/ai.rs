@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderInput {
+    pub model_kind: String,
     pub name: String,
     pub base_url: String,
     pub model_name: String,
@@ -37,13 +38,14 @@ fn row_provider(r: &Row<'_>) -> rusqlite::Result<ProviderConfig> {
             model_name: r.get(3)?,
             is_default: r.get(4)?,
             is_enabled: r.get(5)?,
+            model_kind: r.get(7)?,
         },
         credential_ref: r.get(6)?,
         credential_status: "missing".into(),
     })
 }
-fn provider(c: &Connection, id: &str) -> Result<ProviderConfig, String> {
-    c.query_row("SELECT id,name,base_url,model_name,is_default,is_enabled,credential_ref FROM model_providers WHERE id=?1", [id], row_provider)
+pub(super) fn provider(c: &Connection, id: &str) -> Result<ProviderConfig, String> {
+    c.query_row("SELECT id,name,base_url,model_name,is_default,is_enabled,credential_ref,model_kind FROM model_providers WHERE id=?1", [id], row_provider)
         .optional().map_err(|e|e.to_string())?.ok_or_else(||"模型配置不存在。".into())
 }
 #[derive(Serialize)]
@@ -164,7 +166,7 @@ fn append(
 impl Database {
     pub fn list_providers(&self, vault: &impl Credentials) -> Result<Vec<ProviderConfig>, String> {
         self.with_connection(|c| {
-            let mut q=c.prepare("SELECT id,name,base_url,model_name,is_default,is_enabled,credential_ref FROM model_providers ORDER BY is_default DESC,name,id").map_err(|e|e.to_string())?;
+            let mut q=c.prepare("SELECT id,name,base_url,model_name,is_default,is_enabled,credential_ref,model_kind FROM model_providers ORDER BY is_default DESC,name,id").map_err(|e|e.to_string())?;
             let rows=q.query_map([],row_provider).map_err(|e|e.to_string())?;
             rows.map(|r| {let mut p=r.map_err(|e|e.to_string())?; p.credential_status=match p.credential_ref.as_deref().map(|s|vault.get(s)) {
                 Some(Ok(Some(_)))=>"available", Some(Err(_))=>"unavailable", _=>"missing"
@@ -184,7 +186,8 @@ impl Database {
         input.base_url = ai::normalize_base_url(&input.base_url)?;
         input.name = input.name.trim().into();
         input.model_name = input.model_name.trim().into();
-        if input.name.is_empty()
+        if !matches!(input.model_kind.as_str(), "text" | "image")
+            || input.name.is_empty()
             || input.name.chars().count() > 100
             || input.model_name.is_empty()
             || input.model_name.len() > 200
@@ -202,15 +205,18 @@ impl Database {
             if old.as_ref().is_some_and(|p|p.input.base_url!=input.base_url && p.credential_ref.is_some()) && api_key.is_none() {
                 return Err("更换服务地址时请重新输入 API Key，避免将旧密钥发送到新地址。".into());
             }
+            if old.as_ref().is_some_and(|p| p.input.model_kind != input.model_kind) && c.query_row("SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE provider_id=?1 AND status IN ('pending','running'))", [id], |r| r.get::<_, bool>(0)).map_err(|e|e.to_string())? {
+                return Err("模型有未完成任务，暂不能更改用途。".into());
+            }
             let id=id.map(str::to_string).map(Ok).unwrap_or_else(||new_id(c))?;
             let new_ref=if api_key.is_some(){Some(format!("text-{}",new_id(c)?))}else{old.as_ref().and_then(|p|p.credential_ref.clone())};
             if let (Some(key),Some(reference))=(api_key,new_ref.as_deref()){vault.set(reference,key)?;}
             let saved=(|| {
                 let tx=c.transaction().map_err(|e|e.to_string())?;
-                if input.is_default {tx.execute("UPDATE model_providers SET is_default=0",[]).map_err(|e|e.to_string())?;}
-                tx.execute(&format!("INSERT INTO model_providers(id,name,provider_type,base_url,model_name,is_default,is_enabled,credential_ref,created_at,updated_at)
-                    VALUES(?1,?2,'openai-compatible',?3,?4,?5,?6,?7,{NOW},{NOW}) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,model_name=excluded.model_name,is_default=excluded.is_default,is_enabled=excluded.is_enabled,credential_ref=excluded.credential_ref,updated_at=excluded.updated_at"),
-                    params![id,input.name,input.base_url,input.model_name,input.is_default,input.is_enabled,new_ref]).map_err(|e|e.to_string())?;
+                if input.is_default {tx.execute("UPDATE model_providers SET is_default=0 WHERE model_kind=?1",[&input.model_kind]).map_err(|e|e.to_string())?;}
+                tx.execute(&format!("INSERT INTO model_providers(id,name,provider_type,base_url,model_name,is_default,is_enabled,credential_ref,created_at,updated_at,model_kind)
+                    VALUES(?1,?2,'openai-compatible',?3,?4,?5,?6,?7,{NOW},{NOW},?8) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,model_name=excluded.model_name,is_default=excluded.is_default,is_enabled=excluded.is_enabled,credential_ref=excluded.credential_ref,updated_at=excluded.updated_at,model_kind=excluded.model_kind"),
+                    params![id,input.name,input.base_url,input.model_name,input.is_default,input.is_enabled,new_ref,input.model_kind]).map_err(|e|e.to_string())?;
                 let saved=provider(&tx,&id)?; tx.commit().map_err(|e|e.to_string())?; Ok::<_,String>(saved)
             })();
             if saved.is_err() && api_key.is_some() {if let Some(r)=&new_ref {vault.delete(r)?;}}
@@ -277,7 +283,7 @@ impl Database {
         self.with_connection(|c| {
             get(c,&input.project_id)?;
             let p=provider(c,&input.provider_id)?;
-            if !p.input.is_enabled{return Err("所选模型已停用。".into());}
+            if !p.input.is_enabled || p.input.model_kind != "text" {return Err("请选择已启用的文本模型。".into());}
             let id=new_id(c)?;
             c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW})"),params![id,input.project_id,"publishing",input.provider_id,p.input.model_name,PROMPT_VERSION,serde_json::to_string(&input).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
             Ok(id)
@@ -285,11 +291,11 @@ impl Database {
     }
     pub fn prepare_generation(&self, id: &str) -> Result<PreparedGeneration, String> {
         self.with_connection(|c| {
-            let json:String=c.query_row("SELECT input_json FROM ai_tasks WHERE id=?1 AND status='pending'",[id],|r|r.get(0)).map_err(|_|"任务已取消、已运行或不存在。")?;
+            let json:String=c.query_row("SELECT input_json FROM ai_tasks WHERE id=?1 AND kind='publishing' AND status='pending'",[id],|r|r.get(0)).map_err(|_|"任务已取消、已运行或不存在。")?;
             let input:GenerationInput=serde_json::from_str(&json).map_err(|_|"任务输入无效。")?;
             let project=get(c,&input.project_id)?;
             let p=provider(c,&input.provider_id)?;
-            if !p.input.is_enabled{return Err("所选模型已停用。".into());}
+            if !p.input.is_enabled || p.input.model_kind != "text" {return Err("请选择已启用的文本模型。".into());}
             let user=serde_json::json!({"book":{"title":project.input.title,"author":project.input.author,"description":project.input.description,"sourceNotes":project.input.source_notes}}).to_string();
             c.execute("UPDATE ai_tasks SET status='running',model_name=?2 WHERE id=?1 AND status='pending'",params![id,p.input.model_name]).map_err(|e|e.to_string())?;
             Ok(PreparedGeneration{input,provider:p,user,book_title:project.input.title})

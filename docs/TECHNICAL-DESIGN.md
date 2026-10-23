@@ -1,6 +1,6 @@
 # 书引 AI 技术设计文档
 
-当前产品范围以 PRD 的三项生成为准：发布标题、发布内容、音频生成提示词。本文前面的完整工作台设计保留为历史记录；当前实现见文末“三项生成”说明和 `PUBLISHING-VERIFICATION.md`。
+当前产品范围为三项生成与 M3 封面工坊，包含可选 AI 背景。本文前面的完整工作台设计保留为历史记录；当前实现见文末“三项生成”与“M3”说明、`PUBLISHING-VERIFICATION.md` 和 `M3-VERIFICATION.md`。
 
 ## 1. 技术目标
 
@@ -257,3 +257,24 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 - 一套结果保存为 writing_versions 的 publishing 类型；沿用既有任务、取消、凭据及事务。旧 Markdown/List 类型仅保留读存历史与备份所需，旧 Prompt 不再用于新生成。
 - 复制使用 WebView 的 Clipboard API，用户操作触发、只写当前编辑字段；失败提示手动选择复制，没有引入插件或新权限。
 - v4 迁移和旧备份兼容见 DATABASE；验证见 PUBLISHING-VERIFICATION。
+
+## M3 本地封面工坊（2026-10-23）
+
+- `/projects/:id/covers` 从书籍资料/结果页进入，主导航不变。Vue 维护单份草稿；`types/cover.ts` 定义配置和模板，`services/coverRenderer.ts` 为唯一 Canvas 渲染器，`services/covers.ts` 提供 IPC 边界。
+- 预览直接使用导出分辨率画布。等待系统字体就绪，按字素（Intl.Segmenter）测宽换行，逐步缩小字号，固定安全边距，超限提示；主副标题、品牌文字均由程序排版。
+- 复用 assets 的图片关联；link_asset 返回登记 ID，原调用方可继续忽略返回值。读取命令仅接受本项目已关联的图片 ID，检查扩展名、文件头和 15 MB 上限，通过 Tauri ipc::Response 返回 ArrayBuffer；WebView 解码并检查像素数。使用 data URL，无任意文件读取或 asset protocol 权限。
+- 发布封面仅输出 4:3（1440×1080）和 3:4（1080×1440）。页面维护单份草稿，比例选择仅切换预览；导出先用同一渲染器生成两张 PNG，再依次复用保存命令。第二张写入失败保留第一张的版本/路径及页面未保存草稿，不宣称整组完成。
+- Rust `database/covers.rs` 校验两种固定尺寸、配置和 PNG 文件头/尺寸，将单张图的新版本与项目时间放入同一事务。每次导出写入项目 `covers/cover-{宽}x{高}-v{版本}-{随机ID}.png`，create_new 防止覆盖；文件写入或事务失败时回滚并清理本次新文件。正常错误不会覆盖旧版本；进程在落盘和事务提交之间被强制结束可能留下未登记的新 PNG，不损坏旧数据。
+- cover_versions 配置包含 schemaVersion=1、模板、尺寸、文字、字体、颜色、布局及 backgroundAssetId。没有单独可变“当前封面”表，最新版本即重启默认配置。背景引用保留在配置快照中，素材被移除时可以显示缺失并重新选择，不改写历史。
+- 旧尺寸历史读取不改写数据库或文件；恢复编辑时保留内容样式，将横向转为 4:3、竖向及方形转为 3:4，并显示原尺寸及转换提示。schema 仍为 v5，无新增迁移或依赖。
+- PNG 导出与保存共用一个命令；导出总是追加版本，已保存的历史 PNG 不覆盖。系统字体和源背景属于外部依赖，跨机器字体/源图变化可能影响重新渲染，原 PNG 文件仍保持不变。
+- 无新增 npm/Rust 依赖；三个封面业务命令同时登记 build.rs、lib.rs、permissions/covers.toml 和主窗口 capability。数据库备份仍由原有统一实现处理。
+
+## M3 可选 AI 背景（2026-10-24）
+
+- `database/ai.rs` 的模型配置增加 text/image 用途，默认模型按用途独立。继续使用现有系统凭据实现，不向前端提供密钥读取接口；更换 Base URL 必须重新输入已有密钥。
+- `ai/images.rs` 实现唯一图片 Provider：请求 `/images/generations`，使用用户填写的模型 ID、`n=1`、`size=1024x1024`、`output_format=png`，仅接受一张 base64 PNG；不下载响应 URL。沿用统一 HTTP 错误脱敏、禁止重定向和自动重试，图片超时为 180 秒。
+- 将已解析的书名、作者和画面描述放入版本化 Prompt；只生成背景，中文文字继续使用原 Canvas 渲染器。`base64 0.23.1` 与 `png 0.18.1` 原已存在于锁文件，本功能声明为直接依赖；全量像素、结尾、静态格式和 15 MB/4000 万像素限制校验后才允许保存。
+- `start_cover_generation`/`execute_cover_generation` 复用 ai_tasks、共享任务注册/取消和中断恢复。`database/image_generation.rs` 将新 PNG、素材引用和任务成功状态组成事务，失败清理本次新文件，旧背景及历史不改写。
+- 封面页默认使用本地制作。主动展开 AI 区域才读取图片模型，生成成功后先读取和解码素材，再替换草稿中的背景；不自动保存封面版本。失败、取消与迟到响应保留当前草稿、背景和历史；生成期间阻止离页，现有双比例导出及部分成功提示继续复用。
+- 数据库增量迁移为 v6，详见 DATABASE。Windows 真实 WebView2、IPC、系统凭据、SQLite 和文件验证通过；本机可控响应验证不代表外部图片服务可用性，完整边界见 M3-VERIFICATION。

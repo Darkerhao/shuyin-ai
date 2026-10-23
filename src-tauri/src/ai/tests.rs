@@ -1,4 +1,93 @@
+use super::images::{test_png, ImageProvider, ImageRequest};
 use super::*;
+use base64::{engine::general_purpose::STANDARD, Engine};
+
+fn image_request(base_url: String) -> ImageRequest {
+    ImageRequest {
+        base_url,
+        model: "configured-image-model".into(),
+        key: Some("contract-only-secret".into()),
+        prompt: "无字山林".into(),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn image_contract_decodes_png_and_uses_the_configured_model() {
+    let png = test_png();
+    let body = serde_json::json!({"data":[{"b64_json":STANDARD.encode(&png)}]}).to_string();
+    let (url, h) = server(200, &body, Duration::ZERO);
+    let bytes = OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .generate_image(image_request(url))
+        .await
+        .unwrap();
+    assert_eq!(bytes, png);
+    let received = h.join().unwrap();
+    assert!(received.starts_with("POST /v1/images/generations HTTP/1.1"));
+    assert!(received
+        .to_lowercase()
+        .contains("authorization: bearer contract-only-secret"));
+    let body: serde_json::Value =
+        serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"model":"configured-image-model","prompt":"无字山林","n":1,"size":"1024x1024","output_format":"png"})
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn image_errors_timeout_and_unusable_content_never_return_an_asset() {
+    for (status, code) in [
+        (401, "authentication"),
+        (429, "rate_limit"),
+        (302, "redirect"),
+        (503, "http"),
+    ] {
+        let (url, h) = server(status, "contract-only-secret", Duration::ZERO);
+        let error = OpenAiCompatible::new(TIMEOUT, &url)
+            .unwrap()
+            .generate_image(image_request(url))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, code);
+        assert!(!error.message.contains("contract-only-secret"));
+        h.join().unwrap();
+    }
+    for body in [
+        "not json".to_string(),
+        "{\"data\":[]}".into(),
+        serde_json::json!({"data":[{"url":"https://example.com/image.png"}]}).to_string(),
+        serde_json::json!({"data":[{"b64_json":"%%%"}]}).to_string(),
+        serde_json::json!({"data":[{"b64_json":STANDARD.encode(b"not a png")}]}).to_string(),
+    ] {
+        let (url, h) = server(200, &body, Duration::ZERO);
+        assert!(OpenAiCompatible::new(TIMEOUT, &url)
+            .unwrap()
+            .generate_image(image_request(url))
+            .await
+            .is_err());
+        h.join().unwrap();
+    }
+    let (url, h) = server(200, "{}", Duration::from_millis(120));
+    let error = OpenAiCompatible::new(Duration::from_millis(30), &url)
+        .unwrap()
+        .generate_image(image_request(url))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "timeout");
+    h.join().unwrap();
+}
+
+#[test]
+fn image_validation_rejects_truncated_corrupt_and_oversized_data() {
+    let png = test_png();
+    assert!(images::validate_image(&png).is_ok());
+    assert!(images::validate_image(&png[..png.len() - 12]).is_err());
+    let mut corrupt = png.clone();
+    corrupt[45] ^= 0xff;
+    assert!(images::validate_image(&corrupt).is_err());
+    assert!(images::validate_image(&vec![0; images::MAX_IMAGE_BYTES + 1]).is_err());
+}
 use std::{
     io::{Read, Write},
     net::TcpListener,

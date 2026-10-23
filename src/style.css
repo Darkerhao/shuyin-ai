@@ -67,3 +67,4 @@ button.secondary.danger { color: #a22929; background: white; }
 
 .book-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: end; }
 .book-search label { margin-top: 0; }
+.cover-entry { display: inline-block; margin-left: 16px; }

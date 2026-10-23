@@ -1,0 +1,37 @@
+import { describe, expect, it, vi } from 'vitest'
+import { renderCover, wrapText } from '../src/services/coverRenderer'
+import { coverSizes, newCover } from '../src/types/cover'
+
+function canvas() {
+  const ctx = { font: '', fillStyle: '', textAlign: '', textBaseline: '', fillRect: vi.fn(), drawImage: vi.fn(), fillText: vi.fn(), measureText(text: string) {
+    const size = Number(this.font.match(/(\d+)px/)?.[1] ?? 20)
+    return { width: Array.from(text).length * size, actualBoundingBoxLeft: 0, actualBoundingBoxRight: Array.from(text).length * size }
+  } }
+  return { ctx, canvas: { width: 0, height: 0, getContext: () => ctx } as unknown as HTMLCanvasElement }
+}
+describe('cover text layout', () => {
+  it('wraps Chinese, long words, explicit newlines and whole graphemes', () => {
+    const measure = (line: string) => [...new Intl.Segmenter('zh', { granularity: 'grapheme' }).segment(line)].length * 10
+    expect(wrapText('中文封面\r\nABCDEF\n👨‍👩‍👧‍👦你好', 20, measure)).toEqual(['中文', '封面', 'AB', 'CD', 'EF', '👨‍👩‍👧‍👦你', '好'])
+  })
+  it.each(coverSizes)('fits long Chinese text inside $width × $height', size => {
+    const target = canvas(); const config = { ...newCover('中文长标题'.repeat(35)), ...size, subtitle: '副标题'.repeat(70), brand: '甲子', titleSize: 160, subtitleSize: 80 }
+    const result = renderCover(target.canvas, config, null)
+    expect(target.canvas.width).toBe(size.width); expect(target.canvas.height).toBe(size.height)
+    expect(result.titleSize).toBeLessThan(160)
+    for (const [, x, y] of target.ctx.fillText.mock.calls as [string, number, number][]) {
+      expect(x).toBeGreaterThanOrEqual(size.width * 0.09)
+      expect(y).toBeGreaterThan(0); expect(y).toBeLessThan(size.height * 0.92)
+    }
+  })
+  it('rejects unsafe sizes, empty title, unavailable background and overflowing line breaks', () => {
+    const target = canvas(); const config = newCover('测试')
+    for (const [width, height] of [[1080, 1920], [1920, 1080], [1080, 1080], [1440, 1440]]) {
+      expect(() => renderCover(target.canvas, { ...config, width: width!, height: height! }, null)).toThrow('尺寸无效')
+    }
+    expect(() => renderCover(target.canvas, { ...config, titleSize: Infinity }, null)).toThrow('字号')
+    expect(() => renderCover(target.canvas, { ...config, title: '' }, null)).toThrow('主标题')
+    expect(() => renderCover(target.canvas, { ...config, backgroundAssetId: 'a1' }, null)).toThrow('背景图')
+    expect(() => renderCover(target.canvas, { ...config, title: '字\n'.repeat(99) }, null)).toThrow('安全区域')
+  })
+})

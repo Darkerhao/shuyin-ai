@@ -39,19 +39,17 @@ pub fn delete_model_provider(
 ) -> Result<(), String> {
     database.delete_provider(&id, vault.inner())
 }
-fn request(
-    config: ProviderConfig,
+pub(crate) fn provider_key(
+    config: &ProviderConfig,
     vault: &SystemCredentials,
-    system: &str,
-    user: String,
-) -> Result<TextRequest, AiError> {
+) -> Result<Option<String>, AiError> {
     if !config.input.is_enabled {
         return Err(AiError::new("disabled", "所选模型已停用。"));
     }
-    let key = if let Some(reference) = config.credential_ref {
+    let key = if let Some(reference) = &config.credential_ref {
         Some(
             vault
-                .get(&reference)
+                .get(reference)
                 .map_err(|s| AiError::new("credentials", &s))?
                 .ok_or_else(|| {
                     AiError::new(
@@ -63,6 +61,19 @@ fn request(
     } else {
         None
     };
+    Ok(key)
+}
+
+fn request(
+    config: ProviderConfig,
+    vault: &SystemCredentials,
+    system: &str,
+    user: String,
+) -> Result<TextRequest, AiError> {
+    if config.input.model_kind != "text" {
+        return Err(AiError::new("configuration", "请选择文本模型。"));
+    }
+    let key = provider_key(&config, vault)?;
     Ok(TextRequest {
         base_url: crate::ai::normalize_base_url(&config.input.base_url)
             .map_err(|s| AiError::new("configuration", &s))?,
@@ -79,6 +90,12 @@ pub async fn test_model_connection(
     id: String,
 ) -> Result<String, AiError> {
     let config = database.get_provider(&id).map_err(AiError::database)?;
+    if config.input.model_kind == "image" {
+        return Err(AiError::new(
+            "configuration",
+            "请在封面页生成背景以验证图片模型。",
+        ));
+    }
     let req = request(
         config,
         vault.inner(),
@@ -139,21 +156,13 @@ pub async fn execute_generation(
     active: State<'_, ActiveTasks>,
     id: String,
 ) -> Result<WritingVersion, AiError> {
-    let (sender, mut receiver) = tokio::sync::watch::channel(false);
-    {
-        let mut signals = active
-            .0
-            .lock()
-            .map_err(|_| AiError::new("internal", "任务信号不可用。"))?;
-        if signals.contains_key(&id) {
-            return Err(AiError::new("running", "任务已在运行。"));
-        }
-        signals.insert(id.clone(), sender);
-    }
-    let result=async {
-        let prepared=database.prepare_generation(&id).map_err(AiError::database)?;
+    let database = database.inner();
+    let vault = vault.inner();
+    let id = id.as_str();
+    run_task(database, active.inner(), id, |mut receiver| async move {
+        let prepared=database.prepare_generation(id).map_err(AiError::database)?;
         let model=prepared.provider.input.model_name.clone();
-        let req=request(prepared.provider,vault.inner(),SYSTEM_PROMPT,prepared.user)?;
+        let req=request(prepared.provider,vault,SYSTEM_PROMPT,prepared.user)?;
         let provider=OpenAiCompatible::new(TIMEOUT, &req.base_url)?;
         let raw=tokio::select! {
             biased;
@@ -162,15 +171,40 @@ pub async fn execute_generation(
         };
         let draft:PublishingDraft=serde_json::from_str(&raw).map_err(|_|AiError::new("invalid_content","模型输出不符合发布内容结构，原有内容保留。"))?;
         let content=draft.into_content(&prepared.book_title).map_err(|s|AiError::new("invalid_content",&s))?;
-        database.finish_generation(&id,&prepared.input,content,&model).map_err(AiError::database)
-    }.await;
+        database.finish_generation(id,&prepared.input,content,&model).map_err(AiError::database)
+    }).await
+}
+
+// All generation types share registration, cancellation status and failure recording.
+pub(crate) async fn run_task<T, F, Fut>(
+    database: &Database,
+    active: &ActiveTasks,
+    id: &str,
+    execute: F,
+) -> Result<T, AiError>
+where
+    F: FnOnce(tokio::sync::watch::Receiver<bool>) -> Fut,
+    Fut: std::future::Future<Output = Result<T, AiError>>,
+{
+    let (sender, receiver) = tokio::sync::watch::channel(false);
+    {
+        let mut signals = active
+            .0
+            .lock()
+            .map_err(|_| AiError::new("internal", "任务信号不可用。"))?;
+        if signals.contains_key(id) {
+            return Err(AiError::new("running", "任务已在运行。"));
+        }
+        signals.insert(id.to_string(), sender);
+    }
+    let result = execute(receiver).await;
     if let Ok(mut signals) = active.0.lock() {
-        signals.remove(&id);
+        signals.remove(id);
     }
     if let Err(error) = &result {
         database
             .end_generation(
-                &id,
+                id,
                 if error.code == "cancelled" {
                     "cancelled"
                 } else {

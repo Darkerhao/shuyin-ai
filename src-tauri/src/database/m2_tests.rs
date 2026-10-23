@@ -3,7 +3,7 @@ use super::*;
 use crate::{ai::WritingContent, credentials::Credentials};
 use std::collections::HashMap;
 #[derive(Default)]
-struct Vault {
+pub(super) struct Vault {
     entries: Mutex<HashMap<String, String>>,
     fail: bool,
 }
@@ -42,8 +42,9 @@ fn project(db: &Database) -> Project {
     )
     .unwrap()
 }
-fn model() -> ProviderInput {
+pub(super) fn model() -> ProviderInput {
     ProviderInput {
+        model_kind: "text".into(),
         name: "测试模型".into(),
         base_url: "https://example.com/v1".into(),
         model_name: "test".into(),
@@ -380,7 +381,7 @@ fn v3_upgrade_preserves_old_versions_task_links_and_backup_and_allows_title_only
     assert_eq!(
         c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
             .unwrap(),
-        4
+        MIGRATIONS.len() as u32
     );
     assert_eq!(
         Connection::open(old)
