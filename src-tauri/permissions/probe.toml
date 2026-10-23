@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-probe"
+description = "读取或写入 M0 验证记录。"
+commands.allow = ["read_probe", "save_probe"]
