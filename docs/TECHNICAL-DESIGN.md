@@ -2,7 +2,7 @@
 
 ## 1. 技术目标
 
-构建 Windows 10/11 本地优先桌面应用，围绕书籍项目完成 AI 创作、封面排版、视频关联、素材归档和半自动发布准备。
+构建 Windows 10/11、macOS 与 Linux 的本地优先桌面应用，围绕书籍项目完成 AI 创作、封面排版、视频关联、素材归档和半自动发布准备。人工桌面验收以 Windows 起步，新增平台需要分别验证安装、启动和持久化。
 
 ## 2. 技术栈
 
@@ -215,3 +215,11 @@ interface PublishProvider {
 - 文件服务覆盖文件存在、缺失、移动、无权限和重复文件场景。
 - 发布任务包覆盖素材齐全和素材缺失场景。
 - 桌面安装、升级和凭据存储需要真实 Windows 环境验收。
+
+## 12. 跨平台自动打包
+
+GitHub Actions 仅在 PR 已合并到 main 时构建。prepare 生成一次语义版本提交，通过 Git bundle 传递给 Windows x64、macOS ARM64、macOS x64、Linux x64 四个独立 runner，所有构建均校验并使用同一个提交 SHA，打包前不推送版本。
+
+Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`desktop:build` 不再固定 Windows。Linux 的产品名使用 `Shuyin AI`，确保包管理器包名为 `shuyin-ai`；应用标识符和中文界面不变。macOS 使用现有 SVG 生成的 ICNS，当前为 ad-hoc 签名，尚未配置 Apple Developer ID 与公证。
+
+所有平台的检查与构建成功后，汇总校验 10 个分发文件，生成 SHA-256 清单；然后将版本提交 cherry-pick 到 dev，原子推送 main、dev 和标签。最后在 GitHub Release 草稿中上传完整产物，上传完成才公开。版本与产物逻辑只使用 Node 内置模块、系统归档工具及 runner 自带 gh，没有新增 npm/Rust 依赖。main 快照变化、cherry-pick 冲突或写权限拒绝均中止同步；发布阶段可单独重跑失败任务。详细格式、权限和恢复流程见 `RELEASE.md`。

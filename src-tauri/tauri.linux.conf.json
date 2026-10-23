@@ -1,0 +1,4 @@
+{
+  "productName": "Shuyin AI",
+  "bundle": { "targets": ["deb", "rpm", "appimage"] }
+}

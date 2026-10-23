@@ -2,7 +2,7 @@
 
 > 版本：V1.0  
 > 产品定位：面向个人读书视频创作者的 AI 桌面工作台  
-> 目标平台：Windows 10/11  
+> 目标平台：Windows 10/11、macOS（Intel / Apple Silicon）、Linux x64；当前已有人工桌面验收仅覆盖 Windows
 > MVP 原则：本地优先、单用户、内容可追溯、人工审核、半自动发布
 
 ## 1. 产品背景

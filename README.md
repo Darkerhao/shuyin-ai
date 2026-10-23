@@ -1,6 +1,6 @@
 # 书引 AI
 
-Windows 本地读书创作工作台。当前仅实现 **M0 工程初始化与技术验证**，不包含书籍项目、AI 创作、素材管理或发布业务。
+本地读书创作工作台，提供 Windows、macOS 和 Linux 打包。当前仅实现 **M0 工程初始化与技术验证**，人工桌面验收目前仅覆盖 Windows，不包含书籍项目、AI 创作、素材管理或发布业务。
 
 ## 环境
 
@@ -43,7 +43,26 @@ npm run desktop:build
 ```
 
 `dev` 与 `desktop:dev` 不要同时运行，二者使用同一个固定端口 1420。
-Windows NSIS 安装包输出到 `src-tauri/target/release/bundle/nsis/`。本轮只配置 NSIS，不生成 MSI。
+`desktop:build` 根据当前系统自动选择平台配置：Windows 生成 NSIS，macOS 生成 APP/DMG，Linux 生成 DEB/RPM/AppImage。安装包在 `src-tauri/target/release/bundle/`，显式指定 Rust target 时在 `src-tauri/target/<target>/release/bundle/`。
+
+macOS 需安装 Xcode Command Line Tools；Linux 构建需 WebKitGTK 4.1、GTK 与对应开发依赖，完整安装命令见工作流。Windows 本地环境沿用上面的配置。
+
+## 自动打包与版本同步
+
+PR 合并到 `main` 后自动按约定递增一次版本（破坏性变更 major、`feat` minor、其他 patch），使用同一提交并行构建四个平台目标。全部检查与打包成功后，将版本提交 cherry-pick 到 `dev`，原子推送两个分支及版本标签，最后发布 GitHub Release。dev 推送、main 直接推送及未合并 PR 不打包。
+
+| 平台 | Release 下载文件 |
+| --- | --- |
+| Windows x64 | 安装 `.exe`、免安装 `.zip`（需要 WebView2，数据仍在系统用户目录） |
+| macOS Apple Silicon | `.dmg`、`.zip` |
+| macOS Intel | `.dmg`、`.zip` |
+| Linux x64 | `.deb`、`.rpm`、`.AppImage`、含 AppImage 的 `.tar.gz` |
+
+所有文件统一命名为 `shuyin-ai-<版本>-<平台>-<架构>.<格式>`，并提供 `SHA256SUMS.txt`。Actions Artifacts 同时保留 90 天；macOS 当前为 ad-hoc 签名，Windows 未配置签名证书，正式分发前仍需对应平台的签名和安装验收。
+
+版本规则、仓库写权限、首次启用和失败恢复见 [发布流程](docs/RELEASE.md)。本地发布脚本回归可运行 `npm run test:release`，也包含在 `npm test` 中。
+
+版本级别按实际业务影响填写 PR/提交说明：日常修复和内部整理用 patch，兼容的新能力用 minor，明确的不兼容改动才用 major；同批改动取最高级别，只递增一次，不按改动量或提交数量累加。
 
 ## M0 手工验收
 
