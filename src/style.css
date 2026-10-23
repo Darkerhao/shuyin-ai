@@ -31,3 +31,26 @@ dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .notice { border: 1px solid #d9c991; background: #fff9e8; padding: 14px; border-radius: 8px; }
 .error { color: #a22929; background: #fff0ef; padding: 12px; border-radius: 8px; overflow-wrap: anywhere; }
 @media (max-width: 950px) { .app-shell { grid-template-columns: 170px minmax(0, 1fr); } main { padding: 28px 24px; } header { padding-right: 0; } .runtime-badge { position: static; display: inline-block; } }
+input, select { width: 100%; min-height: 40px; padding: 8px 12px; border: 1px solid #aab9a9; border-radius: 8px; background: #fcfdfb; font: inherit; color: inherit; }
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+nav a { margin-bottom: 8px; background: transparent; }
+nav a.router-link-active { background: #dbe6d8; }
+a { color: #355e43; }
+.button { display: inline-block; padding: 10px 16px; border-radius: 8px; background: #355e43; color: white; text-decoration: none; }
+.header-action { position: absolute; right: 0; top: 32px; }
+.filter-bar { display: grid; grid-template-columns: minmax(160px, 1fr) 170px auto; gap: 16px; align-items: end; }
+.filter-bar label { margin-top: 0; }
+.form-grid, .project-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; }
+.project-card { display: block; text-decoration: none; color: inherit; }
+.project-card:hover { border-color: #739569; }
+.project-card h2 { margin-top: 16px; overflow-wrap: anywhere; }
+.badge { display: inline-block; background: #edf1e9; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: normal; }
+.card-description { color: #637167; font-size: 14px; line-height: 1.8; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.empty-state { padding: 48px; text-align: center; }
+.asset-row { border-top: 1px solid #dde3d9; margin-top: 24px; padding-top: 12px; }
+.asset-row h3 { font-size: 16px; overflow-wrap: anywhere; }
+.wrap { flex-wrap: wrap; }
+button.danger { background: #a22929; border-color: #a22929; }
+button.secondary.danger { color: #a22929; background: white; }
+.confirmation { border-color: #c97168; }
+@media (max-width: 950px) { .header-action { position: static; } .project-grid { grid-template-columns: 1fr; } }

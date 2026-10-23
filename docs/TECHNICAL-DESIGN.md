@@ -223,3 +223,13 @@ GitHub Actions 仅监听 main 的 push，支持 PR 合并及本地 merge/cherry-
 Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`desktop:build` 不再固定 Windows。Linux 的产品名使用 `Shuyin AI`，确保包管理器包名为 `shuyin-ai`；应用标识符和中文界面不变。macOS 使用现有 SVG 生成的 ICNS，当前为 ad-hoc 签名，尚未配置 Apple Developer ID 与公证。
 
 所有平台的检查与构建成功后，汇总校验 10 个分发文件，生成 SHA-256 清单；然后将版本提交 cherry-pick 到 dev，原子推送 main、dev 和标签。最后在 GitHub Release 草稿中上传完整产物，上传完成才公开。版本与产物逻辑只使用 Node 内置模块、系统归档工具及 runner 自带 gh，没有新增 npm/Rust 依赖。main 快照变化、cherry-pick 冲突或写权限拒绝均中止同步；发布阶段可单独重跑失败任务。详细格式、权限和恢复流程见 `RELEASE.md`。
+
+## M1 实际实现（2026-10-23）
+
+- 页面：`/projects` 搜索/筛选，`/projects/new` 新建，`/projects/:id` 资料与素材，`/settings` 目录与备份；M0 验证保留独立入口。
+- 调用链：Vue 页面 → `services/projects.ts` → 受限 Tauri `commands.rs` → `database/{projects,assets,backup}.rs`。状态以 SQLite 为准，页面只维护当前编辑草稿，不增加 Pinia 或 UI 依赖。
+- 项目字段增加主题；所有状态经同一保存命令更新。归档后可选择任意活动状态恢复；支持 ISBN/作者/书名子串查询，百分号与下划线作为普通字符。
+- 工作目录默认在应用数据目录下，可在设置中选择其他磁盘。每个新项目创建 `projects/{id}` 目录，ID 命名避免书名改动和非法文件名引起搬迁。现有项目可重新指定目录，仅更新引用。
+- 素材仅存路径及基本元数据；每次读取实际检测文件，区分可用、缺失和无法访问。重新定位保留素材 ID，校验素材类型和重复关联。文件打开只接受已登记且属于允许格式的素材 ID，目录打开只接受项目 ID。
+- 基础备份使用 SQLite `VACUUM INTO` 创建唯一新文件，恢复使用现有 rusqlite 的 `backup` feature；未新增依赖包。备份不包括外部媒体文件。恢复先核验版本、完整性、schema 和外键，再自动备份当前数据库，最后使用 SQLite backup 原子替换数据库内容。
+- M1 备份恢复只接受 schema v2；M0 数据通过正常启动迁移升级。目录重定位不自动迁移文件；媒体时长、分辨率、校验和提取不在本里程碑。

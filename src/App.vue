@@ -12,14 +12,27 @@ import { RouterLink, RouterView } from 'vue-router'
         读书创作工作台
       </p>
       <nav aria-label="主导航">
+        <RouterLink to="/projects">
+          书籍项目
+        </RouterLink>
+        <RouterLink to="/settings">
+          目录与备份
+        </RouterLink>
         <RouterLink to="/verification">
           工程验证
         </RouterLink>
       </nav>
       <p class="scope-note">
-        M0 · 工程初始化<br>当前仅开放技术验证
+        本地优先 · 从一本书开始<br>资料与素材，井然有序
       </p>
     </aside>
-    <main><RouterView /></main>
+    <main>
+      <RouterView v-slot="{ Component, route }">
+        <component
+          :is="Component"
+          :key="route.path"
+        />
+      </RouterView>
+    </main>
   </div>
 </template>

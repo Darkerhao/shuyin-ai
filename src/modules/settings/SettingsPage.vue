@@ -1,0 +1,118 @@
+<script setup lang="ts">
+import { onMounted, ref } from 'vue'
+import * as api from '../../services/projects'
+import type { WorkspaceSettings } from '../../types/project'
+import { useOperation } from '../../composables/useOperation'
+const desktop = api.isDesktop()
+const settings = ref<WorkspaceSettings | null>(null)
+const restorePath = ref('')
+const { busy, error, message, run } = useOperation()
+const load = () => run(async () => { settings.value = await api.workspaceSettings() })
+const chooseRoot = () => run(async () => { const path = await api.chooseDirectory(); if (path) { settings.value = await api.setWorkspaceRoot(path); message.value = '新项目将使用此目录，已有项目保持原位置。' } })
+const backup = () => run(async () => { const path = await api.chooseDirectory(); if (path) message.value = `备份已保存：${await api.createBackup(path)}` })
+const chooseRestore = () => run(async () => { const path = await api.chooseBackup(); if (path) restorePath.value = path })
+const restore = () => run(async () => {
+  const previous = await api.restoreBackup(restorePath.value)
+  restorePath.value = ''
+  message.value = `恢复完成。恢复前的数据已备份到：${previous}`
+  settings.value = await api.workspaceSettings()
+})
+onMounted(() => { if (desktop) void load() })
+</script>
+<template>
+  <header>
+    <p class="eyebrow">
+      本地数据与文件
+    </p><h1>工作目录与备份</h1><p class="muted">
+      将项目资料保存在本机，定期备份数据库。
+    </p>
+  </header>
+  <p
+    v-if="!desktop"
+    class="notice"
+  >
+    请在桌面应用中管理目录和备份。
+  </p>
+  <p
+    v-if="error"
+    class="error"
+    role="alert"
+  >
+    {{ error }}
+  </p><p
+    v-if="message"
+    class="file-path"
+    role="status"
+  >
+    {{ message }}
+  </p>
+  <section class="panel">
+    <h2>默认工作目录</h2><p class="muted">
+      新项目会在此目录下创建独立文件夹。修改默认目录不会移动已有项目。
+    </p><p
+      v-if="settings"
+      class="file-path"
+    >
+      {{ settings.root }}
+    </p><div class="actions">
+      <button
+        :disabled="!desktop || busy"
+        @click="chooseRoot"
+      >
+        选择工作目录
+      </button><button
+        class="secondary"
+        :disabled="!desktop || busy"
+        @click="load"
+      >
+        重新读取
+      </button>
+    </div><dl v-if="settings">
+      <dt>数据库位置</dt><dd>{{ settings.databasePath }}</dd>
+    </dl>
+  </section>
+  <section class="panel">
+    <h2>数据库备份与恢复</h2><p class="muted">
+      备份包含项目资料、素材路径和普通设置，不复制视频、图片或工作目录内的文件。请另行保管源素材。
+    </p><div class="actions">
+      <button
+        :disabled="!desktop || busy"
+        @click="backup"
+      >
+        创建备份
+      </button><button
+        class="secondary"
+        :disabled="!desktop || busy"
+        @click="chooseRestore"
+      >
+        选择备份恢复
+      </button>
+    </div>
+  </section>
+  <section
+    v-if="restorePath"
+    class="panel confirmation"
+    role="alertdialog"
+    aria-labelledby="restore-title"
+  >
+    <h2 id="restore-title">
+      确认替换当前项目数据？
+    </h2><p class="file-path">
+      {{ restorePath }}
+    </p><p>恢复将替换全部项目、素材关联和普通设置。系统会先校验备份并自动保存当前数据库；原始素材文件保持原位，失效路径可在项目内重新定位。</p><div class="actions">
+      <button
+        class="danger"
+        :disabled="busy"
+        @click="restore"
+      >
+        确认恢复
+      </button><button
+        class="secondary"
+        :disabled="busy"
+        @click="restorePath = ''"
+      >
+        取消
+      </button>
+    </div>
+  </section>
+</template>
