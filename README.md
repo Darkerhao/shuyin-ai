@@ -49,7 +49,7 @@ macOS 需安装 Xcode Command Line Tools；Linux 构建需 WebKitGTK 4.1、GTK �
 
 ## 自动打包与版本同步
 
-PR 合并到 `main` 后自动按约定递增一次版本（破坏性变更 major、`feat` minor、其他 patch），使用同一提交并行构建四个平台目标。全部检查与打包成功后，将版本提交 cherry-pick 到 `dev`，原子推送两个分支及版本标签，最后发布 GitHub Release。dev 推送、main 直接推送及未合并 PR 不打包。
+代码推送到 `main` 后自动按约定递增一次版本（破坏性变更 major、`feat` minor、其他 patch），支持 GitHub PR 合并、本地 merge/cherry-pick 后推送以及直接推送 main，使用同一提交并行构建四个平台目标。全部检查与打包成功后，将版本提交 cherry-pick 到 `dev`，原子推送两个分支及版本标签，最后发布 GitHub Release。dev 推送、标签推送和未合并 PR 不打包；流水线生成的版本提交跳过，避免循环触发。
 
 | 平台 | Release 下载文件 |
 | --- | --- |

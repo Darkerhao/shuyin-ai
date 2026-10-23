@@ -2,9 +2,9 @@
 
 ## 触发与交付
 
-`.github/workflows/release.yml` 仅监听目标为 `main` 的 PR 关闭事件，并仅在 PR 已合并时运行打包任务。直接 push 到 main、push 到 dev、创建标签、关闭未合并 PR 都不打包；需要通过 GitHub PR 合并发布。
+`.github/workflows/release.yml` 仅监听 `main` 的 push：GitHub PR 合并、本地 merge/cherry-pick 后推送，以及直接推送 main 都触发。push 到 dev、创建标签、关闭未合并 PR 不打包。流水线生成的 `chore(release): v...` 提交通过 job 条件跳过；脚本也检查已有标签，避免版本回写重复升版。
 
-使用 `pull_request_target` 是为了让已合并的外部分支 PR 也能使用仓库写权限。工作流明确检出本仓库 `main`，只执行已经合入的代码，不检出 PR head，也不把 PR 标题拼进 Shell 命令。
+工作流只检出本仓库 main，不执行未合入的 PR head；触发依据是代码实际进入远端 main，不依赖 GitHub PR 关闭事件。2026-10-23 的首次配置通过本地 cherry-pick 进入 main，当时仅监听 `pull_request_target`，因此没有产生运行；此次修复改用 push。修复提交推送到 main 后才会生效，不会补触发过去的推送。
 
 每次生成一次版本，四个 runner 使用同一个 Git 提交构建。所有平台成功后同步分支，再创建对应版本的 GitHub Release；完整产物上传到草稿后才公开，避免用户下载不齐全的版本。版本标签 `vX.Y.Z` 指向实际打包的版本提交。
 
@@ -23,7 +23,7 @@
 
 ## 版本规则
 
-以 `package.json` 为当前版本来源，读取触发 PR 的标题，以及上一个版本标签之后尚未发布的 Git 提交说明，按实际业务影响声明取最高级别，一批发布只递增一次：
+以 `package.json` 为当前版本来源，读取上一个版本标签之后尚未发布的 Git 提交说明（包括合并提交中保存的 PR 标题），按实际业务影响声明取最高级别，一批发布只递增一次：
 
 | 内容 | 递增 | 示例 |
 | --- | --- | --- |
@@ -55,8 +55,8 @@ PR 标题和提交说明应基于实际改动选用上述格式，尤其是 reba
 
 ## 执行顺序
 
-1. 检出当前 main，获取 main、dev 和标签；验证触发 PR 的合并提交在 main 中。
-2. 若现有版本标签已包含该 PR，直接跳过，避免重跑或排队事件再次递增。
+1. 检出当前 main，获取 main、dev 和标签；验证事件来自 main 的代码推送，且推送提交在 main 中。
+2. 若现有版本标签已包含该推送提交，直接跳过，避免重跑、版本回写或排队事件再次递增。
 3. prepare 在本地生成只修改五个版本文件的 `chore(release): vX.Y.Z` 提交，运行 lint、前端与发布测试，并用 Git bundle 导出这一个提交，尚不推送远端。
 4. build 矩阵分别下载由 artifact ID 指定的 bundle，校验并恢复预期提交；安装锁定依赖与 Rust 1.99.1，运行各平台 Rust 格式/Clippy/数据库测试和归档测试，再运行 Tauri（包含 TypeScript 检查与 Vite 构建）。
 5. 各平台整理分发文件，上传以版本提交 SHA 和平台命名的 artifact。缺失、空文件或多个候选安装包均失败。
@@ -74,13 +74,13 @@ main 与 dev 的版本一致，但提交 SHA 不同，dev 未发布的业务改�
 
 - `main`、`dev` 必须已存在，仓库开启 GitHub Actions，并允许本工作流请求 `contents: write`。
 - 分支与标签保护必须允许工作流身份写入。`GITHUB_TOKEN` 不会自动绕过保护；如果组织规定必须使用具有绕过权限的 GitHub App，需要先配置该身份，再调整 checkout 的 token。不要为运行流水线关闭整个仓库的保护。
-- 本工作流需先进入仓库默认分支，GitHub 才能加载 `pull_request_target` 事件配置；应把默认分支设为 main。第一次引入工作流的合并是否产生运行需在 GitHub 检查，后续 main PR 合并按此配置触发。
+- 将包含本工作流的提交推送到 main 即可触发，不需要额外创建 PR 或标签。仅保存在本地不会执行，旧推送不会自动补跑；工作流没有手动触发入口。
 - 构建或产物上传失败：远端版本未递增，可选择 **Re-run failed jobs** 复用原版本与成功平台产物；如果 main 已前进，选择 **Re-run all jobs** 或等待下一次合并，以构建最新代码。
 - main 前进或远端拒绝写入：main/dev/标签均不由本次更新，重新运行会重新读取当前版本。已上传 artifact 是失败运行的候选产物，以**整个任务成功并存在对应标签**作为交付依据。
 - dev 冲突：自动中止 cherry-pick，保留远端分支。检查 dev 上的版本文件，把版本字段与已发布版本对齐并保留其他开发内容，再重跑；不通过覆盖 dev 解决冲突。
 - 同步成功而 Release 上传/公开失败：选择原运行的 **Re-run failed jobs**，只重跑 publish，使用保留的全部平台产物恢复草稿；不再次增加版本。此时 main/dev/标签已经同步，Git 分支与 GitHub Release API 不属于同一事务。
 - sync 若在原子推送成功后因 runner 中断被判定失败，重跑会验证相同标签与 dev cherry-pick 记录并跳过重复推送。
-- 同步成功后选择 **Re-run all jobs**：prepare 发现标签已覆盖 PR，跳过后续阶段。恢复发布失败时应选择 **Re-run failed jobs**；需要在 90 天 artifact 保留期内操作。
+- 同步成功后选择 **Re-run all jobs**：prepare 发现标签已覆盖推送提交，跳过后续阶段。恢复发布失败时应选择 **Re-run failed jobs**；需要在 90 天 artifact 保留期内操作。
 
 ## 本地验证
 

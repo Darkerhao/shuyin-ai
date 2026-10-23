@@ -26,7 +26,7 @@ function commitFile(cwd, file, content, message) {
   return git(cwd, 'rev-parse', 'HEAD')
 }
 
-function fixture(t, { message = 'fix: improve probe', title = message, initialTag = true } = {}) {
+function fixture(t, { message = 'fix: improve probe', initialTag = true } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'shuyin-release-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const remote = join(root, 'remote.git')
@@ -54,9 +54,7 @@ function fixture(t, { message = 'fix: improve probe', title = message, initialTa
   git(seed, 'push', 'origin', 'main', 'dev', '--tags')
   git(root, 'clone', remote, runner)
   identity(runner)
-  const event = { action: 'closed', number: 1, pull_request: {
-    merged: true, base: { ref: 'main' }, merge_commit_sha: merge, title,
-  } }
+  const event = { ref: 'refs/heads/main', deleted: false, after: merge }
   return { root, remote, seed, runner, event }
 }
 
@@ -113,7 +111,7 @@ test('bumps and resets the correct version segments, including pre-1.0 major cha
 })
 
 test('first release needs no tag; preparing the version never writes to the remote', t => {
-  const { runner, remote, event } = fixture(t, { title: 'feat: projects', initialTag: false })
+  const { runner, remote, event } = fixture(t, { message: 'feat: projects', initialTag: false })
   const before = remoteRefs(remote)
   const result = prepare(runner, event)
   assert.equal(result.version, '0.2.0')
@@ -125,14 +123,15 @@ test('first release needs no tag; preparing the version never writes to the remo
   assert.ok(diff.every(line => /^(1\t1|2\t2)\t/.test(line)), 'only version lines change')
 })
 
-test('rejects dev merges, unmerged closes and non-PR events before changing files', t => {
+test('rejects dev, tags, branch deletion and PR events before changing files', t => {
   const { runner, event } = fixture(t)
   for (const invalid of [
-    { ...event, action: 'opened' },
-    { ...event, pull_request: { ...event.pull_request, merged: false } },
-    { ...event, pull_request: { ...event.pull_request, base: { ref: 'dev' } } },
-    { action: 'push' },
-  ]) assert.throws(() => prepare(runner, invalid), /仅允许已合并到 main/)
+    { ...event, ref: 'refs/heads/dev' },
+    { ...event, ref: 'refs/tags/v0.1.0' },
+    { ...event, deleted: true },
+    { ...event, after: '0'.repeat(40) },
+    { action: 'closed', pull_request: { merged: true } },
+  ]) assert.throws(() => prepare(runner, invalid), /仅允许 main 分支的代码推送/)
   assert.equal(git(runner, 'status', '--porcelain'), '')
 })
 
@@ -146,7 +145,7 @@ test('validates every manifest before modifying any of them', t => {
 })
 
 test('publishes main, tag and cherry-picked dev together while retaining dev changes', t => {
-  const { seed, runner, remote, event } = fixture(t, { title: 'feat: projects' })
+  const { seed, runner, remote, event } = fixture(t, { message: 'feat: projects' })
   git(seed, 'checkout', 'dev')
   const development = commitFile(seed, 'dev-only.txt', 'unreleased work\n', 'feat: next development')
   git(seed, 'push', 'origin', 'dev')
@@ -162,7 +161,7 @@ test('publishes main, tag and cherry-picked dev together while retaining dev cha
   assert.throws(() => git(remote, 'show', 'main:dev-only.txt'))
 })
 
-test('reruns and PRs already covered by a published tag do not increment again', t => {
+test('reruns and commits already covered by a published tag do not increment again', t => {
   const { runner, remote, event } = fixture(t)
   const result = prepare(runner, event)
   finalize(runner, result.commit, result.version)
@@ -188,9 +187,7 @@ test('a second dev-to-main merge and version sync excludes the previous breaking
   git(seed, 'push', 'origin', 'main')
   git(runner, 'fetch', 'origin')
   git(runner, 'checkout', '--detach', 'origin/main')
-  const next = prepare(runner, { ...event, number: 2, pull_request: {
-    ...event.pull_request, merge_commit_sha: merge, title: 'fix: persistence',
-  } })
+  const next = prepare(runner, { ...event, after: merge })
   assert.equal(next.version, '1.0.1')
   finalize(runner, next.commit, next.version)
   assert.deepEqual(versions(remote, 'main'), Array(6).fill('1.0.1'))
@@ -263,5 +260,30 @@ test('retrying sync after a successful atomic push does not create another commi
   git(runner, 'checkout', '--detach', result.commit)
   const before = remoteRefs(remote)
   assert.equal(finalize(runner, result.commit, result.version).alreadySynced, true)
+  assert.equal(remoteRefs(remote), before)
+})
+
+test('local cherry-pick pushed to main prepares a release without any PR payload', t => {
+  const { seed, runner, event } = fixture(t)
+  git(seed, 'checkout', 'dev')
+  const source = commitFile(seed, 'feature.txt', 'cross-platform packaging\n', 'feat: platform packages')
+  git(seed, 'push', 'origin', 'dev')
+  git(seed, 'checkout', 'main')
+  git(seed, 'cherry-pick', '-x', source)
+  const after = git(seed, 'rev-parse', 'HEAD')
+  git(seed, 'push', 'origin', 'main')
+  git(runner, 'pull', '--ff-only')
+  const result = prepare(runner, { ...event, after })
+  assert.equal(result.version, '0.2.0')
+  assert.equal(result.base, after)
+})
+
+test('a push of the generated version commit never starts another release', t => {
+  const { runner, event, remote } = fixture(t)
+  const result = prepare(runner, event)
+  finalize(runner, result.commit, result.version)
+  git(runner, 'checkout', '--detach', result.commit)
+  const before = remoteRefs(remote)
+  assert.deepEqual(prepare(runner, { ...event, after: result.commit }), { skip: true })
   assert.equal(remoteRefs(remote), before)
 })

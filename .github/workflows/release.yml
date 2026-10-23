@@ -1,9 +1,8 @@
 name: Desktop packages and version sync
 
 on:
-  pull_request_target:
+  push:
     branches: [main]
-    types: [closed]
 
 permissions:
   contents: read
@@ -14,7 +13,8 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.event.pull_request.merged == true
+    if: >-
+      github.event.deleted == false && !startsWith(github.event.head_commit.message, 'chore(release): v')
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     outputs:
@@ -25,7 +25,7 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       source-artifact: ${{ steps.source.outputs.artifact-id }}
     steps:
-      # Never check out the PR head in a privileged pull_request_target workflow.
+      # Always build code from main; dev and tag pushes do not trigger this workflow.
       - uses: actions/checkout@v7.0.1
         with:
           ref: main

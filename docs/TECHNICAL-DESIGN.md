@@ -218,7 +218,7 @@ interface PublishProvider {
 
 ## 12. 跨平台自动打包
 
-GitHub Actions 仅在 PR 已合并到 main 时构建。prepare 生成一次语义版本提交，通过 Git bundle 传递给 Windows x64、macOS ARM64、macOS x64、Linux x64 四个独立 runner，所有构建均校验并使用同一个提交 SHA，打包前不推送版本。
+GitHub Actions 仅监听 main 的 push，支持 PR 合并及本地 merge/cherry-pick 后推送。版本提交通过 job 条件及已发布标签检查跳过，避免循环触发；dev 和标签推送不构建。prepare 生成一次语义版本提交，通过 Git bundle 传递给 Windows x64、macOS ARM64、macOS x64、Linux x64 四个独立 runner，所有构建均校验并使用同一个提交 SHA，打包前不推送版本。
 
 Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`desktop:build` 不再固定 Windows。Linux 的产品名使用 `Shuyin AI`，确保包管理器包名为 `shuyin-ai`；应用标识符和中文界面不变。macOS 使用现有 SVG 生成的 ICNS，当前为 ad-hoc 签名，尚未配置 Apple Developer ID 与公证。
 

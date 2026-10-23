@@ -89,33 +89,32 @@ export function updateVersions(cwd, current, next) {
 }
 
 export function prepare(cwd, event) {
-  const pr = event.pull_request
-  if (event.action !== 'closed' || pr?.merged !== true || pr.base?.ref !== 'main' ||
-      !/^[a-f0-9]{40}$/.test(pr.merge_commit_sha) || !Number.isSafeInteger(event.number)) {
-    throw new Error('仅允许已合并到 main 的 PR 生成版本。')
+  if (event.ref !== 'refs/heads/main' || event.deleted === true ||
+      !/^[a-f0-9]{40}$/.test(event.after) || /^0+$/.test(event.after)) {
+    throw new Error('仅允许 main 分支的代码推送生成版本。')
   }
   requireClean(cwd)
   fetchBranches(cwd)
   const base = git(cwd, 'rev-parse', 'HEAD')
   if (base !== git(cwd, 'rev-parse', 'origin/main')) throw new Error('main 已前进，请重新运行流水线。')
-  if (!isAncestor(cwd, pr.merge_commit_sha, base)) throw new Error('PR 合并提交不在 main 历史中。')
+  if (!isAncestor(cwd, event.after, base)) throw new Error('推送提交不在 main 历史中。')
 
   const current = JSON.parse(readFileSync(`${cwd}/package.json`, 'utf8')).version
   const previousTag = `v${current}`
   const hasTag = git(cwd, 'tag', '--list', previousTag) === previousTag
   if (hasTag && !isAncestor(cwd, previousTag, base)) throw new Error(`${previousTag} 不在 main 历史中。`)
-  // A successful build may already include this PR (also makes reruns idempotent).
-  if (hasTag && isAncestor(cwd, pr.merge_commit_sha, previousTag)) return { skip: true }
+  // Covers reruns, queued older pushes and the generated version commit itself.
+  if (hasTag && isAncestor(cwd, event.after, previousTag)) return { skip: true }
 
   const messages = git(cwd, 'log', '--format=%B%x00', hasTag ? `${previousTag}..HEAD` : 'HEAD')
     .split('\0').map(message => message.trim()).filter(message => !message.startsWith('chore(release): v'))
-  const type = releaseType([pr.title, ...messages])
+  const type = releaseType(messages)
   const version = nextVersion(current, type)
   const tag = `v${version}`
   if (git(cwd, 'tag', '--list', tag)) throw new Error(`${tag} 已存在，停止重复发布。`)
   updateVersions(cwd, current, version)
   git(cwd, 'add', '--', ...versionFiles)
-  git(cwd, 'commit', '-m', `chore(release): ${tag}\n\nRelease-PR: #${event.number}`)
+  git(cwd, 'commit', '-m', `chore(release): ${tag}\n\nRelease-Source: ${event.after}`)
   return { skip: false, base, version, tag, type, commit: git(cwd, 'rev-parse', 'HEAD') }
 }
 
@@ -176,7 +175,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const cwd = process.cwd()
   let result
   if (process.argv[2] === 'prepare') {
-    if (process.env.GITHUB_EVENT_NAME !== 'pull_request_target') throw new Error('版本准备只能由合并事件运行。')
+    if (process.env.GITHUB_EVENT_NAME !== 'push') throw new Error('版本准备只能由 main 推送事件运行。')
     result = prepare(cwd, JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')))
     if (!result.skip && process.env.RELEASE_BUNDLE) exportPrepared(cwd, process.env.RELEASE_BUNDLE, result.commit)
   } else if (process.argv[2] === 'restore') {
