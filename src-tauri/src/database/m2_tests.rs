@@ -67,9 +67,6 @@ fn generation(project_id: &str, provider_id: &str) -> GenerationInput {
     GenerationInput {
         project_id: project_id.into(),
         provider_id: provider_id.into(),
-        kind: "outline".into(),
-        count: 5,
-        reference_version_id: None,
     }
 }
 #[test]
@@ -199,11 +196,11 @@ fn default_model_is_unique_and_deletion_preserves_history() {
     let id = db.start_generation(input.clone()).unwrap();
     assert!(db.delete_provider(&first.id, &vault).is_err());
     db.prepare_generation(&id).unwrap();
-    db.finish_generation(&id, &input, markdown("生成大纲"), "test")
+    db.finish_generation(&id, &input, publishing(), "test")
         .unwrap();
     db.delete_provider(&first.id, &vault).unwrap();
     assert!(vault.entries.lock().unwrap().is_empty());
-    assert_eq!(db.list_versions(&p.id, "outline").unwrap().len(), 1);
+    assert_eq!(db.list_versions(&p.id, "publishing").unwrap().len(), 1);
     assert_eq!(db.list_ai_tasks(&p.id).unwrap()[0].status, "succeeded");
 }
 #[test]
@@ -258,16 +255,16 @@ fn task_success_is_atomic_and_cancelled_or_invalid_results_never_create_versions
     db.end_generation(&task, "cancelled", "cancelled", "用户取消")
         .unwrap();
     assert!(db
-        .finish_generation(&task, &input, markdown("迟到的结果"), "test")
+        .finish_generation(&task, &input, publishing(), "test")
         .is_err());
-    assert!(db.list_versions(&p.id, "outline").unwrap().is_empty());
+    assert!(db.list_versions(&p.id, "publishing").unwrap().is_empty());
     let task = db.start_generation(input.clone()).unwrap();
     db.prepare_generation(&task).unwrap();
     db.with_connection(|c|c.execute_batch("CREATE TRIGGER fail_task BEFORE UPDATE ON ai_tasks WHEN NEW.status='succeeded' BEGIN SELECT RAISE(ABORT,'test commit failure'); END;").map_err(|e|e.to_string())).unwrap();
     assert!(db
-        .finish_generation(&task, &input, markdown("必须回滚"), "test")
+        .finish_generation(&task, &input, publishing(), "test")
         .is_err());
-    assert!(db.list_versions(&p.id, "outline").unwrap().is_empty());
+    assert!(db.list_versions(&p.id, "publishing").unwrap().is_empty());
     db.recover_ai_tasks().unwrap();
     assert!(db
         .list_ai_tasks(&p.id)
@@ -312,4 +309,110 @@ fn v2_backup_is_upgraded_in_memory_and_active_generation_blocks_restore() {
             .unwrap(),
         2
     );
+}
+
+fn publishing() -> WritingContent {
+    WritingContent::Publishing {
+        title: "发布标题".into(),
+        description: "发布内容".into(),
+        audio_prompt: "音频提示词".into(),
+    }
+}
+
+#[test]
+fn v3_upgrade_preserves_old_versions_task_links_and_backup_and_allows_title_only_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("v3.sqlite3");
+    let c = Connection::open(&old).unwrap();
+    c.pragma_update(None, "foreign_keys", true).unwrap();
+    for sql in MIGRATIONS.iter().take(3) {
+        c.execute_batch(sql).unwrap();
+    }
+    c.execute_batch("INSERT INTO book_projects(id,title,target_duration_seconds,status,workspace_path,created_at,updated_at) VALUES('p','旧书',600,'draft','D:/books','old','old');
+    INSERT INTO model_providers VALUES('m','模型','openai-compatible','https://example.com/v1','model',1,1,'reference','old','old');
+    INSERT INTO writing_versions VALUES('v','p','outline',1,'{\"format\":\"markdown\",\"text\":\"旧稿\"}','ai','model','writing-v1',1,'old');
+    INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,version_id,created_at,completed_at) VALUES('t','p','outline','m','model','writing-v1','succeeded','{}','v','old','old');
+    PRAGMA user_version=3;").unwrap();
+    drop(c);
+    let current = dir.path().join("current.sqlite3");
+    std::fs::copy(&old, &current).unwrap();
+    let db = Database::open(current.clone());
+    assert_eq!(
+        db.list_ai_tasks("p").unwrap()[0].version_id.as_deref(),
+        Some("v")
+    );
+    assert_eq!(
+        db.list_versions("p", "outline").unwrap()[0].content,
+        markdown("旧稿")
+    );
+    let new = db
+        .start_generation(GenerationInput {
+            project_id: "p".into(),
+            provider_id: "m".into(),
+        })
+        .unwrap();
+    db.prepare_generation(&new).unwrap();
+    db.finish_generation(
+        &new,
+        &GenerationInput {
+            project_id: "p".into(),
+            provider_id: "m".into(),
+        },
+        publishing(),
+        "model",
+    )
+    .unwrap();
+    assert_eq!(db.list_versions("p", "publishing").unwrap().len(), 1);
+    let v4 = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    db.restore_backup(old.to_str().unwrap()).unwrap();
+    assert_eq!(
+        db.list_ai_tasks("p").unwrap()[0].version_id.as_deref(),
+        Some("v")
+    );
+    db.restore_backup(&v4).unwrap();
+    assert_eq!(db.list_versions("p", "publishing").unwrap().len(), 1);
+    let c = Connection::open(current).unwrap();
+    assert!(!c
+        .prepare("PRAGMA foreign_key_check")
+        .unwrap()
+        .exists([])
+        .unwrap());
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        Connection::open(old)
+            .unwrap()
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        3
+    );
+}
+#[test]
+fn v4_migration_failure_rolls_back_without_dropping_old_task_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("conflict.sqlite3");
+    let c = Connection::open(&path).unwrap();
+    for sql in MIGRATIONS.iter().take(3) {
+        c.execute_batch(sql).unwrap();
+    }
+    c.execute_batch("CREATE TABLE ai_tasks_v4(original TEXT); INSERT INTO ai_tasks_v4 VALUES('keep'); PRAGMA user_version=3;").unwrap();
+    drop(c);
+    assert!(Database::open(path.clone()).read().is_err());
+    let c = Connection::open(path).unwrap();
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        c.query_row("SELECT original FROM ai_tasks_v4", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "keep"
+    );
+    assert!(c.prepare("SELECT * FROM writing_versions").is_ok());
+    assert!(c.prepare("SELECT * FROM writing_versions_v4").is_err());
 }

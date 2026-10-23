@@ -1,7 +1,7 @@
 use crate::{
     ai::{
-        ActiveTasks, AiError, OpenAiCompatible, TextProvider, TextRequest, WritingContent,
-        SYSTEM_PROMPT, TIMEOUT,
+        publishing::PublishingDraft, ActiveTasks, AiError, OpenAiCompatible, TextProvider,
+        TextRequest, SYSTEM_PROMPT, TIMEOUT,
     },
     credentials::{Credentials, SystemCredentials},
     database::{
@@ -160,8 +160,8 @@ pub async fn execute_generation(
             _=receiver.changed()=>return Err(AiError::new("cancelled","生成已取消，原有内容保留。")),
             response=provider.generate(req)=>response?,
         };
-        let content:WritingContent=serde_json::from_str(&raw).map_err(|_|AiError::new("invalid_content","模型输出不符合 JSON 内容结构，原有内容保留。"))?;
-        content.validate(&prepared.input.kind,Some(prepared.input.count)).map_err(|s|AiError::new("invalid_content",&s))?;
+        let draft:PublishingDraft=serde_json::from_str(&raw).map_err(|_|AiError::new("invalid_content","模型输出不符合发布内容结构，原有内容保留。"))?;
+        let content=draft.into_content(&prepared.book_title).map_err(|s|AiError::new("invalid_content",&s))?;
         database.finish_generation(&id,&prepared.input,content,&model).map_err(AiError::database)
     }.await;
     if let Ok(mut signals) = active.0.lock() {

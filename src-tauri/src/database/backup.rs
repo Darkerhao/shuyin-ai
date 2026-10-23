@@ -31,7 +31,7 @@ fn validate_backup(connection: &Connection) -> Result<(), String> {
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .map_err(|e| e.to_string())?;
     if !(2..=super::MIGRATIONS.len() as u32).contains(&version) {
-        return Err("仅可恢复数据库版本 2 或 3 的备份。".into());
+        return Err("备份版本不受当前应用支持。".into());
     }
     let check: String = connection
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))

@@ -107,9 +107,6 @@ pub struct SaveWritingInput {
 pub struct GenerationInput {
     pub project_id: String,
     pub provider_id: String,
-    pub kind: String,
-    pub count: usize,
-    pub reference_version_id: Option<String>,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +138,7 @@ pub struct PreparedGeneration {
     pub input: GenerationInput,
     pub provider: ProviderConfig,
     pub user: String,
+    pub book_title: String,
 }
 
 fn append(
@@ -276,18 +274,12 @@ impl Database {
             let rows=q.query_map([project_id],row_task).map_err(|e|e.to_string())?; rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())})
     }
     pub fn start_generation(&self, input: GenerationInput) -> Result<String, String> {
-        ai::validate_kind(&input.kind)?;
-        if !(1..=20).contains(&input.count) {
-            return Err("生成数量应为 1–20。".into());
-        }
         self.with_connection(|c| {
-            let project=get(c,&input.project_id)?;
-            if project.input.description.trim().is_empty() && project.input.source_notes.trim().is_empty(){return Err("请先保存书籍简介或读书笔记，再生成内容。".into());}
+            get(c,&input.project_id)?;
             let p=provider(c,&input.provider_id)?;
             if !p.input.is_enabled{return Err("所选模型已停用。".into());}
-            if let Some(r)=&input.reference_version_id{if version(c,r)?.project_id!=input.project_id{return Err("参考版本不属于当前项目。".into());}}
             let id=new_id(c)?;
-            c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW})"),params![id,input.project_id,input.kind,input.provider_id,p.input.model_name,PROMPT_VERSION,serde_json::to_string(&input).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+            c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW})"),params![id,input.project_id,"publishing",input.provider_id,p.input.model_name,PROMPT_VERSION,serde_json::to_string(&input).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
             Ok(id)
         })
     }
@@ -298,10 +290,9 @@ impl Database {
             let project=get(c,&input.project_id)?;
             let p=provider(c,&input.provider_id)?;
             if !p.input.is_enabled{return Err("所选模型已停用。".into());}
-            let reference=input.reference_version_id.as_deref().map(|s|version(c,s)).transpose()?.map(|v|v.content);
-            let user=serde_json::json!({"task":input.kind,"count":input.count,"book":project.input,"reference":reference}).to_string();
+            let user=serde_json::json!({"book":{"title":project.input.title,"author":project.input.author,"description":project.input.description,"sourceNotes":project.input.source_notes}}).to_string();
             c.execute("UPDATE ai_tasks SET status='running',model_name=?2 WHERE id=?1 AND status='pending'",params![id,p.input.model_name]).map_err(|e|e.to_string())?;
-            Ok(PreparedGeneration{input,provider:p,user})
+            Ok(PreparedGeneration{input,provider:p,user,book_title:project.input.title})
         })
     }
     pub fn finish_generation(
@@ -311,12 +302,12 @@ impl Database {
         content: WritingContent,
         model: &str,
     ) -> Result<WritingVersion, String> {
-        content.validate(&input.kind, Some(input.count))?;
+        content.validate("publishing", None)?;
         self.with_connection(|c|{
             let tx=c.transaction().map_err(|e|e.to_string())?;
             let running:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE id=?1 AND status='running')",[id],|r|r.get(0)).map_err(|e|e.to_string())?;
             if !running{return Err("任务已取消或结束，结果未写入。".into());}
-            let saved=append(&tx,&SaveWritingInput{project_id:input.project_id.clone(),kind:input.kind.clone(),content,based_on:None,is_confirmed:false},"ai",model,PROMPT_VERSION)?;
+            let saved=append(&tx,&SaveWritingInput{project_id:input.project_id.clone(),kind:"publishing".into(),content,based_on:None,is_confirmed:false},"ai",model,PROMPT_VERSION)?;
             tx.execute(&format!("UPDATE ai_tasks SET status='succeeded',version_id=?2,completed_at={NOW} WHERE id=?1"),params![id,saved.id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;Ok(saved)
         })

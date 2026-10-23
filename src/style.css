@@ -57,3 +57,13 @@ button.secondary.danger { color: #a22929; background: white; }
 .task-row { border-top: 1px solid #dde3d9; padding: 12px 0; font-size: 14px; }
 .confirmation { border-color: #c97168; }
 @media (max-width: 950px) { .header-action { position: static; } .project-grid { grid-template-columns: 1fr; } }
+
+.result-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.result-heading label { margin: 0; font-size: 18px; font-weight: 600; }
+.character-count { text-align: right; margin: 8px 0 0; }
+.history-panel { margin: 24px 0; padding: 16px 0; border-top: 1px solid #dde3d9; }
+.history-panel summary { cursor: pointer; color: #637167; }
+.history-panel button, .save-book { margin-top: 18px; }
+
+.book-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: end; }
+.book-search label { margin-top: 0; }

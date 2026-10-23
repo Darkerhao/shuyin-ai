@@ -8,11 +8,11 @@ import * as api from '../src/services/ai'
 import * as projects from '../src/services/projects'
 import { emptyProject } from '../src/types/project'
 import { emptyProvider, type ModelProvider, type WritingVersion } from '../src/types/ai'
-vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), listTasks: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), cancelGeneration: vi.fn() }))
+vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn() }))
 const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模型', modelName: 'model', isDefault: true, credentialStatus: 'available' }
-const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'outline', versionNo: 1, content: { format: 'markdown', text: '原有大纲' }, sourceType: 'ai', modelName: 'model', promptVersion: 'writing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
-const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { format: 'markdown', text: '新生成大纲' }, isConfirmed: false }
+const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { format: 'publishing', title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'writing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
+const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { format: 'publishing', title: '新标题', description: '新内容', audioPrompt: '新提示词' }, isConfirmed: false }
 const wrappers: ReturnType<typeof mount>[] = []
 async function render(path = '/projects/p1/writing') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
@@ -32,77 +32,95 @@ beforeEach(() => {
   vi.resetAllMocks(); vi.stubGlobal('confirm', vi.fn(() => false))
   vi.mocked(projects.isDesktop).mockReturnValue(true)
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
-  vi.mocked(api.listProviders).mockResolvedValue([provider]); vi.mocked(api.listTasks).mockResolvedValue([])
-  vi.mocked(api.listVersions).mockImplementation(async (_id, kind) => kind === 'outline' ? [initial] : [])
+  vi.mocked(api.listProviders).mockResolvedValue([provider])
+  vi.mocked(api.listVersions).mockImplementation(async (_id, kind) => kind === 'publishing' ? [initial] : [])
   vi.mocked(api.startGeneration).mockResolvedValue('t1')
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
-describe('M2 writing workflow', () => {
-  it('blocks desktop IPC in browser preview', async () => {
+describe('publishing workflow', () => {
+  it('shows only three outputs and blocks desktop IPC in browser preview', async () => {
     vi.mocked(projects.isDesktop).mockReturnValue(false)
-    const { wrapper } = await render(); expect(api.listProviders).not.toHaveBeenCalled(); expect(wrapper.text()).toContain('请在桌面应用')
+    const { wrapper } = await render()
+    expect(api.listVersions).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('请在桌面应用')
   })
-  it('preserves edited drafts when generation fails and formats sanitized IPC errors', async () => {
-    const { wrapper } = await render(); await wrapper.get('#writing-draft').setValue('未保存的重要修改')
+  it('generates all three outputs in one task without outline/count/reference controls', async () => {
+    const { wrapper } = await render()
+    expect(wrapper.findAll('textarea')).toHaveLength(3)
+    expect(wrapper.find('#writing-kind').exists()).toBe(false)
+    expect(wrapper.find('#writing-count').exists()).toBe(false)
+    expect(wrapper.find('#writing-reference').exists()).toBe(false)
+    vi.mocked(api.executeGeneration).mockResolvedValue(generated)
+    await button(wrapper, '一键生成').trigger('click'); await flushPromises()
+    expect(api.startGeneration).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', providerId: 'm1' })
+    expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('新标题')
+    expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('新内容')
+    expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('新提示词')
+  })
+  it('preserves all edited fields when generation fails', async () => {
+    const { wrapper } = await render()
+    await wrapper.get('#result-title').setValue('未保存标题')
+    await wrapper.get('#result-description').setValue('未保存内容')
+    await wrapper.get('#result-audioPrompt').setValue('未保存提示词')
     vi.mocked(api.executeGeneration).mockRejectedValue({ code: 'timeout', message: '模型请求超时' })
-    await button(wrapper, '生成新版本').trigger('click'); await flushPromises()
+    await button(wrapper, '一键生成').trigger('click'); await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('模型请求超时')
-    expect((wrapper.get('#writing-draft').element as HTMLTextAreaElement).value).toBe('未保存的重要修改')
+    expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('未保存标题')
+    expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('未保存内容')
+    expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('未保存提示词')
     expect(api.saveWriting).not.toHaveBeenCalled()
   })
-  it('keeps edits made during generation and leaves new output in history', async () => {
+  it('keeps edits made during generation and leaves generated output in history', async () => {
     let complete!: (v: WritingVersion) => void
     vi.mocked(api.executeGeneration).mockReturnValue(new Promise(resolve => { complete = resolve }))
-    const { wrapper } = await render(); await button(wrapper, '生成新版本').trigger('click'); await flushPromises()
-    await wrapper.get('#writing-draft').setValue('生成过程中手动编辑')
-    vi.mocked(api.listVersions).mockImplementation(async (_id, kind) => kind === 'outline' ? [generated, initial] : [])
+    const { wrapper } = await render(); await button(wrapper, '一键生成').trigger('click'); await flushPromises()
+    await wrapper.get('#result-description').setValue('生成中手动编辑')
     complete(generated); await flushPromises()
-    expect((wrapper.get('#writing-draft').element as HTMLTextAreaElement).value).toBe('生成过程中手动编辑')
-    expect(wrapper.get('#writing-version').text()).toContain('v2'); expect(wrapper.text()).toContain('当前编辑草稿已保留')
+    expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('生成中手动编辑')
+    expect(wrapper.get('#writing-version').text()).toContain('v2')
+    expect(wrapper.text()).toContain('当前修改已保留')
   })
-  it('saves edits as a new version, switches history, and confirms before abandoning edits', async () => {
-    const { wrapper, router } = await render(); await wrapper.get('#writing-draft').setValue('人工修订')
-    await wrapper.get('#writing-version').setValue(''); expect((wrapper.get('#writing-draft').element as HTMLTextAreaElement).value).toBe('人工修订')
-    await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects/p1/writing')
+  it('saves edits, preserves history, and guards navigation and version switching', async () => {
+    const { wrapper, router } = await render()
+    await wrapper.get('#result-title').setValue('人工修订标题')
+    await router.push('/projects'); expect(router.currentRoute.value.path).toContain('/writing')
     await router.push('/projects/p2/writing'); expect(router.currentRoute.value.path).toBe('/projects/p1/writing')
     vi.mocked(api.saveWriting).mockRejectedValueOnce('保存失败')
-    await wrapper.get('form').trigger('submit'); await flushPromises(); expect((wrapper.get('#writing-draft').element as HTMLTextAreaElement).value).toBe('人工修订')
-    const revised = { ...generated, content: { format: 'markdown', text: '人工修订' } as const, sourceType: 'mixed' as const }
-    vi.mocked(api.saveWriting).mockResolvedValue(revised)
-    vi.mocked(api.listVersions).mockImplementation(async (_id, kind) => kind === 'outline' ? [revised, initial] : [])
     await wrapper.get('form').trigger('submit'); await flushPromises()
-    expect(api.saveWriting).toHaveBeenLastCalledWith(expect.objectContaining({ basedOn: 'v1', content: { format: 'markdown', text: '人工修订' }, isConfirmed: true }))
-    await wrapper.get('#writing-version').setValue('v1'); expect((wrapper.get('#writing-draft').element as HTMLTextAreaElement).value).toBe('原有大纲')
+    expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('人工修订标题')
+    const revised: WritingVersion = { ...generated, content: { format: 'publishing', title: '人工修订标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'mixed' }
+    vi.mocked(api.saveWriting).mockResolvedValue(revised)
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveWriting).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'publishing', basedOn: 'v1', content: revised.content }))
+    await wrapper.get('#writing-version').setValue('v1')
+    expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('原有标题')
     await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects')
   })
-  it('cancels an in-flight task, keeps its draft and unblocks navigation', async () => {
+  it('cancels an in-flight task and restores navigation without losing data', async () => {
     let reject!: (e: unknown) => void
     vi.mocked(api.executeGeneration).mockReturnValue(new Promise((_resolve, fail) => { reject = fail }))
     vi.mocked(api.cancelGeneration).mockImplementation(async () => { reject({ code: 'cancelled', message: '生成已取消' }) })
-    const { wrapper, router } = await render(); await button(wrapper, '生成新版本').trigger('click'); await flushPromises()
+    const { wrapper, router } = await render(); await button(wrapper, '一键生成').trigger('click'); await flushPromises()
     await router.push('/projects'); expect(router.currentRoute.value.path).toContain('/writing')
     await button(wrapper, '取消生成').trigger('click'); await flushPromises()
-    expect(api.cancelGeneration).toHaveBeenCalledWith('t1'); expect((wrapper.get('#writing-draft').element as HTMLTextAreaElement).value).toBe('原有大纲')
+    expect(api.cancelGeneration).toHaveBeenCalledWith('t1')
+    expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('原有标题')
     await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects')
   })
-  it('edits title candidates as items and submits the requested generation count and reference', async () => {
-    const { wrapper } = await render(); await wrapper.get('#writing-kind').setValue('titles'); await flushPromises()
-    await wrapper.get('#writing-draft').setValue('候选一\n候选二')
-    vi.mocked(api.saveWriting).mockRejectedValue('test')
-    await wrapper.get('form').trigger('submit'); await flushPromises()
-    expect(api.saveWriting).toHaveBeenCalledWith(expect.objectContaining({ kind: 'titles', content: { format: 'list', items: ['候选一', '候选二'] } }))
-    await wrapper.get('#writing-count').setValue(2); await wrapper.get('#writing-reference').setValue('v1')
-    vi.mocked(api.executeGeneration).mockRejectedValue('test')
-    await button(wrapper, '生成新版本').trigger('click'); await flushPromises()
-    expect(api.startGeneration).toHaveBeenCalledWith({ projectId: 'p1', providerId: 'm1', kind: 'titles', count: 2, referenceVersionId: 'v1' })
-  })
-  it('keeps editor type and content when loading another history fails', async () => {
-    const { wrapper } = await render(); vi.mocked(api.listVersions).mockRejectedValueOnce('读取失败')
-    await wrapper.get('#writing-kind').setValue('script'); await flushPromises()
-    expect((wrapper.get('#writing-kind').element as HTMLSelectElement).value).toBe('outline')
-    expect((wrapper.get('#writing-draft').element as HTMLTextAreaElement).value).toBe('原有大纲')
+  it('copies the current edited field, reports failure, and preserves content', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const { wrapper } = await render()
+    await wrapper.get('#result-description').setValue('编辑后的多行内容\n中文保持换行')
+    await button(wrapper, '复制发布内容').trigger('click'); await flushPromises()
+    expect(writeText).toHaveBeenLastCalledWith('编辑后的多行内容\n中文保持换行')
+    writeText.mockRejectedValueOnce(new Error('denied'))
+    await button(wrapper, '复制音频生成提示词').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('复制失败')
+    expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('原有提示词')
   })
 })
+
 describe('model configuration', () => {
   it('preserves key input on save failure, clears it after success and never reads it back', async () => {
     const { wrapper } = await render('/settings/models')

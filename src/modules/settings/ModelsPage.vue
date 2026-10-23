@@ -209,4 +209,7 @@ onMounted(() => { if (desktop) void load() })
       </button>
     </div>
   </section>
+  <p class="muted">
+    <a href="#/settings">数据备份与应用目录</a>
+  </p>
 </template>

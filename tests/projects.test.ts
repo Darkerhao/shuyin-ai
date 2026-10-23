@@ -20,7 +20,7 @@ const wrappers: ReturnType<typeof mount>[] = []
 async function render(path: string) {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/projects', component: ProjectsPage }, { path: '/projects/new', component: ProjectPage },
-    { path: '/projects/:id', component: ProjectPage, props: true }, { path: '/settings', component: SettingsPage },
+    { path: '/projects/:id', component: ProjectPage, props: true }, { path: '/projects/:id/writing', component: { template: '<p>发布文案与音频提示词</p>' } }, { path: '/assets', component: ProjectAssets, props: { projectId: 'p1' } }, { path: '/settings', component: SettingsPage },
   ] })
   await router.push(path); await router.isReady()
   const wrapper = mount(App, { global: { plugins: [router] } })
@@ -48,11 +48,11 @@ describe('M1 projects and materials', () => {
   })
   it('searches and filters with explicit query and recovers from a read failure', async () => {
     const { wrapper } = await render('/projects')
-    await wrapper.get('#search').setValue('余华'); await wrapper.get('#status').setValue('archived')
+    await wrapper.get('#search').setValue('余华')
     vi.mocked(api.listProjects).mockRejectedValueOnce('读取失败')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('读取失败')
-    expect(api.listProjects).toHaveBeenLastCalledWith('余华', 'archived')
+    expect(api.listProjects).toHaveBeenLastCalledWith('余华', '')
     vi.mocked(api.listProjects).mockResolvedValueOnce([])
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(wrapper.text()).toContain('没有匹配的项目')
@@ -64,8 +64,8 @@ describe('M1 projects and materials', () => {
     vi.mocked(api.saveProject).mockResolvedValue(saved)
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.saveProject).toHaveBeenCalledWith(null, expect.objectContaining({ title: '活着' }))
-    expect(router.currentRoute.value.path).toBe('/projects/p1')
-    expect(wrapper.findComponent(ProjectAssets).exists()).toBe(true)
+    expect(router.currentRoute.value.path).toBe('/projects/p1/writing')
+    expect(wrapper.text()).toContain('发布文案与音频提示词')
   })
   it('preserves edited input after save failure and prevents accidental route loss', async () => {
     const { wrapper, router } = await render('/projects/p1')
@@ -77,13 +77,15 @@ describe('M1 projects and materials', () => {
     await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects/p1')
     await router.push('/projects/p2'); expect(router.currentRoute.value.path).toBe('/projects/p1')
   })
-  it('archives through the single project save operation', async () => {
+  it('keeps existing metadata while the book form only asks for title, author and optional notes', async () => {
     const { wrapper } = await render('/projects/p1')
-    await wrapper.get('#project-status').setValue('archived')
-    vi.mocked(api.saveProject).mockResolvedValueOnce({ ...saved, status: 'archived', archivedAt: saved.createdAt })
+    expect(wrapper.findAll('input')).toHaveLength(2)
+    expect(wrapper.findAll('textarea')).toHaveLength(1)
+    expect(wrapper.findComponent(ProjectAssets).exists()).toBe(false)
+    await wrapper.get('#notes').setValue('这期聚焦人物关系')
+    vi.mocked(api.saveProject).mockResolvedValue(saved)
     await wrapper.get('form').trigger('submit'); await flushPromises()
-    expect(api.saveProject).toHaveBeenCalledWith('p1', expect.objectContaining({ status: 'archived' }))
-    expect(wrapper.text()).toContain('项目已保存')
+    expect(api.saveProject).toHaveBeenCalledWith('p1', expect.objectContaining({ status: saved.status, description: saved.description, sourceNotes: '这期聚焦人物关系' }))
   })
   it('requires deletion confirmation, cancellation is harmless, success returns to list', async () => {
     const { wrapper, router } = await render('/projects/p1')
@@ -97,7 +99,7 @@ describe('M1 projects and materials', () => {
   })
   it('shows missing assets, preserves reference on cancellation and failed relocation', async () => {
     vi.mocked(api.listAssets).mockResolvedValue([asset])
-    const { wrapper } = await render('/projects/p1')
+    const { wrapper } = await render('/assets')
     expect(wrapper.text()).toContain('文件已丢失')
     expect(button(wrapper, '打开文件').element.disabled).toBe(true)
     vi.mocked(api.chooseAsset).mockResolvedValueOnce(null)
@@ -110,7 +112,7 @@ describe('M1 projects and materials', () => {
   })
   it('refreshes the same asset after successful relocation', async () => {
     vi.mocked(api.listAssets).mockResolvedValueOnce([asset]).mockResolvedValueOnce([{ ...asset, existsStatus: 'available', filePath: 'D:/新视频.mp4' }])
-    const { wrapper } = await render('/projects/p1')
+    const { wrapper } = await render('/assets')
     vi.mocked(api.chooseAsset).mockResolvedValueOnce('D:/新视频.mp4')
     await button(wrapper, '重新定位').trigger('click'); await flushPromises()
     expect(api.linkAsset).toHaveBeenCalledWith('p1', 'D:/新视频.mp4', 'a1')
