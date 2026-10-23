@@ -1,3 +1,4 @@
+pub mod ai;
 mod assets;
 mod backup;
 mod projects;
@@ -38,13 +39,10 @@ fn initialize(path: &PathBuf) -> Result<Connection, String> {
     let version: u32 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|error| error.to_string())?;
-    const MIGRATIONS: &[&str] = &[
-        include_str!("../migrations/0001_m0_probe.sql"),
-        include_str!("../migrations/0002_projects_assets.sql"),
-    ];
     if version as usize > MIGRATIONS.len() {
         return Err(format!(
-            "数据库版本 {version} 高于当前支持版本 2，请使用更新的应用。"
+            "数据库版本 {version} 高于当前支持版本 {}，请使用更新的应用。",
+            MIGRATIONS.len()
         ));
     }
     for (index, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
@@ -61,6 +59,12 @@ fn initialize(path: &PathBuf) -> Result<Connection, String> {
     }
     Ok(connection)
 }
+
+pub(super) const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_m0_probe.sql"),
+    include_str!("../migrations/0002_projects_assets.sql"),
+    include_str!("../migrations/0003_ai_writing.sql"),
+];
 
 impl Database {
     pub fn open(path: PathBuf) -> Self {
@@ -159,7 +163,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                 .unwrap(),
-            2
+            3
         );
     }
 
@@ -215,18 +219,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("test.sqlite3");
         let connection = Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 3).unwrap();
+        connection.pragma_update(None, "user_version", 4).unwrap();
         drop(connection);
         assert!(Database::open(path.clone())
             .read()
             .unwrap_err()
-            .contains("版本 3"));
+            .contains("版本 4"));
         assert_eq!(
             Connection::open(path)
                 .unwrap()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                 .unwrap(),
-            3
+            4
         );
     }
 
@@ -241,3 +245,6 @@ mod tests {
 
 #[cfg(test)]
 mod m1_tests;
+
+#[cfg(test)]
+mod m2_tests;

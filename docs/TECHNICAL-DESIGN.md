@@ -233,3 +233,16 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 - 素材仅存路径及基本元数据；每次读取实际检测文件，区分可用、缺失和无法访问。重新定位保留素材 ID，校验素材类型和重复关联。文件打开只接受已登记且属于允许格式的素材 ID，目录打开只接受项目 ID。
 - 基础备份使用 SQLite `VACUUM INTO` 创建唯一新文件，恢复使用现有 rusqlite 的 `backup` feature；未新增依赖包。备份不包括外部媒体文件。恢复先核验版本、完整性、schema 和外键，再自动备份当前数据库，最后使用 SQLite backup 原子替换数据库内容。
 - M1 备份恢复只接受 schema v2；M0 数据通过正常启动迁移升级。目录重定位不自动迁移文件；媒体时长、分辨率、校验和提取不在本里程碑。
+
+## M2 实际实现（2026-10-23）
+
+- 页面：`/settings/models` 模型配置与测试，`/projects/:id/writing` 创作。业务组件只依赖 `services/ai.ts` 和 `types/ai.ts`，没有供应商请求、密钥读取或 SQL。
+- Rust：`ai.rs` 的统一 `TextProvider::generate(TextRequest)` 接口与 `OpenAiCompatible` 适配器，`ai_commands.rs` 编排任务，`credentials.rs` 访问系统凭据，`database/ai.rs` 负责模型、任务与版本持久化。未新增 npm、UI 或全局状态依赖。
+- 适配器调用 `{base_url}/chat/completions`，只发送 model/messages/stream=false，不假设模型支持 temperature、max_tokens 或 response_format。版本化系统 Prompt 位于 `prompts/writing-v1.md`，用户资料按独立用户消息中的 JSON 数据传入。
+- reqwest 0.13.5 使用 Rustls 证书校验；120 秒总超时、15 秒连接超时、显式禁止自动重试和重定向。回环服务绕过环境代理，远程服务保留 reqwest 的环境代理行为；HTTP 仅允许 localhost/127.0.0.1/::1，其他服务必须 HTTPS，URL 不允许账号、查询或片段。
+- HTTP 状态错误只返回本地固定文案，不向界面或日志返回服务响应体、授权头和底层网络错误。响应最多 2 MB，必须完整结束（finish_reason=stop）、有非空文本，再严格解析带 format 的 JSON 并核验内容类型、数量和长度才入库。连接测试验证文本通信，不代表生成 JSON 能力已验收。
+- keyring 4.2.0 默认 v1 API 选择 Windows Credential Manager、macOS Keychain、Linux Secret Service。service 使用实际应用 identifier，凭据引用随机生成，验证产品与正式产品隔离；WebView 没有凭据回读命令。更换服务地址需重新输入已有密钥，避免把旧密钥送到新地址。
+- start_generation 创建 pending；execute_generation 转 running 并调用 Provider；取消使用瞬时 watch 信号，同时 SQLite 把任务转 cancelled。网络等待期间不持有数据库锁；版本与成功状态事务提交，并在数据库锁下检查任务仍为 running。重启和恢复将未完成任务标记 interrupted。
+- 历史内容共用 writing_versions，按项目和内容类型分别编号，人工修订保留模型/Prompt 来源。生成期间的手动编辑保留，新生成内容留在历史；手动保存期间禁用编辑，避免保存响应覆盖同时输入。路由离开和窗口关闭前提示未保存状态。
+- 新业务命令同时登记于 `build.rs`、`lib.rs`、`permissions/ai.toml` 与主窗口 capability；无新增任意网络、Shell、SQL 或文件写入权限。
+- 备份恢复支持 v2/v3，并在内存快照中升级旧备份。详见 DATABASE 第 9 节；已执行命令与实测边界见 `M2-VERIFICATION.md`。

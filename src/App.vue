@@ -18,6 +18,9 @@ import { RouterLink, RouterView } from 'vue-router'
         <RouterLink to="/settings">
           目录与备份
         </RouterLink>
+        <RouterLink to="/settings/models">
+          文本模型
+        </RouterLink>
         <RouterLink to="/verification">
           工程验证
         </RouterLink>

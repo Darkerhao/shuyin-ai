@@ -73,7 +73,7 @@ onMounted(() => { if (desktop) void load() })
   </section>
   <section class="panel">
     <h2>数据库备份与恢复</h2><p class="muted">
-      备份包含项目资料、素材路径和普通设置，不复制视频、图片或工作目录内的文件。请另行保管源素材。
+      备份包含项目资料、创作版本、模型配置、素材路径和普通设置，不包含 API Key，也不复制视频、图片或工作目录内的文件。恢复后请在模型设置中检查并重新输入缺失的密钥。
     </p><div class="actions">
       <button
         :disabled="!desktop || busy"
@@ -99,7 +99,7 @@ onMounted(() => { if (desktop) void load() })
       确认替换当前项目数据？
     </h2><p class="file-path">
       {{ restorePath }}
-    </p><p>恢复将替换全部项目、素材关联和普通设置。系统会先校验备份并自动保存当前数据库；原始素材文件保持原位，失效路径可在项目内重新定位。</p><div class="actions">
+    </p><p>恢复将替换全部项目、创作版本、模型配置、任务、素材关联和普通设置。系统会先校验备份并自动保存当前数据库；原始素材文件保持原位，失效路径可在项目内重新定位。密钥不随备份恢复。</p><div class="actions">
       <button
         class="danger"
         :disabled="busy"

@@ -49,6 +49,13 @@ onMounted(() => { if (desktop && props.id) void load() })
     </RouterLink><h1>{{ project ? project.title : '新建书籍项目' }}</h1><p class="muted">
       {{ dirty ? '有未保存的修改' : '书籍资料与创作方向' }}
     </p>
+    <RouterLink
+      v-if="project"
+      class="button"
+      :to="`/projects/${project.id}/writing`"
+    >
+      进入 AI 创作
+    </RouterLink>
   </header>
   <p
     v-if="!desktop"
@@ -193,7 +200,7 @@ onMounted(() => { if (desktop && props.id) void load() })
   >
     <h2 id="delete-title">
       确认删除「{{ project.title }}」？
-    </h2><p>将删除项目资料及全部素材关联，无法撤销。原始视频、素材文件和工作目录都会保留。</p>
+    </h2><p>将删除项目资料、创作版本、生成任务及全部素材关联，无法撤销。原始视频、素材文件和工作目录都会保留。</p>
     <div class="actions">
       <button
         class="danger"
