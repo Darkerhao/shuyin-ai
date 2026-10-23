@@ -1,4 +1,7 @@
+mod ai;
+mod ai_commands;
 mod commands;
+mod credentials;
 mod database;
 
 use database::{Database, ProbeSnapshot};
@@ -21,7 +24,16 @@ pub fn run() {
             let directory = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&directory)?;
             // Keep initialization errors available to the UI; never delete a failed database.
-            app.manage(Database::open(directory.join("shuyin.sqlite3")));
+            let database = Database::open(directory.join("shuyin.sqlite3"));
+            // Surface initialization errors through commands as before.
+            if database.read().is_ok() {
+                database.recover_ai_tasks()?;
+            }
+            app.manage(database);
+            app.manage(credentials::SystemCredentials(
+                app.config().identifier.clone(),
+            ));
+            app.manage(ai::ActiveTasks::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -40,7 +52,17 @@ pub fn run() {
             commands::open_project_directory,
             commands::relocate_workspace,
             commands::create_backup,
-            commands::restore_backup
+            commands::restore_backup,
+            ai_commands::list_model_providers,
+            ai_commands::save_model_provider,
+            ai_commands::delete_model_provider,
+            ai_commands::test_model_connection,
+            ai_commands::list_writing_versions,
+            ai_commands::save_writing_version,
+            ai_commands::list_ai_tasks,
+            ai_commands::start_generation,
+            ai_commands::execute_generation,
+            ai_commands::cancel_generation
         ])
         .run(tauri::generate_context!())
         .expect("书引 AI 桌面容器启动失败");

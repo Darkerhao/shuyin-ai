@@ -30,8 +30,8 @@ fn validate_backup(connection: &Connection) -> Result<(), String> {
     let version: u32 = connection
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .map_err(|e| e.to_string())?;
-    if version != 2 {
-        return Err("仅可恢复本版本创建的 M1 备份（数据库版本 2）。".into());
+    if !(2..=super::MIGRATIONS.len() as u32).contains(&version) {
+        return Err("仅可恢复数据库版本 2 或 3 的备份。".into());
     }
     let check: String = connection
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
@@ -40,13 +40,9 @@ fn validate_backup(connection: &Connection) -> Result<(), String> {
         return Err("备份数据库完整性校验失败。".into());
     }
     let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
-    expected
-        .execute_batch(concat!(
-            include_str!("../../migrations/0001_m0_probe.sql"),
-            "\n",
-            include_str!("../../migrations/0002_projects_assets.sql")
-        ))
-        .map_err(|e| e.to_string())?;
+    for sql in super::MIGRATIONS.iter().take(version as usize) {
+        expected.execute_batch(sql).map_err(|e| e.to_string())?;
+    }
     if schema(connection)? != schema(&expected)? {
         return Err("备份数据库结构不匹配。".into());
     }
@@ -88,7 +84,27 @@ impl Database {
         let mut snapshot = Connection::open_in_memory().map_err(|e| e.to_string())?;
         copy_database(&source, &mut snapshot)?;
         validate_backup(&snapshot)?;
+        let version: u32 = snapshot
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        for (index, sql) in super::MIGRATIONS.iter().enumerate().skip(version as usize) {
+            let tx = snapshot.transaction().map_err(|e| e.to_string())?;
+            tx.execute_batch(sql).map_err(|e| e.to_string())?;
+            tx.pragma_update(None, "user_version", (index + 1) as u32)
+                .map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| e.to_string())?;
+        }
+        snapshot.execute("UPDATE ai_tasks SET status='failed',error_code='interrupted',error_message='备份恢复中断了任务，请手动重试。' WHERE status IN ('pending','running')",[]).map_err(|e|e.to_string())?;
         self.with_connection(|c| {
+            if c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE status IN ('pending','running'))",
+                [],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(|e| e.to_string())?
+            {
+                return Err("有生成任务正在执行，请先取消或等待完成后恢复备份。".into());
+            }
             let directory = self.path.parent().unwrap().join("backups");
             std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
             let previous = backup_to(c, &directory)?;

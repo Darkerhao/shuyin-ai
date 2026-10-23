@@ -17,6 +17,16 @@ fn main() {
             "relocate_workspace",
             "create_backup",
             "restore_backup",
+            "list_model_providers",
+            "save_model_provider",
+            "delete_model_provider",
+            "test_model_connection",
+            "list_writing_versions",
+            "save_writing_version",
+            "list_ai_tasks",
+            "start_generation",
+            "execute_generation",
+            "cancel_generation",
         ]),
     ))
     .expect("Tauri build configuration failed");

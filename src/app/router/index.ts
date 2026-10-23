@@ -3,6 +3,8 @@ import ProjectsPage from '../../modules/projects/ProjectsPage.vue'
 import ProjectPage from '../../modules/projects/ProjectPage.vue'
 import SettingsPage from '../../modules/settings/SettingsPage.vue'
 import VerificationPage from '../../modules/verification/VerificationPage.vue'
+import ModelsPage from '../../modules/settings/ModelsPage.vue'
+import WritingPage from '../../modules/writing/WritingPage.vue'
 
 export const router = createRouter({
   history: createWebHashHistory(),
@@ -11,6 +13,8 @@ export const router = createRouter({
     { path: '/projects', component: ProjectsPage },
     { path: '/projects/new', component: ProjectPage },
     { path: '/projects/:id', component: ProjectPage, props: true },
+    { path: '/projects/:id/writing', component: WritingPage, props: true },
+    { path: '/settings/models', component: ModelsPage },
     { path: '/settings', component: SettingsPage },
     { path: '/verification', component: VerificationPage },
     { path: '/:pathMatch(.*)*', redirect: '/projects' },

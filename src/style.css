@@ -52,5 +52,8 @@ a { color: #355e43; }
 .wrap { flex-wrap: wrap; }
 button.danger { background: #a22929; border-color: #a22929; }
 button.secondary.danger { color: #a22929; background: white; }
+.check-label { display: flex; align-items: center; gap: 8px; }
+.check-label input { width: 18px; min-height: 18px; margin: 0; }
+.task-row { border-top: 1px solid #dde3d9; padding: 12px 0; font-size: 14px; }
 .confirmation { border-color: #c97168; }
 @media (max-width: 950px) { .header-action { position: static; } .project-grid { grid-template-columns: 1fr; } }

@@ -15,7 +15,7 @@
 
 ## 2. 核心表
 
-> 下列为整体模型设计；M0 实现见第 7 节，M1 实际表及暂缓字段见第 8 节。
+> 下列为整体模型设计；M0 实现见第 7 节，M1 实际表及暂缓字段见第 8 节，M2 实际模型及创作版本见第 9 节。
 
 ### 2.1 book_projects
 
@@ -276,4 +276,18 @@ app_settings
 
 主键使用 SQLite `randomblob(16)` 生成的 32 位十六进制随机 ID，无新增 UUID 依赖。索引包含项目状态/更新时间、素材项目 ID；同一项目的规范化文件路径唯一。素材外键级联删除只清理数据库关联，不进行文件删除。
 
-所有备份包含这三张业务表及 M0 验证表。源文件、工作目录内容需要另行保管。恢复前的自动备份位于数据库同级 `backups` 目录；拒绝损坏、未知结构、额外触发器、外键失效或非 v2 备份。恢复不会搬迁或复制路径指向的素材。
+M1 当时的备份包含这三张业务表及 M0 验证表，仅接受 v2。M2 后的备份策略见下节。源文件、工作目录内容需要另行保管。恢复前的自动备份位于数据库同级 `backups` 目录；拒绝损坏、未知结构、额外触发器或外键失效的备份。恢复不会搬迁或复制路径指向的素材。
+
+## 9. M2 实际数据库（2026-10-23）
+
+新增 `0003_ai_writing.sql`，`user_version=3`；迁移失败回滚本次版本，保留 v2 数据。新增三表：
+
+- `model_providers`：id、name、provider_type（当前仅 openai-compatible）、base_url、model_name、is_default、is_enabled、credential_ref、created_at、updated_at。部分唯一索引保证至多一个默认模型，默认模型必须启用。credential_ref 为随机系统凭据条目标识，不保存密钥。
+- `writing_versions`：id、project_id、kind、version_no、content_json、source_type、model_name、prompt_version、is_confirmed、created_at。kind 为 outline / script / titles / descriptions / hashtags；`(project_id,kind,version_no)` 唯一。大纲和讲稿保存 `{format:"markdown",text}`；候选列表保存 `{format:"list",items}`。与第 2 节早期规划不同，M2 共用一张版本表，不并行创建 script_versions/publish_materials。
+- `ai_tasks`：id、project_id、kind、provider_id、model_name、prompt_version、status、input_json、version_id、error_code、error_message、created_at、completed_at。输入仅记录项目/模型/参考版本 ID、类型和数量，不保存密钥、授权头或完整书籍资料；成功关联结果版本，错误为本地固定脱敏信息。
+
+版本只追加，不修改或覆盖历史已确认内容；来源为 ai/manual/mixed。生成成功时，新版本、项目更新时间和任务成功状态在同一事务提交。任务取消后迟到响应不能写版本。应用重启将 pending/running 任务标为 failed/interrupted，不自动重试。
+
+项目删除级联清理创作版本和任务，不删除媒体。模型删除保留历史任务和模型名，provider_id 设 NULL；有未完成任务时拒绝删除模型。系统凭据与 SQLite 不能共享事务：密钥替换先写新随机条目，数据库保存失败时删除新条目，旧条目保留；成功后清理旧条目，清理失败明确返回提示。
+
+备份包含全部上述表但不含密钥。恢复接受 v2/v3：先核验对应原始 schema、完整性与外键，再在内存快照迁移到 v3，自动备份当前数据库后恢复。源备份文件保持原版本；有运行任务时拒绝恢复。备份中的未完成任务恢复为 failed/interrupted；恢复后按当前系统凭据库重新检查密钥，不伪造“已配置”状态。
