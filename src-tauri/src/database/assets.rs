@@ -129,7 +129,7 @@ impl Database {
         project_id: &str,
         path: &str,
         asset_id: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let path = std::fs::canonicalize(path).map_err(|e| format!("素材文件不可用：{e}"))?;
         let kind = asset_type(&path)?;
         let (size, modified) = inspect(&path)?;
@@ -146,7 +146,7 @@ impl Database {
             c.execute(&format!("INSERT INTO assets(id,project_id,asset_type,file_path,original_name,file_size,modified_at,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,{NOW})
                 ON CONFLICT(id) DO UPDATE SET
                 file_path=excluded.file_path,original_name=excluded.original_name,file_size=excluded.file_size,modified_at=excluded.modified_at"),params![id,project_id,kind,path.to_string_lossy().as_ref(),path.file_name().unwrap().to_string_lossy().as_ref(),size,modified]).map_err(|e|match e { rusqlite::Error::SqliteFailure(ref code,_) if code.code==rusqlite::ErrorCode::ConstraintViolation => "该项目已关联此文件。".to_owned(), _=>e.to_string() })?;
-            Ok(())
+            Ok(id)
         })
     }
     pub fn unlink_asset(&self, id: &str) -> Result<(), String> {

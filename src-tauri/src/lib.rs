@@ -1,6 +1,7 @@
 mod ai;
 mod ai_commands;
 mod commands;
+mod cover_commands;
 mod credentials;
 mod database;
 
@@ -53,6 +54,11 @@ pub fn run() {
             commands::relocate_workspace,
             commands::create_backup,
             commands::restore_backup,
+            cover_commands::list_cover_versions,
+            cover_commands::save_cover_version,
+            cover_commands::read_cover_background,
+            cover_commands::start_cover_generation,
+            cover_commands::execute_cover_generation,
             ai_commands::list_model_providers,
             ai_commands::save_model_provider,
             ai_commands::delete_model_provider,

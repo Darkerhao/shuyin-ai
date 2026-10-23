@@ -34,7 +34,7 @@ onBeforeUnmount(() => globalThis.removeEventListener('beforeunload', beforeUnloa
 const load = () => run(async () => {
   const [project, models, saved] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing')])
   title.value = project.title
-  providers.value = models.filter(p => p.isEnabled)
+  providers.value = models.filter(p => p.isEnabled && p.modelKind === 'text')
   providerId.value = providers.value.find(p => p.isDefault)?.id ?? providers.value[0]?.id ?? ''
   versions.value = saved; accept(saved[0] ?? null); ready.value = true
 })
@@ -85,6 +85,12 @@ onMounted(() => { if (desktop) void load() })
     </p>
     <RouterLink :to="`/projects/${id}`">
       修改书籍资料
+    </RouterLink>
+    <RouterLink
+      class="cover-entry"
+      :to="`/projects/${id}/covers`"
+    >
+      制作封面
     </RouterLink>
   </header>
   <p

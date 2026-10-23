@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Mutex, time::Duration};
 use tokio::sync::watch;
 
+pub mod images;
 pub mod publishing;
 pub const PROMPT_VERSION: &str = "publishing-v1";
 pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v1.md");
@@ -154,42 +155,10 @@ impl TextProvider for OpenAiCompatible {
         request: TextRequest,
     ) -> Pin<Box<dyn Future<Output = Result<String, AiError>> + Send + '_>> {
         Box::pin(async move {
-            let mut call = self.client.post(format!("{}/chat/completions", request.base_url))
-                .json(&serde_json::json!({"model":request.model,"messages":[
+            let data = self.post_json(&request.base_url, "chat/completions", request.key,
+                serde_json::json!({"model":request.model,"messages":[
                     {"role":"system","content":request.system}, {"role":"user","content":request.user}
-                ],"stream":false}));
-            if let Some(key) = request.key.filter(|s| !s.is_empty()) {
-                call = call.bearer_auth(key);
-            }
-            let mut response = call.send().await.map_err(network_error)?;
-            let status = response.status().as_u16();
-            if !response.status().is_success() {
-                // Never surface provider response bodies/headers: some gateways echo secrets.
-                return Err(match status {
-                    401 | 403 => AiError::new(
-                        "authentication",
-                        "模型服务拒绝认证，请检查 API Key 和模型权限。",
-                    ),
-                    429 => AiError::new("rate_limit", "模型服务限流或额度不足，请稍后重试。"),
-                    300..=399 => AiError::new(
-                        "redirect",
-                        "服务返回重定向，请直接配置最终可信的 API 地址。",
-                    ),
-                    _ => AiError::new(
-                        "http",
-                        &format!("模型服务返回 HTTP {status}，请检查地址与模型配置。"),
-                    ),
-                });
-            }
-            let mut body = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(network_error)? {
-                if body.len() + chunk.len() > 2_000_000 {
-                    return Err(AiError::new("invalid_response", "模型响应过长，未保存。"));
-                }
-                body.extend_from_slice(&chunk);
-            }
-            let data: serde_json::Value = serde_json::from_slice(&body)
-                .map_err(|_| AiError::new("invalid_response", "模型服务未返回有效 JSON。"))?;
+                ],"stream":false}), 2_000_000).await?;
             let choice = &data["choices"][0];
             if choice["finish_reason"].as_str() != Some("stop") {
                 return Err(AiError::new(
@@ -203,6 +172,55 @@ impl TextProvider for OpenAiCompatible {
                 .map(str::to_string)
                 .ok_or_else(|| AiError::new("invalid_response", "模型未返回可用文本。"))
         })
+    }
+}
+
+impl OpenAiCompatible {
+    async fn post_json(
+        &self,
+        base_url: &str,
+        endpoint: &str,
+        key: Option<String>,
+        body: serde_json::Value,
+        limit: usize,
+    ) -> Result<serde_json::Value, AiError> {
+        let mut call = self
+            .client
+            .post(format!("{base_url}/{endpoint}"))
+            .json(&body);
+        if let Some(key) = key.filter(|s| !s.is_empty()) {
+            call = call.bearer_auth(key);
+        }
+        let mut response = call.send().await.map_err(network_error)?;
+        let status = response.status().as_u16();
+        if !response.status().is_success() {
+            // Never surface provider response bodies/headers: some gateways echo secrets.
+            return Err(match status {
+                401 | 403 => AiError::new(
+                    "authentication",
+                    "模型服务拒绝认证，请检查 API Key 和模型权限。",
+                ),
+                429 => AiError::new("rate_limit", "模型服务限流或额度不足，请稍后重试。"),
+                300..=399 => AiError::new(
+                    "redirect",
+                    "服务返回重定向，请直接配置最终可信的 API 地址。",
+                ),
+                _ => AiError::new(
+                    "http",
+                    &format!("模型服务返回 HTTP {status}，请检查地址与模型配置。"),
+                ),
+            });
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(network_error)? {
+            if body.len() + chunk.len() > limit {
+                return Err(AiError::new("invalid_response", "模型响应过长，未保存。"));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let data: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|_| AiError::new("invalid_response", "模型服务未返回有效 JSON。"))?;
+        Ok(data)
     }
 }
 

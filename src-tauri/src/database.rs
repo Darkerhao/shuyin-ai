@@ -1,6 +1,8 @@
 pub mod ai;
 mod assets;
 mod backup;
+pub mod covers;
+pub mod image_generation;
 mod projects;
 pub use assets::Asset;
 pub use projects::{Project, ProjectInput, WorkspaceSettings};
@@ -65,6 +67,8 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0002_projects_assets.sql"),
     include_str!("../migrations/0003_ai_writing.sql"),
     include_str!("../migrations/0004_publishing.sql"),
+    include_str!("../migrations/0005_covers.sql"),
+    include_str!("../migrations/0006_image_generation.sql"),
 ];
 
 impl Database {
@@ -164,7 +168,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                 .unwrap(),
-            4
+            MIGRATIONS.len() as u32
         );
     }
 
@@ -220,18 +224,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("test.sqlite3");
         let connection = Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 5).unwrap();
+        connection.pragma_update(None, "user_version", 7).unwrap();
         drop(connection);
         assert!(Database::open(path.clone())
             .read()
             .unwrap_err()
-            .contains("版本 5"));
+            .contains("版本 7"));
         assert_eq!(
             Connection::open(path)
                 .unwrap()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                 .unwrap(),
-            5
+            7
         );
     }
 
@@ -249,3 +253,6 @@ mod m1_tests;
 
 #[cfg(test)]
 mod m2_tests;
+
+#[cfg(test)]
+mod m3_tests;

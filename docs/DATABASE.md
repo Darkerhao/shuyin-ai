@@ -299,3 +299,25 @@ M1 当时的备份包含这三张业务表及 M0 验证表，仅接受 v2。M2 �
 publishing 的 content_json 为 `{format:"publishing",title,description,audioPrompt}`。一套结果一个版本，新生成/编辑只追加。标题≤30字，内容≤1000字，提示词≤20000字；AI 原始草案必须有五个完整章节，模板组装后再保存。任务 input_json 仅记录 projectId/providerId，不保存密钥或完整资料。
 
 备份接受 v2/v3/v4，仍在内存中迁移旧备份，原备份不改写；恢复前备份当前数据库。迁移失败回滚，保留旧 schema 和数据，不重置数据库。旧格式只用于保留历史数据，新界面查询 publishing。
+
+## 11. M3 封面版本 v5（2026-10-23）
+
+新增 `0005_covers.sql`，user_version=5。只增加 cover_versions，原七张表及其记录不改写。迁移和版本更新在同一事务内执行。
+
+用户澄清发布封面比例后，新保存/导出仅接受 1440×1080（4:3）与 1080×1440（3:4），本次调整不改变表结构或 schemaVersion。一次导出生成两条独立版本记录。旧尺寸 config_json、exported_path 与文件保留；转换比例只发生在页面恢复编辑后的新草稿，不重写旧行。
+
+实际字段：id、project_id（关联 book_projects，ON DELETE CASCADE）、version_no、config_json、exported_path（配置保存时可空）、created_at。唯一约束 `(project_id, version_no)`；没有更新历史配置的接口。
+
+与第 2.5 节早期草图不同，本轮将模板与背景素材 ID 保存在完整 config_json 中，不重复维护 template_id/background_asset_id 列；不增加导出素材表或 is_selected 状态。JSON 包含 schemaVersion=1，反序列化及保存时校验固定模板、尺寸、文字长度、颜色、字号、对齐与位置。
+
+新版本和项目更新时间事务提交。PNG 只写项目 covers 目录中的唯一新文件；写入或数据库提交失败不会产生成功版本，并尝试清理本次新文件。删除项目只级联删除版本行，保留原图片与所有已导出文件。
+
+备份现在接受 v2–v5，按原 schema 核验并在内存中顺序升级到 v5，不修改源备份。备份包含封面配置与路径，不包含背景/PNG 二进制；外部文件需另行备份。被删除或移动的背景保留引用以便提示恢复，不以删除历史记录修复缺失。
+
+## 12. 可选图片生成 v6（2026-10-24）
+
+`0006_image_generation.sql` 在模型表增加 `model_kind`（text/image，旧行默认 text），将单个默认文本模型索引替换为按用途唯一的默认模型索引；在 ai_tasks 增加可空 `asset_id`，外键指向 assets，移除关联时设 NULL。不新增表，不改写既有封面配置、路径或凭据引用；迁移失败整次回滚并保留 v5。
+
+图片任务使用 `kind=cover`，input_json 仅保存 projectId/providerId/description，不包含 API Key。生成成功时以事务新增 assets、设置任务 asset_id/succeeded 及项目更新时间；实际 PNG 写入项目 covers 子目录中的唯一 `ai-background-{随机ID}.png`。失败清理本次未登记文件；取消后不允许迟到结果写入。背景未自动成为封面历史，用户保存/导出时才追加 cover_versions。
+
+备份接受 v2–v6，继续核验原 schema 后在内存中迁移，不修改源备份；媒体不包含在数据库备份内。v5→v6 数据/凭据引用保留、迁移回滚、旧备份恢复均有 Rust 回归；隔离 Windows 实测 v6 备份恢复后模型、背景引用和封面历史一致，完整性/外键检查通过。

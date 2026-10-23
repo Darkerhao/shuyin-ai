@@ -122,6 +122,18 @@ describe('publishing workflow', () => {
 })
 
 describe('model configuration', () => {
+  it('saves an image model without running a text connection test', async () => {
+    const { wrapper } = await render('/settings/models')
+    await wrapper.get('#model-kind').setValue('image')
+    await wrapper.get('#provider-name').setValue('封面模型')
+    await wrapper.get('#model-name').setValue('image-model')
+    const imageProvider = { ...provider, modelKind: 'image' as const }
+    vi.mocked(api.saveProvider).mockResolvedValue({ provider: imageProvider, warning: null })
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveProvider).toHaveBeenCalledWith(null, expect.objectContaining({ modelKind: 'image', modelName: 'image-model' }), null)
+    expect(button(wrapper, '测试连接')).toBeUndefined()
+    expect(api.testConnection).not.toHaveBeenCalled()
+  })
   it('preserves key input on save failure, clears it after success and never reads it back', async () => {
     const { wrapper } = await render('/settings/models')
     await wrapper.get('#provider-name').setValue('本机模型'); await wrapper.get('#model-name').setValue('model'); await wrapper.get('#api-key').setValue('test-only-key')
@@ -136,7 +148,7 @@ describe('model configuration', () => {
     await button(wrapper, '测试连接').trigger('click'); await flushPromises(); expect(api.testConnection).toHaveBeenCalledWith('m1')
   })
   it('retains existing credentials when key input is empty and confirms deletion', async () => {
-    const { wrapper } = await render('/settings/models'); await button(wrapper, '本机模型 · 默认 · 密钥已保存').trigger('click')
+    const { wrapper } = await render('/settings/models'); await button(wrapper, '本机模型 · 文本 · 默认 · 密钥已保存').trigger('click')
     vi.mocked(api.saveProvider).mockResolvedValueOnce({ provider, warning: null })
     await wrapper.get('form').trigger('submit'); await flushPromises(); expect(api.saveProvider).toHaveBeenCalledWith('m1', expect.any(Object), null)
     await button(wrapper, '删除模型').trigger('click'); expect(api.deleteProvider).not.toHaveBeenCalled()

@@ -38,7 +38,7 @@ pub fn link_asset(
     project_id: String,
     path: String,
     asset_id: Option<String>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     database.link_asset(&project_id, &path, asset_id.as_deref())
 }
 #[tauri::command]

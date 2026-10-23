@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-covers"
+description = "封面版本、项目内图片读取和指定尺寸 PNG 导出到项目封面目录。"
+commands.allow = ["list_cover_versions", "save_cover_version", "read_cover_background", "start_cover_generation", "execute_cover_generation"]

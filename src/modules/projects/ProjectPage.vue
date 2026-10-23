@@ -50,6 +50,13 @@ onMounted(() => { if (desktop && props.id) void load() })
     >
       查看发布文案与音频提示词
     </RouterLink>
+    <RouterLink
+      v-if="project"
+      class="cover-entry"
+      :to="`/projects/${project.id}/covers`"
+    >
+      制作封面
+    </RouterLink>
   </header>
   <p
     v-if="!desktop"
