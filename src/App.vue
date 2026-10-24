@@ -20,7 +20,7 @@ import { RouterLink, RouterView } from 'vue-router'
         </RouterLink>
       </nav>
       <p class="scope-note">
-        本地优先 · 从一本书开始<br>发布文案与音频提示词
+        本地优先 · 从一本书开始<br>文案、音频提示词与封面素材
       </p>
     </aside>
     <main>

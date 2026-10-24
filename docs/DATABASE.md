@@ -336,3 +336,11 @@ publishing 的 content_json 为 `{format:"publishing",title,description,audioPro
 ## 14. M5 数据验证（2026-10-24）
 
 本轮没有数据库结构变更，schema 保持 v7。新增 v2–v7 逐版本恢复及安全备份回退回归，保留原备份字节、书籍资料、时间戳和缺失素材引用；三项目回归核对文案/封面历史、任务包、任务记录与凭据可用状态。任务包封面内容校验只影响查询时的就绪判定，沿用现有 ready→draft 转换，不新增持久化校验字段。
+
+## 15. 封面素材结果扩展（2026-10-24）
+
+表结构、索引与 `user_version=7` 均不变，无 SQL 迁移。`writing_versions.content_json` 的 publishing 对象新增四个字符串：`coverTitle`（≤30字）、`coverSubtitle`（≤60字）、`coverPromptLandscape` 和 `coverPromptPortrait`（各≤2000字）。新生成必填全部七项，并标注 `publishing-v2`。
+
+旧三项 JSON 读取时由 serde 默认补空字符串，不执行 UPDATE 或批量回填，原始 JSON、ID、版本、时间及引用保持原样。人工编辑允许封面字段为空，因此旧版无需先生成封面才能保存。新保存仍追加版本；不把结果页封面素材重复写入 cover_versions，只有在封面页确认保存/导出才生成封面版本。
+
+备份继续接受 v2–v7，现有快照包含完整 content_json。Rust 回归验证旧三项原始 JSON 在备份恢复后字节不变、新四项在重启后完整保留、超长字段拒绝新增版本，以及三书全流程的新字段随备份保留。升级后的结果由本次新代码读取；旧程序不具备新字段契约，回退需使用升级前的数据库备份。

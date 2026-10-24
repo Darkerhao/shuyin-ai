@@ -48,7 +48,7 @@ onMounted(() => { if (desktop && props.id) void load() })
       v-if="project"
       :to="`/projects/${project.id}/writing`"
     >
-      查看发布文案与音频提示词
+      查看文案、音频提示词与封面素材
     </RouterLink>
     <RouterLink
       v-if="project"

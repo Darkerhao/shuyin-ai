@@ -18,7 +18,7 @@ onMounted(() => { if (desktop) void load() })
       你的读书创作空间
     </p><h1>我的书籍</h1>
     <p class="muted">
-      选一本书，准备发布标题、发布内容和音频生成提示词。
+      选一本书，一次准备发布文案、音频提示词、封面主副标题和图片提示词。
     </p>
     <RouterLink
       v-if="desktop"

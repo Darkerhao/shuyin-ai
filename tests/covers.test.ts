@@ -5,7 +5,7 @@ import App from '../src/App.vue'
 import CoversPage from '../src/modules/covers/CoversPage.vue'
 import * as api from '../src/services/covers'
 import * as ai from '../src/services/ai'
-import { emptyProvider } from '../src/types/ai'
+import { emptyProvider, emptyPublishing, type WritingVersion } from '../src/types/ai'
 import type { Asset } from '../src/types/project'
 import * as projects from '../src/services/projects'
 import * as renderer from '../src/services/coverRenderer'
@@ -13,20 +13,21 @@ import { newCover, type CoverVersion } from '../src/types/cover'
 import { emptyProject } from '../src/types/project'
 
 vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), saveCover: vi.fn(), readBackground: vi.fn(), chooseBackground: vi.fn(), startCoverGeneration: vi.fn(), executeCoverGeneration: vi.fn() }))
-vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), cancelGeneration: vi.fn() }))
+vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), listVersions: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), linkAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ renderCover: vi.fn(), coverPng: vi.fn(), decodeBackground: vi.fn() }))
 const initial: CoverVersion = { id: 'v1', projectId: 'p1', versionNo: 1, config: newCover('最初的封面'), exportedPath: null, createdAt: '2026-10-23T00:00:00Z' }
 const aiAsset: Asset = { id: 'a1', projectId: 'p1', assetType: 'image', filePath: 'D:/ai.png', originalName: 'ai.png', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
 const wrappers: ReturnType<typeof mount>[] = []
-async function render() {
+const writing: WritingVersion = { id: 'w1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), coverTitle: '轮回几世，何时放下', coverSubtitle: '《生死疲劳》里的人间执念', coverPromptLandscape: '横版 4:3，田野向两侧延伸，无字背景。', coverPromptPortrait: '竖版 3:4，田垄引向远方，无字背景。' }, sourceType: 'ai', modelName: 'text', promptVersion: 'publishing-v2', isConfirmed: false, createdAt: '' }
+async function render(path = '/projects/p1/covers') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/projects/:id/covers', component: CoversPage, props: true },
     { path: '/projects/:id/writing', component: { template: '<p>writing</p>' } },
     { path: '/projects', component: { template: '<p>projects</p>' } },
     { path: '/settings/models', component: { template: '<p>models</p>' } },
   ] })
-  await router.push('/projects/p1/covers'); await router.isReady()
+  await router.push(path); await router.isReady()
   const wrapper = mount(App, { global: { plugins: [router] } }); wrappers.push(wrapper)
   await flushPromises(); return { wrapper, router }
 }
@@ -38,6 +39,7 @@ beforeEach(() => {
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), title: '测试书', id: 'p1', workspacePath: 'D:/books/p1', createdAt: '', updatedAt: '', archivedAt: null })
   vi.mocked(projects.listAssets).mockResolvedValue([])
   vi.mocked(ai.listProviders).mockResolvedValue([])
+  vi.mocked(ai.listVersions).mockResolvedValue([])
   vi.mocked(api.listCovers).mockResolvedValue([initial])
   vi.mocked(renderer.renderCover).mockReturnValue({ titleSize: 112, subtitleSize: 44 })
   vi.mocked(renderer.coverPng).mockResolvedValue([137, 80, 78, 71])
@@ -49,6 +51,50 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M3 cover workflow', () => {
+  it('prefills a new cover with the selected writing version and keeps it unsaved', async () => {
+    vi.mocked(ai.listVersions).mockResolvedValue([{ ...writing, id: 'w2', content: { ...writing.content, coverTitle: '较新的标题' } }, writing])
+    vi.mocked(api.listCovers).mockResolvedValue([])
+    const { wrapper, router } = await render('/projects/p1/covers?writingVersion=w1')
+    expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe(writing.content.coverTitle)
+    expect((wrapper.get('#cover-subtitle').element as HTMLTextAreaElement).value).toBe(writing.content.coverSubtitle)
+    expect(api.saveCover).not.toHaveBeenCalled()
+    await router.push('/projects'); expect(router.currentRoute.value.path).toContain('/covers')
+  })
+  it('preserves existing cover styles and text until titles are explicitly applied', async () => {
+    vi.mocked(ai.listVersions).mockResolvedValue([writing])
+    const { wrapper } = await render()
+    expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe(initial.config.title)
+    await button(wrapper, '使用这组主副标题').trigger('click'); await flushPromises()
+    expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe(writing.content.coverTitle)
+    await button(wrapper, '导出两张封面').trigger('click'); await flushPromises()
+    expect(api.saveCover).toHaveBeenNthCalledWith(1, 'p1', { ...initial.config, title: writing.content.coverTitle, subtitle: writing.content.coverSubtitle }, expect.any(Array))
+  })
+  it('copies either ratio without an image model and applies a prompt only on request', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    vi.mocked(ai.listVersions).mockResolvedValue([writing])
+    const { wrapper } = await render()
+    await button(wrapper, '复制封面提示词').trigger('click'); await flushPromises()
+    expect(writeText).toHaveBeenLastCalledWith(writing.content.coverPromptLandscape)
+    await wrapper.get('#cover-prompt-ratio').setValue('portrait')
+    await button(wrapper, '复制封面提示词').trigger('click'); await flushPromises()
+    expect(writeText).toHaveBeenLastCalledWith(writing.content.coverPromptPortrait)
+    expect(ai.listProviders).not.toHaveBeenCalled()
+    await button(wrapper, '用于 AI 背景').trigger('click'); await flushPromises()
+    expect((wrapper.get('#cover-description').element as HTMLTextAreaElement).value).toBe(writing.content.coverPromptPortrait)
+    await wrapper.get('#cover-prompt-ratio').setValue('landscape')
+    expect((wrapper.get('#cover-description').element as HTMLTextAreaElement).value).toBe(writing.content.coverPromptPortrait)
+    expect(api.startCoverGeneration).not.toHaveBeenCalled()
+  })
+  it('allows local editing after writing lookup fails and does not overwrite it on retry', async () => {
+    vi.mocked(ai.listVersions).mockRejectedValueOnce('读取失败').mockResolvedValue([writing])
+    const { wrapper } = await render()
+    await wrapper.get('#cover-title').setValue('自己的标题')
+    await button(wrapper, '重新读取').trigger('click'); await flushPromises()
+    expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('自己的标题')
+    await button(wrapper, '导出两张封面').trigger('click'); await flushPromises()
+    expect(api.saveCover).toHaveBeenCalledTimes(2)
+  })
   async function aiCover() {
     vi.mocked(ai.listProviders).mockResolvedValue([
       { ...emptyProvider(), id: 'text', name: '文本模型', credentialStatus: 'missing' },
