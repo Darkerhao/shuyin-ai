@@ -217,6 +217,38 @@ fn corrupt_cover_is_rejected_without_ready_or_lost_draft() {
 }
 
 #[test]
+fn changed_package_cover_with_same_size_cannot_remain_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let p = project(&db);
+    let i = input(&db, &p);
+    let task = db.save_publish_task(None, i).unwrap();
+    for name in ["cover-landscape.png", "cover-portrait.png"] {
+        let ready = db.prepare_publish_task(&task.id).unwrap();
+        let copy = Path::new(ready.task_directory.as_ref().unwrap()).join(name);
+        let original = fs::read(&copy).unwrap();
+        let mut corrupt = original.clone();
+        corrupt[0] ^= 0xff;
+        fs::write(&copy, &corrupt).unwrap();
+        assert_eq!(fs::metadata(&copy).unwrap().len(), original.len() as u64);
+        let current = db.list_publish_tasks(&p.id).unwrap().remove(0);
+        assert_eq!(current.status, "draft");
+        assert!(
+            !current
+                .checklist
+                .iter()
+                .find(|c| c.key == "package")
+                .unwrap()
+                .passed
+        );
+        assert!(db.record_publish_success(&task.id, record()).is_err());
+        assert_eq!(fs::read(&copy).unwrap(), corrupt);
+        assert_eq!(db.list_cover_versions(&p.id).unwrap().len(), 2);
+    }
+    assert_eq!(db.prepare_publish_task(&task.id).unwrap().status, "ready");
+}
+
+#[test]
 fn success_requires_confirmation_and_record_task_project_commit_together() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(dir.path().join("db.sqlite3"));
@@ -325,4 +357,106 @@ fn v7_migration_old_backup_and_failure_preserve_v6_data() {
             |r| r.get::<_, bool>(0)
         )
         .unwrap());
+}
+
+#[test]
+fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_restore() {
+    use super::{
+        ai::{GenerationInput, SaveWritingInput},
+        m2_tests::{model, Vault},
+    };
+    use crate::ai::WritingContent;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("books.sqlite3");
+    let db = Database::open(path.clone());
+    let vault = Vault::default();
+    let provider = db
+        .save_provider(None, model(), Some("M5-test-only-secret"), &vault)
+        .unwrap()
+        .provider;
+    let mut expected = Vec::new();
+    for title in ["论语", "西游记", "朝花夕拾"] {
+        let mut p = project(&db);
+        p.input.title = title.into();
+        let p = db.save_project(Some(&p.id), p.input).unwrap();
+        let generation = GenerationInput {
+            project_id: p.id.clone(),
+            provider_id: provider.id.clone(),
+        };
+        let task = db.start_generation(generation.clone()).unwrap();
+        db.prepare_generation(&task).unwrap();
+        let content = WritingContent::Publishing {
+            title: format!("一起读《{title}》"),
+            description: format!("读《{title}》\n从原书出发。"),
+            audio_prompt: format!("请以《{title}》原书为来源。"),
+        };
+        let first = db
+            .finish_generation(&task, &generation, content.clone(), "test")
+            .unwrap();
+        db.save_writing(SaveWritingInput {
+            project_id: p.id.clone(),
+            kind: "publishing".into(),
+            content,
+            based_on: Some(first.id),
+            is_confirmed: true,
+        })
+        .unwrap();
+        let failed = db.start_generation(generation).unwrap();
+        db.prepare_generation(&failed).unwrap();
+        db.end_generation(&failed, "failed", "timeout", "模型请求超时")
+            .unwrap();
+        let writing = db.list_versions(&p.id, "publishing").unwrap();
+        assert_eq!(writing.len(), 2);
+        let mut i = input(&db, &p);
+        if let WritingContent::Publishing {
+            title, description, ..
+        } = &writing[0].content
+        {
+            i.title = title.clone();
+            i.description = description.clone();
+        }
+        let publish = db.save_publish_task(None, i).unwrap();
+        db.prepare_publish_task(&publish.id).unwrap();
+        expected.push((
+            p.id.clone(),
+            serde_json::to_value(writing).unwrap(),
+            serde_json::to_value(db.list_cover_versions(&p.id).unwrap()).unwrap(),
+            serde_json::to_value(db.list_publish_tasks(&p.id).unwrap()).unwrap(),
+        ));
+    }
+    let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    assert!(!fs::read(&backup)
+        .unwrap()
+        .windows(b"M5-test-only-secret".len())
+        .any(|s| s == b"M5-test-only-secret"));
+    for (id, ..) in &expected {
+        db.delete_project(id).unwrap();
+    }
+    let recovery = db.restore_backup(&backup).unwrap();
+    assert!(Path::new(&recovery).is_file());
+    drop(db);
+    let db = Database::open(path);
+    assert_eq!(
+        db.list_providers(&vault).unwrap()[0].credential_status,
+        "available"
+    );
+    for (id, writing, covers, tasks) in expected {
+        assert_eq!(
+            serde_json::to_value(db.list_versions(&id, "publishing").unwrap()).unwrap(),
+            writing
+        );
+        assert_eq!(
+            serde_json::to_value(db.list_cover_versions(&id).unwrap()).unwrap(),
+            covers
+        );
+        assert_eq!(
+            serde_json::to_value(db.list_publish_tasks(&id).unwrap()).unwrap(),
+            tasks
+        );
+        assert_eq!(db.list_ai_tasks(&id).unwrap().len(), 2);
+        assert_eq!(
+            fs::read(&db.list_assets(&id).unwrap()[0].file_path).unwrap(),
+            b"original video"
+        );
+    }
 }
