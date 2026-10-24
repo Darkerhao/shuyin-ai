@@ -4,6 +4,7 @@ mod commands;
 mod cover_commands;
 mod credentials;
 mod database;
+mod publish_commands;
 
 use database::{Database, ProbeSnapshot};
 use tauri::Manager;
@@ -54,6 +55,11 @@ pub fn run() {
             commands::relocate_workspace,
             commands::create_backup,
             commands::restore_backup,
+            publish_commands::list_publish_tasks,
+            publish_commands::save_publish_task,
+            publish_commands::prepare_publish_task,
+            publish_commands::record_publish_success,
+            publish_commands::open_publish_item,
             cover_commands::list_cover_versions,
             cover_commands::save_cover_version,
             cover_commands::read_cover_background,

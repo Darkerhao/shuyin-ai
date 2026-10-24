@@ -92,6 +92,12 @@ onMounted(() => { if (desktop) void load() })
     >
       制作封面
     </RouterLink>
+    <RouterLink
+      class="cover-entry"
+      :to="`/projects/${id}/publishing`"
+    >
+      发布准备
+    </RouterLink>
   </header>
   <p
     v-if="!desktop"
