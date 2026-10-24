@@ -11,6 +11,9 @@ import type { CoverVersion } from '../../types/cover'
 import type { WritingVersion } from '../../types/ai'
 import { useOperation } from '../../composables/useOperation'
 import ProjectAssets from '../projects/ProjectAssets.vue'
+import AppIcon from '../../components/AppIcon.vue'
+import ProjectNavigation from '../../components/ProjectNavigation.vue'
+import OperationFeedback from '../../components/OperationFeedback.vue'
 
 const props = defineProps<{ id: string }>()
 const desktop = isDesktop()
@@ -108,44 +111,33 @@ onMounted(() => { if (desktop) void load() })
 </script>
 
 <template>
-  <header>
-    <RouterLink to="/projects">
-      ← 我的书籍
-    </RouterLink>
-    <h1>{{ title || '书籍' }} · 发布准备</h1>
-    <p class="muted">
-      选好视频、文案与两张封面，生成任务包后到抖音手动发布。
-    </p>
-    <RouterLink :to="`/projects/${id}/writing`">
-      编辑发布文案
-    </RouterLink>
-    <RouterLink
-      class="cover-entry"
-      :to="`/projects/${id}/covers`"
-    >
-      制作封面
-    </RouterLink>
+  <header class="page-heading">
+    <div>
+      <RouterLink
+        class="back-link"
+        to="/projects"
+      >
+        <AppIcon name="back" />我的书籍
+      </RouterLink>
+      <h1>准备好，分享你的作品</h1>
+      <p class="muted">
+        {{ title || '书籍' }} · 选好素材与文案，生成任务包后到抖音手动发布。
+      </p>
+    </div>
+    <span class="badge"><AppIcon name="upload" />发布前的最后一步</span>
   </header>
+  <ProjectNavigation :id="id" />
   <p
     v-if="!desktop"
     class="notice"
   >
     请在桌面应用中准备发布。
   </p>
-  <p
-    v-if="error"
-    role="alert"
-    class="error"
-  >
-    {{ error }}
-  </p>
-  <p
-    v-if="message"
-    role="status"
-    class="notice"
-  >
-    {{ message }}
-  </p>
+  <OperationFeedback
+    :error="error"
+    :message="message"
+    @dismiss="message = ''"
+  />
   <button
     v-if="!loaded"
     :disabled="busy || !desktop"
@@ -209,7 +201,10 @@ onMounted(() => { if (desktop) void load() })
       </fieldset>
     </details>
     <form @submit.prevent="save">
-      <fieldset :disabled="busy || published || recordOpen">
+      <fieldset
+        class="publish-form-grid"
+        :disabled="busy || published || recordOpen"
+      >
         <section class="panel">
           <h2>发布文字</h2>
           <label for="publish-title">发布标题</label>
@@ -325,7 +320,7 @@ onMounted(() => { if (desktop) void load() })
         </section>
         <div
           v-if="!published"
-          class="actions wrap"
+          class="sticky-actions publish-save"
         >
           <button
             type="submit"
@@ -513,7 +508,12 @@ onMounted(() => { if (desktop) void load() })
 </template>
 
 <style scoped>
+.publish-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; }
+.publish-save { grid-column: 1 / -1; justify-content: flex-start; margin-top: 0; }
+.publish-save .muted { margin-left: auto; font-size: 11px; }
 .publish-actions { margin-top: 24px; }
-.publish-checklist { list-style: none; padding: 0; line-height: 2; font-size: 14px; }
+.publish-checklist { list-style: none; padding: 0; line-height: 2; font-size: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.publish-checklist li { padding: 9px 12px; background: #f1f6ec; border-radius: 7px; }
 .check-pending { color: #8c5d23; }
+@media (max-width: 1000px) { .publish-form-grid { grid-template-columns: 1fr; } }
 </style>
