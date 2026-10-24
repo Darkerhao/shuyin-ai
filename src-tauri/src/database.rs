@@ -4,6 +4,7 @@ mod backup;
 pub mod covers;
 pub mod image_generation;
 mod projects;
+pub mod publishing;
 pub use assets::Asset;
 pub use projects::{Project, ProjectInput, WorkspaceSettings};
 
@@ -69,6 +70,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0004_publishing.sql"),
     include_str!("../migrations/0005_covers.sql"),
     include_str!("../migrations/0006_image_generation.sql"),
+    include_str!("../migrations/0007_publish_tasks.sql"),
 ];
 
 impl Database {
@@ -224,18 +226,21 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("test.sqlite3");
         let connection = Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 7).unwrap();
+        let future_version = MIGRATIONS.len() as u32 + 1;
+        connection
+            .pragma_update(None, "user_version", future_version)
+            .unwrap();
         drop(connection);
         assert!(Database::open(path.clone())
             .read()
             .unwrap_err()
-            .contains("版本 7"));
+            .contains(&format!("版本 {future_version}")));
         assert_eq!(
             Connection::open(path)
                 .unwrap()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                 .unwrap(),
-            7
+            future_version
         );
     }
 
@@ -256,3 +261,6 @@ mod m2_tests;
 
 #[cfg(test)]
 mod m3_tests;
+
+#[cfg(test)]
+mod m4_tests;

@@ -6,6 +6,7 @@ import VerificationPage from '../../modules/verification/VerificationPage.vue'
 import ModelsPage from '../../modules/settings/ModelsPage.vue'
 import WritingPage from '../../modules/writing/WritingPage.vue'
 import CoversPage from '../../modules/covers/CoversPage.vue'
+import PublishingPage from '../../modules/publishing/PublishingPage.vue'
 
 export const router = createRouter({
   history: createWebHashHistory(),
@@ -16,6 +17,7 @@ export const router = createRouter({
     { path: '/projects/:id', component: ProjectPage, props: true },
     { path: '/projects/:id/writing', component: WritingPage, props: true },
     { path: '/projects/:id/covers', component: CoversPage, props: true },
+    { path: '/projects/:id/publishing', component: PublishingPage, props: true },
     { path: '/settings/models', component: ModelsPage },
     { path: '/settings', component: SettingsPage },
     { path: '/verification', component: VerificationPage },

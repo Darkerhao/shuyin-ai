@@ -4,6 +4,7 @@ import * as api from '../../services/projects'
 import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 const props = defineProps<{ projectId: string }>()
+const emit = defineEmits<{ changed: [] }>()
 const assets = ref<Asset[]>([])
 const loaded = ref(false)
 const removing = ref<Asset | null>(null)
@@ -16,6 +17,7 @@ const select = (asset?: Asset) => run(async () => {
   if (!path) return
   await api.linkAsset(props.projectId, path, asset?.id ?? null)
   await refresh()
+  emit('changed')
   message.value = asset ? '已重新定位素材。' : '素材已关联，源文件保持原位。'
 })
 const remove = () => run(async () => {
@@ -23,6 +25,7 @@ const remove = () => run(async () => {
   await api.unlinkAsset(removing.value.id)
   removing.value = null
   await refresh()
+  emit('changed')
 })
 onMounted(() => { void run(refresh) })
 </script>

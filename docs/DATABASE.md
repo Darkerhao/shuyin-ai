@@ -321,3 +321,14 @@ publishing 的 content_json 为 `{format:"publishing",title,description,audioPro
 图片任务使用 `kind=cover`，input_json 仅保存 projectId/providerId/description，不包含 API Key。生成成功时以事务新增 assets、设置任务 asset_id/succeeded 及项目更新时间；实际 PNG 写入项目 covers 子目录中的唯一 `ai-background-{随机ID}.png`。失败清理本次未登记文件；取消后不允许迟到结果写入。背景未自动成为封面历史，用户保存/导出时才追加 cover_versions。
 
 备份接受 v2–v6，继续核验原 schema 后在内存中迁移，不修改源备份；媒体不包含在数据库备份内。v5→v6 数据/凭据引用保留、迁移回滚、旧备份恢复均有 Rust 回归；隔离 Windows 实测 v6 备份恢复后模型、背景引用和封面历史一致，完整性/外键检查通过。
+
+## 13. M4 发布准备 v7（2026-10-24）
+
+新增 `0007_publish_tasks.sql`，事务内增加两张表及索引，旧表及记录不改写：
+
+- `publish_tasks`：id、project_id、title、description、tags、video_asset_id、landscape_cover_id、portrait_cover_id、title_confirmed、covers_confirmed、status、task_directory、created_at、updated_at。标题/内容/标签是发布时的文字快照；不并行新增早期草图中的 publish_materials。视频和封面外键移除时设 NULL，任务仍可重新选素材。
+- `publish_records`：publish_task_id（主键兼外键，一项任务一次确认）、published_at、post_url、notes、created_at。仅在明确确认后插入；记录、任务 published 状态和项目状态在同一事务提交。已发布任务固定，另一作品另建任务；不引入运营指标。
+
+当前单一平台为抖音，平台名记录在任务包 manifest 中；未增加可选平台或重复配置。实际任务状态只使用 draft / ready / published。保存修改退回 draft，生成完整且有效的任务包后为 ready；每次查询按素材路径、文件大小/修改时间及任务包文件重查，失效时退回 draft。published 为已确认的历史事实，不因源文件后来移动而撤销。
+
+迁移支持 v1 顺序升级至 v7。备份恢复接受 v2–v7，在内存迁移并提前备份当前库；旧备份文件保持原样。备份不含视频、封面和任务包目录，需另行保管。源视频仅引用；删除项目只级联数据库行，不删除视频、封面或任务包。

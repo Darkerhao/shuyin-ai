@@ -167,6 +167,9 @@ onMounted(async () => {
     <p class="muted">
       {{ bookTitle }} · 制作发布作品时上传的两张图片：横版 4:3 和竖版 3:4。
     </p>
+    <RouterLink :to="`/projects/${id}/publishing`">
+      发布准备
+    </RouterLink>
   </header>
   <p
     v-if="!desktop"
