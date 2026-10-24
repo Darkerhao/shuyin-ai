@@ -243,3 +243,55 @@ fn invalid_backups_do_not_replace_current_data() {
     assert_eq!(db.get_project(&project.id).unwrap().input.title, "不可丢失");
     assert!(!dir.path().join("backups").exists());
 }
+
+#[test]
+fn every_supported_backup_restores_without_changing_source_and_can_be_undone() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("current.sqlite3"));
+    for version in 2..=MIGRATIONS.len() {
+        let path = dir.path().join(format!("v{version}.sqlite3"));
+        let c = Connection::open(&path).unwrap();
+        for sql in MIGRATIONS.iter().take(version) {
+            c.execute_batch(sql).unwrap();
+        }
+        c.pragma_update(None, "user_version", version as u32)
+            .unwrap();
+        c.execute_batch("INSERT INTO book_projects(id,title,source_notes,target_duration_seconds,status,workspace_path,created_at,updated_at) VALUES('old','旧书','中文资料',600,'draft','missing','original','original'); INSERT INTO assets VALUES('video','old','video','missing.mp4','missing.mp4',10,0,'original');").unwrap();
+        drop(c);
+        let source = fs::read(&path).unwrap();
+        let current = db.save_project(None, input("恢复前项目")).unwrap();
+        let previous = db.restore_backup(path.to_str().unwrap()).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), source);
+        assert_eq!(
+            db.get_project("old").unwrap().input.source_notes,
+            "中文资料"
+        );
+        assert_eq!(db.get_project("old").unwrap().updated_at, "original");
+        assert_eq!(db.list_assets("old").unwrap()[0].exists_status, "missing");
+        assert!(db.get_project(&current.id).is_err());
+        db.with_connection(|c| {
+            assert_eq!(
+                c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                MIGRATIONS.len() as u32
+            );
+            assert_eq!(
+                c.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+                    .unwrap(),
+                "ok"
+            );
+            assert!(!c
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .exists([])
+                .unwrap());
+            Ok(())
+        })
+        .unwrap();
+        db.restore_backup(&previous).unwrap();
+        assert_eq!(
+            db.get_project(&current.id).unwrap().input.title,
+            "恢复前项目"
+        );
+    }
+}

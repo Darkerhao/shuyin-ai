@@ -244,12 +244,16 @@ fn package_valid(c: &Connection, task: &PublishTask) -> bool {
     text_files(&current).iter().all(|(name, text)| {
         read_limited(&directory.join(name), 64 * 1024).is_ok_and(|bytes| bytes == text.as_bytes())
     }) && [
-        ("cover-landscape.png", current.landscape.size),
-        ("cover-portrait.png", current.portrait.size),
+        ("cover-landscape.png", &current.landscape),
+        ("cover-portrait.png", &current.portrait),
     ]
     .iter()
-    .all(|(name, size)| {
-        fs::metadata(directory.join(name)).is_ok_and(|m| m.is_file() && m.len() == *size)
+    .all(|(name, source)| {
+        // Covers are bounded small files; matching size alone cannot detect a damaged copy.
+        let Ok(original) = read_limited(Path::new(&source.path), MAX_IMAGE_BYTES) else {
+            return false;
+        };
+        read_limited(&directory.join(name), MAX_IMAGE_BYTES).is_ok_and(|copy| copy == original)
     })
 }
 
