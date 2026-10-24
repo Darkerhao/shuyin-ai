@@ -2,7 +2,7 @@
 
 日期：2026-10-23。用户本轮明确重新启用原 M3；保留三项文案生成，不实施 M4。类型为兼容新增功能 `feat`，发布影响 minor；版本号仍由现有发布流水线处理，未提交或发布。
 
-当前结论（2026-10-24）：发布作品的图片封面固定为横版 4:3 和竖版 3:4，一次导出两张；可选 AI 背景及独立图片模型已完成本机契约服务的 Windows 桌面验证。最新证据见文末「图片模型保存、AI 背景导出及异常保护续验」。此前四种尺寸和 Windows 安装/升级记录保留为历史证据，新增 AI 能力未重新打包安装或调用外部图片服务。
+当前结论（2026-10-24）：发布作品的图片封面固定为横版 4:3 和竖版 3:4，一次导出两张；可选 AI 背景及独立图片模型已完成本机契约服务的 Windows 开发版与新版安装升级、重启和备份恢复验证。最新证据见文末「AI 封面安装升级与 v6 数据续验」。此前四种尺寸与旧安装记录保留为历史证据；外部图片服务仍待实测。
 
 ## M3 初轮实现内容（历史记录）
 
@@ -248,3 +248,73 @@ Rust回归实际覆盖v5→v6旧模型/凭据引用/封面保留、迁移回滚�
 - 本机服务证明保存/网络/导出/异常保护闭环，不能证明外部模型可用性、生成质量或服务账单；本轮未调用远程图片服务，也未补当前AI源码的NSIS安装升级、macOS/Linux或目标平台上传验收。
 - 收尾已正常关闭本轮隔离桌面程序，核对进程命令后停止本轮Vite及契约服务；关闭后再次运行inspect.py通过。隔离数据、凭据和证据保留，未改动正式安装或正式数据库。
 - 下一步使用用户确认的兼容图片服务做一次真实生成与双图导出；正式分发前补当前源码安装包升级验收。数据库备份仍不包含图片二进制，原图片与导出目录须另行保管。
+
+## AI 封面安装升级与 v6 数据续验（2026-10-24）
+
+### 范围与结果
+
+本轮使用既有独立产品 `com.shuyin.m3-install-verification` 完成当前源码的 Windows 安装升级续验，未触碰正式安装 `com.shuyin.desktop`。基线为 0.5.1/schema v5；测试安装包通过临时配置声明为 0.6.0，不修改仓库正式版本清单。
+
+- 安装后注册版本和程序文件版本均为 0.6.0；应用首次启动将 SQLite 从 v5 迁至 v6。升级前 8 张表、4 条封面、2 个素材及其文件全部保留；旧模型补为 `model_kind=text`，旧任务补为 `asset_id=NULL`。
+- 在安装版 UI 中新增并设为默认的图片模型，临时密钥只进入系统凭据库；数据库和备份不包含密钥，重载后密钥输入为空。
+- 封面页真实调用本机 `/v1/images/generations` 契约服务，请求包含配置模型、1024×1024、PNG 和授权头；仅替换背景，生成后不自动追加封面历史。
+- 一次导出追加横版 1440×1080 与竖版 1080×1440 两条版本。最终 6 条封面版本均存在对应文件；6 张 PNG 全量解码且尺寸与配置一致，素材由 2 增至 3，成功图片任务已关联新素材。
+- 正常关闭并重启后模型、系统凭据、封面、素材、任务和既有发布版本保持；恢复本轮 v6 备份后再次逐字段一致，再重启仍为 schema v6。
+- 正式产品 EXE、SQLite（含 WAL/SHM，如存在）及卸载注册信息在验收前后哈希/值一致。
+
+### 实际命令与结果
+
+仓库根目录执行；Rust/Tauri 命令前加载 `. ./.tools/env.ps1`，测试文件均位于 Git 忽略的 `output/playwright/ai-cover-install/`。
+
+| 命令/操作 | 实际结果 |
+| --- | --- |
+| `npm run desktop:build -- --config output/playwright/ai-cover-install/tauri-0.6.0.json` | 类型检查、Vite 生产构建、Rust release 和 NSIS 构建通过 |
+| 静默启动 0.6.0 NSIS 安装包并启动独立 EXE | 注册版本和安装文件版本为 0.6.0，应用启动成功 |
+| `python output/playwright/ai-cover-install/inspect.py migrated` | v5→v6 通过；8 表、旧行与文件保留，完整性和外键通过 |
+| `node output/playwright/ai-cover-install/model.cjs` | 安装版 UI 保存图片模型通过；凭据状态 available，数据库不含密钥 |
+| `node output/playwright/ai-cover-install/generate.cjs` | 背景生成和双图导出实际完成；首轮脚本误按版本升序取记录，尺寸断言退出 1，业务写入未回滚 |
+| `node output/playwright/ai-cover-install/capture.cjs` | 修正为新到旧排序后通过；6 封面、3 素材、成功任务及两尺寸文件成立 |
+| `python output/playwright/ai-cover-install/inspect.py postpatch` | schema 6、6 张 PNG 全量解码、任务素材关联、正式产品不变均通过 |
+| `./output/playwright/ai-cover-install/install.ps1 -Action restart -Version 0.6.0` | `CloseMainWindow` 正常退出，进程 ID 由 39100 变为 38872 |
+| `node output/playwright/ai-cover-install/restart.cjs` | 重启逐字段一致，系统凭据 available，v6 备份恢复一致，页面错误为空 |
+| 再次正常关闭/启动后执行 `python output/playwright/ai-cover-install/inspect.py final` | schema 6、6 封面、3 素材、完整性和外键通过，正式产品不变 |
+
+安装包：`src-tauri/target/release/bundle/nsis/Shuyin M3 Install Verification_0.6.0_x64-setup.exe`，SHA-256 `CCC1560742474B44E140DE35DEFD6816B59BA90074B05C6021893046D70A75F5`。安装后 EXE 被 Tauri 打包后处理，不能用其哈希直接等同 target 中未封装二进制；验收改为核对安装文件版本和运行行为。
+
+证据：`before.json`、`database-postpatch.json`、`final.json`、`restart.json`、`requests.json`、`generated.png`、`restart.png`、`model.cjs`、`generate.cjs`、`capture.cjs`、`restart.cjs` 与 `inspect.py`。首轮 `install.ps1` 在安装成功后因错误的二进制直接哈希假设退出 1，未启动应用；随后核对注册版本并按正确目标继续，数据快照和正式产品未受影响。
+
+### 剩余边界
+
+本轮未调用外部图片服务，画面来自可控本机响应，因此仍不能证明第三方服务的模型可用性、画质或计费。未替换正式安装，未去目标发布平台上传，macOS/Linux 实机尚未验证。数据库备份不包含背景和封面 PNG，文件目录仍需独立保管。
+## UGQ.ai 外部图片服务实测（2026-10-24）
+
+### 服务与结果
+
+使用独立安装 `com.shuyin.m3-install-verification`，Base URL 为 `https://ugq.ai/v1`，模型为 `gpt-image-2`，接口为 `POST /v1/images/generations`。服务标价 `$0.20/次`，当前分组 `Gpt-image2-2.5-Adobe 0.75x`，两次实际扣费均为 `$0.15`，合计 `$0.30`。
+
+- 首次请求未显式设置 `response_format`，New API 默认返回 URL；应用按设计判定 `invalid_response`，未新增素材或封面版本。随后从 UGQ 绘图日志取回该次已生成的 512×512 JPEG，仅用于定位兼容性。
+- 根因修复后请求显式发送 `response_format=b64_json`，并移除上游文档未要求的 `output_format`。图片 Provider 现完整解码并接受静态 PNG、JPEG、WebP，保存时使用真实扩展名。
+- 第二次请求成功返回 1024×1024 PNG，文件 1,472,681 字节，耗时约 74 秒；任务状态 `succeeded`，新素材已落盘，生成后不自动追加封面历史。
+- 从该背景导出横版 1440×1080（v7）和竖版 1080×1440（v8）两张 PNG；两张均全量解码通过，中文文字、主体与蒙层视觉正常。
+- 首次响应的 URL-only 路径验证了错误脱敏和原内容保护；401、429、重定向、非 JSON 等 HTTP/响应异常仍由本机契约测试覆盖，未在外部服务上制造额外失败请求。
+- 第二次成功后的自动化脚本曾错误读取不存在的 `task.assetId` 字段而退出；数据库已成功落库，因此没有重试模型，改为按新素材和成功任务继续导出。
+
+### 实际命令与结果
+
+| 命令/操作 | 实际结果 |
+| --- | --- |
+| `npm run test:rust` | 41 通过、1 项原生凭据测试默认忽略 |
+| `npm run check:rust` | fmt 与 Clippy 全目标 `-D warnings` 通过 |
+| `npm test` | 前端 47 项、发布脚本 27 项通过，1 项 macOS 专用跳过 |
+| `npm run lint`、`npm run build` | 通过，0 警告；类型检查与 Vite 生产构建通过 |
+| `npm run desktop:build -- --config output/playwright/ai-cover-install/tauri-0.6.1.json` | 隔离 0.6.1 NSIS 构建通过 |
+| `./output/playwright/ai-cover-install/install.ps1 -Action upgrade -Version 0.6.1` | 0.6.0→0.6.1 升级退出 0，模型与凭据保留 |
+| `node output/playwright/ai-cover-install/external-preflight.cjs` | 真实调用前备份、模型和凭据状态通过 |
+| UGQ 真实生成与导出脚本 | 1024×1024 PNG 成功；v7/v8 双图导出通过；页面错误为空 |
+| UGQ 绘图/用量日志 | 第二次调用成功，`$0.15`，模型 `gpt-image-2` |
+
+证据位于 Git 忽略目录 `output/playwright/ai-cover-install/`，包括 `external-before.json`、`external-second-state.json`、`external-success.json`、背景 PNG、两张封面和备份文件。
+
+### 剩余边界
+
+外部服务目前只实测 UGQ.ai 的 `gpt-image-2`；其他供应商、认证失败和额度耗尽的外部响应尚未逐项实测。本轮验证的是隔离安装，正式安装升级与发布产物验收另行执行。

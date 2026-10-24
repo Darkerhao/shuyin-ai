@@ -53,13 +53,13 @@ impl Database {
         })
     }
     pub fn finish_cover_generation(&self, task_id: &str, bytes: &[u8]) -> Result<Asset, String> {
-        validate_image(bytes).map_err(|e| e.message)?;
+        let extension = validate_image(bytes).map_err(|e| e.message)?;
         self.with_connection(|c| {
             let tx = c.transaction().map_err(|e|e.to_string())?;
             let project_id: String = tx.query_row("SELECT project_id FROM ai_tasks WHERE id=?1 AND kind='cover' AND status='running'", [task_id], |r|r.get(0)).map_err(|_|"生成已取消或结束，图片未写入。")?;
             let project = get(&tx, &project_id)?;
             let id = new_id(&tx)?;
-            let name = format!("ai-background-{id}.png");
+            let name = format!("ai-background-{id}.{extension}");
             let directory = Path::new(&project.workspace_path).join("covers");
             std::fs::create_dir_all(&directory).map_err(|e|format!("封面目录不可写：{e}"))?;
             let path = directory.join(&name);

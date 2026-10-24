@@ -4,7 +4,7 @@ use super::{
     image_generation::ImageGenerationInput,
     m2_tests::{model, Vault},
 };
-use crate::ai::images::test_png;
+use crate::ai::images::{test_jpeg, test_png};
 use std::fs;
 
 fn image_model(db: &Database) -> ai::ProviderConfig {
@@ -74,10 +74,11 @@ fn generated_background_persists_with_history_and_backup_without_overwriting_fil
     let db = Database::open(path.clone());
     let p = project(&db);
     let image = image_model(&db);
-    let bytes = test_png();
+    let bytes = test_jpeg();
     let task = image_task(&db, &p.id, &image.id);
     db.prepare_cover_generation(&task).unwrap();
     let asset = db.finish_cover_generation(&task, &bytes).unwrap();
+    assert!(asset.file_path.ends_with(".jpg"));
     assert_eq!(db.read_cover_background(&p.id, &asset.id).unwrap(), bytes);
     assert!(db.finish_cover_generation(&task, &bytes).is_err());
     let mut draft = config();

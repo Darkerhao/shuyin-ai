@@ -273,8 +273,9 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 ## M3 可选 AI 背景（2026-10-24）
 
 - `database/ai.rs` 的模型配置增加 text/image 用途，默认模型按用途独立。继续使用现有系统凭据实现，不向前端提供密钥读取接口；更换 Base URL 必须重新输入已有密钥。
-- `ai/images.rs` 实现唯一图片 Provider：请求 `/images/generations`，使用用户填写的模型 ID、`n=1`、`size=1024x1024`、`output_format=png`，仅接受一张 base64 PNG；不下载响应 URL。沿用统一 HTTP 错误脱敏、禁止重定向和自动重试，图片超时为 180 秒。
-- 将已解析的书名、作者和画面描述放入版本化 Prompt；只生成背景，中文文字继续使用原 Canvas 渲染器。`base64 0.23.1` 与 `png 0.18.1` 原已存在于锁文件，本功能声明为直接依赖；全量像素、结尾、静态格式和 15 MB/4000 万像素限制校验后才允许保存。
-- `start_cover_generation`/`execute_cover_generation` 复用 ai_tasks、共享任务注册/取消和中断恢复。`database/image_generation.rs` 将新 PNG、素材引用和任务成功状态组成事务，失败清理本次新文件，旧背景及历史不改写。
+- `ai/images.rs` 实现唯一图片 Provider：请求 `/images/generations`，使用用户填写的模型 ID、`n=1`、`size=1024x1024`、`response_format=b64_json`，仅接受一张 base64 静态 PNG、JPEG 或 WebP；不下载响应 URL。沿用统一 HTTP 错误脱敏、禁止重定向和自动重试，图片超时为 180 秒。
+- 图片响应写入素材前使用 `image 0.25.10`（仅启用 jpeg/png/webp）完整解码并限制 15 MB、4000 万像素和 160 MB 解码分配；拒绝动画内容，按实际格式保存 `.png`、`.jpg` 或 `.webp`。
+- 将已解析的书名、作者和画面描述放入版本化 Prompt；只生成背景，中文文字继续使用原 Canvas 渲染器。`base64 0.23.1` 与 `png 0.18.1` 原已存在于锁文件；新增 `image 0.25.10`（仅 jpeg/png/webp）用于全量像素解码，静态格式和 15 MB/4000 万像素限制校验后才允许保存。
+- `start_cover_generation`/`execute_cover_generation` 复用 ai_tasks、共享任务注册/取消和中断恢复。`database/image_generation.rs` 将新图片文件、素材引用和任务成功状态组成事务，失败清理本次新文件，旧背景及历史不改写。
 - 封面页默认使用本地制作。主动展开 AI 区域才读取图片模型，生成成功后先读取和解码素材，再替换草稿中的背景；不自动保存封面版本。失败、取消与迟到响应保留当前草稿、背景和历史；生成期间阻止离页，现有双比例导出及部分成功提示继续复用。
 - 数据库增量迁移为 v6，详见 DATABASE。Windows 真实 WebView2、IPC、系统凭据、SQLite 和文件验证通过；本机可控响应验证不代表外部图片服务可用性，完整边界见 M3-VERIFICATION。

@@ -142,7 +142,7 @@ onMounted(() => { if (desktop) void load() })
         v-if="form.modelKind === 'image'"
         class="muted"
       >
-        支持兼容 GPT Image、返回 base64 PNG 的服务。保存后到书籍封面页生成背景验证，生成可能产生服务费用。
+        支持兼容 GPT Image、返回 base64 PNG、JPEG 或 WebP 的服务。保存后到书籍封面页生成背景验证，生成可能产生服务费用。
       </p>
       <label for="model-name">模型名 *</label><input
         id="model-name"

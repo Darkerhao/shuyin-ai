@@ -1,4 +1,4 @@
-use super::images::{test_png, ImageProvider, ImageRequest};
+use super::images::{test_jpeg, test_png, test_webp, ImageProvider, ImageRequest};
 use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 
@@ -12,16 +12,16 @@ fn image_request(base_url: String) -> ImageRequest {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn image_contract_decodes_png_and_uses_the_configured_model() {
-    let png = test_png();
-    let body = serde_json::json!({"data":[{"b64_json":STANDARD.encode(&png)}]}).to_string();
+async fn image_contract_decodes_image_and_uses_the_configured_model() {
+    let jpeg = test_jpeg();
+    let body = serde_json::json!({"data":[{"b64_json":STANDARD.encode(&jpeg)}]}).to_string();
     let (url, h) = server(200, &body, Duration::ZERO);
     let bytes = OpenAiCompatible::new(TIMEOUT, &url)
         .unwrap()
         .generate_image(image_request(url))
         .await
         .unwrap();
-    assert_eq!(bytes, png);
+    assert_eq!(bytes, jpeg);
     let received = h.join().unwrap();
     assert!(received.starts_with("POST /v1/images/generations HTTP/1.1"));
     assert!(received
@@ -31,7 +31,7 @@ async fn image_contract_decodes_png_and_uses_the_configured_model() {
         serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(
         body,
-        serde_json::json!({"model":"configured-image-model","prompt":"无字山林","n":1,"size":"1024x1024","output_format":"png"})
+        serde_json::json!({"model":"configured-image-model","prompt":"无字山林","n":1,"size":"1024x1024","response_format":"b64_json"})
     );
 }
 
@@ -81,8 +81,13 @@ async fn image_errors_timeout_and_unusable_content_never_return_an_asset() {
 #[test]
 fn image_validation_rejects_truncated_corrupt_and_oversized_data() {
     let png = test_png();
-    assert!(images::validate_image(&png).is_ok());
+    let jpeg = test_jpeg();
+    let webp = test_webp();
+    assert_eq!(images::validate_image(&png).unwrap(), "png");
+    assert_eq!(images::validate_image(&jpeg).unwrap(), "jpg");
+    assert_eq!(images::validate_image(&webp).unwrap(), "webp");
     assert!(images::validate_image(&png[..png.len() - 12]).is_err());
+    assert!(images::validate_image(&jpeg[..jpeg.len() / 2]).is_err());
     let mut corrupt = png.clone();
     corrupt[45] ^= 0xff;
     assert!(images::validate_image(&corrupt).is_err());
