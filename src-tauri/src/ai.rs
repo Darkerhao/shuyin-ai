@@ -4,8 +4,8 @@ use tokio::sync::watch;
 
 pub mod images;
 pub mod publishing;
-pub const PROMPT_VERSION: &str = "publishing-v1";
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v1.md");
+pub const PROMPT_VERSION: &str = "publishing-v2";
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v2.md");
 pub const TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -22,6 +22,14 @@ pub enum WritingContent {
         description: String,
         #[serde(rename = "audioPrompt")]
         audio_prompt: String,
+        #[serde(rename = "coverTitle", default)]
+        cover_title: String,
+        #[serde(rename = "coverSubtitle", default)]
+        cover_subtitle: String,
+        #[serde(rename = "coverPromptLandscape", default)]
+        cover_prompt_landscape: String,
+        #[serde(rename = "coverPromptPortrait", default)]
+        cover_prompt_portrait: String,
     },
 }
 impl WritingContent {
@@ -33,6 +41,10 @@ impl WritingContent {
                     title,
                     description,
                     audio_prompt,
+                    cover_title,
+                    cover_subtitle,
+                    cover_prompt_landscape,
+                    cover_prompt_portrait,
                 },
             ) => {
                 !title.trim().is_empty()
@@ -41,6 +53,14 @@ impl WritingContent {
                     && description.chars().count() <= 1000
                     && !audio_prompt.trim().is_empty()
                     && audio_prompt.chars().count() <= 20_000
+                    && [
+                        (cover_title, 30),
+                        (cover_subtitle, 60),
+                        (cover_prompt_landscape, 2000),
+                        (cover_prompt_portrait, 2000),
+                    ]
+                    .iter()
+                    .all(|(value, limit)| value.chars().count() <= *limit)
             }
             ("outline" | "script", Self::Markdown { text }) => {
                 !text.trim().is_empty() && text.chars().count() <= 100_000

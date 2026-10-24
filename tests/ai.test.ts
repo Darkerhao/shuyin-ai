@@ -7,12 +7,12 @@ import ModelsPage from '../src/modules/settings/ModelsPage.vue'
 import * as api from '../src/services/ai'
 import * as projects from '../src/services/projects'
 import { emptyProject } from '../src/types/project'
-import { emptyProvider, type ModelProvider, type WritingVersion } from '../src/types/ai'
+import { emptyProvider, emptyPublishing, type ModelProvider, type WritingVersion } from '../src/types/ai'
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn() }))
 const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模型', modelName: 'model', isDefault: true, credentialStatus: 'available' }
-const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { format: 'publishing', title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'writing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
-const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { format: 'publishing', title: '新标题', description: '新内容', audioPrompt: '新提示词' }, isConfirmed: false }
+const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'publishing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
+const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
 const wrappers: ReturnType<typeof mount>[] = []
 async function render(path = '/projects/p1/writing') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
@@ -20,6 +20,7 @@ async function render(path = '/projects/p1/writing') {
     { path: '/settings/models', component: ModelsPage },
     { path: '/projects', component: { template: '<p>Projects</p>' } },
     { path: '/projects/:id', component: { template: '<p>Project</p>' } },
+    { path: '/projects/:id/covers', component: { template: '<p>封面工坊</p>' } },
     { path: '/settings', component: { template: '<p>Settings</p>' } },
     { path: '/verification', component: { template: '<p>Verification</p>' } },
   ] })
@@ -38,15 +39,15 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
-  it('shows only three outputs and blocks desktop IPC in browser preview', async () => {
+  it('blocks desktop IPC in browser preview', async () => {
     vi.mocked(projects.isDesktop).mockReturnValue(false)
     const { wrapper } = await render()
     expect(api.listVersions).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('请在桌面应用')
   })
-  it('generates all three outputs in one task without outline/count/reference controls', async () => {
+  it('generates publishing and four cover fields in one task', async () => {
     const { wrapper } = await render()
-    expect(wrapper.findAll('textarea')).toHaveLength(3)
+    expect(wrapper.findAll('textarea')).toHaveLength(7)
     expect(wrapper.find('#writing-kind').exists()).toBe(false)
     expect(wrapper.find('#writing-count').exists()).toBe(false)
     expect(wrapper.find('#writing-reference').exists()).toBe(false)
@@ -56,12 +57,17 @@ describe('publishing workflow', () => {
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('新标题')
     expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('新内容')
     expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('新提示词')
+    for (const field of ['coverTitle', 'coverSubtitle', 'coverPromptLandscape', 'coverPromptPortrait'] as const) {
+      expect((wrapper.get(`#result-${field}`).element as HTMLTextAreaElement).value).toBe(generated.content[field])
+    }
   })
   it('preserves all edited fields when generation fails', async () => {
     const { wrapper } = await render()
     await wrapper.get('#result-title').setValue('未保存标题')
     await wrapper.get('#result-description').setValue('未保存内容')
     await wrapper.get('#result-audioPrompt').setValue('未保存提示词')
+    await wrapper.get('#result-coverTitle').setValue('未保存封面主标题')
+    await wrapper.get('#result-coverPromptPortrait').setValue('竖版 3:4，未保存的画面创意')
     vi.mocked(api.executeGeneration).mockRejectedValue({ code: 'timeout', message: '模型请求超时' })
     await button(wrapper, '一键生成').trigger('click'); await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('模型请求超时')
@@ -69,16 +75,20 @@ describe('publishing workflow', () => {
     expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('未保存内容')
     expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('未保存提示词')
     expect(api.saveWriting).not.toHaveBeenCalled()
+    expect((wrapper.get('#result-coverTitle').element as HTMLTextAreaElement).value).toBe('未保存封面主标题')
+    expect((wrapper.get('#result-coverPromptPortrait').element as HTMLTextAreaElement).value).toBe('竖版 3:4，未保存的画面创意')
   })
   it('keeps edits made during generation and leaves generated output in history', async () => {
     let complete!: (v: WritingVersion) => void
     vi.mocked(api.executeGeneration).mockReturnValue(new Promise(resolve => { complete = resolve }))
     const { wrapper } = await render(); await button(wrapper, '一键生成').trigger('click'); await flushPromises()
     await wrapper.get('#result-description').setValue('生成中手动编辑')
+    await wrapper.get('#result-coverSubtitle').setValue('生成中的副标题修改')
     complete(generated); await flushPromises()
     expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('生成中手动编辑')
     expect(wrapper.get('#writing-version').text()).toContain('v2')
     expect(wrapper.text()).toContain('当前修改已保留')
+    expect((wrapper.get('#result-coverSubtitle').element as HTMLTextAreaElement).value).toBe('生成中的副标题修改')
   })
   it('saves edits, preserves history, and guards navigation and version switching', async () => {
     const { wrapper, router } = await render()
@@ -88,7 +98,7 @@ describe('publishing workflow', () => {
     vi.mocked(api.saveWriting).mockRejectedValueOnce('保存失败')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('人工修订标题')
-    const revised: WritingVersion = { ...generated, content: { format: 'publishing', title: '人工修订标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'mixed' }
+    const revised: WritingVersion = { ...generated, content: { ...initial.content, title: '人工修订标题' }, sourceType: 'mixed' }
     vi.mocked(api.saveWriting).mockResolvedValue(revised)
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.saveWriting).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'publishing', basedOn: 'v1', content: revised.content }))
@@ -118,6 +128,40 @@ describe('publishing workflow', () => {
     await button(wrapper, '复制音频生成提示词').trigger('click'); await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('复制失败')
     expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('原有提示词')
+  })
+  it('copies each cover field with edits and line breaks intact', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const { wrapper } = await render()
+    for (const [field, label] of [['coverTitle', '封面主标题'], ['coverSubtitle', '封面副标题'], ['coverPromptLandscape', '横版 4:3 封面提示词'], ['coverPromptPortrait', '竖版 3:4 封面提示词']]) {
+      await wrapper.get(`#result-${field}`).setValue(`${label}\n我的修改`)
+      await button(wrapper, `复制${label}`).trigger('click'); await flushPromises()
+      expect(writeText).toHaveBeenLastCalledWith(`${label}\n我的修改`)
+    }
+  })
+  it('saves cover edits before navigating and passes the selected version', async () => {
+    vi.mocked(api.listVersions).mockResolvedValue([generated, initial])
+    const { wrapper, router } = await render()
+    await wrapper.get('#result-coverTitle').setValue('修改后的封面标题')
+    vi.mocked(api.saveWriting).mockRejectedValueOnce('保存失败')
+    await button(wrapper, '保存并制作封面').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.path).toContain('/writing')
+    vi.mocked(api.saveWriting).mockImplementation(async input => ({ ...generated, id: 'v3', content: input.content }))
+    await button(wrapper, '保存并制作封面').trigger('click'); await flushPromises()
+    expect(api.saveWriting).toHaveBeenLastCalledWith(expect.objectContaining({ basedOn: 'v2', content: { ...generated.content, coverTitle: '修改后的封面标题' } }))
+    expect(router.currentRoute.value.fullPath).toBe('/projects/p1/covers?writingVersion=v3')
+  })
+  it('can edit and save old three-field versions without generating covers', async () => {
+    const legacy = JSON.parse(JSON.stringify(initial)) as WritingVersion
+    for (const field of ['coverTitle', 'coverSubtitle', 'coverPromptLandscape', 'coverPromptPortrait'] as const) Reflect.deleteProperty(legacy.content, field)
+    vi.mocked(api.listVersions).mockResolvedValue([legacy])
+    const { wrapper } = await render()
+    expect((wrapper.get('#result-coverTitle').element as HTMLTextAreaElement).value).toBe('')
+    await wrapper.get('#result-description').setValue('旧版本仍可编辑')
+    expect(button(wrapper, '保存修改').attributes('disabled')).toBeUndefined()
+    vi.mocked(api.saveWriting).mockImplementation(async input => ({ ...initial, content: input.content }))
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveWriting).toHaveBeenCalledWith(expect.objectContaining({ content: { ...initial.content, description: '旧版本仍可编辑' } }))
   })
 })
 

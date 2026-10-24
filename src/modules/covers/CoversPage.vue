@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
+import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import * as api from '../../services/covers'
-import { listProviders, cancelGeneration } from '../../services/ai'
-import type { ModelProvider } from '../../types/ai'
+import { listProviders, listVersions, cancelGeneration } from '../../services/ai'
+import { emptyPublishing, type ModelProvider, type PublishingContent } from '../../types/ai'
 import { getProject, isDesktop, linkAsset, listAssets, openProjectDirectory } from '../../services/projects'
 import { coverPng, decodeBackground, renderCover } from '../../services/coverRenderer'
 import { coverSizes, coverTemplates, newCover, type CoverConfig, type CoverVersion } from '../../types/cover'
@@ -11,6 +11,7 @@ import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 
 const props = defineProps<{ id: string }>()
+const route = useRoute()
 const desktop = isDesktop()
 const ready = ref(false)
 const bookTitle = ref('')
@@ -32,6 +33,10 @@ const useAi = ref(false)
 const imageModels = ref<ModelProvider[]>([])
 const providerId = ref('')
 const description = ref('')
+const writing = ref<PublishingContent | null>(null)
+const writingError = ref('')
+const promptRatio = ref<'landscape' | 'portrait'>('landscape')
+const suggestedPrompt = computed(() => (promptRatio.value === 'landscape' ? writing.value?.coverPromptLandscape : writing.value?.coverPromptPortrait) ?? '')
 const taskId = ref('')
 const cancelling = ref(false)
 let loadedBackgroundId: string | null = null
@@ -54,13 +59,40 @@ function accept(version: CoverVersion | null) {
   draft.value = { ...config, width: size.width, height: size.height }
   original.value = JSON.stringify(draft.value)
 }
+async function loadWriting() {
+  writingError.value = ''
+  try {
+    const textVersions = await listVersions(props.id, 'publishing')
+    const textVersion = route.query.writingVersion ? textVersions.find(v => v.id === route.query.writingVersion) : textVersions[0]
+    writing.value = textVersion ? { ...emptyPublishing(), ...textVersion.content } : null
+  } catch {
+    writingError.value = '封面文案读取失败，可重新读取；仍可使用本地模板。'
+  }
+}
 const load = () => run(async () => {
-  const [project, saved, assets] = await Promise.all([getProject(props.id), api.listCovers(props.id), listAssets(props.id)])
+  const [project, saved, assets] = await Promise.all([getProject(props.id), api.listCovers(props.id), listAssets(props.id), loadWriting()])
   bookTitle.value = project.title; workspace.value = project.workspacePath
   versions.value = saved; images.value = assets.filter(a => a.assetType === 'image')
-  accept(saved[0] ?? null); ready.value = true
+  accept(saved[0] ?? null)
+  if (!saved.length && writing.value?.coverTitle && writing.value.coverSubtitle) applyWritingTitles()
+  ready.value = true
   await nextTick(); paint()
 })
+function applyWritingTitles() {
+  if (!writing.value) return
+  draft.value.title = writing.value.coverTitle
+  draft.value.subtitle = writing.value.coverSubtitle
+  message.value = '已带入封面主副标题，确认预览后保存或导出。'
+}
+async function copyPrompt() {
+  try { await globalThis.navigator.clipboard.writeText(suggestedPrompt.value); message.value = '已复制封面提示词。'; error.value = '' }
+  catch { error.value = '复制失败，请选中文本后手动复制。' }
+}
+function usePrompt() {
+  description.value = suggestedPrompt.value
+  useAi.value = true
+  void loadImageModels()
+}
 async function loadBackground(id: string | null) {
   const request = ++backgroundRequest
   background.value = null; loadedBackgroundId = null; backgroundError.value = ''; backgroundLoading.value = !!id
@@ -111,7 +143,7 @@ const loadImageModels = () => run(async () => {
 function toggleAi() {
   useAi.value = !useAi.value
   if (useAi.value) {
-    if (!description.value) description.value = `为《${bookTitle.value}》设计简洁、有阅读氛围的封面背景，主体居中，四周留白。`
+    if (!description.value) description.value = suggestedPrompt.value || `为《${bookTitle.value}》设计简洁、有阅读氛围的封面背景，主体居中，四周留白。`
     void loadImageModels()
   }
 }
@@ -161,7 +193,7 @@ onMounted(async () => {
 <template>
   <header>
     <RouterLink :to="`/projects/${id}/writing`">
-      ← 发布文案与音频提示词
+      ← 书籍内容与封面素材
     </RouterLink>
     <h1>发布图片封面</h1>
     <p class="muted">
@@ -199,6 +231,86 @@ onMounted(async () => {
     {{ busy ? '读取中…' : '重新读取' }}
   </button>
   <template v-if="ready">
+    <p
+      v-if="writingError"
+      class="notice"
+    >
+      {{ writingError }}
+      <button
+        class="secondary"
+        :disabled="busy"
+        @click="loadWriting"
+      >
+        重新读取
+      </button>
+    </p>
+    <section
+      class="panel"
+      aria-label="本书封面素材"
+    >
+      <h2>本书封面素材</h2>
+      <template v-if="writing?.coverTitle && writing.coverSubtitle">
+        <p>{{ writing.coverTitle }}</p>
+        <p class="muted">
+          {{ writing.coverSubtitle }}
+        </p>
+        <button
+          class="secondary"
+          :disabled="busy"
+          @click="applyWritingTitles"
+        >
+          使用这组主副标题
+        </button>
+      </template>
+      <p
+        v-else
+        class="muted"
+      >
+        还没有封面文案，可前往<RouterLink :to="`/projects/${id}/writing`">
+          书籍内容
+        </RouterLink>一键生成，或在下方手动填写。
+      </p>
+      <template v-if="writing?.coverPromptLandscape || writing?.coverPromptPortrait">
+        <label for="cover-prompt-ratio">封面提示词比例</label>
+        <select
+          id="cover-prompt-ratio"
+          v-model="promptRatio"
+        >
+          <option value="landscape">
+            横版 4:3 · 1440 × 1080
+          </option>
+          <option value="portrait">
+            竖版 3:4 · 1080 × 1440
+          </option>
+        </select>
+        <label for="cover-suggested-prompt">书籍专属画面提示词</label>
+        <textarea
+          id="cover-suggested-prompt"
+          :value="suggestedPrompt"
+          rows="5"
+          readonly
+        />
+        <div class="actions wrap">
+          <button
+            class="secondary"
+            :disabled="!suggestedPrompt.trim()"
+            @click="copyPrompt"
+          >
+            复制封面提示词
+          </button>
+          <button
+            class="secondary"
+            :disabled="busy || !suggestedPrompt.trim()"
+            @click="usePrompt"
+          >
+            用于 AI 背景
+          </button>
+        </div>
+        <p class="muted">
+          复制到外部图片工具时，选择对应比例。内置 AI 使用这份画面创意生成一张可双向裁切的无字背景，再由本地排版导出两种比例。切换提示词不会替换已编辑的画面描述。
+        </p>
+      </template>
+    </section>
     <section
       class="panel"
       aria-label="可选 AI 背景"

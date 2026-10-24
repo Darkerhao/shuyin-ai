@@ -1,6 +1,7 @@
 use super::ai::*;
 use super::*;
 use crate::{ai::WritingContent, credentials::Credentials};
+use rusqlite::params;
 use std::collections::HashMap;
 #[derive(Default)]
 pub(super) struct Vault {
@@ -317,7 +318,102 @@ fn publishing() -> WritingContent {
         title: "发布标题".into(),
         description: "发布内容".into(),
         audio_prompt: "音频提示词".into(),
+        cover_title: "换了几辈子，还是放不下".into(),
+        cover_subtitle: "《生死疲劳》里的执念".into(),
+        cover_prompt_landscape: "横版 4:3，田野横向展开\n中央留白，无文字。".into(),
+        cover_prompt_portrait: "竖版 3:4，田垄向远方延伸\n中央留白，无文字。".into(),
     }
+}
+
+#[test]
+fn cover_materials_and_legacy_publishing_survive_save_backup_and_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("data.sqlite3");
+    let db = Database::open(path.clone());
+    let p = project(&db);
+    let legacy_json = r#"{"format":"publishing","title":"旧标题","description":"旧内容","audioPrompt":"旧提示词"}"#;
+    db.with_connection(|c| {
+        c.execute("INSERT INTO writing_versions(id,project_id,kind,version_no,content_json,source_type,model_name,prompt_version,is_confirmed,created_at) VALUES('old',?1,'publishing',1,?2,'ai','test','publishing-v1',1,'old')", params![p.id, legacy_json]).unwrap();
+        Ok(())
+    }).unwrap();
+    let old = db.list_versions(&p.id, "publishing").unwrap().remove(0);
+    let WritingContent::Publishing {
+        cover_title,
+        cover_subtitle,
+        cover_prompt_landscape,
+        cover_prompt_portrait,
+        ..
+    } = &old.content
+    else {
+        panic!()
+    };
+    assert!([
+        cover_title,
+        cover_subtitle,
+        cover_prompt_landscape,
+        cover_prompt_portrait
+    ]
+    .iter()
+    .all(|value| value.is_empty()));
+    let input = SaveWritingInput {
+        project_id: p.id.clone(),
+        kind: "publishing".into(),
+        content: old.content.clone(),
+        based_on: Some(old.id),
+        is_confirmed: false,
+    };
+    db.save_writing(input).unwrap();
+    let mut input = SaveWritingInput {
+        project_id: p.id.clone(),
+        kind: "publishing".into(),
+        content: publishing(),
+        based_on: None,
+        is_confirmed: false,
+    };
+    db.save_writing(SaveWritingInput {
+        project_id: input.project_id.clone(),
+        kind: input.kind.clone(),
+        content: input.content.clone(),
+        based_on: None,
+        is_confirmed: false,
+    })
+    .unwrap();
+    if let WritingContent::Publishing {
+        cover_prompt_portrait,
+        ..
+    } = &mut input.content
+    {
+        *cover_prompt_portrait = "字".repeat(2001);
+    }
+    assert!(db.save_writing(input).is_err());
+    assert_eq!(db.list_versions(&p.id, "publishing").unwrap().len(), 3);
+    let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    db.delete_project(&p.id).unwrap();
+    db.restore_backup(&backup).unwrap();
+    drop(db);
+    let reopened = Database::open(path);
+    let versions = reopened.list_versions(&p.id, "publishing").unwrap();
+    assert_eq!(versions.len(), 3);
+    assert_eq!(versions[0].content, publishing());
+    assert_eq!(versions[2].content, old.content);
+    reopened
+        .with_connection(|c| {
+            let unchanged: String = c
+                .query_row(
+                    "SELECT content_json FROM writing_versions WHERE id='old'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(unchanged, legacy_json);
+            assert_eq!(
+                c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                7
+            );
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]

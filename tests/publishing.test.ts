@@ -7,6 +7,7 @@ import * as api from '../src/services/publishing'
 import * as projects from '../src/services/projects'
 import * as ai from '../src/services/ai'
 import * as covers from '../src/services/covers'
+import { emptyPublishing } from '../src/types/ai'
 import { emptyProject, type Asset } from '../src/types/project'
 import { newCover } from '../src/types/cover'
 import type { PublishTask } from '../src/types/publishing'
@@ -50,7 +51,7 @@ describe('M4 publish preparation', () => {
   })
   it('starts from saved writing and exported covers without requiring a model', async () => {
     vi.mocked(api.listPublishTasks).mockResolvedValue([])
-    vi.mocked(ai.listVersions).mockResolvedValue([{ id: 'w1', projectId: 'p1', kind: 'publishing', content: { format: 'publishing', title: '已有发布标题', description: '已有内容', audioPrompt: '提示词' }, versionNo: 1, sourceType: 'manual', modelName: '', promptVersion: '', isConfirmed: false, createdAt: '' }])
+    vi.mocked(ai.listVersions).mockResolvedValue([{ id: 'w1', projectId: 'p1', kind: 'publishing', content: { ...emptyPublishing(), title: '已有发布标题', description: '已有内容', audioPrompt: '提示词' }, versionNo: 1, sourceType: 'manual', modelName: '', promptVersion: '', isConfirmed: false, createdAt: '' }])
     const { wrapper } = await render()
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('已有发布标题')
     expect((wrapper.get('#publish-landscape').element as HTMLSelectElement).value).toBe('c1')

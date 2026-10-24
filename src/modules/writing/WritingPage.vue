@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
+import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/ai'
 import { getProject, isDesktop } from '../../services/projects'
 import { emptyPublishing, type ModelProvider, type PublishingContent, type WritingVersion } from '../../types/ai'
 import { useOperation } from '../../composables/useOperation'
 const props = defineProps<{ id: string }>()
+const router = useRouter()
 const desktop = isDesktop()
 const title = ref('')
 const ready = ref(false)
@@ -21,7 +22,7 @@ const cancelling = ref(false)
 const { busy, error, message, run } = useOperation()
 function accept(version: WritingVersion | null) {
   selected.value = version
-  draft.value = version?.content.format === 'publishing' ? { ...version.content } : emptyPublishing()
+  draft.value = { ...emptyPublishing(), ...version?.content }
   original.value = JSON.stringify(draft.value)
 }
 function canDiscard() { return !dirty.value || globalThis.confirm('当前内容尚未保存，确定放弃修改？') }
@@ -53,7 +54,7 @@ const generate = () => run(async () => {
     const saved = await api.executeGeneration(taskId.value)
     versions.value = [saved, ...versions.value]
     if (!dirty.value) accept(saved)
-    message.value = dirty.value ? '生成完成，当前修改已保留。保存后可在历史版本中查看新结果。' : '标题、发布内容和音频提示词已生成并保存。'
+    message.value = dirty.value ? '生成完成，当前修改已保留。保存后可在历史版本中查看新结果。' : '发布文案、音频提示词、封面主副标题及两种比例的图片提示词已生成并保存。'
   } finally { taskId.value = '' }
 })
 async function cancel() {
@@ -63,15 +64,24 @@ async function cancel() {
   catch { error.value = '取消失败，请稍后重试。' }
   finally { cancelling.value = false }
 }
-async function copy(field: 'title' | 'description' | 'audioPrompt', label: string) {
+async function makeCover() {
+  if (dirty.value) await save()
+  if (!dirty.value && selected.value) await router.push({ path: `/projects/${props.id}/covers`, query: { writingVersion: selected.value.id } })
+}
+async function copy(field: keyof Omit<PublishingContent, 'format'>, label: string) {
   try { await globalThis.navigator.clipboard.writeText(draft.value[field]); message.value = `已复制${label}。`; error.value = '' }
   catch { error.value = '复制失败，请选中文本后手动复制。' }
 }
-const fields: { key: keyof Omit<PublishingContent, 'format'>; label: string; rows: number; limit: number }[] = [
+const fields: { key: keyof Omit<PublishingContent, 'format'>; label: string; rows: number; limit: number; help?: string }[] = [
   { key: 'title', label: '发布标题', rows: 2, limit: 30 },
   { key: 'description', label: '发布内容', rows: 7, limit: 1000 },
-  { key: 'audioPrompt', label: '音频生成提示词', rows: 18, limit: 20000 },
+  { key: 'audioPrompt', label: '音频生成提示词', rows: 18, limit: 20000, help: '复制到音频工具的自定义提示词中，并在该工具中选择对应书籍来源。' },
+  { key: 'coverTitle', label: '封面主标题', rows: 2, limit: 30, help: '提炼本书的悬念或看点，与发布标题分开使用。旧版本没有封面内容，可再次一键生成，也可手动填写。' },
+  { key: 'coverSubtitle', label: '封面副标题', rows: 2, limit: 60, help: '用书名和具体看点补充主标题，可直接带入制作封面。' },
+  { key: 'coverPromptLandscape', label: '横版 4:3 封面提示词', rows: 7, limit: 2000, help: '用于 1440 × 1080 横版构图，复制到图片工具并选择 4:3。只生成无字背景，主副标题在制作封面时添加。' },
+  { key: 'coverPromptPortrait', label: '竖版 3:4 封面提示词', rows: 7, limit: 2000, help: '用于 1080 × 1440 竖版构图，复制到图片工具并选择 3:4。与横版保持同一主题，分别安排主体和留白。' },
 ]
+const canSave = computed(() => [draft.value.title, draft.value.description, draft.value.audioPrompt].every(value => value.trim()))
 onMounted(() => { if (desktop) void load() })
 </script>
 <template>
@@ -81,7 +91,7 @@ onMounted(() => { if (desktop) void load() })
     </RouterLink>
     <h1>{{ title || '书籍' }}</h1>
     <p class="muted">
-      发布文案与音频提示词，一次准备好。
+      发布文案、音频提示词和封面素材，一次准备好。
     </p>
     <RouterLink :to="`/projects/${id}`">
       修改书籍资料
@@ -198,10 +208,10 @@ onMounted(() => { if (desktop) void load() })
           </button>
         </div>
         <p
-          v-if="field.key === 'audioPrompt'"
+          v-if="field.help"
           class="muted"
         >
-          复制到音频工具的自定义提示词中，并在该工具中选择对应书籍来源。
+          {{ field.help }}
         </p>
         <textarea
           :id="`result-${field.key}`"
@@ -218,12 +228,20 @@ onMounted(() => { if (desktop) void load() })
           {{ [...draft[field.key]].length }} / {{ field.limit }}
         </p>
       </section>
-      <div class="actions">
+      <div class="actions wrap">
         <button
           type="submit"
-          :disabled="busy || !dirty || fields.some(f => !draft[f.key].trim())"
+          :disabled="busy || !dirty || !canSave"
         >
           保存修改
+        </button>
+        <button
+          type="button"
+          class="secondary"
+          :disabled="busy || !canSave || !draft.coverTitle.trim() || !draft.coverSubtitle.trim()"
+          @click="makeCover"
+        >
+          {{ dirty ? '保存并制作封面' : '使用这些内容制作封面' }}
         </button>
         <span class="muted">{{ dirty ? '有未保存的修改' : '已保存的内容会自动保留' }}</span>
       </div>
