@@ -4,6 +4,8 @@ import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from '
 import * as api from '../../services/projects'
 import { emptyProject, projectInput, type Project } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
+import AppIcon from '../../components/AppIcon.vue'
+import ProjectNavigation from '../../components/ProjectNavigation.vue'
 const props = defineProps<{ id?: string }>()
 const router = useRouter()
 const desktop = api.isDesktop()
@@ -36,35 +38,24 @@ onBeforeRouteUpdate(canLeave)
 onMounted(() => { if (desktop && props.id) void load() })
 </script>
 <template>
-  <header>
-    <RouterLink to="/projects">
-      ← 我的书籍
-    </RouterLink>
-    <h1>{{ project ? project.title : '添加一本书' }}</h1>
-    <p class="muted">
-      填书名即可开始。有简介或想重点讲的内容，也可以一起补充。
-    </p>
-    <RouterLink
-      v-if="project"
-      :to="`/projects/${project.id}/writing`"
-    >
-      查看文案、音频提示词与封面素材
-    </RouterLink>
-    <RouterLink
-      v-if="project"
-      class="cover-entry"
-      :to="`/projects/${project.id}/covers`"
-    >
-      制作封面
-    </RouterLink>
-    <RouterLink
-      v-if="project"
-      class="cover-entry"
-      :to="`/projects/${project.id}/publishing`"
-    >
-      发布准备
-    </RouterLink>
+  <header class="page-heading">
+    <div>
+      <RouterLink
+        class="back-link"
+        to="/projects"
+      >
+        <AppIcon name="back" />我的书籍
+      </RouterLink>
+      <h1>{{ project ? '书籍资料' : '添加一本书' }}</h1><p class="muted">
+        {{ project ? '补充你的阅读理解，让创作更有自己的味道。' : '从一个书名开始，把读过的好故事分享出去。' }}
+      </p>
+    </div>
+    <span class="badge"><AppIcon name="book" />{{ project ? project.title : '一段新创作的开始' }}</span>
   </header>
+  <ProjectNavigation
+    v-if="project"
+    :id="project.id"
+  />
   <p
     v-if="!desktop"
     class="notice"
@@ -77,8 +68,7 @@ onMounted(() => { if (desktop && props.id) void load() })
     role="alert"
   >
     {{ error }}
-  </p>
-  <p
+  </p><p
     v-if="message"
     role="status"
   >
@@ -93,49 +83,72 @@ onMounted(() => { if (desktop && props.id) void load() })
   </button>
   <p
     v-if="!ready && busy"
+    class="loading-state"
     role="status"
   >
     正在读取书籍…
   </p>
-  <form
+  <div
     v-if="ready"
-    class="panel"
-    @submit.prevent="save"
+    class="book-form-layout"
   >
-    <fieldset :disabled="!desktop || busy">
-      <label for="title">书名 *</label><input
-        id="title"
-        v-model="form.title"
-        required
-        maxlength="200"
-        placeholder="例如：明朝那些事儿"
-      >
-      <label for="author">作者（选填）</label><input
-        id="author"
-        v-model="form.author"
-        placeholder="同名书建议填写作者"
-      >
-      <label for="notes">书籍内容或创作要求（选填）</label>
-      <textarea
-        id="notes"
-        v-model="form.sourceNotes"
-        rows="7"
-        placeholder="可以粘贴书籍简介、读书笔记，或说明这一期想重点讲什么。不需要先准备大纲和讲稿。"
-      />
-      <button
-        type="submit"
-        class="save-book"
-      >
-        保存并继续
-      </button>
-    </fieldset>
-  </form>
+    <form
+      class="panel"
+      @submit.prevent="save"
+    >
+      <fieldset :disabled="!desktop || busy">
+        <div class="form-grid">
+          <div>
+            <label for="title">书名 *</label><input
+              id="title"
+              v-model="form.title"
+              required
+              maxlength="200"
+              placeholder="例如：生死疲劳"
+            >
+          </div>
+          <div>
+            <label for="author">作者 <span class="optional">· 选填</span></label><input
+              id="author"
+              v-model="form.author"
+              placeholder="同名书建议填写作者"
+            >
+          </div>
+        </div>
+        <label for="notes">这本书，你想聊什么？ <span class="optional">· 选填</span></label>
+        <textarea
+          id="notes"
+          v-model="form.sourceNotes"
+          rows="9"
+          placeholder="粘贴书籍简介、读书笔记，或写下这一期想重点讲的内容。&#10;&#10;例如：想从人物的命运聊聊普通人的韧性，语言通俗一些，像朋友聊天。"
+        />
+        <p class="muted">
+          不需要先准备大纲或讲稿，留空也可以继续。
+        </p>
+        <div class="actions wrap">
+          <button type="submit">
+            <AppIcon name="check" />{{ busy ? '保存中…' : '保存并继续' }}
+          </button><RouterLink
+            :to="project ? `/projects/${project.id}/writing` : '/projects'"
+            class="button secondary"
+          >
+            取消
+          </RouterLink><span
+            v-if="dirty"
+            class="save-status is-dirty"
+          >有未保存的修改</span>
+        </div>
+      </fieldset>
+    </form>
+    <aside class="book-form-aside">
+      <AppIcon name="sparkle" /><h2>好内容，始于你的视角</h2><p>一个打动你的片段、一个想讨论的问题，都能让生成的内容更贴近你的表达。</p><p>接下来，你可以一键准备发布文案、音频提示词与封面素材。</p>
+    </aside>
+  </div>
   <details
     v-if="project"
     class="history-panel"
   >
-    <summary>管理这本书</summary>
-    <button
+    <summary>管理这本书</summary><button
       class="secondary danger"
       :disabled="busy"
       @click="deleting = true"
@@ -151,8 +164,7 @@ onMounted(() => { if (desktop && props.id) void load() })
   >
     <h2 id="delete-title">
       确认删除这本书？
-    </h2>
-    <p>此项目及生成历史将被删除。原始视频、素材文件和工作目录都会保留。</p>
+    </h2><p>此项目及生成历史将被删除。原始视频、素材文件和工作目录都会保留。</p>
     <div class="actions">
       <button
         class="danger"

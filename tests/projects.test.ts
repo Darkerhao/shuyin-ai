@@ -46,17 +46,42 @@ describe('M1 projects and materials', () => {
     expect(wrapper.text()).toContain('浏览器预览')
     expect(wrapper.findAll('button').every(b => b.element.disabled)).toBe(true)
   })
-  it('searches and filters with explicit query and recovers from a read failure', async () => {
+  it('filters immediately and preserves the library when refreshing fails', async () => {
     const { wrapper } = await render('/projects')
     await wrapper.get('#search').setValue('余华')
     vi.mocked(api.listProjects).mockRejectedValueOnce('读取失败')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('读取失败')
-    expect(api.listProjects).toHaveBeenLastCalledWith('余华', '')
+    expect(api.listProjects).toHaveBeenLastCalledWith()
+    expect(wrapper.get('.project-card').text()).toContain('活着')
     vi.mocked(api.listProjects).mockResolvedValueOnce([])
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(wrapper.text()).toContain('没有匹配的项目')
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+  it('combines search and status filters, clears search, and sorts without extra database calls', async () => {
+    vi.mocked(api.listProjects).mockResolvedValue([
+      saved,
+      { ...saved, id: 'p2', title: '朝花夕拾', author: '鲁迅', status: 'published', updatedAt: '2026-10-24T00:00:00Z' },
+      { ...saved, id: 'p3', title: '归档书籍', status: 'archived', isbn: '978-123', updatedAt: '2026-10-22T00:00:00Z' },
+    ])
+    const { wrapper } = await render('/projects')
+    expect(wrapper.findAll('.project-card h2').map(el => el.text())).toEqual(['朝花夕拾', '活着', '归档书籍'])
+    await wrapper.get('#search').setValue('  鲁迅  ')
+    expect(wrapper.findAll('.project-card')).toHaveLength(1)
+    await wrapper.get('[aria-label="清空搜索"]').trigger('click')
+    expect(wrapper.findAll('.project-card')).toHaveLength(3)
+    await wrapper.findAll('.library-filters button')[1]!.trigger('click')
+    expect(wrapper.findAll('.project-card h2').map(el => el.text())).toEqual(['活着'])
+    await wrapper.findAll('.library-filters button')[2]!.trigger('click')
+    expect(wrapper.findAll('.project-card h2').map(el => el.text())).toEqual(['朝花夕拾'])
+    await wrapper.findAll('.library-filters button')[0]!.trigger('click')
+    await wrapper.get('#search').setValue('978-123')
+    expect(wrapper.get('.project-card h2').text()).toBe('归档书籍')
+    await wrapper.get('#search').trigger('keydown', { key: 'Escape' })
+    await wrapper.get('#book-sort').setValue('title')
+    expect(wrapper.findAll('.project-card h2').map(el => el.text())).toEqual(['朝花夕拾', '归档书籍', '活着'])
+    expect(api.listProjects).toHaveBeenCalledTimes(1)
   })
   it('creates a project and navigates to its persisted detail', async () => {
     const { wrapper, router } = await render('/projects/new')
