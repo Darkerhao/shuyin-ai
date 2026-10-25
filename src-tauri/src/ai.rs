@@ -4,6 +4,7 @@ use tokio::sync::watch;
 
 pub mod images;
 pub mod publishing;
+pub mod revision;
 pub const PROMPT_VERSION: &str = "publishing-v2";
 pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v2.md");
 pub const TIMEOUT: Duration = Duration::from_secs(120);

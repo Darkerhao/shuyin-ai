@@ -74,6 +74,7 @@ pub fn run() {
             ai_commands::list_ai_tasks,
             ai_commands::start_generation,
             ai_commands::execute_generation,
+            ai_commands::apply_generation,
             ai_commands::cancel_generation
         ])
         .run(tauri::generate_context!())

@@ -19,24 +19,14 @@ struct Section {
     heading: String,
     guidance: String,
 }
-impl PublishingDraft {
-    pub fn into_content(self, book: &str) -> Result<WritingContent, String> {
-        if [
-            &self.cover_title,
-            &self.cover_subtitle,
-            &self.cover_prompt_landscape,
-            &self.cover_prompt_portrait,
-        ]
-        .iter()
-        .any(|value| value.trim().is_empty())
-            || !self.cover_prompt_landscape.contains("4:3")
-            || !self.cover_prompt_portrait.contains("3:4")
-            || self.cover_prompt_landscape.trim() == self.cover_prompt_portrait.trim()
-        {
-            return Err(
-                "封面需要主标题、副标题及分别标明 4:3、3:4 的两份不同提示词，原有内容保留。".into(),
-            );
-        }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AudioDraft {
+    introduction: String,
+    sections: Vec<Section>,
+}
+impl AudioDraft {
+    pub fn into_prompt(self, book: &str) -> Result<String, String> {
         if self.sections.len() != 5
             || self.introduction.trim().is_empty()
             || self.introduction.chars().count() > 1500
@@ -62,13 +52,38 @@ impl PublishingDraft {
             })
             .collect::<Vec<_>>()
             .join("\n\n---\n\n");
-        let audio_prompt = include_str!("../../../prompts/audio-template-v1.md")
+        Ok(include_str!("../../../prompts/audio-template-v1.md")
             .replace(
                 "{{book}}",
                 book.trim().trim_start_matches('《').trim_end_matches('》'),
             )
             .replace("{{introduction}}", self.introduction.trim())
-            .replace("{{sections}}", &sections);
+            .replace("{{sections}}", &sections))
+    }
+}
+impl PublishingDraft {
+    pub fn into_content(self, book: &str) -> Result<WritingContent, String> {
+        if [
+            &self.cover_title,
+            &self.cover_subtitle,
+            &self.cover_prompt_landscape,
+            &self.cover_prompt_portrait,
+        ]
+        .iter()
+        .any(|value| value.trim().is_empty())
+            || !self.cover_prompt_landscape.contains("4:3")
+            || !self.cover_prompt_portrait.contains("3:4")
+            || self.cover_prompt_landscape.trim() == self.cover_prompt_portrait.trim()
+        {
+            return Err(
+                "封面需要主标题、副标题及分别标明 4:3、3:4 的两份不同提示词，原有内容保留。".into(),
+            );
+        }
+        let audio_prompt = AudioDraft {
+            introduction: self.introduction,
+            sections: self.sections,
+        }
+        .into_prompt(book)?;
         let content = WritingContent::Publishing {
             title: self.title.trim().into(),
             description: self.description.trim().into(),
