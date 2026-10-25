@@ -348,3 +348,13 @@ publishing 的 content_json 为 `{format:"publishing",title,description,audioPro
 ## 16. 封面 16:9 尺寸扩展（2026-10-25）
 
 保存校验增加 1920×1080，沿用 `cover_versions.config_json` 的宽高字段和 `schemaVersion=1`；数据库仍为 v7，无 SQL 迁移。批量导出追加 4:3、3:4、16:9 三条独立版本，原有行与文件不重写。已有 1920×1080 历史配置可直接恢复编辑，不再转换为 4:3。发布任务的两张封面引用保持原有比例要求。
+
+## 17. 按项调整 v8（2026-10-25）
+
+新增 `0008_generation_preview.sql`，只为 `ai_tasks` 增加可空且校验 JSON 的 `preview_json`，原记录、内容、时间戳及凭据引用不变。迁移与 `user_version=8` 在同一事务内提交；失败保留旧版本。
+
+按项任务仍使用 `kind=publishing`，`input_json` 增加可选 `revision`：`basedOn`、`fields`、`instruction`。不记录原书全文、当前内容快照或密钥。请求使用来源版本，拒绝跨项目/跨类型引用、空字段集合、重复字段及超长要求；Prompt 版本为 `publishing-revision-v1`。
+
+候选生成成功把完整合并结果写入 `preview_json` 并标记 succeeded，不新增 `writing_versions`。采用时事务内追加来源 mixed 的版本、写入实际模型和 Prompt 版本、设置 `version_id` 并清空候选；重复采用返回已关联版本。取消后的迟到响应不能写入候选，采用失败保留候选和旧版本。
+
+备份接受 v2–v8，继续核验原 schema、完整性和外键，在内存中迁移旧备份；源备份不改写。v8 备份包含候选数据，正式 UI 不提供跨重启恢复候选。回退旧程序须使用升级前数据库备份，不对 v8 强制降级。

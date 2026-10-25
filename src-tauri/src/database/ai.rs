@@ -3,7 +3,11 @@ use super::{
     Database,
 };
 use crate::{
-    ai::{self, WritingContent, PROMPT_VERSION},
+    ai::{
+        self,
+        revision::{self, PublishingField, RevisionInput},
+        WritingContent, PROMPT_VERSION,
+    },
     credentials::Credentials,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -109,6 +113,22 @@ pub struct SaveWritingInput {
 pub struct GenerationInput {
     pub project_id: String,
     pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<RevisionInput>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationPreview {
+    pub task_id: String,
+    pub fields: Vec<PublishingField>,
+    pub before: WritingContent,
+    pub content: WritingContent,
+}
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum GenerationResult {
+    Version(WritingVersion),
+    Preview(GenerationPreview),
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +161,25 @@ pub struct PreparedGeneration {
     pub provider: ProviderConfig,
     pub user: String,
     pub book_title: String,
+    pub base: Option<WritingVersion>,
+}
+
+fn revision_base(
+    c: &Connection,
+    input: &GenerationInput,
+) -> Result<Option<WritingVersion>, String> {
+    input
+        .revision
+        .as_ref()
+        .map(|revision| {
+            revision.validate()?;
+            let base = version(c, &revision.based_on)?;
+            if base.project_id != input.project_id || base.kind != "publishing" {
+                return Err("调整来源不属于当前书籍的发布内容。".into());
+            }
+            Ok(base)
+        })
+        .transpose()
 }
 
 fn append(
@@ -282,10 +321,12 @@ impl Database {
     pub fn start_generation(&self, input: GenerationInput) -> Result<String, String> {
         self.with_connection(|c| {
             get(c,&input.project_id)?;
+            revision_base(c, &input)?;
             let p=provider(c,&input.provider_id)?;
             if !p.input.is_enabled || p.input.model_kind != "text" {return Err("请选择已启用的文本模型。".into());}
             let id=new_id(c)?;
-            c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW})"),params![id,input.project_id,"publishing",input.provider_id,p.input.model_name,PROMPT_VERSION,serde_json::to_string(&input).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+            let prompt = if input.revision.is_some() { revision::PROMPT_VERSION } else { PROMPT_VERSION };
+            c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW})"),params![id,input.project_id,"publishing",input.provider_id,p.input.model_name,prompt,serde_json::to_string(&input).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
             Ok(id)
         })
     }
@@ -296,9 +337,14 @@ impl Database {
             let project=get(c,&input.project_id)?;
             let p=provider(c,&input.provider_id)?;
             if !p.input.is_enabled || p.input.model_kind != "text" {return Err("请选择已启用的文本模型。".into());}
-            let user=serde_json::json!({"book":{"title":project.input.title,"author":project.input.author,"description":project.input.description,"sourceNotes":project.input.source_notes}}).to_string();
+            let base = revision_base(c, &input)?;
+            let mut user=serde_json::json!({"book":{"title":project.input.title,"author":project.input.author,"description":project.input.description,"sourceNotes":project.input.source_notes}});
+            if let Some(base) = &base {
+                user["currentContent"] = serde_json::to_value(&base.content).map_err(|e|e.to_string())?;
+                user["revision"] = serde_json::to_value(&input.revision).map_err(|e|e.to_string())?;
+            }
             c.execute("UPDATE ai_tasks SET status='running',model_name=?2 WHERE id=?1 AND status='pending'",params![id,p.input.model_name]).map_err(|e|e.to_string())?;
-            Ok(PreparedGeneration{input,provider:p,user,book_title:project.input.title})
+            Ok(PreparedGeneration{input,provider:p,user:user.to_string(),book_title:project.input.title,base})
         })
     }
     pub fn finish_generation(
@@ -316,6 +362,36 @@ impl Database {
             let saved=append(&tx,&SaveWritingInput{project_id:input.project_id.clone(),kind:"publishing".into(),content,based_on:None,is_confirmed:false},"ai",model,PROMPT_VERSION)?;
             tx.execute(&format!("UPDATE ai_tasks SET status='succeeded',version_id=?2,completed_at={NOW} WHERE id=?1"),params![id,saved.id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;Ok(saved)
+        })
+    }
+    pub fn finish_revision(
+        &self,
+        id: &str,
+        input: &GenerationInput,
+        content: WritingContent,
+    ) -> Result<GenerationPreview, String> {
+        content.validate("publishing", None)?;
+        self.with_connection(|c| {
+            let base = revision_base(c, input)?.ok_or("调整任务缺少来源版本。")?;
+            let changed = c.execute(&format!("UPDATE ai_tasks SET status='succeeded',preview_json=?2,completed_at={NOW} WHERE id=?1 AND status='running'"),params![id,serde_json::to_string(&content).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+            if changed == 0 { return Err("任务已取消或结束，候选结果未保存。".into()); }
+            Ok(GenerationPreview { task_id:id.into(), fields:input.revision.as_ref().unwrap().fields.clone(), before:base.content, content })
+        })
+    }
+    pub fn apply_generation(&self, id: &str) -> Result<WritingVersion, String> {
+        self.with_connection(|c| {
+            let tx = c.transaction().map_err(|e|e.to_string())?;
+            let (input, preview, saved, model, prompt): (String,Option<String>,Option<String>,String,String) = tx.query_row(
+                "SELECT input_json,preview_json,version_id,model_name,prompt_version FROM ai_tasks WHERE id=?1 AND kind='publishing' AND status='succeeded'",[id],|r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))
+            ).map_err(|_|"没有可采用的候选结果。")?;
+            let input:GenerationInput=serde_json::from_str(&input).map_err(|_|"调整任务无效。")?;
+            let base=revision_base(&tx,&input)?.ok_or("此任务不是按项调整。")?;
+            if let Some(saved)=saved { return version(&tx,&saved); }
+            let content:WritingContent=serde_json::from_str(&preview.ok_or("候选结果已不可用。")?).map_err(|_|"候选结果无效。")?;
+            let saved=append(&tx,&SaveWritingInput { project_id:input.project_id, kind:"publishing".into(),content,based_on:Some(base.id),is_confirmed:false },"mixed",&model,&prompt)?;
+            tx.execute("UPDATE ai_tasks SET version_id=?2,preview_json=NULL WHERE id=?1",params![id,saved.id]).map_err(|e|e.to_string())?;
+            tx.commit().map_err(|e|e.to_string())?;
+            Ok(saved)
         })
     }
     pub fn end_generation(

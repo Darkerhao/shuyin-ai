@@ -69,6 +69,7 @@ fn generation(project_id: &str, provider_id: &str) -> GenerationInput {
     GenerationInput {
         project_id: project_id.into(),
         provider_id: provider_id.into(),
+        revision: None,
     }
 }
 #[test]
@@ -409,7 +410,7 @@ fn cover_materials_and_legacy_publishing_survive_save_backup_and_restart() {
             assert_eq!(
                 c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
                     .unwrap(),
-                7
+                MIGRATIONS.len() as u32
             );
             Ok(())
         })
@@ -446,6 +447,7 @@ fn v3_upgrade_preserves_old_versions_task_links_and_backup_and_allows_title_only
         .start_generation(GenerationInput {
             project_id: "p".into(),
             provider_id: "m".into(),
+            revision: None,
         })
         .unwrap();
     db.prepare_generation(&new).unwrap();
@@ -454,6 +456,7 @@ fn v3_upgrade_preserves_old_versions_task_links_and_backup_and_allows_title_only
         &GenerationInput {
             project_id: "p".into(),
             provider_id: "m".into(),
+            revision: None,
         },
         publishing(),
         "model",
@@ -512,4 +515,149 @@ fn v4_migration_failure_rolls_back_without_dropping_old_task_links() {
     );
     assert!(c.prepare("SELECT * FROM writing_versions").is_ok());
     assert!(c.prepare("SELECT * FROM writing_versions_v4").is_err());
+}
+
+#[test]
+fn revision_preview_requires_adoption_and_adoption_is_atomic_and_idempotent() {
+    use crate::ai::revision::{self, PublishingField, RevisionInput};
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("data.sqlite3"));
+    let project = project(&db);
+    let provider = db
+        .save_provider(None, model(), None, &Vault::default())
+        .unwrap()
+        .provider;
+    let base = db
+        .save_writing(SaveWritingInput {
+            project_id: project.id.clone(),
+            kind: "publishing".into(),
+            content: publishing(),
+            based_on: None,
+            is_confirmed: false,
+        })
+        .unwrap();
+    let mut input = generation(&project.id, &provider.id);
+    input.revision = Some(RevisionInput {
+        based_on: base.id.clone(),
+        fields: vec![PublishingField::Title],
+        instruction: "标题更简洁".into(),
+    });
+    let id = db.start_generation(input.clone()).unwrap();
+    let prepared = db.prepare_generation(&id).unwrap();
+    assert!(prepared.user.contains("标题更简洁"));
+    let content = revision::revise(
+        r#"{"title":"调整后的标题"}"#,
+        &base.content,
+        &input.revision.as_ref().unwrap().fields,
+        "书名",
+    )
+    .unwrap();
+    let preview = db.finish_revision(&id, &input, content.clone()).unwrap();
+    assert_eq!(preview.before, base.content);
+    assert_eq!(
+        db.list_versions(&project.id, "publishing").unwrap().len(),
+        1
+    );
+    // A failed database write must retain the candidate so adoption can be retried.
+    db.with_connection(|c| {
+        c.pragma_update(None, "query_only", true)
+            .map_err(|e| e.to_string())
+    })
+    .unwrap();
+    assert!(db.apply_generation(&id).is_err());
+    db.with_connection(|c| {
+        c.pragma_update(None, "query_only", false)
+            .map_err(|e| e.to_string())
+    })
+    .unwrap();
+    let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    db.restore_backup(&backup).unwrap();
+    let adopted = db.apply_generation(&id).unwrap();
+    assert_eq!(adopted.content, content);
+    assert_eq!(adopted.source_type, "mixed");
+    assert_eq!(adopted.prompt_version, revision::PROMPT_VERSION);
+    assert_eq!(db.apply_generation(&id).unwrap().id, adopted.id);
+    assert_eq!(
+        db.list_versions(&project.id, "publishing").unwrap().len(),
+        2
+    );
+    assert_eq!(
+        db.list_ai_tasks(&project.id).unwrap()[0]
+            .version_id
+            .as_deref(),
+        Some(adopted.id.as_str())
+    );
+    assert_eq!(
+        db.list_versions(&project.id, "publishing").unwrap()[1].content,
+        base.content
+    );
+}
+
+#[test]
+fn revision_rejects_foreign_sources_duplicate_fields_and_late_cancelled_responses() {
+    use crate::ai::revision::{PublishingField, RevisionInput};
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("data.sqlite3"));
+    let p = project(&db);
+    let other = project(&db);
+    let provider = db
+        .save_provider(None, model(), None, &Vault::default())
+        .unwrap()
+        .provider;
+    let base = db
+        .save_writing(SaveWritingInput {
+            project_id: p.id.clone(),
+            kind: "publishing".into(),
+            content: publishing(),
+            based_on: None,
+            is_confirmed: false,
+        })
+        .unwrap();
+    let mut input = generation(&other.id, &provider.id);
+    input.revision = Some(RevisionInput {
+        based_on: base.id.clone(),
+        fields: vec![PublishingField::Title],
+        instruction: String::new(),
+    });
+    assert!(db.start_generation(input.clone()).is_err());
+    input.project_id = p.id.clone();
+    input
+        .revision
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(PublishingField::Title);
+    assert!(db.start_generation(input.clone()).is_err());
+    input.revision.as_mut().unwrap().fields.pop();
+    let id = db.start_generation(input.clone()).unwrap();
+    db.prepare_generation(&id).unwrap();
+    db.end_generation(&id, "cancelled", "cancelled", "用户取消")
+        .unwrap();
+    assert!(db.finish_revision(&id, &input, publishing()).is_err());
+    assert!(db.apply_generation(&id).is_err());
+    assert_eq!(db.list_versions(&p.id, "publishing").unwrap().len(), 1);
+}
+
+#[test]
+fn v8_migration_conflict_keeps_v7_data_and_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v7.sqlite3");
+    let c = Connection::open(&path).unwrap();
+    for sql in MIGRATIONS.iter().take(7) {
+        c.execute_batch(sql).unwrap();
+    }
+    c.execute_batch("INSERT INTO m0_probe VALUES(1,'保留旧数据','原时间'); ALTER TABLE ai_tasks ADD COLUMN preview_json TEXT; PRAGMA user_version=7;").unwrap();
+    drop(c);
+    assert!(Database::open(path.clone()).read().is_err());
+    let c = Connection::open(path).unwrap();
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        7
+    );
+    assert_eq!(
+        c.query_row("SELECT note FROM m0_probe", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "保留旧数据"
+    );
 }

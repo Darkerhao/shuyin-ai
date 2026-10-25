@@ -71,6 +71,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0005_covers.sql"),
     include_str!("../migrations/0006_image_generation.sql"),
     include_str!("../migrations/0007_publish_tasks.sql"),
+    include_str!("../migrations/0008_generation_preview.sql"),
 ];
 
 impl Database {

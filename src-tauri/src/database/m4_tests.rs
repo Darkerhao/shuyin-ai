@@ -318,7 +318,7 @@ fn v7_migration_old_backup_and_failure_preserve_v6_data() {
         assert_eq!(
             c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
                 .unwrap(),
-            7
+            MIGRATIONS.len() as u32
         );
         assert!(!c
             .prepare("PRAGMA foreign_key_check")
@@ -382,6 +382,7 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
         let generation = GenerationInput {
             project_id: p.id.clone(),
             provider_id: provider.id.clone(),
+            revision: None,
         };
         let task = db.start_generation(generation.clone()).unwrap();
         db.prepare_generation(&task).unwrap();

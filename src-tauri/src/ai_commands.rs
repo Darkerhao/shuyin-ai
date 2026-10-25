@@ -1,13 +1,13 @@
 use crate::{
     ai::{
-        publishing::PublishingDraft, ActiveTasks, AiError, OpenAiCompatible, TextProvider,
-        TextRequest, SYSTEM_PROMPT, TIMEOUT,
+        publishing::PublishingDraft, revision, ActiveTasks, AiError, OpenAiCompatible,
+        TextProvider, TextRequest, SYSTEM_PROMPT, TIMEOUT,
     },
     credentials::{Credentials, SystemCredentials},
     database::{
         ai::{
-            AiTask, GenerationInput, ProviderConfig, ProviderInput, SaveWritingInput,
-            SavedProvider, WritingVersion,
+            AiTask, GenerationInput, GenerationResult, ProviderConfig, ProviderInput,
+            SaveWritingInput, SavedProvider, WritingVersion,
         },
         Database,
     },
@@ -137,6 +137,13 @@ pub fn start_generation(
     database.start_generation(input)
 }
 #[tauri::command]
+pub fn apply_generation(
+    database: State<'_, Database>,
+    id: String,
+) -> Result<WritingVersion, String> {
+    database.apply_generation(&id)
+}
+#[tauri::command]
 pub fn cancel_generation(
     database: State<'_, Database>,
     active: State<'_, ActiveTasks>,
@@ -155,23 +162,29 @@ pub async fn execute_generation(
     vault: State<'_, SystemCredentials>,
     active: State<'_, ActiveTasks>,
     id: String,
-) -> Result<WritingVersion, AiError> {
+) -> Result<GenerationResult, AiError> {
     let database = database.inner();
     let vault = vault.inner();
     let id = id.as_str();
     run_task(database, active.inner(), id, |mut receiver| async move {
         let prepared=database.prepare_generation(id).map_err(AiError::database)?;
         let model=prepared.provider.input.model_name.clone();
-        let req=request(prepared.provider,vault,SYSTEM_PROMPT,prepared.user)?;
+        let system=if prepared.input.revision.is_some() { revision::SYSTEM_PROMPT } else { SYSTEM_PROMPT };
+        let req=request(prepared.provider,vault,system,prepared.user)?;
         let provider=OpenAiCompatible::new(TIMEOUT, &req.base_url)?;
         let raw=tokio::select! {
             biased;
             _=receiver.changed()=>return Err(AiError::new("cancelled","生成已取消，原有内容保留。")),
             response=provider.generate(req)=>response?,
         };
-        let draft:PublishingDraft=serde_json::from_str(&raw).map_err(|_|AiError::new("invalid_content","模型输出不符合发布内容结构，原有内容保留。"))?;
-        let content=draft.into_content(&prepared.book_title).map_err(|s|AiError::new("invalid_content",&s))?;
-        database.finish_generation(id,&prepared.input,content,&model).map_err(AiError::database)
+        if let (Some(revision),Some(base))=(&prepared.input.revision,&prepared.base) {
+            let content=revision::revise(&raw,&base.content,&revision.fields,&prepared.book_title).map_err(|s|AiError::new("invalid_content",&s))?;
+            database.finish_revision(id,&prepared.input,content).map(GenerationResult::Preview).map_err(AiError::database)
+        } else {
+            let draft:PublishingDraft=serde_json::from_str(&raw).map_err(|_|AiError::new("invalid_content","模型输出不符合发布内容结构，原有内容保留。"))?;
+            let content=draft.into_content(&prepared.book_title).map_err(|s|AiError::new("invalid_content",&s))?;
+            database.finish_generation(id,&prepared.input,content,&model).map(GenerationResult::Version).map_err(AiError::database)
+        }
     }).await
 }
 

@@ -40,7 +40,8 @@ fn image_and_text_defaults_are_independent_and_wrong_task_types_are_rejected() {
     assert!(db
         .start_generation(ai::GenerationInput {
             project_id: p.id.clone(),
-            provider_id: image.id.clone()
+            provider_id: image.id.clone(),
+            revision: None,
         })
         .is_err());
     assert!(db

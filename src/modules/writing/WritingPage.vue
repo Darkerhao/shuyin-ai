@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
@@ -7,7 +8,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/ai'
 import { getProject, isDesktop } from '../../services/projects'
-import { emptyPublishing, type ModelProvider, type PublishingContent, type WritingVersion } from '../../types/ai'
+import { emptyPublishing, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type WritingVersion } from '../../types/ai'
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
@@ -27,6 +28,12 @@ const original = ref(JSON.stringify(draft.value))
 const dirty = computed(() => JSON.stringify(draft.value) !== original.value)
 const taskId = ref('')
 const cancelling = ref(false)
+const revisionOpen = ref(false)
+const revisionFields = ref<PublishingField[]>(['title'])
+const revisionInstruction = ref('')
+const revising = ref(false)
+const preview = ref<GenerationPreview | null>(null)
+const revisionLocked = computed(() => revising.value || !!preview.value)
 const activeTab = ref('publishing')
 const copiedField = ref('')
 let copyTimer: ReturnType<typeof globalThis.setTimeout> | undefined
@@ -41,11 +48,11 @@ function accept(version: WritingVersion | null) {
   draft.value = { ...emptyPublishing(), ...version?.content }
   original.value = JSON.stringify(draft.value)
 }
-function canDiscard() { return !dirty.value || globalThis.confirm('当前内容尚未保存，确定放弃修改？') }
+function canDiscard() { return (!dirty.value && !preview.value) || globalThis.confirm(preview.value ? '候选结果尚未采用，确定放弃？' : '当前内容尚未保存，确定放弃修改？') }
 const canLeave = () => !busy.value && canDiscard()
 onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate(canLeave)
-function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value) event.preventDefault() }
+function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value || preview.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(copyTimer) })
 const load = () => run(async () => {
@@ -58,19 +65,45 @@ const load = () => run(async () => {
 function switchVersion(id: string | null) {
   if (canDiscard()) accept(versions.value.find(v => v.id === id) ?? null)
 }
-const save = () => run(async () => {
+async function persistWriting() {
   const saved = await api.saveWriting({ projectId: props.id, kind: 'publishing', content: { ...draft.value }, basedOn: selected.value?.id ?? null, isConfirmed: false })
-  accept(saved); versions.value = [saved, ...versions.value]; message.value = '修改已保存。'
-})
+  accept(saved); versions.value = [saved, ...versions.value]
+}
+const save = () => run(async () => { await persistWriting(); message.value = '修改已保存。' })
 const generate = () => run(async () => {
   try {
     taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value })
     const saved = await api.executeGeneration(taskId.value)
+    if ('taskId' in saved) throw new Error('生成结果类型不符，当前内容保留。')
     versions.value = [saved, ...versions.value]
     if (!dirty.value) accept(saved)
     message.value = dirty.value ? '生成完成，当前修改已保留。保存后可在历史版本中查看新结果。' : '发布文案、音频提示词、封面主副标题及两种比例的图片提示词已生成并保存。'
   } finally { taskId.value = '' }
 })
+function openRevision() { revisionOpen.value = true }
+function selectRevision(field: PublishingField, checked: boolean | 'indeterminate') {
+  revisionFields.value = checked === true ? [...revisionFields.value, field] : revisionFields.value.filter(key => key !== field)
+}
+const generateRevision = () => run(async () => {
+  revising.value = true
+  try {
+    if (dirty.value) await persistWriting()
+    if (!selected.value) throw new Error('请先生成或保存一套内容。')
+    taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value, revision: { basedOn: selected.value.id, fields: [...revisionFields.value], instruction: revisionInstruction.value.trim() } })
+    const result = await api.executeGeneration(taskId.value)
+    if (!('taskId' in result)) throw new Error('调整结果类型不符，当前内容保留。')
+    preview.value = result
+    message.value = '候选结果已生成。核对后采用，或放弃并保留原内容。'
+  } finally { taskId.value = ''; revising.value = false }
+})
+const applyRevision = () => run(async () => {
+  if (!preview.value) return
+  const saved = await api.applyGeneration(preview.value.taskId)
+  accept(saved); versions.value = [saved, ...versions.value.filter(v => v.id !== saved.id)]
+  preview.value = null; revisionOpen.value = false
+  message.value = '已采用选中内容并保存新版本，其余内容保持原样。'
+})
+function closeRevision() { preview.value = null; revisionOpen.value = false }
 async function cancel() {
   if (cancelling.value) return
   cancelling.value = true
@@ -91,7 +124,7 @@ async function copy(field: keyof Omit<PublishingContent, 'format'>, label: strin
   }
   catch { error.value = '复制失败，请选中文本后手动复制。' }
 }
-const fields: { key: keyof Omit<PublishingContent, 'format'>; label: string; rows: number; limit: number; help?: string }[] = [
+const fields: { key: PublishingField; label: string; rows: number; limit: number; help?: string }[] = [
   { key: 'title', label: '发布标题', rows: 2, limit: 30 },
   { key: 'description', label: '发布内容', rows: 7, limit: 1000 },
   { key: 'audioPrompt', label: '音频生成提示词', rows: 18, limit: 20000, help: '复制到音频工具的自定义提示词中，并在该工具中选择对应书籍来源。' },
@@ -105,7 +138,7 @@ function fieldTab(key: string) { return key.startsWith('cover') ? 'cover' : key 
 function saveShortcut(event: globalThis.KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
     event.preventDefault()
-    if (ready.value && !busy.value && dirty.value && canSave.value) void save()
+    if (ready.value && !busy.value && !revisionLocked.value && dirty.value && canSave.value) void save()
   }
 }
 onMounted(() => globalThis.addEventListener('keydown', saveShortcut))
@@ -197,11 +230,19 @@ onMounted(() => { if (desktop) void load() })
           </Select>
         </template>
         <Button
-          :disabled="busy || !providerId"
+          :disabled="busy || !providerId || !!preview"
           type="button"
           @click="generate"
         >
           <AppIcon name="sparkle" />{{ taskId ? '生成中…' : '一键生成' }}
+        </Button>
+        <Button
+          variant="outline"
+          :disabled="busy || !selected || !!preview || !providerId"
+          type="button"
+          @click="openRevision"
+        >
+          按项调整
         </Button>
         <Button
           v-if="taskId"
@@ -227,8 +268,111 @@ onMounted(() => { if (desktop) void load() })
       class="notice"
       role="status"
     >
-      正在生成文案、音频提示词和封面素材，最多等待 120 秒。你可以继续编辑，当前修改会保留。
+      {{ revising ? '正在调整选中的内容，最多等待 120 秒。完成后先预览，再决定是否采用。' : '正在生成文案、音频提示词和封面素材，最多等待 120 秒。你可以继续编辑，当前修改会保留。' }}
     </p>
+    <section
+      v-if="revisionOpen"
+      class="panel mb-6 space-y-5"
+      aria-labelledby="revision-heading"
+    >
+      <div>
+        <h2 id="revision-heading">
+          按项调整
+        </h2>
+        <p class="muted">
+          只重新生成选中的内容。生成前会保存当前修改，候选结果经你采用后才成为新版本。
+        </p>
+      </div>
+      <fieldset :disabled="busy || !!preview">
+        <legend class="mb-3 text-sm font-medium">
+          选择要调整的内容
+        </legend>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label
+            v-for="field in fields"
+            :key="field.key"
+            :for="`revision-${field.key}`"
+            class="flex items-center gap-2 text-sm"
+          >
+            <Checkbox
+              :id="`revision-${field.key}`"
+              :model-value="revisionFields.includes(field.key)"
+              :disabled="busy || !!preview"
+              @update:model-value="selectRevision(field.key, $event)"
+            />{{ field.label }}
+          </label>
+        </div>
+      </fieldset>
+      <div>
+        <label for="revision-instruction">修改要求 <span class="optional">· 选填</span></label>
+        <Textarea
+          id="revision-instruction"
+          v-model="revisionInstruction"
+          :disabled="busy || !!preview"
+          :maxlength="2000"
+          :rows="3"
+          placeholder="例如：标题更有悬念但不剧透；发布内容再简短一些。"
+        />
+      </div>
+      <template v-if="preview">
+        <section
+          v-for="field in fields.filter(item => preview?.fields.includes(item.key))"
+          :key="field.key"
+          class="space-y-3 border-t pt-4"
+          :aria-label="`${field.label}调整对比`"
+        >
+          <h3 class="text-sm font-semibold">
+            {{ field.label }}
+          </h3>
+          <div class="grid gap-4 lg:grid-cols-2">
+            <div>
+              <label :for="`revision-before-${field.key}`">原内容</label>
+              <Textarea
+                :id="`revision-before-${field.key}`"
+                :model-value="preview.before[field.key]"
+                :rows="Math.min(field.rows, 8)"
+                readonly
+              />
+            </div>
+            <div>
+              <label :for="`revision-after-${field.key}`">候选内容</label>
+              <Textarea
+                :id="`revision-after-${field.key}`"
+                :model-value="preview.content[field.key]"
+                :rows="Math.min(field.rows, 8)"
+                readonly
+              />
+            </div>
+          </div>
+        </section>
+      </template>
+      <div class="actions wrap">
+        <Button
+          v-if="preview"
+          :disabled="busy"
+          type="button"
+          @click="applyRevision"
+        >
+          采用并保存新版本
+        </Button>
+        <Button
+          v-else
+          :disabled="busy || !revisionFields.length || !canSave || !providerId"
+          type="button"
+          @click="generateRevision"
+        >
+          {{ dirty ? '保存并生成预览' : '生成预览' }}
+        </Button>
+        <Button
+          :disabled="busy"
+          variant="outline"
+          type="button"
+          @click="closeRevision"
+        >
+          {{ preview ? '放弃候选结果' : '取消调整' }}
+        </Button>
+      </div>
+    </section>
     <form
       class="writing-editor"
       @submit.prevent="save"
@@ -286,7 +430,7 @@ onMounted(() => { if (desktop) void load() })
               v-model="draft[field.key]"
               :rows="field.rows"
               :maxlength="field.limit"
-              :disabled="busy && !taskId"
+              :disabled="(busy && !taskId) || revisionLocked"
               :placeholder="`生成后在这里查看和修改${field.label}`"
             />
             <p
@@ -306,14 +450,14 @@ onMounted(() => { if (desktop) void load() })
         <div class="actions wrap">
           <Button
             type="submit"
-            :disabled="busy || !dirty || !canSave"
+            :disabled="busy || revisionLocked || !dirty || !canSave"
             variant="outline"
           >
             <AppIcon name="save" />保存修改
           </Button>
           <Button
             type="button"
-            :disabled="busy || !canSave || !draft.coverTitle.trim() || !draft.coverSubtitle.trim()"
+            :disabled="busy || revisionLocked || !canSave || !draft.coverTitle.trim() || !draft.coverSubtitle.trim()"
             @click="makeCover"
           >
             {{ dirty ? '保存并制作封面' : '使用这些内容制作封面' }}<AppIcon name="arrow" />
@@ -333,7 +477,7 @@ onMounted(() => { if (desktop) void load() })
         <label for="writing-version">选择历史版本</label>
         <Select
           :model-value="selected?.id ?? null"
-          :disabled="busy"
+          :disabled="busy || !!preview"
           @update:model-value="switchVersion"
         >
           <SelectTrigger

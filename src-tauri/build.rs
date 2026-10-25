@@ -36,6 +36,7 @@ fn main() {
             "list_ai_tasks",
             "start_generation",
             "execute_generation",
+            "apply_generation",
             "cancel_generation",
         ]),
     ))
