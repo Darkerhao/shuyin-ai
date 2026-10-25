@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-update-settings"
+description = "读取和保存自动更新偏好。"
+commands.allow = ["update_settings", "set_auto_update"]

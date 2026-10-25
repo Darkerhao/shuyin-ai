@@ -125,7 +125,16 @@ jobs:
           npm run test:rust
           node --test tests/release-assets.test.mjs
       - name: Build platform packages
-        run: npm run desktop:build -- --target "$BUILD_TARGET" -- --locked
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "Missing TAURI_SIGNING_PRIVATE_KEY: signed updater packages are required."
+            exit 1
+          fi
+          export VITE_RELEASE_NOTES="$(node scripts/release-assets.mjs notes)"
+          npm run desktop:build -- --target "$BUILD_TARGET" -- --locked
       - name: Collect installers and archives
         run: node scripts/release-assets.mjs collect "$BUILD_PLATFORM" "$BUILD_TARGET" output/release
       - uses: actions/upload-artifact@v7.0.2

@@ -7,6 +7,7 @@ import ModelsPage from '../../modules/settings/ModelsPage.vue'
 import WritingPage from '../../modules/writing/WritingPage.vue'
 import CoversPage from '../../modules/covers/CoversPage.vue'
 import PublishingPage from '../../modules/publishing/PublishingPage.vue'
+import AboutPage from '../../modules/settings/AboutPage.vue'
 
 export const router = createRouter({
   history: createWebHashHistory(),
@@ -20,6 +21,7 @@ export const router = createRouter({
     { path: '/projects/:id/publishing', component: PublishingPage, props: true },
     { path: '/settings/models', component: ModelsPage },
     { path: '/settings', component: SettingsPage },
+    { path: '/about', component: AboutPage },
     { path: '/verification', component: VerificationPage },
     { path: '/:pathMatch(.*)*', redirect: '/projects' },
   ],
