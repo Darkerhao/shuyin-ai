@@ -7,6 +7,10 @@ import ProjectPage from '../src/modules/projects/ProjectPage.vue'
 import ProjectAssets from '../src/modules/projects/ProjectAssets.vue'
 import SettingsPage from '../src/modules/settings/SettingsPage.vue'
 import * as api from '../src/services/projects'
+import * as notes from '../src/services/notes'
+import * as fullBackup from '../src/services/backup'
+vi.mock('../src/services/notes', () => ({ chooseNote: vi.fn(), importNote: vi.fn(), appendNote: vi.fn() }))
+vi.mock('../src/services/backup', () => ({ createFullBackup: vi.fn(), inspectFullBackup: vi.fn(), restoreFullBackup: vi.fn(), chooseFullBackup: vi.fn() }))
 import { emptyProject, type Asset, type Project } from '../src/types/project'
 vi.mock('../src/services/projects', async (original) => ({
   ...await original<typeof api>(),
@@ -40,6 +44,52 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M1 projects and materials', () => {
+  it('previews imported notes and appends only after adoption, preserving existing notes and source', async () => {
+    const imported = { text: '# 阅读笔记\n观点', sourceName: '笔记.md', sourcePath: 'D:/笔记.md' }
+    vi.mocked(notes.chooseNote).mockResolvedValue('D:/笔记.md')
+    vi.mocked(notes.importNote).mockResolvedValue(imported)
+    vi.mocked(notes.appendNote).mockImplementation((existing, note) => `${existing}\n来源：${note.sourceName}\n${note.text}`)
+    const { wrapper } = await render('/projects/p1')
+    await wrapper.get('#notes').setValue('已有资料')
+    await button(wrapper, '导入 TXT / Markdown 笔记').trigger('click'); await flushPromises()
+    expect((wrapper.get('#notes').element as HTMLTextAreaElement).value).toBe('已有资料')
+    expect(wrapper.get('[aria-label="读书资料导入预览"]').text()).toContain(imported.sourcePath)
+    await button(wrapper, '取消导入').trigger('click')
+    expect((wrapper.get('#notes').element as HTMLTextAreaElement).value).toBe('已有资料')
+    await button(wrapper, '导入 TXT / Markdown 笔记').trigger('click'); await flushPromises()
+    await button(wrapper, '采用并追加到资料').trigger('click'); await flushPromises()
+    expect((wrapper.get('#notes').element as HTMLTextAreaElement).value).toContain('已有资料\n来源：笔记.md\n# 阅读笔记')
+    expect(api.saveProject).not.toHaveBeenCalled()
+  })
+  it('requires a checked backup preview, restore destination and explicit confirmation', async () => {
+    const preview = { manifestPath: 'D:/完整备份/manifest.json', fileCount: 12, totalBytes: 2048, omittedVideos: 1 }
+    vi.mocked(fullBackup.chooseFullBackup).mockResolvedValue(preview.manifestPath)
+    vi.mocked(fullBackup.inspectFullBackup).mockResolvedValue(preview)
+    const { wrapper } = await render('/settings')
+    await button(wrapper, '选择完整备份恢复').trigger('click'); await flushPromises()
+    expect(fullBackup.restoreFullBackup).not.toHaveBeenCalled()
+    expect(button(wrapper, '确认完整恢复').element.disabled).toBe(true)
+    vi.mocked(api.chooseDirectory).mockResolvedValue('D:/恢复目录')
+    await button(wrapper, '选择恢复目录').trigger('click'); await flushPromises()
+    vi.mocked(fullBackup.restoreFullBackup).mockRejectedValueOnce('备份文件校验失败')
+    await button(wrapper, '确认完整恢复').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role=alertdialog]').text()).toContain(preview.manifestPath)
+    vi.mocked(fullBackup.restoreFullBackup).mockResolvedValue({ previousDatabase: 'D:/恢复前.sqlite3', workspacePath: 'D:/新位置' })
+    await button(wrapper, '确认完整恢复').trigger('click'); await flushPromises()
+    expect(fullBackup.restoreFullBackup).toHaveBeenCalledWith(preview.manifestPath, 'D:/恢复目录')
+    expect(wrapper.find('[role=alertdialog]').exists()).toBe(false)
+    expect(wrapper.get('[role=status]').text()).toContain('D:/恢复前.sqlite3')
+  })
+  it('creates a full backup without videos by default and supports opting in', async () => {
+    vi.mocked(api.chooseDirectory).mockResolvedValue('D:/备份')
+    vi.mocked(fullBackup.createFullBackup).mockResolvedValue({ manifestPath: 'D:/备份/manifest.json', fileCount: 3, totalBytes: 1, omittedVideos: 0 })
+    const { wrapper } = await render('/settings')
+    await button(wrapper, '创建完整备份').trigger('click'); await flushPromises()
+    expect(fullBackup.createFullBackup).toHaveBeenLastCalledWith('D:/备份', false)
+    await wrapper.get('[role=checkbox]').trigger('click')
+    await button(wrapper, '创建完整备份').trigger('click'); await flushPromises()
+    expect(fullBackup.createFullBackup).toHaveBeenLastCalledWith('D:/备份', true)
+  })
   it('browser preview never invokes local database commands', async () => {
     vi.mocked(api.isDesktop).mockReturnValue(false)
     const { wrapper } = await render('/projects')

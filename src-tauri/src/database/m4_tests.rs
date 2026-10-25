@@ -5,7 +5,7 @@ use super::{
 };
 use std::{fs, path::Path};
 
-fn project(db: &Database) -> Project {
+pub(super) fn project(db: &Database) -> Project {
     db.save_project(None,serde_json::from_value(serde_json::json!({"title":"中文书籍","author":"作者","publisher":"","isbn":"","description":"","sourceNotes":"原始资料","theme":"","targetAudience":"","contentStyle":"","targetDurationSeconds":600,"status":"draft"})).unwrap()).unwrap()
 }
 fn cover(db: &Database, id: &str, width: u32, height: u32) -> String {
@@ -23,10 +23,11 @@ fn cover(db: &Database, id: &str, width: u32, height: u32) -> String {
     }
     db.save_cover_version(id, config, Some(&bytes)).unwrap().id
 }
-fn input(db: &Database, project: &Project) -> PublishInput {
+pub(super) fn input(db: &Database, project: &Project) -> PublishInput {
     let path = Path::new(&project.workspace_path).join("中文 视频.mp4");
     fs::write(&path, b"original video").unwrap();
     PublishInput {
+        writing_version_id: None,
         project_id: project.id.clone(),
         title: "中文发布标题".into(),
         description: "第一行\n第二行：保留换行".into(),

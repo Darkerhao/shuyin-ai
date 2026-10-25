@@ -50,6 +50,14 @@ export async function decodeBackground(bytes: ArrayBuffer): Promise<globalThis.H
 }
 
 // Preview and export call this same renderer at the full output resolution.
+export function backgroundRect(config: CoverConfig, image: { naturalWidth: number; naturalHeight: number }) {
+  const zoom = config.backgroundZoom ?? 1
+  const x = config.backgroundX ?? 0.5; const y = config.backgroundY ?? 0.5
+  if (![zoom,x,y].every(Number.isFinite) || zoom < 1 || zoom > 3 || x < 0 || x > 1 || y < 0 || y > 1) throw new Error('背景缩放或位置无效。')
+  const scale = Math.max(config.width / image.naturalWidth, config.height / image.naturalHeight) * zoom
+  const width = image.naturalWidth * scale; const height = image.naturalHeight * scale
+  return { x: (config.width - width) * x, y: (config.height - height) * y, width, height }
+}
 export function renderCover(canvas: globalThis.HTMLCanvasElement, config: CoverConfig, background: globalThis.HTMLImageElement | null) {
   if (!coverSizes.some(size => size.width === config.width && size.height === config.height)) throw new Error('封面尺寸无效。')
   if (!Number.isInteger(config.titleSize) || config.titleSize < 40 || config.titleSize > 160 || !Number.isInteger(config.subtitleSize) || config.subtitleSize < 24 || config.subtitleSize > 80) throw new Error('标题字号须为 40–160，副标题字号须为 24–80 的整数。')
@@ -60,9 +68,8 @@ export function renderCover(canvas: globalThis.HTMLCanvasElement, config: CoverC
   ctx.fillStyle = config.backgroundColor; ctx.fillRect(0, 0, width, height)
   if (config.backgroundAssetId) {
     if (!background) throw new Error('背景图不可用，请重新选择图片或使用纯色背景。')
-    const scale = Math.max(width / background.naturalWidth, height / background.naturalHeight)
-    const w = background.naturalWidth * scale; const h = background.naturalHeight * scale
-    ctx.drawImage(background, (width - w) / 2, (height - h) / 2, w, h)
+    const rect = backgroundRect(config, background)
+    ctx.drawImage(background, rect.x, rect.y, rect.width, rect.height)
     ctx.globalAlpha = config.overlayOpacity
     ctx.fillStyle = config.backgroundColor; ctx.fillRect(0, 0, width, height)
     ctx.globalAlpha = 1

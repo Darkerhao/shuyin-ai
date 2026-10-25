@@ -19,6 +19,8 @@ const MAX_IMAGE_BYTES: u64 = 15 * 1024 * 1024;
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublishInput {
+    #[serde(default)]
+    pub writing_version_id: Option<String>,
     pub project_id: String,
     pub title: String,
     pub description: String,
@@ -140,8 +142,8 @@ fn cover_path(
 }
 
 fn load(c: &Connection, id: &str) -> Result<PublishTask, String> {
-    let mut task = c.query_row("SELECT id,project_id,title,description,tags,video_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,task_directory,created_at,updated_at FROM publish_tasks WHERE id=?1", [id], |r| Ok(PublishTask {
-        id: r.get(0)?, input: PublishInput { project_id:r.get(1)?, title:r.get(2)?, description:r.get(3)?, tags:r.get(4)?, video_asset_id:r.get(5)?, landscape_cover_id:r.get(6)?, portrait_cover_id:r.get(7)?, title_confirmed:r.get(8)?, covers_confirmed:r.get(9)? }, status:r.get(10)?, task_directory:r.get(11)?, created_at:r.get(12)?, updated_at:r.get(13)?, checklist:Vec::new(), record:None
+    let mut task = c.query_row("SELECT id,project_id,title,description,tags,video_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,task_directory,created_at,updated_at,writing_version_id FROM publish_tasks WHERE id=?1", [id], |r| Ok(PublishTask {
+        id: r.get(0)?, input: PublishInput { project_id:r.get(1)?, title:r.get(2)?, description:r.get(3)?, tags:r.get(4)?, video_asset_id:r.get(5)?, landscape_cover_id:r.get(6)?, portrait_cover_id:r.get(7)?, title_confirmed:r.get(8)?, covers_confirmed:r.get(9)?, writing_version_id:r.get(14)? }, status:r.get(10)?, task_directory:r.get(11)?, created_at:r.get(12)?, updated_at:r.get(13)?, checklist:Vec::new(), record:None
     })).optional().map_err(|e| e.to_string())?.ok_or("发布任务不存在。")?;
     task.record = c
         .query_row(
@@ -257,6 +259,46 @@ fn package_valid(c: &Connection, task: &PublishTask) -> bool {
     })
 }
 
+// Called only for a newly copied restore directory, never for original task packages.
+pub(super) fn rebase_package(c: &Connection, id: &str) -> Result<(), String> {
+    let task = load(c, id)?;
+    let directory = Path::new(task.task_directory.as_deref().ok_or("任务包位置缺失。")?);
+    let mut m: Manifest =
+        serde_json::from_slice(&read_limited(&directory.join("manifest.json"), 64 * 1024)?)
+            .map_err(|e| e.to_string())?;
+    m.input = task.input.clone();
+    m.task_id = task.id.clone();
+    let video = video_path(c, &m.input)?;
+    m.video = reference(&video).unwrap_or(FileReference {
+        path: video,
+        size: m.video.size,
+        modified: m.video.modified,
+    });
+    m.landscape = reference(&cover_path(
+        c,
+        &m.input.project_id,
+        &m.input.landscape_cover_id,
+        1440,
+        1080,
+    )?)?;
+    m.portrait = reference(&cover_path(
+        c,
+        &m.input.project_id,
+        &m.input.portrait_cover_id,
+        1080,
+        1440,
+    )?)?;
+    for (name, text) in text_files(&m) {
+        fs::write(directory.join(name), text).map_err(|e| e.to_string())?;
+    }
+    fs::write(
+        directory.join("manifest.json"),
+        serde_json::to_vec_pretty(&m).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    checked(c, id).map(|_| ())
+}
+
 fn checked(c: &Connection, id: &str) -> Result<PublishTask, String> {
     let mut task = load(c, id)?;
     let i = &task.input;
@@ -337,6 +379,9 @@ impl Database {
         self.with_connection(|c| {
             let tx = c.transaction().map_err(|e|e.to_string())?;
             get(&tx,&input.project_id)?;
+            if let Some(version)=&input.writing_version_id {
+                if !tx.query_row("SELECT EXISTS(SELECT 1 FROM writing_versions WHERE id=?1 AND project_id=?2 AND kind='publishing')",params![version,input.project_id],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("文案版本不属于当前书籍。".into()); }
+            }
             if input.video_asset_id.is_some() { video_path(&tx,&input)?; }
             for (id,w,h) in [(&input.landscape_cover_id,1440,1080),(&input.portrait_cover_id,1080,1440)] { if id.is_some() { cover_path(&tx,&input.project_id,id,w,h)?; } }
             let id = if let Some(id)=id {
@@ -346,6 +391,7 @@ impl Database {
             } else { new_id(&tx)? };
             tx.execute(&format!("INSERT INTO publish_tasks(id,project_id,title,description,tags,video_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'draft',{NOW},{NOW}) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,tags=excluded.tags,video_asset_id=excluded.video_asset_id,landscape_cover_id=excluded.landscape_cover_id,portrait_cover_id=excluded.portrait_cover_id,title_confirmed=excluded.title_confirmed,covers_confirmed=excluded.covers_confirmed,status='draft',task_directory=NULL,updated_at=excluded.updated_at"),params![id,input.project_id,input.title,input.description,input.tags,input.video_asset_id,input.landscape_cover_id,input.portrait_cover_id,input.title_confirmed,input.covers_confirmed]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE book_projects SET updated_at={NOW} WHERE id=?1"),[&input.project_id]).map_err(|e|e.to_string())?;
+            tx.execute("UPDATE publish_tasks SET writing_version_id=?1 WHERE id=?2",params![input.writing_version_id,id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;
             checked(c,&id)
         })

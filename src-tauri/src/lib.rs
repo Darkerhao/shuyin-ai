@@ -4,6 +4,7 @@ mod commands;
 mod cover_commands;
 mod credentials;
 mod database;
+mod note_import;
 mod publish_commands;
 
 use database::{Database, ProbeSnapshot};
@@ -55,6 +56,12 @@ pub fn run() {
             commands::relocate_workspace,
             commands::create_backup,
             commands::restore_backup,
+            commands::read_editor_draft,
+            commands::save_editor_draft,
+            note_import::import_reading_notes,
+            commands::create_full_backup,
+            commands::inspect_full_backup,
+            commands::restore_full_backup,
             publish_commands::list_publish_tasks,
             publish_commands::save_publish_task,
             publish_commands::prepare_publish_task,
@@ -63,6 +70,10 @@ pub fn run() {
             cover_commands::list_cover_versions,
             cover_commands::save_cover_version,
             cover_commands::read_cover_background,
+            cover_commands::read_cover_export,
+            cover_commands::list_cover_presets,
+            cover_commands::save_cover_preset,
+            cover_commands::delete_cover_preset,
             cover_commands::start_cover_generation,
             cover_commands::execute_cover_generation,
             ai_commands::list_model_providers,

@@ -2,6 +2,8 @@ pub mod ai;
 mod assets;
 mod backup;
 pub mod covers;
+pub mod drafts;
+pub mod full_backup;
 pub mod image_generation;
 mod projects;
 pub mod publishing;
@@ -72,6 +74,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0006_image_generation.sql"),
     include_str!("../migrations/0007_publish_tasks.sql"),
     include_str!("../migrations/0008_generation_preview.sql"),
+    include_str!("../migrations/0009_creator_workflow.sql"),
 ];
 
 impl Database {
@@ -265,3 +268,6 @@ mod m3_tests;
 
 #[cfg(test)]
 mod m4_tests;
+
+#[cfg(test)]
+mod workflow_tests;

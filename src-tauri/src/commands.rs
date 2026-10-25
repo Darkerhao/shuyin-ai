@@ -1,5 +1,47 @@
+use crate::database::drafts::EditorDraft;
 use crate::database::{Asset, Database, Project, ProjectInput, WorkspaceSettings};
 use tauri::State;
+
+#[tauri::command]
+pub fn read_editor_draft(
+    database: State<'_, Database>,
+    project_id: String,
+    kind: String,
+) -> Result<Option<EditorDraft>, String> {
+    database.read_editor_draft(&project_id, &kind)
+}
+#[tauri::command]
+pub fn save_editor_draft(
+    database: State<'_, Database>,
+    project_id: String,
+    kind: String,
+    draft: Option<EditorDraft>,
+) -> Result<(), String> {
+    database.save_editor_draft(&project_id, &kind, draft)
+}
+#[tauri::command]
+pub async fn create_full_backup(
+    database: State<'_, Database>,
+    directory: String,
+    include_videos: bool,
+) -> Result<crate::database::full_backup::BackupSummary, String> {
+    database.create_full_backup(&directory, include_videos)
+}
+#[tauri::command]
+pub async fn inspect_full_backup(
+    database: State<'_, Database>,
+    path: String,
+) -> Result<crate::database::full_backup::BackupSummary, String> {
+    database.inspect_full_backup(&path)
+}
+#[tauri::command]
+pub async fn restore_full_backup(
+    database: State<'_, Database>,
+    path: String,
+    directory: String,
+) -> Result<crate::database::full_backup::RestoreResult, String> {
+    database.restore_full_backup(&path, &directory)
+}
 
 #[tauri::command]
 pub fn list_projects(

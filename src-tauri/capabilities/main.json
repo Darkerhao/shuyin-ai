@@ -3,5 +3,5 @@
   "identifier": "main",
   "description": "主窗口仅可访问项目、素材、备份、文本创作、封面、发布准备业务命令和文件选择对话框。",
   "windows": ["main"],
-  "permissions": ["allow-probe", "allow-projects", "allow-ai-writing", "allow-covers", "allow-publishing", "dialog:allow-open"]
+  "permissions": ["allow-probe", "allow-projects", "allow-ai-writing", "allow-covers", "allow-publishing", "dialog:allow-open", "core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-destroy"]
 }

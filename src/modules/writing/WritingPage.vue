@@ -10,6 +10,8 @@ import * as api from '../../services/ai'
 import { getProject, isDesktop } from '../../services/projects'
 import { emptyPublishing, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type WritingVersion } from '../../types/ai'
 import { useOperation } from '../../composables/useOperation'
+import { useEditorDraft } from '../../composables/useEditorDraft'
+import { readDraft } from '../../services/drafts'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -43,31 +45,40 @@ const tabs = [
   { value: 'cover', label: '封面素材' },
 ]
 const { busy, error, message, run } = useOperation()
+const autosave = useEditorDraft(() => props.id, 'writing', draft, () => selected.value?.id ?? null, dirty, ready, () => !busy.value && (!preview.value || canDiscard()))
 function accept(version: WritingVersion | null) {
   selected.value = version
   draft.value = { ...emptyPublishing(), ...version?.content }
   original.value = JSON.stringify(draft.value)
 }
 function canDiscard() { return (!dirty.value && !preview.value) || globalThis.confirm(preview.value ? '候选结果尚未采用，确定放弃？' : '当前内容尚未保存，确定放弃修改？') }
-const canLeave = () => !busy.value && canDiscard()
+const canLeave = async () => {
+  if (busy.value || (preview.value && !canDiscard())) return false
+  try { if (ready.value) await autosave.flush(); return true } catch { return false }
+}
 onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate(canLeave)
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value || preview.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(copyTimer) })
 const load = () => run(async () => {
-  const [project, models, saved] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing')])
+  const [project, models, saved, recovery] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing'), readDraft<PublishingContent>(props.id, 'writing')])
   title.value = project.title
   providers.value = models.filter(p => p.isEnabled && p.modelKind === 'text')
   providerId.value = providers.value.find(p => p.isDefault)?.id ?? providers.value[0]?.id ?? ''
-  versions.value = saved; accept(saved[0] ?? null); ready.value = true
+  versions.value = saved
+  accept(recovery ? saved.find(v => v.id === recovery.basedOn) ?? null : saved[0] ?? null)
+  if (recovery) { draft.value = { ...emptyPublishing(), ...recovery.content }; message.value = '已恢复自动暂存的草稿，保存修改后才会新增历史版本。' }
+  ready.value = true
 })
 function switchVersion(id: string | null) {
   if (canDiscard()) accept(versions.value.find(v => v.id === id) ?? null)
 }
 async function persistWriting() {
+  await autosave.flush()
   const saved = await api.saveWriting({ projectId: props.id, kind: 'publishing', content: { ...draft.value }, basedOn: selected.value?.id ?? null, isConfirmed: false })
   accept(saved); versions.value = [saved, ...versions.value]
+  await autosave.flush()
 }
 const save = () => run(async () => { await persistWriting(); message.value = '修改已保存。' })
 const generate = () => run(async () => {
@@ -182,6 +193,13 @@ onMounted(() => { if (desktop) void load() })
     :message="message"
     @dismiss="message = ''"
   />
+  <p
+    v-if="autosave.error.value"
+    class="error"
+    role="alert"
+  >
+    {{ autosave.error.value }}
+  </p>
   <Button
     v-if="!ready"
     :disabled="!desktop || busy"
@@ -446,7 +464,7 @@ onMounted(() => { if (desktop) void load() })
         <span
           class="save-status"
           :class="{ 'is-dirty': dirty }"
-        ><i class="status-dot" />{{ dirty ? '有未保存的修改' : selected ? '当前版本已保存' : '生成后自动保存' }}<span class="shortcut-hint"> · Ctrl / ⌘ S 保存</span></span>
+        ><i class="status-dot" />{{ dirty ? autosave.status.value || '有未保存的修改' : selected ? '当前版本已保存' : '生成后自动保存' }}<span class="shortcut-hint"> · Ctrl / ⌘ S 保存</span></span>
         <div class="actions wrap">
           <Button
             type="submit"

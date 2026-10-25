@@ -7,6 +7,8 @@ import WritingPage from '../src/modules/writing/WritingPage.vue'
 import ModelsPage from '../src/modules/settings/ModelsPage.vue'
 import * as api from '../src/services/ai'
 import * as projects from '../src/services/projects'
+import * as drafts from '../src/services/drafts'
+vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
 import { emptyProject } from '../src/types/project'
 import { emptyProvider, emptyPublishing, type ModelProvider, type WritingVersion } from '../src/types/ai'
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
@@ -33,6 +35,8 @@ async function render(path = '/projects/p1/writing') {
 function button(w: ReturnType<typeof mount>, text: string) { return w.findAll('button').find(b => b.text() === text)! }
 beforeEach(() => {
   vi.resetAllMocks(); vi.stubGlobal('confirm', vi.fn(() => false))
+  vi.mocked(drafts.readDraft).mockResolvedValue(null)
+  vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   vi.mocked(projects.isDesktop).mockReturnValue(true)
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
   vi.mocked(api.listProviders).mockResolvedValue([provider])
@@ -196,8 +200,10 @@ describe('publishing workflow', () => {
   it('saves edits, preserves history, and guards navigation and version switching', async () => {
     const { wrapper, router } = await render()
     await wrapper.get('#result-title').setValue('人工修订标题')
+    vi.mocked(drafts.saveDraft).mockRejectedValue('暂存不可写')
     await router.push('/projects'); expect(router.currentRoute.value.path).toContain('/writing')
     await router.push('/projects/p2/writing'); expect(router.currentRoute.value.path).toBe('/projects/p1/writing')
+    vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
     vi.mocked(api.saveWriting).mockRejectedValueOnce('保存失败')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('人工修订标题')
@@ -209,6 +215,33 @@ describe('publishing workflow', () => {
     await chooseSelect(wrapper, '#writing-version', /^v1 ·/)
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('原有标题')
     await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects')
+  })
+  it('autosaves incomplete edits on navigation and recovers the source version without adding history', async () => {
+    const { wrapper, router } = await render()
+    await wrapper.get('#result-title').setValue('')
+    await wrapper.get('#result-description').setValue('重启后保留这段草稿')
+    await router.push('/projects')
+    expect(router.currentRoute.value.path).toBe('/projects')
+    const stored = vi.mocked(drafts.saveDraft).mock.lastCall![2]!
+    expect(stored).toMatchObject({ basedOn: 'v1', content: { title: '', description: '重启后保留这段草稿' } })
+    expect(api.saveWriting).not.toHaveBeenCalled()
+    vi.mocked(drafts.readDraft).mockResolvedValue(stored)
+    const recovered = await render()
+    expect((recovered.wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('')
+    expect((recovered.wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('重启后保留这段草稿')
+    expect(recovered.wrapper.text()).toContain('已恢复自动暂存')
+    expect(recovered.wrapper.text()).toContain('历史版本（1）')
+  })
+  it('automatically persists after a short pause and clears the draft only after explicit save', async () => {
+    const { wrapper } = await render()
+    await wrapper.get('#result-description').setValue('暂停输入后自动保存')
+    await new Promise(resolve => globalThis.setTimeout(resolve, 450)); await flushPromises()
+    expect(drafts.saveDraft).toHaveBeenLastCalledWith('p1', 'writing', expect.objectContaining({ content: expect.objectContaining({ description: '暂停输入后自动保存' }) }))
+    expect(api.saveWriting).not.toHaveBeenCalled()
+    vi.mocked(api.saveWriting).mockResolvedValue({ ...generated, content: { ...initial.content, description: '暂停输入后自动保存' } })
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveWriting).toHaveBeenCalledTimes(1)
+    expect(drafts.saveDraft).toHaveBeenLastCalledWith('p1', 'writing', null)
   })
   it('cancels an in-flight task and restores navigation without losing data', async () => {
     let reject!: (e: unknown) => void

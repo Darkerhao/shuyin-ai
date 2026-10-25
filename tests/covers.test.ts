@@ -6,6 +6,8 @@ import App from '../src/App.vue'
 import CoversPage from '../src/modules/covers/CoversPage.vue'
 import * as api from '../src/services/covers'
 import * as ai from '../src/services/ai'
+import * as drafts from '../src/services/drafts'
+vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
 import { emptyProvider, emptyPublishing, type WritingVersion } from '../src/types/ai'
 import type { Asset } from '../src/types/project'
 import * as projects from '../src/services/projects'
@@ -13,7 +15,7 @@ import * as renderer from '../src/services/coverRenderer'
 import { newCover, type CoverVersion } from '../src/types/cover'
 import { emptyProject } from '../src/types/project'
 
-vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), saveCover: vi.fn(), readBackground: vi.fn(), chooseBackground: vi.fn(), startCoverGeneration: vi.fn(), executeCoverGeneration: vi.fn() }))
+vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), saveCover: vi.fn(), readBackground: vi.fn(), chooseBackground: vi.fn(), startCoverGeneration: vi.fn(), executeCoverGeneration: vi.fn(), listPresets: vi.fn(), savePreset: vi.fn(), deletePreset: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), listVersions: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), linkAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ renderCover: vi.fn(), coverPng: vi.fn(), decodeBackground: vi.fn() }))
@@ -37,6 +39,9 @@ async function render(path = '/projects/p1/covers') {
 function button(wrapper: ReturnType<typeof mount>, name: string) { return wrapper.findAll('button').find(b => b.text() === name)! }
 beforeEach(() => {
   vi.resetAllMocks(); vi.stubGlobal('confirm', vi.fn(() => false))
+  vi.mocked(drafts.readDraft).mockResolvedValue(null)
+  vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
+  vi.mocked(api.listPresets).mockResolvedValue([])
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   Object.defineProperty(document, 'fonts', { value: { ready: Promise.resolve() }, configurable: true })
   vi.mocked(projects.isDesktop).mockReturnValue(true)
@@ -113,7 +118,8 @@ describe('M3 cover workflow', () => {
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe(writing.content.coverTitle)
     expect((wrapper.get('#cover-subtitle').element as HTMLTextAreaElement).value).toBe(writing.content.coverSubtitle)
     expect(api.saveCover).not.toHaveBeenCalled()
-    await router.push('/projects'); expect(router.currentRoute.value.path).toContain('/covers')
+    await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects')
+    expect(drafts.saveDraft).toHaveBeenLastCalledWith('p1', 'cover', expect.objectContaining({ basedOn: null, content: expect.objectContaining({ title: writing.content.coverTitle }) }))
   })
   it('preserves existing cover styles and text until titles are explicitly applied', async () => {
     vi.mocked(ai.listVersions).mockResolvedValue([writing])
@@ -259,9 +265,11 @@ describe('M3 cover workflow', () => {
     await button(wrapper, '导出 3 张封面').trigger('click'); await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('不可写')
     await wrapper.get('.history-panel [data-slot=collapsible-trigger]').trigger('click')
-    await chooseSelect(wrapper, '#cover-history', /^v1 ·/); await router.push('/projects')
-    expect(router.currentRoute.value.path).toBe('/projects/p1/covers')
+    await chooseSelect(wrapper, '#cover-history', /^v1 ·/)
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('失败仍保留')
+    await router.push('/projects')
+    expect(router.currentRoute.value.path).toBe('/projects')
+    expect(drafts.saveDraft).toHaveBeenLastCalledWith('p1', 'cover', expect.objectContaining({ content: expect.objectContaining({ title: '失败仍保留' }) }))
   })
   it('keeps draft on render failure and saves config without requiring an image', async () => {
     const { wrapper } = await render()
@@ -308,9 +316,10 @@ describe('M3 cover workflow', () => {
     expect(wrapper.get('[role="status"]').text()).toContain('已导出 1/3 张封面：D:/cover-1440x1080-v2.png')
     expect(wrapper.get('[role="alert"]').text()).toContain('不可写')
     expect(wrapper.get('.history-panel [data-slot=collapsible-trigger]').text()).toContain('2 个版本')
-    await router.push('/projects')
-    expect(router.currentRoute.value.path).toBe('/projects/p1/covers')
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('第二张失败仍保留')
+    await router.push('/projects')
+    expect(router.currentRoute.value.path).toBe('/projects')
+    expect(drafts.saveDraft).toHaveBeenLastCalledWith('p1', 'cover', expect.objectContaining({ basedOn: 'v1', content: expect.objectContaining({ title: '第二张失败仍保留' }) }))
   })
   it('retains both completed exports and the draft when writing the 16:9 cover fails', async () => {
     const saveCover = vi.mocked(api.saveCover).getMockImplementation()!
@@ -324,9 +333,35 @@ describe('M3 cover workflow', () => {
     expect(wrapper.get('[role="status"]').text()).toContain('D:/cover-1080x1440-v3.png')
     expect(wrapper.get('[role="alert"]').text()).toContain('16:9 封面目录不可写')
     expect(wrapper.get('.history-panel [data-slot=collapsible-trigger]').text()).toContain('3 个版本')
-    await router.push('/projects')
-    expect(router.currentRoute.value.path).toBe('/projects/p1/covers')
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('第三张失败仍保留')
+    await router.push('/projects')
+    expect(router.currentRoute.value.path).toBe('/projects')
+    expect(drafts.saveDraft).toHaveBeenLastCalledWith('p1', 'cover', expect.objectContaining({ basedOn: 'v1', content: expect.objectContaining({ title: '第三张失败仍保留' }) }))
+  })
+  it('recovers cover crop and text without creating a formal cover version', async () => {
+    const config = { ...initial.config, title: '恢复封面草稿', backgroundX: 0.2, backgroundY: 0.8, backgroundZoom: 1.5 }
+    vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: initial.id, content: config })
+    const { wrapper, router } = await render()
+    expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe(config.title)
+    expect(renderer.renderCover).toHaveBeenCalledWith(expect.anything(), config, null)
+    expect(wrapper.get('[aria-label="三种比例并排预览"]').findAll('canvas')).toHaveLength(3)
+    expect(api.saveCover).not.toHaveBeenCalled()
+    await router.push('/projects')
+    expect(drafts.saveDraft).toHaveBeenLastCalledWith('p1', 'cover', expect.objectContaining({ basedOn: initial.id, content: config }))
+  })
+  it('applies a personal style without replacing this book copy, background or crop', async () => {
+    const style = { templateId: 'night' as const, brand: '我的读书频道', fontFamily: 'sans' as const, titleSize: 96, subtitleSize: 36, align: 'center' as const, position: 'bottom' as const, backgroundColor: '#112233', textColor: '#ffffff', accentColor: '#ddaa11', overlayOpacity: 0.6 }
+    vi.mocked(api.listPresets).mockResolvedValue([{ id: 'preset1', name: '我的品牌', style }])
+    const { wrapper } = await render()
+    await button(wrapper, '排版样式').trigger('click')
+    await chooseSelect(wrapper, '#cover-preset', '我的品牌')
+    await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
+    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...initial.config, ...style }, null)
+    await wrapper.get('[aria-label="新样式名称"]').setValue('新风格')
+    await button(wrapper, '保存为我的样式').trigger('click'); await flushPromises()
+    expect(api.savePreset).toHaveBeenCalledWith('新风格', { ...initial.config, ...style })
+    await button(wrapper, '删除样式').trigger('click'); await flushPromises()
+    expect(api.deletePreset).toHaveBeenCalledWith('preset1')
   })
   it.each([[1080, 1920, '1'], [1600, 900, '0'], [1080, 1080, '1']])('adapts historical %i × %i configurations without modifying their saved data', async (width, height, index) => {
     const legacy = { ...initial, config: { ...initial.config, width, height } }

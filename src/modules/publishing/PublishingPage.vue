@@ -21,6 +21,7 @@ import ProjectAssets from '../projects/ProjectAssets.vue'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
+import CoverThumbnail from '../../components/CoverThumbnail.vue'
 
 const props = defineProps<{ id: string }>()
 const desktop = isDesktop()
@@ -31,7 +32,7 @@ const selected = ref<PublishTask | null>(null)
 const assets = ref<Asset[]>([])
 const covers = ref<CoverVersion[]>([])
 const writing = ref<WritingVersion[]>([])
-const draft = ref<PublishInput>({ projectId: props.id, title: '', description: '', tags: '', videoAssetId: null, landscapeCoverId: null, portraitCoverId: null, titleConfirmed: false, coversConfirmed: false })
+const draft = ref<PublishInput>({ projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: null, landscapeCoverId: null, portraitCoverId: null, titleConfirmed: false, coversConfirmed: false })
 const original = ref(JSON.stringify(draft.value))
 const dirty = computed(() => JSON.stringify(draft.value) !== original.value)
 const published = computed(() => selected.value?.status === 'published')
@@ -39,6 +40,8 @@ const videos = computed(() => assets.value.filter(a => a.assetType === 'video'))
 const landscape = computed(() => covers.value.filter(c => c.exportedPath && c.config.width === 1440 && c.config.height === 1080))
 const portrait = computed(() => covers.value.filter(c => c.exportedPath && c.config.width === 1080 && c.config.height === 1440))
 const video = computed(() => videos.value.find(a => a.id === draft.value.videoAssetId))
+const selectedLandscape = computed(() => landscape.value.find(c => c.id === draft.value.landscapeCoverId))
+const selectedPortrait = computed(() => portrait.value.find(c => c.id === draft.value.portraitCoverId))
 const recordOpen = ref(false)
 const record = ref({ publishedAt: '', postUrl: '', notes: '' })
 const { busy, error, message, run } = useOperation()
@@ -47,8 +50,15 @@ const taskLabel = (task: PublishTask) => `${task.title || '未填写标题'} · 
 const videoLabel = (asset: Asset) => `${asset.originalName}${asset.existsStatus !== 'available' ? '（文件不可用）' : ''}`
 
 function defaults(): PublishInput {
-  const content = writing.value[0]?.content
-  return { projectId: props.id, title: content?.format === 'publishing' ? content.title : '', description: content?.format === 'publishing' ? content.description : '', tags: '', videoAssetId: videos.value.find(v => v.existsStatus === 'available')?.id ?? null, landscapeCoverId: landscape.value[0]?.id ?? null, portraitCoverId: portrait.value[0]?.id ?? null, titleConfirmed: false, coversConfirmed: false }
+  return { projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: videos.value.find(v => v.existsStatus === 'available')?.id ?? null, landscapeCoverId: landscape.value[0]?.id ?? null, portraitCoverId: portrait.value[0]?.id ?? null, titleConfirmed: false, coversConfirmed: false }
+}
+function selectWriting(id: string | null) {
+  if (id === draft.value.writingVersionId) return
+  const version = writing.value.find(v => v.id === id)
+  if (version && (draft.value.title || draft.value.description) && !globalThis.confirm('使用此版本将替换当前发布标题和内容，确定继续？')) return
+  draft.value.writingVersionId = id
+  if (version) { draft.value.title = version.content.title; draft.value.description = version.content.description }
+  draft.value.titleConfirmed = false
 }
 function accept(task: PublishTask | null) {
   selected.value = task
@@ -234,6 +244,34 @@ onMounted(() => { if (desktop) void load() })
       >
         <section class="panel">
           <h2>发布文字</h2>
+          <label for="publish-writing-version">文案来源版本</label>
+          <Select
+            :model-value="draft.writingVersionId"
+            :disabled="busy || published || recordOpen"
+            @update:model-value="selectWriting"
+          >
+            <SelectTrigger
+              id="publish-writing-version"
+              class="w-full min-w-0"
+            >
+              <SelectValue placeholder="请选择历史文案，或手动填写" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem :value="null">
+                手动填写 / 旧任务未记录来源
+              </SelectItem>
+              <SelectItem
+                v-for="version in writing"
+                :key="version.id"
+                :value="version.id"
+              >
+                v{{ version.versionNo }} · {{ version.content.title }} · {{ new Date(version.createdAt).toLocaleString() }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="muted">
+            选择后带入标题和内容，仍可编辑；保存任务后固定文字快照与来源版本。
+          </p>
           <label for="publish-title">发布标题</label>
           <Input
             id="publish-title"
@@ -331,6 +369,10 @@ onMounted(() => { if (desktop) void load() })
                   </SelectItem>
                 </SelectContent>
               </Select>
+              <CoverThumbnail
+                v-if="selectedLandscape"
+                :cover="selectedLandscape"
+              />
             </div>
             <div>
               <label for="publish-portrait">竖版封面 · 3:4</label><Select
@@ -356,6 +398,10 @@ onMounted(() => { if (desktop) void load() })
                   </SelectItem>
                 </SelectContent>
               </Select>
+              <CoverThumbnail
+                v-if="selectedPortrait"
+                :cover="selectedPortrait"
+              />
             </div>
           </div>
           <p
