@@ -92,7 +92,7 @@ describe('M4 publish preparation', () => {
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('')
     await chooseSelect(wrapper, '#publish-writing-version', /^v1 · 已有发布标题/)
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('已有发布标题')
-    expect(wrapper.findAll('img').map(img => img.attributes('alt'))).toEqual(['封面 v1：横版', '封面 v2：竖版'])
+    expect(wrapper.getComponent(PublishingPage).findAll('img').map(img => img.attributes('alt'))).toEqual(['封面 v1：横版', '封面 v2：竖版'])
     expect(wrapper.get('#publish-landscape').text()).toBe('v1 · 横版')
     expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
     await wrapper.get('form').trigger('submit'); await flushPromises()

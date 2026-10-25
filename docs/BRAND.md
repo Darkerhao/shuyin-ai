@@ -35,3 +35,19 @@
 - 以上验证对应四项标准中的源码、资源与浏览器界面部分；未重新构建/安装桌面包，未验证 Windows 图标缓存或 macOS/Linux 实机显示。数据库与业务流程没有变更，不需要迁移；本次未运行 Rust、迁移或完整测试套件。
 
 下一步：在下一次桌面打包后确认安装图标、任务栏和桌面快捷方式显示一致。
+
+## Logo 集成后的发布测试回归修复（2026-10-25）
+
+发布流水线在 `prepare` 的前端测试阶段失败：`tests/publishing.test.ts:95` 期望两张封面，却得到 `['', '封面 v1：横版', '封面 v2：竖版']`。本地用以下命令复现了同样的失败：
+
+```powershell
+npx vitest run tests/publishing.test.ts -t 'requires choosing saved writing explicitly and previews selected exported covers without a model'
+```
+
+根因是测试挂载完整 `App`，随后用 `wrapper.findAll('img')` 查询整个应用。侧栏 Logo 从内联 SVG 改为 `img` 后，装饰图片的空 `alt` 也被当成封面结果。封面显示与发布逻辑正常。
+
+最小修复：将查询限定到 `wrapper.getComponent(PublishingPage)`，仍严格核对两张封面的数量、顺序与完整 `alt`，保留真实 Logo 和完整应用挂载。没有过滤空值、放宽断言或修改产品代码。
+
+修复后上述单项测试通过；`npm test` 的完整前端95项通过，发布脚本27项通过、1项 macOS 专属检查按原设置跳过；`npm run lint`、`npm run build`（包含 TypeScript）和 `git diff --check` 均通过。原始失败用例已恢复通过，严格的封面预览断言保留，满足本次回归修复验收。
+
+没有数据库、依赖、权限或版本变更；发布影响为 `fix`，由后续流水线处理版本。本地修复未提交、推送或重跑远端流水线，本次未运行 Rust 或桌面打包。下一步将修复合入 main 后确认新的 `prepare` 任务通过，再验收后续打包阶段。
