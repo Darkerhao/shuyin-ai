@@ -1,6 +1,6 @@
 [package]
 name = "shuyin-ai"
-version = "0.13.0"
+version = "0.14.0"
 description = "书引 AI M0 工程验证"
 edition = "2021"
 rust-version = "1.95"
