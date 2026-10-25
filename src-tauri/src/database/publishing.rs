@@ -1,7 +1,7 @@
 use super::{
     assets::open_path,
     covers::CoverConfig,
-    projects::{get, new_id, NOW},
+    projects::{create_named_directory, get, new_id, NOW},
     Database,
 };
 use rusqlite::{params, Connection, OptionalExtension};
@@ -406,12 +406,12 @@ impl Database {
             let snapshot = manifest(c,&task)?;
             let landscape = cover_bytes(Path::new(&snapshot.landscape.path),1440,1080)?;
             let portrait = cover_bytes(Path::new(&snapshot.portrait.path),1080,1440)?;
-            let workspace = PathBuf::from(get(c,&task.input.project_id)?.workspace_path);
+            let project = get(c,&task.input.project_id)?;
+            let workspace = PathBuf::from(project.workspace_path);
             if !workspace.is_dir() { return Err("项目工作目录不可用，请在设置中重新定位。".into()); }
             let parent = workspace.join("publish");
             fs::create_dir_all(&parent).map_err(|e|format!("无法创建发布目录：{e}"))?;
-            let directory = fs::canonicalize(parent).map_err(|e|e.to_string())?.join(format!("{}-{}",id,new_id(c)?));
-            fs::create_dir(&directory).map_err(|e|format!("无法创建任务包：{e}"))?;
+            let directory = create_named_directory(&fs::canonicalize(parent).map_err(|e|e.to_string())?, &format!("{}-发布任务包", project.input.title))?;
             let result = (|| {
                 let write = |name:&str,bytes:&[u8]| -> Result<(),String> {
                     let mut file = OpenOptions::new().write(true).create_new(true).open(directory.join(name)).map_err(|e|e.to_string())?;

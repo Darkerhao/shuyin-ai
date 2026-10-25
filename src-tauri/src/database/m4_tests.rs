@@ -91,6 +91,7 @@ fn package_is_complete_unique_and_preserves_sources_and_unicode() {
     assert_eq!(ready.status, "ready");
     assert!(ready.checklist.iter().all(|c| c.passed));
     let pack = PathBuf::from(ready.task_directory.unwrap());
+    assert_eq!(pack.file_name().unwrap(), "中文书籍-发布任务包");
     assert_eq!(fs::read_dir(&pack).unwrap().count(), 8);
     assert_eq!(
         fs::read_to_string(pack.join("description.txt")).unwrap(),
@@ -108,6 +109,12 @@ fn package_is_complete_unique_and_preserves_sources_and_unicode() {
         assert_eq!((image.width(), image.height()), (w, h));
     }
     let next = db.prepare_publish_task(&t.id).unwrap();
+    assert_eq!(
+        Path::new(next.task_directory.as_ref().unwrap())
+            .file_name()
+            .unwrap(),
+        "中文书籍-发布任务包 (2)"
+    );
     assert_ne!(next.task_directory.as_deref(), pack.to_str());
     assert!(pack.is_dir());
     drop(db);

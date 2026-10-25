@@ -15,6 +15,90 @@ fn input(title: &str) -> ProjectInput {
         status: "draft".into(),
     }
 }
+
+#[test]
+fn project_directories_use_book_titles_and_keep_existing_files_on_name_collisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("data.sqlite3"));
+    let first = db.save_project(None, input("  三体  ")).unwrap();
+    let workspace = PathBuf::from(&first.workspace_path);
+    assert_eq!(workspace.file_name().unwrap(), "三体");
+    fs::write(workspace.join("保留.txt"), "原项目文件").unwrap();
+    fs::write(workspace.with_file_name("三体 (2)"), "已有同名文件").unwrap();
+    let second = db.save_project(None, input("三体")).unwrap();
+    assert_eq!(
+        PathBuf::from(&second.workspace_path).file_name().unwrap(),
+        "三体 (3)"
+    );
+    assert_ne!(first.id, second.id);
+    db.delete_project(&first.id).unwrap();
+    let third = db.save_project(None, input("三体")).unwrap();
+    assert_eq!(
+        PathBuf::from(&third.workspace_path).file_name().unwrap(),
+        "三体 (4)"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("保留.txt")).unwrap(),
+        "原项目文件"
+    );
+    drop(db);
+    assert_eq!(
+        Database::open(dir.path().join("data.sqlite3"))
+            .get_project(&second.id)
+            .unwrap()
+            .workspace_path,
+        second.workspace_path
+    );
+}
+
+#[test]
+fn book_titles_make_portable_directory_names_without_changing_the_saved_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("data.sqlite3"));
+    for (title, expected) in [
+        ("《三体》：黑暗森林", "《三体》：黑暗森林"),
+        ("书名<>:\"/\\|?*\n结尾. ", "书名__________结尾"),
+        ("..", "未命名书籍"),
+        ("Con.txt", "_Con.txt"),
+        ("LPT1", "_LPT1"),
+        ("COM¹", "_COM¹"),
+    ] {
+        let p = db.save_project(None, input(title)).unwrap();
+        let path = PathBuf::from(&p.workspace_path);
+        assert_eq!(path.file_name().unwrap(), expected, "{title}");
+        assert_eq!(p.input.title, title.trim());
+        assert!(path.is_dir());
+    }
+    let long = "书".repeat(200);
+    let p = db.save_project(None, input(&long)).unwrap();
+    let name = PathBuf::from(&p.workspace_path)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(long.starts_with(&name));
+    assert!(name.len() <= 120);
+    assert_eq!(p.input.title, long);
+}
+
+#[test]
+fn editing_legacy_projects_preserves_their_directory_and_asset_references() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("data.sqlite3"));
+    let p = db.save_project(None, input("原书名")).unwrap();
+    let legacy = PathBuf::from(&p.workspace_path).with_file_name(&p.id);
+    fs::create_dir(&legacy).unwrap();
+    let p = db
+        .relocate_workspace(&p.id, legacy.to_str().unwrap())
+        .unwrap();
+    let video = legacy.join("视频.mp4");
+    fs::write(&video, b"original video").unwrap();
+    db.link_asset(&p.id, video.to_str().unwrap(), None).unwrap();
+    let edited = db.save_project(Some(&p.id), input("新书名")).unwrap();
+    assert_eq!(edited.workspace_path, p.workspace_path);
+    assert_eq!(db.list_assets(&p.id).unwrap()[0].exists_status, "available");
+    assert_eq!(fs::read(video).unwrap(), b"original video");
+}
 #[test]
 fn upgrade_v1_preserves_probe_and_repeated_open_preserves_projects() {
     let dir = tempfile::tempdir().unwrap();

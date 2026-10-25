@@ -1,4 +1,8 @@
-use super::{backup::read_snapshot, projects::new_id, publishing, Database};
+use super::{
+    backup::read_snapshot,
+    projects::{create_named_directory, new_id},
+    publishing, Database,
+};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -311,12 +315,25 @@ impl Database {
                 &snapshot,
                 "SELECT id,task_directory FROM publish_tasks WHERE task_directory IS NOT NULL",
             )?;
-            for (index, (_, old)) in tasks.iter().enumerate() {
-                let target = root.join("packages").join(index.to_string());
-                fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+            for (id, old) in &tasks {
+                let title: String = snapshot
+                    .query_row(
+                        "SELECT title FROM book_projects WHERE id=(SELECT project_id FROM publish_tasks WHERE id=?1)",
+                        [id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                let target =
+                    create_named_directory(&root.join("packages"), &format!("{title}-发布任务包"))?;
                 for name in PACKAGE_FILES {
                     mapping.insert(package_reference(old, name), target.join(name));
                 }
+                snapshot
+                    .execute(
+                        "UPDATE publish_tasks SET task_directory=?1 WHERE id=?2",
+                        params![target.to_string_lossy(), id],
+                    )
+                    .map_err(|e| e.to_string())?;
             }
             for file in &m.files {
                 let origin = package_file(&source, &file.relative_path)?;
@@ -325,12 +342,8 @@ impl Database {
                     return Err("复制后的文件校验失败。".into());
                 }
             }
-            for (index, (id, _)) in pairs(&snapshot, "SELECT id,workspace_path FROM book_projects")?
-                .iter()
-                .enumerate()
-            {
-                let target = root.join("projects").join(index.to_string());
-                fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+            for (id, title) in pairs(&snapshot, "SELECT id,title FROM book_projects")? {
+                let target = create_named_directory(&root.join("projects"), &title)?;
                 snapshot
                     .execute(
                         "UPDATE book_projects SET workspace_path=?1 WHERE id=?2",
@@ -360,18 +373,7 @@ impl Database {
                     .map_err(|e| e.to_string())?;
             }
             snapshot.execute("INSERT INTO app_settings(key,value) VALUES('workspace_root',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[root.to_string_lossy().as_ref()]).map_err(|e|e.to_string())?;
-            for (index, (id, _)) in tasks.iter().enumerate() {
-                snapshot
-                    .execute(
-                        "UPDATE publish_tasks SET task_directory=?1 WHERE id=?2",
-                        params![
-                            root.join("packages")
-                                .join(index.to_string())
-                                .to_string_lossy(),
-                            id
-                        ],
-                    )
-                    .map_err(|e| e.to_string())?;
+            for (id, _) in &tasks {
                 publishing::rebase_package(&snapshot, id)?;
             }
             let previous_database = self.replace_snapshot(&snapshot)?;

@@ -1,7 +1,11 @@
 use super::Database;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 
 const COLUMNS: &str = "id,title,author,publisher,isbn,description,source_notes,theme,target_audience,content_style,target_duration_seconds,status,workspace_path,created_at,updated_at,archived_at";
 pub(super) const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
@@ -80,6 +84,67 @@ pub(super) fn new_id(connection: &Connection) -> Result<String, String> {
         .query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))
         .map_err(|e| e.to_string())
 }
+
+pub(super) fn create_named_directory(parent: &Path, title: &str) -> Result<PathBuf, String> {
+    let mut name: String = title
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    // Windows device names remain reserved even when followed by an extension.
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || stem
+            .strip_prefix("COM")
+            .or_else(|| stem.strip_prefix("LPT"))
+            .is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
+    {
+        name.insert(0, '_');
+    }
+    // Leave room for duplicate suffixes and files nested below the project on every platform.
+    while name.len() > 120 {
+        name.pop();
+    }
+    let name = name.trim_end_matches([' ', '.']);
+    let name = if name.is_empty() {
+        "未命名书籍"
+    } else {
+        name
+    };
+    fs::create_dir_all(parent).map_err(|e| format!("无法创建工作目录：{e}"))?;
+    let mut index = 1u64;
+    loop {
+        let path = parent.join(if index == 1 {
+            name.to_owned()
+        } else {
+            format!("{name} ({index})")
+        });
+        // Reserve the directory atomically; never reuse an existing file or folder.
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => index += 1,
+            Err(error) => return Err(format!("无法创建目录 {}：{error}", path.display())),
+        }
+    }
+}
+
 fn valid_status(status: &str) -> bool {
     matches!(
         status,
@@ -174,12 +239,8 @@ impl Database {
             let id = match id { Some(id) => id.to_owned(), None => new_id(c)? };
             let workspace = match &existing {
                 Some(p) => PathBuf::from(&p.workspace_path),
-                None => self.workspace_root(c)?.join("projects").join(&id),
+                None => create_named_directory(&self.workspace_root(c)?.join("projects"), &input.title)?,
             };
-            if existing.is_none() {
-                std::fs::create_dir_all(workspace.parent().unwrap()).map_err(|e|format!("无法创建工作目录：{e}"))?;
-                std::fs::create_dir(&workspace).map_err(|e|format!("无法创建项目目录：{e}"))?;
-            }
             let result = c.execute(&format!("INSERT INTO book_projects ({COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,{NOW},{NOW},CASE WHEN ?12='archived' THEN {NOW} END)
                
                 ON CONFLICT(id) DO UPDATE SET
