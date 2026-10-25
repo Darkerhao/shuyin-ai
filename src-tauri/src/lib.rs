@@ -6,6 +6,7 @@ mod credentials;
 mod database;
 mod note_import;
 mod publish_commands;
+mod updates;
 
 use database::{Database, ProbeSnapshot};
 use tauri::Manager;
@@ -23,6 +24,8 @@ fn save_probe(note: String, database: tauri::State<'_, Database>) -> Result<Prob
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let directory = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&directory)?;
@@ -42,6 +45,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_probe,
             save_probe,
+            updates::update_settings,
+            updates::set_auto_update,
             commands::list_projects,
             commands::get_project,
             commands::save_project,

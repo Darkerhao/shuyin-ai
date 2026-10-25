@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import AppIcon from './components/AppIcon.vue'
 import appLogo from '../assets/app-icon.svg'
 import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useAppUpdates } from './composables/useAppUpdates'
+
+const { initialize, status: updateStatus, update } = useAppUpdates()
+onMounted(() => { void initialize() })
 
 const route = useRoute()
 const inProjects = computed(() => route.path.startsWith('/projects'))
@@ -12,7 +16,7 @@ const navigation = computed(() => [
   { to: '/projects', label: '我的书籍', icon: 'shelf', active: inProjects.value },
   { to: '/settings/models', label: '模型设置', icon: 'settings', active: route.path === '/settings/models' },
 ] as const)
-const workspaceTitle = computed(() => inProjects.value ? '我的书籍' : route.path === '/settings/models' ? '模型设置' : '数据与备份')
+const workspaceTitle = computed(() => inProjects.value ? '我的书籍' : route.path === '/settings/models' ? '模型设置' : route.path === '/about' ? '关于书引 AI' : '数据与备份')
 </script>
 
 <template>
@@ -82,6 +86,19 @@ const workspaceTitle = computed(() => inProjects.value ? '我的书籍' : route.
           >
             <AppIcon name="folder" /><span class="hidden md:inline">数据与备份</span>
           </RouterLink>
+          <RouterLink
+            to="/about"
+            title="关于与更新"
+            aria-label="关于与更新"
+            :aria-current="route.path === '/about' ? 'page' : undefined"
+            :class="cn(buttonVariants({ variant: 'ghost' }), 'h-10 w-full justify-center px-3 text-muted-foreground md:justify-start', route.path === '/about' && 'bg-white text-primary shadow-xs')"
+          >
+            <AppIcon name="info" /><span class="hidden md:inline">关于与更新</span>
+            <span
+              v-if="update"
+              class="size-1.5 rounded-full bg-primary md:ml-auto"
+            />
+          </RouterLink>
           <p class="mb-0 mt-4 hidden items-center gap-2 px-3 text-xs text-muted-foreground md:flex">
             <span class="size-1.5 rounded-full bg-primary" />本地保存，安心创作
           </p>
@@ -99,6 +116,15 @@ const workspaceTitle = computed(() => inProjects.value ? '我的书籍' : route.
         id="main-content"
         class="mx-auto w-full max-w-[1440px] px-5 py-7 md:px-8 md:py-9 xl:px-10"
       >
+        <RouterLink
+          v-if="update && route.path !== '/about'"
+          to="/about"
+          class="mb-6 flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-accent px-4 py-3 text-sm text-primary"
+          aria-live="polite"
+        >
+          <span>书引 AI v{{ update.version }} {{ updateStatus === 'ready' ? '已下载，可以安装' : updateStatus === 'downloading' ? '正在后台下载' : updateStatus === 'restart' ? '已安装，请重启' : '可用' }}</span>
+          <span>查看更新内容 →</span>
+        </RouterLink>
         <RouterView v-slot="{ Component, route: currentRoute }">
           <div
             :key="currentRoute.path"

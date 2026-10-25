@@ -15,11 +15,26 @@
 | macOS Intel | `macos-15-intel` / `x86_64-apple-darwin` | `.dmg`、保留 APP 包结构的 `.zip` |
 | Linux x64 | `ubuntu-22.04` / `x86_64-unknown-linux-gnu` | `.deb`、`.rpm`、`.AppImage`、包含 AppImage 的 `.tar.gz` |
 
-共 10 个分发文件，命名为 `shuyin-ai-<版本>-<平台>-<架构>.<格式>`，另有 `SHA256SUMS.txt`；同时在 Actions Artifacts 保存 90 天。Windows ZIP 包含程序和运行说明，需要系统已有 WebView2，数据保存在系统用户目录。Linux TAR.GZ 包含 AppImage，避免分发缺少共享库的裸可执行文件；运行环境仍需符合 Tauri/WebKitGTK 的支持范围，不承诺兼容全部 Linux 发行版。
+共 10 个常规分发文件，命名为 `shuyin-ai-<版本>-<平台>-<架构>.<格式>`；另增加 Windows EXE 签名、两种 macOS `.app.tar.gz` 更新包及签名、Linux AppImage 签名，共 16 个包/签名文件，加上 `latest.json` 和 `SHA256SUMS.txt`，每个 Release 共 18 个附件。同时在 Actions Artifacts 保存 90 天。Windows ZIP 包含程序和运行说明，需要系统已有 WebView2，数据保存在系统用户目录。ZIP 是解压运行分发，不提供应用内自更新，升级时下载新版 ZIP 解压替换程序；应用内安装更新以 Windows NSIS 安装版验收。Linux TAR.GZ 包含 AppImage；应用内更新使用 AppImage，DEB/RPM 安装由系统包管理器更新。
 
 平台默认配置分别位于 `src-tauri/tauri.windows.conf.json`、`tauri.macos.conf.json`、`tauri.linux.conf.json`。Linux 产品名为 `Shuyin AI`，使 DEB/RPM 包名为 `shuyin-ai`；应用内界面和标识符保留。macOS ICNS 从已有 SVG 生成，当前配置 ad-hoc 签名（`signingIdentity: "-"`），未接入 Developer ID 与公证；Windows 也未配置签名证书。首次分发仍需完成真实系统上的安装与信任提示验收。
 
-截图中的 `.blockmap` 和更新 YAML 属于另一种更新机制。本项目使用 Tauri，当前输出实际安装包和校验清单，客户端自动更新另行接入。
+本项目使用 Tauri 官方 Updater。应用从 GitHub Release 的 `latest.json` 获取版本和更新内容，按 `windows-x86_64`、`darwin-aarch64`、`darwin-x86_64`、`linux-x86_64` 选择更新包，下载后使用固定公钥校验签名。Windows 使用 NSIS EXE；macOS 使用 Tauri 生成的 APP TAR.GZ，不能用手工 ZIP 替代；Linux 使用 AppImage。
+
+## 更新签名与首次启用
+
+仓库的 `src-tauri/tauri.conf.json` 只保存公钥。对应私钥首次生成在仓库外的 `D:\MyWork\software\shuyin-ai\keys\updater.key`，公钥副本为同目录 `updater.key.pub`。私钥未提交；应长期保管此密钥，后续版本必须沿用，与系统安装包代码签名证书是两回事。
+
+在 GitHub 仓库 Settings → Secrets and variables → Actions 配置：
+
+- `TAURI_SIGNING_PRIVATE_KEY`：私钥文件的完整内容，不是本机路径。
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：私钥密码；本次生成的密钥密码为空，该项可留空。
+
+缺少私钥时构建明确失败，远端版本不会递增。密钥不会注入前端、日志或发布附件。本地签名打包前，在当前 PowerShell 会话加载 `. ./.tools/env.ps1`，将 `$env:TAURI_SIGNING_PRIVATE_KEY` 设为上述私钥文件路径，再运行 `npm run desktop:build -- --target x86_64-pc-windows-msvc -- --locked`；有密码时同时设置密码环境变量。不要重新生成密钥替换已经发布客户端信任的公钥。
+
+更新说明来自前一个正式版本标签之后的非合并提交标题，排除流水线版本提交并去掉提交类型前缀。各平台构建时将相同说明注入 `VITE_RELEASE_NOTES`，安装后即使没有新版本也可查看本版内容；发布脚本将同一说明写入 `latest.json` 和 GitHub Release。说明由 Vue 文本插值展示，不执行远端 HTML。开发预览或未设置该环境变量的本地构建会明确显示未附带说明。
+
+首个包含此功能的签名版本公开后更新源才完整；旧版没有更新入口，需要先手动安装一次。其后可在「关于与更新」使用自动检查/后台下载，或关闭自动模式后手动检查、下载，再确认安装并重启。自动模式每次启动检查一次，不在创作时自动安装。网络失败和签名失败可重试，不显示为“已是最新”。当前 GitHub 更新清单尚未发布，真实跨版本安装须在首次配置 Secrets 并发布后验收。
 
 ## 版本规则
 
@@ -60,7 +75,7 @@ PR 标题和提交说明应基于实际改动选用上述格式，尤其是 reba
 3. prepare 在本地生成只修改五个版本文件的 `chore(release): vX.Y.Z` 提交，运行 lint、前端与发布测试，并用 Git bundle 导出这一个提交，尚不推送远端。
 4. build 矩阵分别下载由 artifact ID 指定的 bundle，校验并恢复预期提交；安装锁定依赖与 Rust 1.99.1，运行各平台 Rust 格式/Clippy/数据库测试和归档测试，再运行 Tauri（包含 TypeScript 检查与 Vite 构建）。
 5. 各平台整理分发文件，上传以版本提交 SHA 和平台命名的 artifact。缺失、空文件或多个候选安装包均失败。
-6. sync 只在四个平台全部成功后运行：恢复同一个提交，下载并校验所有 10 个文件、生成 SHA-256 清单，再次读取远端 main/dev。确认 main 仍是本次构建的父提交，然后在最新 dev 执行 `git cherry-pick -x <版本提交>`。
+6. sync 只在四个平台全部成功后运行：恢复同一个提交，下载并校验全部 16 个包/签名文件、生成包含更新说明的 `latest.json` 与 SHA-256 清单，再次读取远端 main/dev。确认 main 仍是本次构建的父提交，然后在最新 dev 执行 `git cherry-pick -x <版本提交>`。
 7. 一次 `git push --atomic` 提交 main、dev 和版本标签；任意引用被拒绝则全部不更新，不使用强制推送。
 8. publish 下载同一批产物，再次校验并创建 GitHub Release 草稿，上传完整文件与校验清单，最后公开。已公开版本不替换文件；失败草稿可重跑继续上传。
 
