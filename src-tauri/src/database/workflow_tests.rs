@@ -223,6 +223,7 @@ fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_ne
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(dir.path().join("data.sqlite3"));
     let p = project(&db);
+    let duplicate = project(&db);
     let text = writing(&db, &p.id, "备份文案");
     let mut i = input(&db, &p);
     i.writing_version_id = Some(text.id.clone());
@@ -268,6 +269,19 @@ fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_ne
         .restore_full_backup(manifest.to_str().unwrap(), dir.path().to_str().unwrap())
         .unwrap();
     let restored = db.get_project(&p.id).unwrap();
+    let duplicate = db.get_project(&duplicate.id).unwrap();
+    let mut names: Vec<_> = [&restored.workspace_path, &duplicate.workspace_path]
+        .into_iter()
+        .map(|path| {
+            Path::new(path)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, ["中文书籍", "中文书籍 (2)"]);
     assert_ne!(restored.workspace_path, p.workspace_path);
     assert!(Path::new(&restored.workspace_path).is_dir());
     assert!(Path::new(&result.previous_database).is_file());
@@ -297,6 +311,12 @@ fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_ne
     );
     assert_eq!(db.list_cover_presets().unwrap()[0].name, "备份样式");
     let restored = db.list_publish_tasks(&p.id).unwrap().remove(0);
+    assert_eq!(
+        Path::new(restored.task_directory.as_ref().unwrap())
+            .file_name()
+            .unwrap(),
+        "中文书籍-发布任务包"
+    );
     assert_eq!(restored.status, "ready");
     assert!(restored.checklist.iter().all(|c| c.passed));
     assert_eq!(restored.input.writing_version_id, Some(text.id));

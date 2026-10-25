@@ -1,5 +1,15 @@
 # 书引 AI 开发计划与验收标准
 
+## 书名目录命名（2026-10-25）
+
+- 新建书籍使用 `projects/{书名}`，新发布包使用 `publish/{书名}-发布任务包`；完整恢复的项目与任务包使用相同命名规则。同名追加 ` (2)`、` (3)`，不复用或覆盖已有文件/目录。
+- 保留中文，处理文件名禁用字符、Windows 设备保留名、尾部空格/句点与过长名称；数据库内完整书名和项目 ID 不变。已有目录及编辑书名时不自动搬迁，素材引用保留。
+- 验收覆盖中文书名、同名文件/目录、删除后残留目录、非法/过长名称、重启、旧随机目录素材可读、任务包重复生成/失败清理，以及完整恢复后的重名书籍与任务包就绪。
+- 本次为 `fix`（patch），无依赖、权限或数据库结构变更，schema v9 不变；不手动升版本、不提交或发布。
+- 修改文件：`src-tauri/src/database/{projects,publishing,full_backup}.rs`、`src-tauri/src/database/{m1_tests,m4_tests,workflow_tests}.rs`、`docs/{TECHNICAL-DESIGN,USER-GUIDE,DEVELOPMENT-PLAN}.md`。
+- 实际验证：先执行 `cargo test --manifest-path src-tauri/Cargo.toml --locked project_directories_use_book_titles`，确认旧代码把“三体”创建为随机ID，回归失败；修复后 `npm run test:rust` 为70通过、1项既有原生凭据测试忽略，`npm test` 为106项前端测试与30项发布脚本测试通过、1项macOS检查跳过。`npm run lint`、`npm run build`（含TypeScript）、`npm run check:rust`（fmt / Clippy）及 `git diff --check` 均通过。Rust 命令先执行 `. ./.tools/env.ps1`，测试进程的 `TEMP`、`TMP`、`SQLITE_TMPDIR` 指向仓库 `output/naming-test-temp`。
+- 未进行安装包构建、正式数据迁移或桌面人工验收。下一步使用新版在 Windows 新建书籍并重复生成任务包，核对资源管理器中的中文目录。
+
 2026-10-25 新增「关于与更新」切片（feat，兼容功能增强，版本仍由发布流水线统一递增）：当前版本与说明、启动自动检查/后台下载、手动检查/下载、进度与错误重试、人工确认安装/重启；复用 app_settings 持久化偏好，schema v9 不变。同步接入官方 Tauri 更新插件、签名更新包、四平台 latest.json 和统一 Release 说明。验收证据、首次 Secrets 配置及真实安装/发布边界见 `UPDATES-VERIFICATION.md` 与 `RELEASE.md`。
 
 ## 当前执行范围（2026-10-25）
