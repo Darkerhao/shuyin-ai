@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import AppIcon from './components/AppIcon.vue'
+import appLogo from '../assets/app-icon.svg'
 import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -22,10 +23,16 @@ const workspaceTitle = computed(() => inProjects.value ? '我的书籍' : route.
         aria-label="书引 AI 首页"
         class="mx-auto flex items-center gap-3 rounded-lg md:mx-2"
       >
-        <span class="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-xs"><AppIcon name="book" /></span>
-        <span class="hidden md:block">
-          <span class="flex items-center gap-2 text-lg font-semibold tracking-tight">书引 <span class="rounded border border-border px-1 text-[10px] font-medium text-muted-foreground">AI</span></span>
-          <span class="mt-0.5 block text-xs text-muted-foreground">你的读书创作工作台</span>
+        <img
+          :src="appLogo"
+          alt=""
+          width="40"
+          height="40"
+          class="size-10 shrink-0"
+        >
+        <span class="hidden min-w-0 md:block">
+          <span class="flex items-center gap-2 text-[22px] font-semibold leading-tight tracking-[0.06em] text-[#153D32]">书引 <span class="rounded bg-[#D5F267] px-1.5 py-0.5 text-[10px] font-bold leading-none tracking-normal">AI</span></span>
+          <span class="mt-1 block whitespace-nowrap text-[11px] text-muted-foreground">让阅读，成为创作。</span>
         </span>
       </RouterLink>
       <p class="mb-2 mt-10 hidden px-3 text-xs font-medium text-muted-foreground md:block">
