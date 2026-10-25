@@ -77,3 +77,32 @@ pub fn read_cover_background(
         .read_cover_background(&project_id, &asset_id)
         .map(Response::new)
 }
+
+#[tauri::command]
+pub fn read_cover_export(
+    database: State<'_, Database>,
+    project_id: String,
+    id: String,
+) -> Result<Response, String> {
+    database
+        .read_cover_export(&project_id, &id)
+        .map(Response::new)
+}
+#[tauri::command]
+pub fn list_cover_presets(
+    database: State<'_, Database>,
+) -> Result<Vec<crate::database::covers::CoverPreset>, String> {
+    database.list_cover_presets()
+}
+#[tauri::command]
+pub fn save_cover_preset(
+    database: State<'_, Database>,
+    name: String,
+    config: CoverConfig,
+) -> Result<(), String> {
+    database.save_cover_preset(&name, config)
+}
+#[tauri::command]
+pub fn delete_cover_preset(database: State<'_, Database>, id: String) -> Result<(), String> {
+    database.delete_cover_preset(&id)
+}

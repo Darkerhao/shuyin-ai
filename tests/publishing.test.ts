@@ -15,8 +15,9 @@ import type { PublishTask } from '../src/types/publishing'
 vi.mock('../src/services/publishing', () => ({ listPublishTasks: vi.fn(), savePublishTask: vi.fn(), preparePublishTask: vi.fn(), recordPublishSuccess: vi.fn(), openPublishItem: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), linkAsset: vi.fn(), chooseAsset: vi.fn(), unlinkAsset: vi.fn(), openAsset: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listVersions: vi.fn() }))
-vi.mock('../src/services/covers', () => ({ listCovers: vi.fn() }))
-const task: PublishTask = { id: 't1', projectId: 'p1', title: '中文标题', description: '第一行\n第二行', tags: '#读书', videoAssetId: 'a1', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: true, coversConfirmed: true, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [{ key: 'video', label: '视频已关联且文件可用', passed: true }], record: null }
+vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), readCoverExport: vi.fn() }))
+vi.mock('../src/services/coverRenderer', () => ({ decodeBackground: vi.fn(async () => ({ src: 'data:image/png;base64,thumbnail' })) }))
+const task: PublishTask = { id: 't1', projectId: 'p1', writingVersionId: null, title: '中文标题', description: '第一行\n第二行', tags: '#读书', videoAssetId: 'a1', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: true, coversConfirmed: true, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [{ key: 'video', label: '视频已关联且文件可用', passed: true }], record: null }
 const asset: Asset = { id: 'a1', projectId: 'p1', assetType: 'video', originalName: '视频.mp4', filePath: 'D:/视频.mp4', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
 const wrappers: ReturnType<typeof mount>[] = []
 async function render() {
@@ -31,6 +32,7 @@ async function render() {
 function button(w: ReturnType<typeof mount>, label: string) { return w.findAll('button').find(b => b.text() === label)! }
 beforeEach(() => {
   vi.resetAllMocks(); vi.stubGlobal('confirm', vi.fn(() => false))
+  vi.mocked(covers.readCoverExport).mockResolvedValue(new ArrayBuffer(0))
   vi.mocked(projects.isDesktop).mockReturnValue(true)
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), id: 'p1', title: '测试书', workspacePath: 'D:/书籍', createdAt: '', updatedAt: '', archivedAt: null })
   vi.mocked(projects.listAssets).mockResolvedValue([asset])
@@ -83,15 +85,30 @@ describe('M4 publish preparation', () => {
     vi.mocked(projects.isDesktop).mockReturnValue(false)
     const { wrapper } = await render(); expect(api.listPublishTasks).not.toHaveBeenCalled(); expect(wrapper.text()).toContain('请在桌面应用中准备发布')
   })
-  it('starts from saved writing and exported covers without requiring a model', async () => {
+  it('requires choosing saved writing explicitly and previews selected exported covers without a model', async () => {
     vi.mocked(api.listPublishTasks).mockResolvedValue([])
     vi.mocked(ai.listVersions).mockResolvedValue([{ id: 'w1', projectId: 'p1', kind: 'publishing', content: { ...emptyPublishing(), title: '已有发布标题', description: '已有内容', audioPrompt: '提示词' }, versionNo: 1, sourceType: 'manual', modelName: '', promptVersion: '', isConfirmed: false, createdAt: '' }])
     const { wrapper } = await render()
+    expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('')
+    await chooseSelect(wrapper, '#publish-writing-version', /^v1 · 已有发布标题/)
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('已有发布标题')
+    expect(wrapper.findAll('img').map(img => img.attributes('alt'))).toEqual(['封面 v1：横版', '封面 v2：竖版'])
     expect(wrapper.get('#publish-landscape').text()).toBe('v1 · 横版')
     expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
     await wrapper.get('form').trigger('submit'); await flushPromises()
-    expect(api.savePublishTask).toHaveBeenCalledWith(null, expect.objectContaining({ title: '已有发布标题', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: false }))
+    expect(api.savePublishTask).toHaveBeenCalledWith(null, expect.objectContaining({ writingVersionId: 'w1', title: '已有发布标题', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: false }))
+  })
+  it('keeps task text when a historical writing selection is cancelled', async () => {
+    vi.mocked(ai.listVersions).mockResolvedValue([{ id: 'old', projectId: 'p1', kind: 'publishing', content: { ...emptyPublishing(), title: '历史标题', description: '历史内容' }, versionNo: 1, sourceType: 'manual', modelName: '', promptVersion: '', isConfirmed: false, createdAt: '' }])
+    const { wrapper } = await render()
+    await chooseSelect(wrapper, '#publish-writing-version', /^v1 · 历史标题/)
+    expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe(task.title)
+    vi.mocked(globalThis.confirm).mockReturnValue(true)
+    await chooseSelect(wrapper, '#publish-writing-version', /^v1 · 历史标题/)
+    expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('历史标题')
+    expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ writingVersionId: 'old', title: '历史标题' }))
   })
   it('invalidates confirmation after edits and preserves draft on save failure and navigation', async () => {
     const { wrapper, router } = await render()

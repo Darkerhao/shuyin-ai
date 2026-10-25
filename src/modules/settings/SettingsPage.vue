@@ -1,17 +1,42 @@
 <script setup lang="ts">
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { onMounted, ref } from 'vue'
 import * as api from '../../services/projects'
+import * as fullBackup from '../../services/backup'
 import type { WorkspaceSettings } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 const desktop = api.isDesktop()
 const settings = ref<WorkspaceSettings | null>(null)
 const restorePath = ref('')
+const includeVideos = ref(false)
+const fullRestore = ref<fullBackup.BackupSummary | null>(null)
+const restoreDirectory = ref('')
 const { busy, error, message, run } = useOperation()
 const load = () => run(async () => { settings.value = await api.workspaceSettings() })
 const chooseRoot = () => run(async () => { const path = await api.chooseDirectory(); if (path) { settings.value = await api.setWorkspaceRoot(path); message.value = '新项目将使用此目录，已有项目保持原位置。' } })
 const backup = () => run(async () => { const path = await api.chooseDirectory(); if (path) message.value = `备份已保存：${await api.createBackup(path)}` })
-const chooseRestore = () => run(async () => { const path = await api.chooseBackup(); if (path) restorePath.value = path })
+const chooseRestore = () => run(async () => { const path = await api.chooseBackup(); if (path) { restorePath.value = path; fullRestore.value = null; restoreDirectory.value = '' } })
+const backupAll = () => run(async () => {
+  const directory = await api.chooseDirectory()
+  if (!directory) return
+  const result = await fullBackup.createFullBackup(directory, includeVideos.value)
+  message.value = `完整备份已保存（${result.fileCount} 个文件）：${result.manifestPath}。请保留整个备份目录。`
+})
+const chooseFullRestore = () => run(async () => {
+  const path = await fullBackup.chooseFullBackup()
+  if (!path) return
+  const preview = await fullBackup.inspectFullBackup(path)
+  fullRestore.value = preview; restoreDirectory.value = ''; restorePath.value = ''
+})
+const chooseRestoreDirectory = () => run(async () => { const directory = await api.chooseDirectory(); if (directory) restoreDirectory.value = directory })
+const restoreAll = () => run(async () => {
+  if (!fullRestore.value || !restoreDirectory.value) return
+  const result = await fullBackup.restoreFullBackup(fullRestore.value.manifestPath, restoreDirectory.value)
+  fullRestore.value = null
+  message.value = `完整恢复完成，资料已放到：${result.workspacePath}。恢复前数据库：${result.previousDatabase}。请到模型设置检查密钥。`
+  settings.value = await api.workspaceSettings()
+})
 const restore = () => run(async () => {
   const previous = await api.restoreBackup(restorePath.value)
   restorePath.value = ''
@@ -25,7 +50,7 @@ onMounted(() => { if (desktop) void load() })
     <p class="eyebrow">
       本地数据与文件
     </p><h1>工作目录与备份</h1><p class="muted">
-      将项目资料保存在本机，定期备份数据库。
+      将项目资料保存在本机，定期备份资料与素材。
     </p>
   </header>
   <p
@@ -73,6 +98,85 @@ onMounted(() => { if (desktop) void load() })
     </div><dl v-if="settings">
       <dt>数据库位置</dt><dd>{{ settings.databasePath }}</dd>
     </dl>
+  </section>
+  <section class="panel">
+    <h2>完整备份与恢复</h2>
+    <p class="muted">
+      备份数据库、自动草稿、个人样式、已关联图片和文档、已导出封面以及已登记任务包。备份是一个目录，请整体保管或搬移；不包含 API Key。文件缺失或校验失败时明确中止。
+    </p>
+    <label class="my-4 flex items-center gap-2 text-sm">
+      <Checkbox
+        v-model="includeVideos"
+        :disabled="!desktop || busy"
+      />同时包含已关联的原始视频（可能较大）
+    </label>
+    <div class="actions wrap">
+      <Button
+        type="button"
+        :disabled="!desktop || busy"
+        @click="backupAll"
+      >
+        {{ busy ? '处理中…' : '创建完整备份' }}
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        :disabled="!desktop || busy"
+        @click="chooseFullRestore"
+      >
+        选择完整备份恢复
+      </Button>
+    </div>
+    <p class="muted">
+      不勾选视频时只保留原路径，换电脑后可能需要重新定位。未登记到应用的文件不在备份范围。
+    </p>
+  </section>
+  <section
+    v-if="fullRestore"
+    class="panel confirmation"
+    role="alertdialog"
+    aria-labelledby="full-restore-title"
+  >
+    <h2 id="full-restore-title">
+      确认恢复完整备份？
+    </h2>
+    <p class="file-path">
+      {{ fullRestore.manifestPath }}
+    </p>
+    <p>{{ fullRestore.fileCount }} 个文件 · {{ (fullRestore.totalBytes / 1024 / 1024).toFixed(1) }} MB · 未包含 {{ fullRestore.omittedVideos }} 个视频。</p>
+    <p>将替换当前数据库，并在所选目录内新建恢复文件夹、重建素材和任务包引用；现有文件保留，替换前自动备份当前数据库。密钥需在模型设置核验。</p>
+    <p
+      v-if="restoreDirectory"
+      class="file-path"
+    >
+      恢复位置：{{ restoreDirectory }}
+    </p>
+    <div class="actions wrap">
+      <Button
+        type="button"
+        variant="outline"
+        :disabled="busy"
+        @click="chooseRestoreDirectory"
+      >
+        选择恢复目录
+      </Button>
+      <Button
+        type="button"
+        variant="destructive"
+        :disabled="busy || !restoreDirectory"
+        @click="restoreAll"
+      >
+        确认完整恢复
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        :disabled="busy"
+        @click="fullRestore = null"
+      >
+        取消
+      </Button>
+    </div>
   </section>
   <section class="panel">
     <h2>数据库备份与恢复</h2><p class="muted">

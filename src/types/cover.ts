@@ -16,7 +16,12 @@ export interface CoverConfig {
   accentColor: string
   backgroundAssetId: string | null
   overlayOpacity: number
+  backgroundX: number
+  backgroundY: number
+  backgroundZoom: number
 }
+export type CoverStyle = Pick<CoverConfig, 'templateId' | 'brand' | 'fontFamily' | 'titleSize' | 'subtitleSize' | 'align' | 'position' | 'backgroundColor' | 'textColor' | 'accentColor' | 'overlayOpacity'>
+export interface CoverPreset { id: string; name: string; style: CoverStyle }
 export interface CoverVersion {
   id: string
   projectId: string
@@ -35,5 +40,5 @@ export const coverTemplates = {
   night: { label: '深林', style: { backgroundColor: '#183c32', textColor: '#fff8e8', accentColor: '#d6bc7f', fontFamily: 'sans', align: 'center', position: 'center' } },
 } as const
 export function newCover(title = ''): CoverConfig {
-  return { schemaVersion: 1, templateId: 'classic', width: 1440, height: 1080, title, subtitle: '十分钟读懂一本书', brand: '甲子 · 书引', titleSize: 112, subtitleSize: 44, backgroundAssetId: null, overlayOpacity: 0.45, ...coverTemplates.classic.style }
+  return { schemaVersion: 1, templateId: 'classic', width: 1440, height: 1080, title, subtitle: '十分钟读懂一本书', brand: '甲子 · 书引', titleSize: 112, subtitleSize: 44, backgroundAssetId: null, overlayOpacity: 0.45, backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1, ...coverTemplates.classic.style }
 }

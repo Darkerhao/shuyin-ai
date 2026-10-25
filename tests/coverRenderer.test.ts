@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { renderCover, wrapText } from '../src/services/coverRenderer'
+import { backgroundRect, renderCover, wrapText } from '../src/services/coverRenderer'
 import { coverSizes, newCover } from '../src/types/cover'
 
 function canvas() {
@@ -10,6 +10,20 @@ function canvas() {
   return { ctx, canvas: { width: 0, height: 0, getContext: () => ctx } as unknown as HTMLCanvasElement }
 }
 describe('cover text layout', () => {
+  it.each(coverSizes)('preserves the chosen focal point and covers all edges at $width × $height', size => {
+    const image = { naturalWidth: 2000, naturalHeight: 1000 } as HTMLImageElement
+    const config = { ...newCover('主体'), width: size.width, height: size.height, backgroundAssetId: 'image', backgroundX: 0.2, backgroundY: 0.9, backgroundZoom: 1.5 }
+    const rect = backgroundRect(config, image)
+    expect(rect.x).toBeCloseTo((config.width - rect.width) * 0.2)
+    expect(rect.y).toBeCloseTo((config.height - rect.height) * 0.9)
+    expect(rect.x).toBeLessThanOrEqual(0); expect(rect.y).toBeLessThanOrEqual(0)
+    expect(rect.x + rect.width).toBeGreaterThanOrEqual(config.width)
+    expect(rect.y + rect.height).toBeGreaterThanOrEqual(config.height)
+    const target = canvas()
+    renderCover(target.canvas, config, image)
+    expect(target.ctx.drawImage).toHaveBeenCalledWith(image, rect.x, rect.y, rect.width, rect.height)
+    expect(() => backgroundRect({ ...config, backgroundZoom: NaN }, image)).toThrow('背景')
+  })
   it('wraps Chinese, long words, explicit newlines and whole graphemes', () => {
     const measure = (line: string) => [...new Intl.Segmenter('zh', { granularity: 'grapheme' }).segment(line)].length * 10
     expect(wrapText('中文封面\r\nABCDEF\n👨‍👩‍👧‍👦你好', 20, measure)).toEqual(['中文', '封面', 'AB', 'CD', 'EF', '👨‍👩‍👧‍👦你', '好'])

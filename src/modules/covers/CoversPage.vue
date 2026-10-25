@@ -6,16 +6,18 @@ import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import * as api from '../../services/covers'
 import { listProviders, listVersions, cancelGeneration } from '../../services/ai'
 import { emptyPublishing, type ModelProvider, type PublishingContent } from '../../types/ai'
 import { getProject, isDesktop, linkAsset, listAssets, openProjectDirectory } from '../../services/projects'
-import { coverPng, decodeBackground, renderCover } from '../../services/coverRenderer'
-import { coverSizes, coverTemplates, newCover, type CoverConfig, type CoverVersion } from '../../types/cover'
+import { backgroundRect, coverPng, decodeBackground, renderCover } from '../../services/coverRenderer'
+import { coverSizes, coverTemplates, newCover, type CoverConfig, type CoverVersion, type CoverPreset } from '../../types/cover'
 import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
+import { useEditorDraft } from '../../composables/useEditorDraft'
+import { readDraft } from '../../services/drafts'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -34,6 +36,10 @@ const versions = ref<CoverVersion[]>([])
 const selected = ref<CoverVersion | null>(null)
 const images = ref<Asset[]>([])
 const canvas = ref<globalThis.HTMLCanvasElement | null>(null)
+const previewCanvases: (globalThis.HTMLCanvasElement | null)[] = []
+const presets = ref<CoverPreset[]>([])
+const presetId = ref<string | null>(null)
+const presetName = ref('')
 const background = shallowRef<globalThis.HTMLImageElement | null>(null)
 const backgroundLoading = ref(false)
 const backgroundError = ref('')
@@ -57,7 +63,11 @@ let backgroundRequest = 0
 let disposed = false
 let fontsReady = false
 const canDiscard = () => !dirty.value || globalThis.confirm('封面尚未保存，确定放弃修改？')
-const canLeave = () => !busy.value && canDiscard()
+const autosave = useEditorDraft(() => props.id, 'cover', draft, () => selected.value?.id ?? null, dirty, ready, () => !busy.value)
+const canLeave = async () => {
+  if (busy.value) return false
+  try { if (ready.value) await autosave.flush(); return true } catch { return false }
+}
 onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate(canLeave)
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value) event.preventDefault() }
@@ -66,7 +76,7 @@ onBeforeUnmount(() => { disposed = true; backgroundRequest++; globalThis.removeE
 
 function accept(version: CoverVersion | null) {
   selected.value = version
-  const config = version ? { ...version.config } : newCover(bookTitle.value)
+  const config = { ...newCover(bookTitle.value), ...version?.config }
   const size = coverSizes.find(s => s.width === config.width && s.height === config.height) ?? coverSizes[config.width > config.height ? 0 : 1]
   if (size.width !== config.width || size.height !== config.height) message.value = `历史封面为 ${config.width} × ${config.height}，当前按${size.label}继续编辑，原版本和文件保留。`
   draft.value = { ...config, width: size.width, height: size.height }
@@ -83,11 +93,13 @@ async function loadWriting() {
   }
 }
 const load = () => run(async () => {
-  const [project, saved, assets] = await Promise.all([getProject(props.id), api.listCovers(props.id), listAssets(props.id), loadWriting()])
+  const [project, saved, assets, recovery, styles] = await Promise.all([getProject(props.id), api.listCovers(props.id), listAssets(props.id), readDraft<CoverConfig>(props.id, 'cover'), api.listPresets(), loadWriting()])
   bookTitle.value = project.title; workspace.value = project.workspacePath
   versions.value = saved; images.value = assets.filter(a => a.assetType === 'image')
-  accept(saved[0] ?? null)
-  if (!saved.length && writing.value?.coverTitle && writing.value.coverSubtitle) applyWritingTitles()
+  presets.value = styles
+  accept(recovery ? saved.find(v => v.id === recovery.basedOn) ?? null : saved[0] ?? null)
+  if (recovery) { draft.value = { ...newCover(), ...recovery.content }; message.value = '已恢复自动暂存的封面草稿，尚未新增历史版本。' }
+  else if (!saved.length && writing.value?.coverTitle && writing.value.coverSubtitle) applyWritingTitles()
   ready.value = true
   await nextTick(); paint()
 })
@@ -124,9 +136,45 @@ async function loadBackground(id: string | null) {
 function paint() {
   if (!canvas.value || !fontsReady || disposed) return
   previewError.value = ''
-  try { actualSizes.value = renderCover(canvas.value, draft.value, background.value) }
+  try {
+    actualSizes.value = renderCover(canvas.value, draft.value, background.value)
+    coverSizes.forEach((size, index) => { const target = previewCanvases[index]; if (target) renderCover(target, { ...draft.value, width: size.width, height: size.height }, background.value) })
+  }
   catch (cause) { previewError.value = cause instanceof Error ? cause.message : String(cause) }
 }
+function setPreviewCanvas(el: globalThis.Element | ComponentPublicInstance | null, index: number) {
+  previewCanvases[index] = el instanceof globalThis.HTMLCanvasElement ? el : null
+}
+let drag: { x: number; y: number; positionX: number; positionY: number; overflowX: number; overflowY: number } | null = null
+function startDrag(event: globalThis.PointerEvent) {
+  if (busy.value || !background.value || !canvas.value || event.button !== 0) return
+  const rect = backgroundRect(draft.value, background.value)
+  const bounds = canvas.value.getBoundingClientRect()
+  drag = { x: event.clientX, y: event.clientY, positionX: draft.value.backgroundX, positionY: draft.value.backgroundY, overflowX: (rect.width - draft.value.width) * bounds.width / draft.value.width, overflowY: (rect.height - draft.value.height) * bounds.height / draft.value.height }
+  canvas.value.setPointerCapture(event.pointerId)
+  event.preventDefault()
+}
+function moveDrag(event: globalThis.PointerEvent) {
+  if (!drag) return
+  const clamp = (value: number) => Math.min(1, Math.max(0, value))
+  if (drag.overflowX > 0) draft.value.backgroundX = clamp(drag.positionX - (event.clientX - drag.x) / drag.overflowX)
+  if (drag.overflowY > 0) draft.value.backgroundY = clamp(drag.positionY - (event.clientY - drag.y) / drag.overflowY)
+}
+function applyPreset(id: string | null) {
+  const preset = presets.value.find(p => p.id === id)
+  if (!preset) return
+  Object.assign(draft.value, preset.style); presetId.value = id
+  message.value = `已应用「${preset.name}」，可继续为本书调整。`
+}
+const savePreset = () => run(async () => {
+  await api.savePreset(presetName.value.trim(), { ...draft.value })
+  presets.value = await api.listPresets(); presetName.value = ''; message.value = '已保存到我的封面样式。'
+})
+const deletePreset = () => run(async () => {
+  if (!presetId.value) return
+  await api.deletePreset(presetId.value)
+  presets.value = presets.value.filter(p => p.id !== presetId.value); presetId.value = null; message.value = '已删除个人样式，当前封面保持原样。'
+})
 watch(() => draft.value.backgroundAssetId, id => { if (!id || id !== loadedBackgroundId) void loadBackground(id) })
 watch(draft, paint, { deep: true, flush: 'post' })
 
@@ -181,6 +229,7 @@ async function cancelImage() {
   finally { cancelling.value = false }
 }
 const save = (exportPng = false) => run(async () => {
+  await autosave.flush()
   const source = { ...draft.value }
   const configs = exportPng ? coverSizes.map(size => ({ ...source, width: size.width, height: size.height })) : [source]
   // Render all ratios before writing any file so layout failures keep the whole draft.
@@ -192,6 +241,7 @@ const save = (exportPng = false) => run(async () => {
     if (exportPng) message.value = `已导出 ${saved.length}/${outputs.length} 张封面：${saved.map(v => v.exportedPath).join('；')}`
   }
   accept(saved.find(v => v.config.width === source.width && v.config.height === source.height) ?? saved[0]!)
+  await autosave.flush()
   message.value = exportPng ? `已导出 ${saved.length} 张封面：${saved.map((v, i) => `${coverSizes[i]!.label}：${v.exportedPath}`).join('；')}` : `编辑配置已保存为 v${saved[0]!.versionNo}。`
 })
 onMounted(async () => {
@@ -236,6 +286,13 @@ onMounted(async () => {
     :message="message"
     @dismiss="message = ''"
   />
+  <p
+    v-if="autosave.error.value"
+    class="error"
+    role="alert"
+  >
+    {{ autosave.error.value }}
+  </p>
   <Button
     v-if="!ready && desktop"
     :disabled="busy"
@@ -348,6 +405,57 @@ onMounted(async () => {
                 </Collapsible>
               </TabsContent>
               <TabsContent value="style">
+                <label for="cover-preset">我的封面样式</label>
+                <Select
+                  :model-value="presetId"
+                  :disabled="busy"
+                  @update:model-value="applyPreset"
+                >
+                  <SelectTrigger
+                    id="cover-preset"
+                    class="w-full min-w-0"
+                  >
+                    <SelectValue placeholder="选择个人样式" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem
+                      v-for="preset in presets"
+                      :key="preset.id"
+                      :value="preset.id"
+                    >
+                      {{ preset.name }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <Input
+                    v-model="presetName"
+                    aria-label="新样式名称"
+                    placeholder="给当前样式起个名字"
+                    maxlength="60"
+                    class="min-w-0 flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    :disabled="busy || !presetName.trim()"
+                    @click="savePreset"
+                  >
+                    保存为我的样式
+                  </Button>
+                  <Button
+                    v-if="presetId"
+                    type="button"
+                    variant="outline"
+                    :disabled="busy"
+                    @click="deletePreset"
+                  >
+                    删除样式
+                  </Button>
+                </div>
+                <p class="muted">
+                  复用品牌文字、字体、字号、颜色和布局；每本书的标题、背景与裁切单独保留。
+                </p>
                 <label for="cover-template">封面模板</label><Select
                   :model-value="draft.templateId"
                   :disabled="busy"
@@ -526,7 +634,7 @@ onMounted(async () => {
                   <AppIcon name="upload" />选择本地图片
                 </Button>
                 <p class="muted">
-                  支持 PNG、JPEG、WebP，图片将居中裁切。
+                  支持 PNG、JPEG、WebP，可在预览画布拖动和缩放背景。
                 </p>
                 <template v-if="draft.backgroundAssetId">
                   <label for="cover-overlay">底色蒙层 <span class="optional">· {{ Math.round(draft.overlayOpacity * 100) }}%</span></label><Slider
@@ -747,7 +855,83 @@ onMounted(async () => {
             :style="{ aspectRatio: `${draft.width} / ${draft.height}` }"
             aria-label="当前封面画布"
             role="img"
+            :class="{ 'cursor-grab touch-none': !!background && !busy }"
+            @pointerdown="startDrag"
+            @pointermove="moveDrag"
+            @pointerup="drag = null"
+            @pointercancel="drag = null"
+            @lostpointercapture="drag = null"
           />
+        </div>
+        <div
+          v-if="draft.backgroundAssetId"
+          class="mt-4 space-y-3"
+        >
+          <p class="muted">
+            拖动画布调整背景，也可用下方滑块精确定位。
+          </p>
+          <label for="background-zoom">背景缩放 · {{ draft.backgroundZoom.toFixed(2) }} 倍</label>
+          <Slider
+            id="background-zoom"
+            aria-label="背景缩放"
+            :model-value="[draft.backgroundZoom]"
+            :min="1"
+            :max="3"
+            :step="0.05"
+            :disabled="busy"
+            @update:model-value="draft.backgroundZoom = $event?.[0] ?? 1"
+          />
+          <label for="background-x">背景水平位置</label>
+          <Slider
+            id="background-x"
+            aria-label="背景水平位置"
+            :model-value="[draft.backgroundX]"
+            :min="0"
+            :max="1"
+            :step="0.01"
+            :disabled="busy"
+            @update:model-value="draft.backgroundX = $event?.[0] ?? 0.5"
+          />
+          <label for="background-y">背景垂直位置</label>
+          <Slider
+            id="background-y"
+            aria-label="背景垂直位置"
+            :model-value="[draft.backgroundY]"
+            :min="0"
+            :max="1"
+            :step="0.01"
+            :disabled="busy"
+            @update:model-value="draft.backgroundY = $event?.[0] ?? 0.5"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            :disabled="busy"
+            @click="Object.assign(draft, { backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1 })"
+          >
+            重置背景位置
+          </Button>
+        </div>
+        <div
+          class="mt-5 grid grid-cols-3 items-start gap-3"
+          aria-label="三种比例并排预览"
+        >
+          <figure
+            v-for="(size, index) in coverSizes"
+            :key="size.label"
+            class="min-w-0 space-y-2"
+          >
+            <canvas
+              :ref="el => setPreviewCanvas(el, index)"
+              class="w-full"
+              :style="{ aspectRatio: `${size.width}/${size.height}` }"
+              :aria-label="size.label"
+              role="img"
+            />
+            <figcaption class="text-center text-xs text-muted-foreground">
+              {{ size.width }} × {{ size.height }}
+            </figcaption>
+          </figure>
         </div>
         <p class="preview-caption">
           同一份内容，{{ coverSizes.length }} 种精心排版的封面
@@ -785,7 +969,7 @@ onMounted(async () => {
       <span
         class="save-status"
         :class="{ 'is-dirty': dirty }"
-      ><i class="status-dot" />{{ dirty ? '有未保存修改' : '编辑配置已保存' }}</span>
+      ><i class="status-dot" />{{ dirty ? autosave.status.value || '有未保存修改' : '编辑配置已保存' }}</span>
       <div class="actions wrap">
         <Button
           type="submit"

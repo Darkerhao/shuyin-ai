@@ -32,6 +32,18 @@ pub struct CoverConfig {
     pub accent_color: String,
     pub background_asset_id: Option<String>,
     pub overlay_opacity: f64,
+    #[serde(default = "center")]
+    pub background_x: f64,
+    #[serde(default = "center")]
+    pub background_y: f64,
+    #[serde(default = "one")]
+    pub background_zoom: f64,
+}
+fn center() -> f64 {
+    0.5
+}
+fn one() -> f64 {
+    1.0
 }
 
 impl CoverConfig {
@@ -48,6 +60,9 @@ impl CoverConfig {
             || !(40..=160).contains(&self.title_size)
             || !(24..=80).contains(&self.subtitle_size)
             || !(0.0..=0.85).contains(&self.overlay_opacity)
+            || !(0.0..=1.0).contains(&self.background_x)
+            || !(0.0..=1.0).contains(&self.background_y)
+            || !(1.0..=3.0).contains(&self.background_zoom)
         {
             return Err("封面尺寸、模板或排版设置无效。".into());
         }
@@ -81,6 +96,13 @@ pub struct CoverVersion {
     pub created_at: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct CoverPreset {
+    pub id: String,
+    pub name: String,
+    pub style: serde_json::Value,
+}
+
 fn background_path(c: &Connection, project_id: &str, asset_id: &str) -> Result<String, String> {
     c.query_row(
         "SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='image'",
@@ -104,6 +126,77 @@ fn validate_png(bytes: &[u8], config: &CoverConfig) -> Result<(), String> {
 }
 
 impl Database {
+    pub fn list_cover_presets(&self) -> Result<Vec<CoverPreset>, String> {
+        self.with_connection(|c| {
+            let mut q = c
+                .prepare("SELECT id,name,style_json FROM cover_presets ORDER BY created_at DESC,id")
+                .map_err(|e| e.to_string())?;
+            let rows = q
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
+            rows.map(|row| {
+                let (id, name, json) = row.map_err(|e| e.to_string())?;
+                Ok(CoverPreset {
+                    id,
+                    name,
+                    style: serde_json::from_str(&json).map_err(|e| e.to_string())?,
+                })
+            })
+            .collect()
+        })
+    }
+    pub fn save_cover_preset(&self, name: &str, config: CoverConfig) -> Result<(), String> {
+        config.validate()?;
+        if name.trim().is_empty() || name.chars().count() > 60 {
+            return Err("样式名称必填且最多 60 字。".into());
+        }
+        let mut style = serde_json::to_value(config).map_err(|e| e.to_string())?;
+        style.as_object_mut().unwrap().retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "templateId"
+                    | "brand"
+                    | "fontFamily"
+                    | "titleSize"
+                    | "subtitleSize"
+                    | "align"
+                    | "position"
+                    | "backgroundColor"
+                    | "textColor"
+                    | "accentColor"
+                    | "overlayOpacity"
+            )
+        });
+        self.with_connection(|c| {
+            c.execute(&format!("INSERT INTO cover_presets(id,name,style_json,created_at) VALUES(?1,?2,?3,{NOW})"),params![new_id(c)?,name.trim(),style.to_string()]).map_err(|e| match e { rusqlite::Error::SqliteFailure(ref code,_) if code.code==rusqlite::ErrorCode::ConstraintViolation => "已有同名样式，请使用新名称。".into(), _=>e.to_string() })?;
+            Ok(())
+        })
+    }
+    pub fn delete_cover_preset(&self, id: &str) -> Result<(), String> {
+        self.with_connection(|c| {
+            c.execute("DELETE FROM cover_presets WHERE id=?1", [id])
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+    }
+    pub fn read_cover_export(&self, project_id: &str, id: &str) -> Result<Vec<u8>, String> {
+        let (path,config): (String,String) = self.with_connection(|c| c.query_row("SELECT exported_path,config_json FROM cover_versions WHERE id=?1 AND project_id=?2 AND exported_path IS NOT NULL",params![id,project_id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|"已导出的封面不存在。".to_owned()))?;
+        let config: CoverConfig = serde_json::from_str(&config).map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .map_err(|e| e.to_string())?
+            .take((MAX_IMAGE_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        validate_png(&bytes, &config)?;
+        Ok(bytes)
+    }
     pub fn list_cover_versions(&self, project_id: &str) -> Result<Vec<CoverVersion>, String> {
         self.with_connection(|c| {
             get(c, project_id)?;

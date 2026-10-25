@@ -358,3 +358,19 @@ publishing 的 content_json 为 `{format:"publishing",title,description,audioPro
 候选生成成功把完整合并结果写入 `preview_json` 并标记 succeeded，不新增 `writing_versions`。采用时事务内追加来源 mixed 的版本、写入实际模型和 Prompt 版本、设置 `version_id` 并清空候选；重复采用返回已关联版本。取消后的迟到响应不能写入候选，采用失败保留候选和旧版本。
 
 备份接受 v2–v8，继续核验原 schema、完整性和外键，在内存中迁移旧备份；源备份不改写。v8 备份包含候选数据，正式 UI 不提供跨重启恢复候选。回退旧程序须使用升级前数据库备份，不对 v8 强制降级。
+
+## 18. 创作草稿、个人样式与发布来源 v9（2026-10-25）
+
+迁移 `0009_creator_workflow.sql` 在同一事务内新增：
+
+- `editor_drafts`：联合主键 `(project_id, kind)`，kind 为 writing/cover，保存 `based_on`、`content_json`、`updated_at`；项目删除级联。来源版本由业务服务核验同项目/类型；允许未完成对象，JSON 上限512 KB。不新增历史版本，显式保存成功清除对应草稿。
+- `cover_presets`：id、唯一 name、style_json、created_at，全应用共享；风格只含白名单字段，不携带书籍文字/素材引用。名称重复明确拒绝，应用与删除不改动封面历史。
+- `publish_tasks.writing_version_id`：可空外键引用 writing_versions，删除来源时置空；旧任务为空，继续保留原文字快照。新保存校验 publishing 类型与同项目，任务包 manifest 记录来源和实际文本。
+
+`cover_versions.config_json` 的 `schemaVersion=1` 增加 `backgroundX`、`backgroundY`（0–1）和 `backgroundZoom`（1–3）；旧 JSON 不重写，读取缺省0.5/0.5/1。所有比例共用同一草稿裁切值，分别追加导出版本。
+
+当前 `user_version=9`，支持顺序升级和 v2–v9 数据库备份恢复。兼容迁移不删除旧行；结构冲突回滚整个 v9，保留 v8 数据与版本。回退旧程序需使用升级前数据库备份。
+
+完整备份格式版本为1，与数据库版本独立。目录包含一致性 SQLite 快照、文件清单及 SHA-256，登记的素材/导出封面/当前任务包均复制；可选原始视频。草稿及样式随数据库保留。恢复在内存核验/迁移快照，将文件复制到新目录后重建 `workspace_path`、`file_path`、`exported_path`、`task_directory` 及包内引用，再自动备份当前库并替换。不复制未登记文件、旧的无引用任务包或系统凭据；未包含视频继续引用原路径，缺失时记录保留且任务退回草稿。
+
+回归覆盖 v8→v9 保留/失败回滚、草稿重启、样式白名单、跨书来源拒绝、备份目录搬移、源文件移除后的恢复、遗漏视频、同大小损坏与越界路径拒绝。Windows 真实文件/数据库证据见 `CREATOR-WORKFLOW-VERIFICATION.md`。

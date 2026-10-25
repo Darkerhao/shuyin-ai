@@ -4,6 +4,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/projects'
+import { appendNote, chooseNote, importNote, type ImportedNote } from '../../services/notes'
 import { emptyProject, projectInput, type Project } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
@@ -20,10 +21,17 @@ const original = ref(JSON.stringify(form.value))
 const dirty = computed(() => JSON.stringify(form.value) !== original.value)
 const ready = ref(!props.id)
 const deleting = ref(false)
+const imported = ref<ImportedNote | null>(null)
 let leaving = false
 const { busy, error, message, run } = useOperation()
 function accept(saved: Project) { project.value = saved; form.value = projectInput(saved); original.value = JSON.stringify(form.value); ready.value = true }
 const load = () => run(async () => { if (props.id) accept(await api.getProject(props.id)) })
+const chooseImport = () => run(async () => { const path = await chooseNote(); if (path) imported.value = await importNote(path) })
+const applyImport = () => run(async () => {
+  if (!imported.value) return
+  form.value.sourceNotes = appendNote(form.value.sourceNotes, imported.value)
+  imported.value = null; message.value = '资料已追加，保留来源说明。点击保存并继续写入书籍资料。'
+})
 const save = () => run(async () => {
   const saved = await api.saveProject(props.id ?? null, { ...form.value })
   accept(saved)
@@ -133,6 +141,43 @@ onMounted(() => { if (desktop && props.id) void load() })
         <p class="muted">
           不需要先准备大纲或讲稿，留空也可以继续。
         </p>
+        <Button
+          type="button"
+          variant="outline"
+          @click="chooseImport"
+        >
+          导入 TXT / Markdown 笔记
+        </Button>
+        <section
+          v-if="imported"
+          class="my-4 space-y-3 rounded-lg border p-4"
+          aria-label="读书资料导入预览"
+        >
+          <p class="file-path">
+            来源：{{ imported.sourceName }} · {{ imported.sourcePath }}
+          </p>
+          <Textarea
+            :model-value="imported.text"
+            rows="8"
+            readonly
+            aria-label="导入资料预览"
+          />
+          <div class="actions wrap">
+            <Button
+              type="button"
+              @click="applyImport"
+            >
+              采用并追加到资料
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              @click="imported = null"
+            >
+              取消导入
+            </Button>
+          </div>
+        </section>
         <div class="actions wrap">
           <Button type="submit">
             <AppIcon name="check" />{{ busy ? '保存中…' : '保存并继续' }}

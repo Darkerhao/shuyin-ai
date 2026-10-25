@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "allow-projects"
 description = "项目、素材关联、工作目录与数据库备份恢复；不提供任意 SQL、文件删除或 Shell 命令。"
-commands.allow = ["list_projects", "get_project", "save_project", "delete_project", "list_assets", "link_asset", "unlink_asset", "open_asset", "workspace_settings", "set_workspace_root", "open_project_directory", "relocate_workspace", "create_backup", "restore_backup"]
+commands.allow = ["list_projects", "get_project", "save_project", "delete_project", "list_assets", "link_asset", "unlink_asset", "open_asset", "workspace_settings", "set_workspace_root", "open_project_directory", "relocate_workspace", "create_backup", "restore_backup", "read_editor_draft", "save_editor_draft", "create_full_backup", "inspect_full_backup", "restore_full_backup", "import_reading_notes"]
