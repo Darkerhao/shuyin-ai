@@ -170,7 +170,7 @@ const generateBackground = () => run(async () => {
     backgroundRequest++; loadedBackgroundId = asset.id
     background.value = image; backgroundLoading.value = false; backgroundError.value = ''
     draft.value.backgroundAssetId = asset.id
-    message.value = 'AI 背景已生成，文字和样式已保留。确认预览后可导出两张封面。'
+    message.value = 'AI 背景已生成，文字和样式已保留。确认预览后可导出全部比例封面。'
   } finally { taskId.value = '' }
 })
 async function cancelImage() {
@@ -183,16 +183,16 @@ async function cancelImage() {
 const save = (exportPng = false) => run(async () => {
   const source = { ...draft.value }
   const configs = exportPng ? coverSizes.map(size => ({ ...source, width: size.width, height: size.height })) : [source]
-  // Render both ratios before writing either file so layout failures keep the whole draft.
+  // Render all ratios before writing any file so layout failures keep the whole draft.
   const outputs = await Promise.all(configs.map(async config => ({ config, png: exportPng ? await coverPng(config, background.value) : null })))
   const saved: CoverVersion[] = []
   for (const { config, png } of outputs) {
     const version = await api.saveCover(props.id, config, png)
     versions.value = [version, ...versions.value]; saved.push(version)
-    if (exportPng) message.value = `已导出 ${saved.length}/2 张发布封面：${saved.map(v => v.exportedPath).join('；')}`
+    if (exportPng) message.value = `已导出 ${saved.length}/${outputs.length} 张封面：${saved.map(v => v.exportedPath).join('；')}`
   }
   accept(saved.find(v => v.config.width === source.width && v.config.height === source.height) ?? saved[0]!)
-  message.value = exportPng ? `已导出两张发布封面：${saved.map((v, i) => `${coverSizes[i]!.label}：${v.exportedPath}`).join('；')}` : `编辑配置已保存为 v${saved[0]!.versionNo}。`
+  message.value = exportPng ? `已导出 ${saved.length} 张封面：${saved.map((v, i) => `${coverSizes[i]!.label}：${v.exportedPath}`).join('；')}` : `编辑配置已保存为 v${saved[0]!.versionNo}。`
 })
 onMounted(async () => {
   await globalThis.document.fonts.ready
@@ -690,7 +690,7 @@ onMounted(async () => {
                   </Button>
                 </div>
                 <p class="muted">
-                  外部工具请选择对应比例；内置 AI 生成一张可双向裁切的背景，再排版导出两种比例。切换提示词不会替换你的画面描述。
+                  外部工具请选择对应比例；内置 AI 生成一张背景，再裁切排版导出 {{ coverSizes.length }} 种比例。切换提示词不会替换你的画面描述。
                 </p>
               </CollapsibleContent>
             </Collapsible>
@@ -750,10 +750,10 @@ onMounted(async () => {
           />
         </div>
         <p class="preview-caption">
-          同一份内容，两种精心排版的封面
+          同一份内容，{{ coverSizes.length }} 种精心排版的封面
         </p>
         <div class="export-formats">
-          <span><i class="ratio-icon landscape" />横版 4:3</span><span><i class="ratio-icon portrait" />竖版 3:4</span><Badge variant="secondary">
+          <span><i class="ratio-icon landscape" />横版 4:3</span><span><i class="ratio-icon portrait" />竖版 3:4</span><span><i class="ratio-icon widescreen" />横版 16:9</span><Badge variant="secondary">
             高清 PNG
           </Badge>
         </div>
@@ -799,7 +799,7 @@ onMounted(async () => {
           :disabled="busy || backgroundLoading || !!previewError || !!backgroundError"
           @click="save(true)"
         >
-          <AppIcon name="download" />导出两张封面
+          <AppIcon name="download" />导出 {{ coverSizes.length }} 张封面
         </Button>
       </div>
     </div>
@@ -859,10 +859,11 @@ onMounted(async () => {
 .canvas-stage { display: flex; align-items: center; justify-content: center; height: clamp(280px, 43vh, 470px); padding: 24px; background-color: #eef0e9; background-image: radial-gradient(#cbd4c0 0.8px, transparent 0.8px); background-size: 12px 12px; border: 1px solid #e4e8db; border-radius: 9px; overflow: hidden; }
 canvas { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; box-shadow: 0 6px 18px #22352224; }
 .preview-caption { text-align: center; color: var(--muted-foreground); font-size: 12px; margin: 17px 0 11px; }
-.export-formats { display: flex; align-items: center; justify-content: center; gap: 17px; }
+.export-formats { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 17px; }
 .export-formats > span { display: inline-flex; align-items: center; gap: 6px; color: #829274; font-size: 10px; }
 .ratio-icon { width: 17px; height: 13px; border: 1px solid #99ae8a; border-radius: 2px; }
 .ratio-icon.portrait { width: 12px; height: 16px; }
+.ratio-icon.widescreen { width: 21px; height: 12px; }
 .cover-suggestions, .preview-details { margin-top: 21px; padding-top: 15px; border-top: 1px solid var(--line); color: var(--muted-foreground); font-size: 12px; }
 .ai-background { border-top: 1px solid var(--line); padding-top: 17px; margin-top: 17px; }
 .ai-toggle, .choose-image { width: 100%; margin-top: 11px; }

@@ -198,3 +198,11 @@ M0 后补充工程能力（2026-10-23）：新增 main 代码推送后的自动�
 Windows 桌面补充核对（2026-10-25）：独立 identifier 的当前源码开发运行版已验证 WebView2 下拉浮层、焦点返回、背景滑块、原生日历键盘选日，以及目录、素材、背景图片的真实选择和取消保留。颜色输入保存、SQLite、双比例 PNG、任务包与备份文件比对通过，页面错误为 0；lint、构建和完整前端 / 发布脚本测试重跑通过。详细证据见 `UI-COMPONENTS-VERIFICATION.md` 的桌面补充记录。
 
 剩余：原生颜色弹层鼠标选择受 Computer Use 窗口归属检查拦截，随后窗口激活失败，未将该项记为通过；原生备份文件选择器也未完成。恢复桌面交互后先补测这两项。安装包更新、缺少 WebView2 的环境及 macOS/Linux 实机验证另行执行；本次独立开发运行版结果不代表正式数据库、真实模型或安装版验收。
+
+## 封面 16:9 尺寸扩展（2026-10-25）
+
+- 新增横版 16:9（1920×1080），与已有 4:3、3:4 共用编辑配置、预览和导出。属于兼容的用户功能增强（feat），版本交由发布流水线处理。
+- 验收：可选中 16:9 并保存/恢复；一次导出三种准确尺寸；已有 16:9 历史不被转换；任一比例排版失败不写文件，部分写入失败保留已完成版本与草稿。
+- 数据库 v7、既有模型输出和发布准备的两封面要求不变。
+- 已验证：`npx vitest run tests/covers.test.ts tests/coverRenderer.test.ts tests/publishing.test.ts`（44 通过）、`npm run lint`、`npm run build`（含 TypeScript）、`npm run check:rust`（fmt / Clippy）均通过。Rust 命令先加载 `. ./.tools/env.ps1`；首次 `npm run test:rust` 因 C 盘临时目录空间不足失败，将本次进程的 `TEMP`、`TMP`、`SQLITE_TMPDIR` 指向仓库 `output/cover-16x9-test-temp` 后重跑，53 通过、1 项系统凭据测试按原设置忽略。
+- 未执行真实桌面人工验收或安装包构建；下一步在 Windows 桌面版选择 16:9，确认预览和三张 PNG 导出。C 盘剩余空间不足的问题未作清理。

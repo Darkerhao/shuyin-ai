@@ -26,7 +26,7 @@ describe('cover text layout', () => {
   })
   it('rejects unsafe sizes, empty title, unavailable background and overflowing line breaks', () => {
     const target = canvas(); const config = newCover('测试')
-    for (const [width, height] of [[1080, 1920], [1920, 1080], [1080, 1080], [1440, 1440]]) {
+    for (const [width, height] of [[1080, 1920], [1280, 720], [1080, 1080], [1440, 1440]]) {
       expect(() => renderCover(target.canvas, { ...config, width: width!, height: height! }, null)).toThrow('尺寸无效')
     }
     expect(() => renderCover(target.canvas, { ...config, titleSize: Infinity }, null)).toThrow('字号')
