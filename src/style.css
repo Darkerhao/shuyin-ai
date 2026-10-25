@@ -44,6 +44,8 @@
   --accent: #eaf0eb;
   --border: #e3e6e2;
   --sidebar: #f4f5f3;
+  --scrollbar-thumb: #bdc9c0;
+  --scrollbar-thumb-hover: #8ba391;
   --radius: 0.625rem;
   --ink: var(--foreground);
   --muted: var(--muted-foreground);
@@ -57,6 +59,18 @@
   * { @apply border-border; }
   body { @apply bg-background text-foreground; }
   button:not(:disabled), [role='combobox']:not(:disabled) { cursor: pointer; }
+
+  /* One native scrollbar style for pages, editors and scrollable panels. */
+  *::-webkit-scrollbar { width: 6px; height: 6px; }
+  *::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+  *::-webkit-scrollbar-thumb { min-width: 24px; min-height: 24px; border-radius: 999px; background: var(--scrollbar-thumb); }
+  *::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+  *::-webkit-scrollbar-thumb:active { background: var(--primary); }
+  *::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+
+  @supports not selector(::-webkit-scrollbar) {
+    * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+  }
 }
 
 /* Shared page layout; shadcn-vue components own control styles. */

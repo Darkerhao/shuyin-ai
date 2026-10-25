@@ -356,3 +356,10 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 - 完整恢复先核验清单、哈希、schema、完整性/外键及路径边界，再复制到所选位置的新目录，重建项目目录、素材/封面路径和任务包清单、视频引用及文字文件。共享 `backup.rs` 的快照读取/替换流程，替换前保存当前库；失败只清理本次新建目录，原文件及源备份保留。不包含的视频保持原路径，失效就绪任务退回草稿。跨系统引用按源目录分隔符匹配，跨系统实机仍待验证。
 - `note_import.rs` 只读取 TXT/MD、UTF-8/BOM，限制1 MB/10万字并规范化换行；ProjectPage 预览后追加正文及来源，随原书籍保存流程写入，不新增解析依赖或资料状态表。
 - schema v9 的兼容迁移和本轮验收见 `DATABASE.md`、`CREATOR-WORKFLOW-VERIFICATION.md`。
+
+## 全局滚动条样式（2026-10-25）
+
+- `src/style.css` 的基础层统一页面、文本框和可滚动面板的原生滚动条：横纵均为 6px，透明轨道、灰绿色圆角滑块，悬停加深、拖动使用主题墨绿，并隐藏原生两端箭头与滚动条交角底色。
+- 不支持 WebKit 滚动条伪元素的浏览器使用标准 `scrollbar-width: thin` 和相同配色；Reka Select 已隐藏的视口滚动条继续由组件管理，保留原有上下滚动按钮和键盘选择。
+- 仅修改共享 CSS，无新增依赖、组件、脚本状态或数据库迁移。发布影响为 `style`，默认 patch。
+- 验证：`npm run lint`、`npm run build`（含 TypeScript）、`npx vitest run`（95 项通过）及 `git diff --check` 通过。Playwright CLI 在 Chrome 有界面模式下运行本地 `output/playwright/scrollbars-verify.js`，确认页面 6px 实际宽度、滚轮与滑块拖动、文本框滚轮/键盘滚动及纵向缩放、40 项下拉列表的键盘选择，以及 360px 布局检查；页面错误为 0，截图保留在同目录的 `scrollbars-*.png`。浏览器使用隔离内存数据，未验证 Tauri 安装版及 macOS/Linux 实机。
