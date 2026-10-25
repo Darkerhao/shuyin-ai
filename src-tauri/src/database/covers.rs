@@ -38,7 +38,10 @@ impl CoverConfig {
     fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1
             || !matches!(self.template_id.as_str(), "classic" | "night")
-            || !matches!((self.width, self.height), (1440, 1080) | (1080, 1440))
+            || !matches!(
+                (self.width, self.height),
+                (1440, 1080) | (1080, 1440) | (1920, 1080)
+            )
             || !matches!(self.font_family.as_str(), "sans" | "serif")
             || !matches!(self.align.as_str(), "left" | "center")
             || !matches!(self.position.as_str(), "top" | "center" | "bottom")

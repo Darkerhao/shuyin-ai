@@ -225,11 +225,11 @@ fn png() -> Vec<u8> {
     bytes
 }
 #[test]
-fn publishing_covers_export_only_landscape_4_3_and_portrait_3_4() {
+fn covers_export_and_restore_all_three_supported_sizes() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(dir.path().join("db.sqlite3"));
     let p = project(&db);
-    for (width, height) in [(1440, 1080), (1080, 1440)] {
+    for (width, height) in [(1440, 1080), (1080, 1440), (1920, 1080)] {
         let mut draft = config();
         draft.width = width;
         draft.height = height;
@@ -241,13 +241,20 @@ fn publishing_covers_export_only_landscape_4_3_and_portrait_3_4() {
         assert!(path.contains(&format!("{width}x{height}")));
         assert_eq!(fs::read(path).unwrap(), bytes);
     }
-    for (width, height) in [(1080, 1920), (1920, 1080), (1080, 1080), (1440, 1440)] {
+    for (width, height) in [(1080, 1920), (1280, 720), (1080, 1080), (1440, 1440)] {
         let mut draft = config();
         draft.width = width;
         draft.height = height;
         assert!(db.save_cover_version(&p.id, draft, None).is_err());
     }
-    assert_eq!(db.list_cover_versions(&p.id).unwrap().len(), 2);
+    drop(db);
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let versions = db.list_cover_versions(&p.id).unwrap();
+    assert_eq!(versions.len(), 3);
+    assert_eq!(
+        (versions[0].config.width, versions[0].config.height),
+        (1920, 1080)
+    );
 }
 
 #[test]

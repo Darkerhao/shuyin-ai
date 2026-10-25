@@ -28,6 +28,7 @@ export interface CoverVersion {
 export const coverSizes = [
   { label: '横版 4:3 · 1440 × 1080', width: 1440, height: 1080 },
   { label: '竖版 3:4 · 1080 × 1440', width: 1080, height: 1440 },
+  { label: '横版 16:9 · 1920 × 1080', width: 1920, height: 1080 },
 ] as const
 export const coverTemplates = {
   classic: { label: '纸页', style: { backgroundColor: '#f4efdf', textColor: '#24362f', accentColor: '#9a5938', fontFamily: 'serif', align: 'left', position: 'center' } },
