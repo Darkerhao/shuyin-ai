@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Button } from '@/components/ui/button'
 import { onMounted, ref } from 'vue'
 import * as api from '../../services/projects'
 import type { WorkspaceSettings } from '../../types/project'
@@ -55,18 +56,20 @@ onMounted(() => { if (desktop) void load() })
     >
       {{ settings.root }}
     </p><div class="actions">
-      <button
+      <Button
         :disabled="!desktop || busy"
+        type="button"
         @click="chooseRoot"
       >
         选择工作目录
-      </button><button
-        class="secondary"
+      </Button><Button
         :disabled="!desktop || busy"
+        variant="outline"
+        type="button"
         @click="load"
       >
         重新读取
-      </button>
+      </Button>
     </div><dl v-if="settings">
       <dt>数据库位置</dt><dd>{{ settings.databasePath }}</dd>
     </dl>
@@ -75,18 +78,20 @@ onMounted(() => { if (desktop) void load() })
     <h2>数据库备份与恢复</h2><p class="muted">
       备份包含项目资料、创作版本、模型配置、素材路径和普通设置，不包含 API Key，也不复制视频、图片或工作目录内的文件。恢复后请在模型设置中检查并重新输入缺失的密钥。
     </p><div class="actions">
-      <button
+      <Button
         :disabled="!desktop || busy"
+        type="button"
         @click="backup"
       >
         创建备份
-      </button><button
-        class="secondary"
+      </Button><Button
         :disabled="!desktop || busy"
+        variant="outline"
+        type="button"
         @click="chooseRestore"
       >
         选择备份恢复
-      </button>
+      </Button>
     </div>
   </section>
   <section
@@ -100,19 +105,21 @@ onMounted(() => { if (desktop) void load() })
     </h2><p class="file-path">
       {{ restorePath }}
     </p><p>恢复将替换全部项目、创作版本、模型配置、任务、素材关联和普通设置。系统会先校验备份并自动保存当前数据库；原始素材文件保持原位，失效路径可在项目内重新定位。密钥不随备份恢复。</p><div class="actions">
-      <button
-        class="danger"
+      <Button
         :disabled="busy"
+        variant="destructive"
+        type="button"
         @click="restore"
       >
         确认恢复
-      </button><button
-        class="secondary"
+      </Button><Button
         :disabled="busy"
+        variant="outline"
+        type="button"
         @click="restorePath = ''"
       >
         取消
-      </button>
+      </Button>
     </div>
   </section>
 </template>

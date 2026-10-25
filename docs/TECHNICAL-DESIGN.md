@@ -13,7 +13,7 @@
 - SQLite：结构化业务数据。
 - Pinia：跨模块状态。
 - Vue Router：导航。
-- Element Plus 或经项目确认的统一组件库：UI。
+- shadcn-vue + Tailwind CSS 4：统一 UI，已覆盖应用壳层及全部页面；业务布局保留共享样式，交互控件统一使用组件。
 - Vitest：单元测试。
 - Playwright 或适用的桌面测试方案：关键交互验证。
 - SVG/Canvas 或专用渲染模块：封面文字排版与导出。
@@ -315,3 +315,16 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 - 模型设置改为服务列表与配置详情布局，按文本/图片用途展示默认状态和凭据状态；切换或离开前会确认未保存修改，密钥输入仍只写入系统凭据库。
 - 发布准备页、操作成功/失败反馈、图标、按钮、表单、空状态和窄屏断点统一使用同一套颜色、间距、圆角、焦点和 reduced-motion 规则；新增 SVG favicon。
 - 本次只调整 Vue/CSS/测试与文档，没有新增依赖、IPC 命令、权限或数据库字段/迁移；数据库 schema 与已有数据保持不变。
+
+## shadcn-vue 全页面接入（2026-10-25）
+
+- 使用官方 `new-york-v4` registry 的 Button、Input、Textarea、Badge、Select、Checkbox、Slider、Tabs、Collapsible 源码，保存在 `src/components/ui/`，并保留 MIT LICENSE。`components.json` 管理源码路径，`src/lib/utils.ts` 是唯一的类名合并工具。没有引入运行时 UI 插件或第二套组件库。
+- 依赖锁定：Reka UI 2.11.0、VueUse 14.4.0、Tailwind CSS / Vite 插件 4.3.3、class-variance-authority 0.7.1、clsx 2.1.1、tailwind-merge 3.7.0。VueUse 与 Reka 的依赖范围对齐，避免重复版本。显式加载 `@types/web-bluetooth` 只为满足 VueUse 类型声明，不增加蓝牙功能或桌面权限；类型检查仍覆盖依赖声明。
+- 当前机器 Node 22.21.1 不满足初始化 CLI 的间接依赖 `validate-npm-package-name@8` 的 Node 要求，因此按官方源码分发方式直接导入组件；没有强制安装、跳过引擎检查或修改全局 Node。后续使用 CLI 前应先核验其当前 Node 要求。
+- Select 的图标复用现有 `AppIcon`，不新增图标依赖；移除本切片不用的 Select 分组、标签、分隔线及文字包装组件。组件名称与可选属性默认值遵守现有 ESLint 规则，不关闭检查。未引入动画依赖。
+- `src/style.css` 集中定义暖白、灰阶和墨绿主题变量；保留业务布局、提示与响应式规则，删除已被组件替代的原生按钮、输入、下拉框、标签和手写页签样式。Textarea 保留 `rows` 与纵向调整大小；颜色、日期时间等原生输入能力由 Input 统一外观。
+- 书架保留即时搜索、状态计数、按书名/更新时间排序、刷新失败保留列表、空状态和浏览器预览边界。排序改用带键盘操作与焦点返回的 Select。书籍表单复用 Input / Textarea / Button，保存调用、未保存离页保护及删除确认语义保持一致。
+- 全部编辑页与辅助页迁移到相同组件体系。删除手写 `EditorTabs.vue`，由 Tabs 管理键盘和 ARIA 关联；设置 `unmountOnHide=false` 保留切换前后的表单。封面文字/样式表单与背景生成表单保持独立，避免嵌套表单。
+- Select 采用带类型参数的 `modelValue` / `update:modelValue`；历史切换由已保存版本控制，取消放弃修改时不更新选中值。空素材使用 `null`，尺寸和字号保持数字。Select、Checkbox、Slider 显式绑定业务禁用条件，避免仅依赖原生 fieldset 而漏掉自定义交互。
+- 发布任务标题/状态及视频文件状态会在同一 ID 下更新。当前 Reka 2.11.0 的 SelectItemText 注册文字不会随普通 DOM 文字更新，因此这两个 SelectValue 使用插槽直接渲染业务数据；标签格式在各自的小函数中复用，不修改依赖源码、不引入缓存或重复状态。
+- 本次影响为 `style` / `refactor`，默认 patch；不手动修改版本。数据库仍为 schema v7，无 Rust、IPC、权限或迁移变更。验证见 `UI-COMPONENTS-VERIFICATION.md`。

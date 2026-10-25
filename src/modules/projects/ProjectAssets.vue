@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { onMounted, ref } from 'vue'
 import * as api from '../../services/projects'
 import type { Asset } from '../../types/project'
@@ -41,18 +43,20 @@ onMounted(() => { void run(refresh) })
       关联本地视频、图片、字幕与文档。移除关联或删除项目都会保留源文件。
     </p>
     <div class="actions">
-      <button
+      <Button
         :disabled="busy"
+        type="button"
         @click="select()"
       >
         关联素材
-      </button><button
-        class="secondary"
+      </Button><Button
         :disabled="busy"
+        variant="outline"
+        type="button"
         @click="run(refresh)"
       >
         刷新文件状态
-      </button>
+      </Button>
     </div>
     <p
       v-if="error"
@@ -83,7 +87,11 @@ onMounted(() => { void run(refresh) })
       :key="asset.id"
       class="asset-row"
     >
-      <h3>{{ asset.originalName }} <span class="badge">{{ labels[asset.assetType] }}</span></h3>
+      <h3>
+        {{ asset.originalName }} <Badge variant="secondary">
+          {{ labels[asset.assetType] }}
+        </Badge>
+      </h3>
       <p class="file-path">
         {{ asset.filePath }}
       </p>
@@ -91,31 +99,35 @@ onMounted(() => { void run(refresh) })
         {{ asset.existsStatus === 'available' ? '文件可用' : asset.existsStatus === 'missing' ? '文件已丢失，请重新定位' : '无法访问文件，请检查权限或磁盘连接' }} · {{ (asset.fileSize / 1024 / 1024).toFixed(2) }} MB · {{ new Date(asset.modifiedAt * 1000).toLocaleString() }}
       </p>
       <div class="actions wrap">
-        <button
-          class="secondary"
+        <Button
           :disabled="busy || asset.existsStatus !== 'available'"
+          variant="outline"
+          type="button"
           @click="openFile(asset.id)"
         >
           打开文件
-        </button><button
-          class="secondary"
+        </Button><Button
           :disabled="busy"
+          variant="outline"
+          type="button"
           @click="openFile(asset.id, true)"
         >
           打开所在目录
-        </button><button
-          class="secondary"
+        </Button><Button
           :disabled="busy"
+          variant="outline"
+          type="button"
           @click="select(asset)"
         >
           重新定位
-        </button><button
-          class="secondary danger"
+        </Button><Button
           :disabled="busy"
+          variant="destructive"
+          type="button"
           @click="removing = asset"
         >
           移除关联
-        </button>
+        </Button>
       </div>
     </article>
     <div
@@ -127,18 +139,20 @@ onMounted(() => { void run(refresh) })
       <h3 id="unlink-title">
         移除「{{ removing.originalName }}」的关联？
       </h3><p>源文件将保留在原位置。</p><div class="actions">
-        <button
+        <Button
           :disabled="busy"
+          type="button"
           @click="remove"
         >
           确认移除
-        </button><button
-          class="secondary"
+        </Button><Button
           :disabled="busy"
+          variant="outline"
+          type="button"
           @click="removing = null"
         >
           取消
-        </button>
+        </Button>
       </div>
     </div>
   </section>

@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/ai'
@@ -7,7 +11,7 @@ import { emptyPublishing, type ModelProvider, type PublishingContent, type Writi
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
-import EditorTabs from '../../components/EditorTabs.vue'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 const props = defineProps<{ id: string }>()
 const router = useRouter()
@@ -51,10 +55,8 @@ const load = () => run(async () => {
   providerId.value = providers.value.find(p => p.isDefault)?.id ?? providers.value[0]?.id ?? ''
   versions.value = saved; accept(saved[0] ?? null); ready.value = true
 })
-function switchVersion(event: globalThis.Event) {
-  const select = event.target as globalThis.HTMLSelectElement
-  if (canDiscard()) accept(versions.value.find(v => v.id === select.value) ?? null)
-  else select.value = selected.value?.id ?? ''
+function switchVersion(id: string | null) {
+  if (canDiscard()) accept(versions.value.find(v => v.id === id) ?? null)
 }
 const save = () => run(async () => {
   const saved = await api.saveWriting({ projectId: props.id, kind: 'publishing', content: { ...draft.value }, basedOn: selected.value?.id ?? null, isConfirmed: false })
@@ -124,12 +126,16 @@ onMounted(() => { if (desktop) void load() })
         把读过的好书，变成想分享的内容。
       </p>
     </div>
-    <RouterLink
-      class="button secondary"
-      :to="`/projects/${id}`"
+    <Button
+      variant="outline"
+      as-child
     >
-      <AppIcon name="pen" />修改书籍资料
-    </RouterLink>
+      <RouterLink
+        :to="`/projects/${id}`"
+      >
+        <AppIcon name="pen" />修改书籍资料
+      </RouterLink>
+    </Button>
   </header>
   <ProjectNavigation :id="id" />
   <p
@@ -143,16 +149,17 @@ onMounted(() => { if (desktop) void load() })
     :message="message"
     @dismiss="message = ''"
   />
-  <button
+  <Button
     v-if="!ready"
     :disabled="!desktop || busy"
+    type="button"
     @click="load"
   >
     <AppIcon
       name="refresh"
       :class="{ spin: busy }"
     />{{ busy ? '读取中…' : '重新读取' }}
-  </button>
+  </Button>
   <template v-if="ready">
     <section class="panel generation-panel">
       <div class="generation-info">
@@ -168,34 +175,43 @@ onMounted(() => { if (desktop) void load() })
             class="sr-only"
             for="writing-provider"
           >文本模型</label>
-          <select
-            id="writing-provider"
+          <Select
             v-model="providerId"
             :disabled="busy"
           >
-            <option
-              v-for="provider in providers"
-              :key="provider.id"
-              :value="provider.id"
+            <SelectTrigger
+              id="writing-provider"
+              class="w-full min-w-0 sm:w-44"
             >
-              {{ provider.name }}
-            </option>
-          </select>
+              <SelectValue placeholder="请选择" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem
+                v-for="provider in providers"
+                :key="provider.id"
+                :value="provider.id"
+              >
+                {{ provider.name }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </template>
-        <button
+        <Button
           :disabled="busy || !providerId"
+          type="button"
           @click="generate"
         >
           <AppIcon name="sparkle" />{{ taskId ? '生成中…' : '一键生成' }}
-        </button>
-        <button
+        </Button>
+        <Button
           v-if="taskId"
-          class="secondary"
           :disabled="cancelling"
+          variant="outline"
+          type="button"
           @click="cancel"
         >
           取消生成
-        </button>
+        </Button>
       </div>
     </section>
     <p
@@ -217,107 +233,126 @@ onMounted(() => { if (desktop) void load() })
       class="writing-editor"
       @submit.prevent="save"
     >
-      <EditorTabs
-        id="writing"
+      <Tabs
         v-model="activeTab"
-        label="创作内容"
-        :tabs="tabs"
-      />
-      <div
-        v-for="tab in tabs"
-        :id="`writing-panel-${tab.value}`"
-        :key="tab.value"
-        :hidden="activeTab !== tab.value"
-        role="tabpanel"
-        :aria-labelledby="`writing-tab-${tab.value}`"
-        tabindex="0"
+        :unmount-on-hide="false"
       >
-        <p class="tab-intro">
-          {{ tab.value === 'publishing' ? '一份有吸引力的标题，一段让人想点开的介绍。' : tab.value === 'audio' ? '复制到音频工具的自定义指导，并选择对应的书籍来源。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
-        </p>
-        <section
-          v-for="field in fields.filter(item => fieldTab(item.key) === tab.value)"
-          :key="field.key"
-          class="panel editor-section"
+        <TabsList
+          class="w-full"
+          aria-label="创作内容"
         >
-          <div class="result-heading">
-            <label :for="`result-${field.key}`">{{ field.label }}</label>
-            <button
-              type="button"
-              class="secondary"
-              :class="{ copied: copiedField === field.key }"
-              :disabled="!draft[field.key].trim()"
-              :aria-label="`复制${field.label}`"
-              @click="copy(field.key, field.label)"
+          <TabsTrigger
+            v-for="tab in tabs"
+            :key="tab.value"
+            :value="tab.value"
+          >
+            {{ tab.label }}
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent
+          v-for="tab in tabs"
+          :key="tab.value"
+          :value="tab.value"
+        >
+          <p class="tab-intro">
+            {{ tab.value === 'publishing' ? '一份有吸引力的标题，一段让人想点开的介绍。' : tab.value === 'audio' ? '复制到音频工具的自定义指导，并选择对应的书籍来源。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
+          </p>
+          <section
+            v-for="field in fields.filter(item => fieldTab(item.key) === tab.value)"
+            :key="field.key"
+            class="panel editor-section"
+          >
+            <div class="result-heading">
+              <label :for="`result-${field.key}`">{{ field.label }}</label>
+              <Button
+                type="button"
+                :class="{ 'border-primary/30 bg-accent text-primary': copiedField === field.key }"
+                :disabled="!draft[field.key].trim()"
+                :aria-label="`复制${field.label}`"
+                variant="outline"
+                @click="copy(field.key, field.label)"
+              >
+                <AppIcon :name="copiedField === field.key ? 'check' : 'copy'" />{{ copiedField === field.key ? '已复制' : `复制${field.label}` }}
+              </Button>
+            </div>
+            <p
+              v-if="field.help"
+              class="muted"
             >
-              <AppIcon :name="copiedField === field.key ? 'check' : 'copy'" />{{ copiedField === field.key ? '已复制' : `复制${field.label}` }}
-            </button>
-          </div>
-          <p
-            v-if="field.help"
-            class="muted"
-          >
-            {{ field.help }}
-          </p>
-          <textarea
-            :id="`result-${field.key}`"
-            v-model="draft[field.key]"
-            :rows="field.rows"
-            :maxlength="field.limit"
-            :disabled="busy && !taskId"
-            :placeholder="`生成后在这里查看和修改${field.label}`"
-          />
-          <p
-            v-if="field.key !== 'audioPrompt'"
-            class="character-count"
-          >
-            {{ [...draft[field.key]].length }} / {{ field.limit }}
-          </p>
-        </section>
-      </div>
+              {{ field.help }}
+            </p>
+            <Textarea
+              :id="`result-${field.key}`"
+              v-model="draft[field.key]"
+              :rows="field.rows"
+              :maxlength="field.limit"
+              :disabled="busy && !taskId"
+              :placeholder="`生成后在这里查看和修改${field.label}`"
+            />
+            <p
+              v-if="field.key !== 'audioPrompt'"
+              class="character-count"
+            >
+              {{ [...draft[field.key]].length }} / {{ field.limit }}
+            </p>
+          </section>
+        </TabsContent>
+      </Tabs>
       <div class="sticky-actions">
         <span
           class="save-status"
           :class="{ 'is-dirty': dirty }"
         ><i class="status-dot" />{{ dirty ? '有未保存的修改' : selected ? '当前版本已保存' : '生成后自动保存' }}<span class="shortcut-hint"> · Ctrl / ⌘ S 保存</span></span>
         <div class="actions wrap">
-          <button
+          <Button
             type="submit"
-            class="secondary"
             :disabled="busy || !dirty || !canSave"
+            variant="outline"
           >
             <AppIcon name="save" />保存修改
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             :disabled="busy || !canSave || !draft.coverTitle.trim() || !draft.coverSubtitle.trim()"
             @click="makeCover"
           >
             {{ dirty ? '保存并制作封面' : '使用这些内容制作封面' }}<AppIcon name="arrow" />
-          </button>
+          </Button>
         </div>
       </div>
     </form>
-    <details
+    <Collapsible
       v-if="versions.length"
       class="history-panel"
+      :unmount-on-hide="false"
     >
-      <summary>历史版本（{{ versions.length }}） · 每次生成和保存，都为你保留</summary>
-      <label for="writing-version">选择历史版本</label>
-      <select
-        id="writing-version"
-        :value="selected?.id ?? ''"
-        :disabled="busy"
-        @change="switchVersion"
-      >
-        <option
-          v-for="version in versions"
-          :key="version.id"
-          :value="version.id"
+      <CollapsibleTrigger class="disclosure-trigger">
+        历史版本（{{ versions.length }}） · 每次生成和保存，都为你保留
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <label for="writing-version">选择历史版本</label>
+        <Select
+          :model-value="selected?.id ?? null"
+          :disabled="busy"
+          @update:model-value="switchVersion"
         >
-          v{{ version.versionNo }} · {{ version.sourceType === 'ai' ? '生成' : '修改' }} · {{ new Date(version.createdAt).toLocaleString() }}
-        </option>
-      </select>
-    </details>
+          <SelectTrigger
+            id="writing-version"
+            class="w-full min-w-0"
+          >
+            <SelectValue placeholder="请选择" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem
+              v-for="version in versions"
+              :key="version.id"
+              :value="version.id"
+            >
+              v{{ version.versionNo }} · {{ version.sourceType === 'ai' ? '生成' : '修改' }} · {{ new Date(version.createdAt).toLocaleString() }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </CollapsibleContent>
+    </Collapsible>
   </template>
 </template>

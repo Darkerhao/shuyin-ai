@@ -1,3 +1,4 @@
+import { chooseSelect, openSelect, tab, tabPanel } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
@@ -21,11 +22,12 @@ async function render(path = '/projects/p1/writing') {
     { path: '/projects', component: { template: '<p>Projects</p>' } },
     { path: '/projects/:id', component: { template: '<p>Project</p>' } },
     { path: '/projects/:id/covers', component: { template: '<p>封面工坊</p>' } },
+    { path: '/projects/:id/publishing', component: { template: '<p>发布准备</p>' } },
     { path: '/settings', component: { template: '<p>Settings</p>' } },
     { path: '/verification', component: { template: '<p>Verification</p>' } },
   ] })
   await router.push(path); await router.isReady()
-  const wrapper = mount(App, { global: { plugins: [router] } }); wrappers.push(wrapper); await flushPromises()
+  const wrapper = mount(App, { attachTo: document.body, global: { plugins: [router] } }); wrappers.push(wrapper); await flushPromises()
   return { wrapper, router }
 }
 function button(w: ReturnType<typeof mount>, text: string) { return w.findAll('button').find(b => b.text() === text)! }
@@ -41,22 +43,24 @@ afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlob
 describe('publishing workflow', () => {
   it('retains edits across tabs and saves all fields with the keyboard shortcut', async () => {
     const { wrapper } = await render()
-    expect(wrapper.get('#writing-panel-publishing').attributes('hidden')).toBeUndefined()
-    expect(wrapper.get('#writing-panel-audio').attributes('hidden')).toBeDefined()
+    expect(tabPanel(wrapper, '发布文案').attributes('hidden')).toBeUndefined()
+    expect(tabPanel(wrapper, '音频提示词').attributes('hidden')).toBeDefined()
     await wrapper.get('#result-title').setValue('跨页签保留的标题')
-    await wrapper.get('#writing-tab-publishing').trigger('keydown', { key: 'ArrowRight' })
-    expect(wrapper.get('#writing-tab-audio').attributes('aria-selected')).toBe('true')
-    expect(wrapper.get('#writing-panel-publishing').attributes('hidden')).toBeDefined()
+    ;(tab(wrapper, '发布文案').element as HTMLButtonElement).focus()
+    await tab(wrapper, '发布文案').trigger('keydown', { key: 'ArrowRight' }); await flushPromises()
+    expect(tab(wrapper, '音频提示词').attributes('aria-selected')).toBe('true')
+    expect(tabPanel(wrapper, '发布文案').attributes('hidden')).toBeDefined()
     await wrapper.get('#result-audioPrompt').setValue('修改后的音频提示词')
-    await wrapper.get('#writing-tab-cover').trigger('click')
+    await tab(wrapper, '封面素材').trigger('click')
     await wrapper.get('#result-coverTitle').setValue('修改后的封面标题')
     vi.mocked(api.saveWriting).mockImplementation(async input => ({ ...initial, content: input.content }))
     const event = new globalThis.KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true })
     globalThis.dispatchEvent(event); await flushPromises()
     expect(event.defaultPrevented).toBe(true)
     expect(api.saveWriting).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ content: expect.objectContaining({ title: '跨页签保留的标题', audioPrompt: '修改后的音频提示词', coverTitle: '修改后的封面标题' }) }))
-    await wrapper.get('#writing-tab-cover').trigger('keydown', { key: 'Home' })
-    expect(wrapper.get('#writing-tab-publishing').attributes('aria-selected')).toBe('true')
+    ;(tab(wrapper, '封面素材').element as HTMLButtonElement).focus()
+    await tab(wrapper, '封面素材').trigger('keydown', { key: 'Home' }); await flushPromises()
+    expect(tab(wrapper, '发布文案').attributes('aria-selected')).toBe('true')
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('跨页签保留的标题')
     wrapper.unmount()
     globalThis.dispatchEvent(new globalThis.KeyboardEvent('keydown', { key: 's', ctrlKey: true })); await flushPromises()
@@ -109,7 +113,13 @@ describe('publishing workflow', () => {
     await wrapper.get('#result-coverSubtitle').setValue('生成中的副标题修改')
     complete(generated); await flushPromises()
     expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('生成中手动编辑')
-    expect(wrapper.get('#writing-version').text()).toContain('v2')
+    await wrapper.get('.history-panel [data-slot=collapsible-trigger]').trigger('click')
+    const history = await openSelect(wrapper, '#writing-version')
+    expect(history.text()).toContain('v2')
+    await history.trigger('keydown', { key: 'Escape' }); await flushPromises()
+    await chooseSelect(wrapper, '#writing-version', /^v2 ·/)
+    expect(globalThis.confirm).toHaveBeenCalled()
+    expect(wrapper.get('#writing-version').text()).toContain('v1')
     expect(wrapper.text()).toContain('当前修改已保留')
     expect((wrapper.get('#result-coverSubtitle').element as HTMLTextAreaElement).value).toBe('生成中的副标题修改')
   })
@@ -125,7 +135,8 @@ describe('publishing workflow', () => {
     vi.mocked(api.saveWriting).mockResolvedValue(revised)
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.saveWriting).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'publishing', basedOn: 'v1', content: revised.content }))
-    await wrapper.get('#writing-version').setValue('v1')
+    await wrapper.get('.history-panel [data-slot=collapsible-trigger]').trigger('click')
+    await chooseSelect(wrapper, '#writing-version', /^v1 ·/)
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('原有标题')
     await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects')
   })
@@ -189,10 +200,31 @@ describe('publishing workflow', () => {
 })
 
 describe('model configuration', () => {
+  it('clears the default setting when disabling a model through the checkbox', async () => {
+    const { wrapper } = await render('/settings/models')
+    const [enabled, defaultModel] = wrapper.findAll('[role=checkbox]')
+    expect(defaultModel!.attributes('aria-checked')).toBe('true')
+    await enabled!.trigger('click')
+    expect(enabled!.attributes('aria-checked')).toBe('false')
+    expect(defaultModel!.attributes('aria-checked')).toBe('false')
+    expect(defaultModel!.element.matches(':disabled')).toBe(true)
+    expect(api.saveProvider).not.toHaveBeenCalled()
+    vi.mocked(api.saveProvider).mockResolvedValue({ provider: { ...provider, isEnabled: false, isDefault: false }, warning: null })
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveProvider).toHaveBeenCalledWith('m1', expect.objectContaining({ isEnabled: false, isDefault: false }), null)
+  })
+
+  it('disables the model selector and checkboxes in browser preview', async () => {
+    vi.mocked(projects.isDesktop).mockReturnValue(false)
+    const { wrapper } = await render('/settings/models')
+    expect(wrapper.get('#model-kind').element.matches(':disabled')).toBe(true)
+    expect(wrapper.findAll('[role=checkbox]').every(control => control.element.matches(':disabled'))).toBe(true)
+    expect(api.listProviders).not.toHaveBeenCalled()
+  })
   it('saves an image model without running a text connection test', async () => {
     const { wrapper } = await render('/settings/models')
     await button(wrapper, '新增模型').trigger('click')
-    await wrapper.get('#model-kind').setValue('image')
+    await chooseSelect(wrapper, '#model-kind', '图片 · AI 封面背景')
     await wrapper.get('#provider-name').setValue('封面模型')
     await wrapper.get('#model-name').setValue('image-model')
     const imageProvider = { ...provider, modelKind: 'image' as const }
@@ -233,7 +265,7 @@ describe('model configuration', () => {
     expect((wrapper.get('#provider-name').element as HTMLInputElement).value).toBe('未保存的模型名称')
     vi.mocked(globalThis.confirm).mockReturnValue(true)
     await wrapper.get('[aria-label="编辑模型 图片模型"]').trigger('click')
-    expect((wrapper.get('#model-kind').element as HTMLSelectElement).value).toBe('image')
+    expect(wrapper.get('#model-kind').text()).toBe('图片 · AI 封面背景')
     expect(wrapper.get('[aria-label="编辑模型 图片模型"]').attributes('aria-pressed')).toBe('true')
   })
 })

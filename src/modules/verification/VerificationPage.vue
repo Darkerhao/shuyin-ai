@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { onMounted, ref } from 'vue'
 import { errorMessage, isDesktop, readProbe, saveProbe, selectVideo } from '../../services/verification'
 import type { ProbeSnapshot } from '../../services/verification'
@@ -74,7 +77,9 @@ onMounted(() => { if (desktop) void load() })
     <p class="muted">
       验证桌面容器、本地数据库和文件选择。此页面不包含创作业务。
     </p>
-    <span class="runtime-badge">{{ desktop ? 'Tauri 桌面环境' : '浏览器预览' }}</span>
+    <Badge variant="secondary">
+      {{ desktop ? 'Tauri 桌面环境' : '浏览器预览' }}
+    </Badge>
   </header>
 
   <p
@@ -98,7 +103,7 @@ onMounted(() => { if (desktop) void load() })
     </p>
     <form @submit.prevent="save">
       <label for="probe-note">验证文字</label>
-      <textarea
+      <Textarea
         id="probe-note"
         v-model="note"
         rows="3"
@@ -107,20 +112,20 @@ onMounted(() => { if (desktop) void load() })
         placeholder="例如：书引 AI，重启后见。"
       />
       <div class="actions">
-        <button
+        <Button
           type="submit"
           :disabled="!desktop || databaseBusy"
         >
           {{ databaseBusy ? '处理中…' : '写入并回读' }}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          class="secondary"
           :disabled="!desktop || databaseBusy"
+          variant="outline"
           @click="load"
         >
           重新读取
-        </button>
+        </Button>
       </div>
     </form>
     <p
@@ -154,13 +159,13 @@ onMounted(() => { if (desktop) void load() })
     <p class="muted">
       通过 Windows 原生对话框选择视频，仅显示路径，不复制、修改或删除文件。
     </p>
-    <button
+    <Button
       type="button"
       :disabled="!desktop || selecting"
       @click="chooseVideo"
     >
       {{ selecting ? '选择中…' : '选择本地视频' }}
-    </button>
+    </Button>
     <p
       v-if="selectedVideo"
       class="file-path"

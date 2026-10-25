@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import App from '../src/App.vue'
 import ProjectsPage from '../src/modules/projects/ProjectsPage.vue'
@@ -20,10 +20,11 @@ const wrappers: ReturnType<typeof mount>[] = []
 async function render(path: string) {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/projects', component: ProjectsPage }, { path: '/projects/new', component: ProjectPage },
+    { path: '/settings/models', component: { template: '<p>模型设置</p>' } },
     { path: '/projects/:id', component: ProjectPage, props: true }, { path: '/projects/:id/writing', component: { template: '<p>发布文案与音频提示词</p>' } }, { path: '/assets', component: ProjectAssets, props: { projectId: 'p1' } }, { path: '/settings', component: SettingsPage },
   ] })
   await router.push(path); await router.isReady()
-  const wrapper = mount(App, { global: { plugins: [router] } })
+  const wrapper = mount(App, { attachTo: document.body, global: { plugins: [router] } })
   wrappers.push(wrapper); await flushPromises()
   return { wrapper, router }
 }
@@ -79,7 +80,11 @@ describe('M1 projects and materials', () => {
     await wrapper.get('#search').setValue('978-123')
     expect(wrapper.get('.project-card h2').text()).toBe('归档书籍')
     await wrapper.get('#search').trigger('keydown', { key: 'Escape' })
-    await wrapper.get('#book-sort').setValue('title')
+    await wrapper.get('#book-sort').trigger('keydown', { key: 'ArrowDown' }); await flushPromises()
+    const titleOption = Array.from(document.querySelectorAll('[role="option"]')).find(option => option.textContent?.trim() === '书名排序')!
+    expect(titleOption).toBeDefined()
+    await new DOMWrapper(titleOption).trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(wrapper.get('#book-sort').attributes('aria-expanded')).toBe('false')
     expect(wrapper.findAll('.project-card h2').map(el => el.text())).toEqual(['朝花夕拾', '归档书籍', '活着'])
     expect(api.listProjects).toHaveBeenCalledTimes(1)
   })

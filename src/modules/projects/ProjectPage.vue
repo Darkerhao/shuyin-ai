@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { Badge } from '@/components/ui/badge'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/projects'
@@ -6,6 +8,9 @@ import { emptyProject, projectInput, type Project } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 const props = defineProps<{ id?: string }>()
 const router = useRouter()
 const desktop = api.isDesktop()
@@ -50,7 +55,9 @@ onMounted(() => { if (desktop && props.id) void load() })
         {{ project ? '补充你的阅读理解，让创作更有自己的味道。' : '从一个书名开始，把读过的好故事分享出去。' }}
       </p>
     </div>
-    <span class="badge"><AppIcon name="book" />{{ project ? project.title : '一段新创作的开始' }}</span>
+    <Badge variant="secondary">
+      <AppIcon name="book" />{{ project ? project.title : '一段新创作的开始' }}
+    </Badge>
   </header>
   <ProjectNavigation
     v-if="project"
@@ -74,13 +81,13 @@ onMounted(() => { if (desktop && props.id) void load() })
   >
     {{ message }}
   </p>
-  <button
+  <Button
     v-if="!ready && !busy"
     :disabled="!desktop"
     @click="load"
   >
     重新读取项目
-  </button>
+  </Button>
   <p
     v-if="!ready && busy"
     class="loading-state"
@@ -99,38 +106,39 @@ onMounted(() => { if (desktop && props.id) void load() })
       <fieldset :disabled="!desktop || busy">
         <div class="form-grid">
           <div>
-            <label for="title">书名 *</label><input
+            <label for="title">书名 *</label><Input
               id="title"
               v-model="form.title"
               required
               maxlength="200"
               placeholder="例如：生死疲劳"
-            >
+            />
           </div>
           <div>
-            <label for="author">作者 <span class="optional">· 选填</span></label><input
+            <label for="author">作者 <span class="optional">· 选填</span></label><Input
               id="author"
               v-model="form.author"
               placeholder="同名书建议填写作者"
-            >
+            />
           </div>
         </div>
         <label for="notes">这本书，你想聊什么？ <span class="optional">· 选填</span></label>
-        <textarea
+        <Textarea
           id="notes"
           v-model="form.sourceNotes"
           rows="9"
+          class="min-h-52 resize-y leading-7"
           placeholder="粘贴书籍简介、读书笔记，或写下这一期想重点讲的内容。&#10;&#10;例如：想从人物的命运聊聊普通人的韧性，语言通俗一些，像朋友聊天。"
         />
         <p class="muted">
           不需要先准备大纲或讲稿，留空也可以继续。
         </p>
         <div class="actions wrap">
-          <button type="submit">
+          <Button type="submit">
             <AppIcon name="check" />{{ busy ? '保存中…' : '保存并继续' }}
-          </button><RouterLink
+          </Button><RouterLink
             :to="project ? `/projects/${project.id}/writing` : '/projects'"
-            class="button secondary"
+            :class="buttonVariants({ variant: 'outline' })"
           >
             取消
           </RouterLink><span
@@ -144,18 +152,25 @@ onMounted(() => { if (desktop && props.id) void load() })
       <AppIcon name="sparkle" /><h2>好内容，始于你的视角</h2><p>一个打动你的片段、一个想讨论的问题，都能让生成的内容更贴近你的表达。</p><p>接下来，你可以一键准备发布文案、音频提示词与封面素材。</p>
     </aside>
   </div>
-  <details
+  <Collapsible
     v-if="project"
     class="history-panel"
+    :unmount-on-hide="false"
   >
-    <summary>管理这本书</summary><button
-      class="secondary danger"
-      :disabled="busy"
-      @click="deleting = true"
-    >
-      删除项目
-    </button>
-  </details>
+    <CollapsibleTrigger class="disclosure-trigger">
+      管理这本书
+    </CollapsibleTrigger>
+    <CollapsibleContent>
+      <Button
+        variant="outline"
+        class="mt-4 text-destructive hover:text-destructive"
+        :disabled="busy"
+        @click="deleting = true"
+      >
+        删除项目
+      </Button>
+    </CollapsibleContent>
+  </Collapsible>
   <section
     v-if="deleting"
     class="panel confirmation"
@@ -166,19 +181,19 @@ onMounted(() => { if (desktop && props.id) void load() })
       确认删除这本书？
     </h2><p>此项目及生成历史将被删除。原始视频、素材文件和工作目录都会保留。</p>
     <div class="actions">
-      <button
-        class="danger"
+      <Button
+        variant="destructive"
         :disabled="busy"
         @click="remove"
       >
         确认删除
-      </button><button
-        class="secondary"
+      </Button><Button
+        variant="outline"
         :disabled="busy"
         @click="deleting = false"
       >
         取消
-      </button>
+      </Button>
     </div>
   </section>
 </template>

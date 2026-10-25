@@ -1,3 +1,4 @@
+import { chooseSelect } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -21,10 +22,10 @@ const wrappers: ReturnType<typeof mount>[] = []
 async function render() {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/projects/:id/publishing', component: PublishingPage, props: true },
-    ...['/projects', '/projects/:id/writing', '/projects/:id/covers', '/settings/models'].map(path => ({ path, component: { template: '<p>other page</p>' } })),
+    ...['/settings', '/projects', '/projects/:id/writing', '/projects/:id/covers', '/settings/models'].map(path => ({ path, component: { template: '<p>other page</p>' } })),
   ] })
   await router.push('/projects/p1/publishing'); await router.isReady()
-  const wrapper = mount(App, { global: { plugins: [router] } }); wrappers.push(wrapper); await flushPromises()
+  const wrapper = mount(App, { attachTo: document.body, global: { plugins: [router] } }); wrappers.push(wrapper); await flushPromises()
   return { wrapper, router }
 }
 function button(w: ReturnType<typeof mount>, label: string) { return w.findAll('button').find(b => b.text() === label)! }
@@ -45,6 +46,39 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 
 describe('M4 publish preparation', () => {
+  it('updates the selected task label after saving the same task with a new title and status', async () => {
+    const { wrapper } = await render()
+    await wrapper.get('#publish-title').setValue('重新编辑的发布标题')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(wrapper.get('#publish-task').text()).toContain('重新编辑的发布标题 · 草稿')
+  })
+  it('clears cover confirmation when a selection changes and saves nullable selections', async () => {
+    const { wrapper } = await render()
+    expect(wrapper.get('#covers-confirmed').attributes('aria-checked')).toBe('true')
+    await chooseSelect(wrapper, '#publish-landscape', '请选择已导出封面')
+    expect(wrapper.get('#covers-confirmed').attributes('aria-checked')).toBe('false')
+    await chooseSelect(wrapper, '#publish-video', '请选择视频')
+    await wrapper.get('#title-confirmed').trigger('click')
+    expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ videoAssetId: null, landscapeCoverId: null, titleConfirmed: false, coversConfirmed: false }))
+  })
+
+  it('keeps task selection and edits when discarding is declined', async () => {
+    vi.mocked(api.listPublishTasks).mockResolvedValue([task, { ...task, id: 't2', title: '另一个任务' }])
+    const { wrapper } = await render()
+    await wrapper.get('#publish-title').setValue('未保存的任务标题')
+    await chooseSelect(wrapper, '#publish-task', /^另一个任务 ·/)
+    expect(globalThis.confirm).toHaveBeenCalled()
+    expect(wrapper.get('#publish-task').text()).toContain('中文标题')
+    expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('未保存的任务标题')
+    vi.mocked(globalThis.confirm).mockReturnValue(true)
+    await chooseSelect(wrapper, '#publish-task', '新任务')
+    expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.savePublishTask).toHaveBeenCalledWith(null, expect.any(Object))
+  })
   it('does not access local data in browser preview', async () => {
     vi.mocked(projects.isDesktop).mockReturnValue(false)
     const { wrapper } = await render(); expect(api.listPublishTasks).not.toHaveBeenCalled(); expect(wrapper.text()).toContain('请在桌面应用中准备发布')
@@ -54,15 +88,15 @@ describe('M4 publish preparation', () => {
     vi.mocked(ai.listVersions).mockResolvedValue([{ id: 'w1', projectId: 'p1', kind: 'publishing', content: { ...emptyPublishing(), title: '已有发布标题', description: '已有内容', audioPrompt: '提示词' }, versionNo: 1, sourceType: 'manual', modelName: '', promptVersion: '', isConfirmed: false, createdAt: '' }])
     const { wrapper } = await render()
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('已有发布标题')
-    expect((wrapper.get('#publish-landscape').element as HTMLSelectElement).value).toBe('c1')
-    expect((wrapper.get('#title-confirmed').element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.get('#publish-landscape').text()).toBe('v1 · 横版')
+    expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.savePublishTask).toHaveBeenCalledWith(null, expect.objectContaining({ title: '已有发布标题', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: false }))
   })
   it('invalidates confirmation after edits and preserves draft on save failure and navigation', async () => {
     const { wrapper, router } = await render()
     await wrapper.get('#publish-title').setValue('新标题')
-    expect((wrapper.get('#title-confirmed').element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
     vi.mocked(api.savePublishTask).mockRejectedValueOnce('保存失败')
     await button(wrapper, '生成完整任务包').trigger('click'); await flushPromises()
     expect(api.preparePublishTask).not.toHaveBeenCalled(); expect(wrapper.text()).toContain('保存失败')
@@ -92,6 +126,7 @@ describe('M4 publish preparation', () => {
     await button(wrapper, '刷新素材与状态').trigger('click'); await flushPromises()
     expect((wrapper.get('#publish-tags').element as HTMLInputElement).value).toBe('#新标签')
     expect(wrapper.text()).toContain('视频文件不可用'); expect(button(wrapper, '记录发布成功').element.disabled).toBe(true)
+    expect(wrapper.get('#publish-video').text()).toContain('视频.mp4（文件不可用）')
   })
   it('opening portal does not publish; confirmation cancellation and failed record preserve data', async () => {
     const { wrapper } = await render(); await button(wrapper, '打开抖音创作者中心').trigger('click'); await flushPromises()

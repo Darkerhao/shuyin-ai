@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import * as api from '../../services/ai'
@@ -62,7 +68,9 @@ onMounted(() => { if (desktop) void load() })
         连接你信赖的服务，让文字与画面各得其所。
       </p>
     </div>
-    <span class="badge"><AppIcon name="shield" />密钥由系统安全保管</span>
+    <Badge variant="secondary">
+      <AppIcon name="shield" />密钥由系统安全保管
+    </Badge>
   </header>
   <p
     v-if="!desktop"
@@ -81,27 +89,35 @@ onMounted(() => { if (desktop) void load() })
       aria-label="已配置服务"
     >
       <div class="section-heading">
-        <h2>我的模型 <span class="badge">{{ providers.length }}</span></h2><button
-          class="icon-button ghost"
+        <h2>
+          我的模型 <Badge variant="secondary">
+            {{ providers.length }}
+          </Badge>
+        </h2><Button
           :disabled="!desktop || busy"
           aria-label="刷新列表"
           title="刷新列表"
+          variant="ghost"
+          size="icon-sm"
+          type="button"
           @click="load"
         >
           <AppIcon
             name="refresh"
             :class="{ spin: busy }"
           />
-        </button>
+        </Button>
       </div>
-      <button
+      <Button
         v-for="provider in providers"
         :key="provider.id"
-        class="provider-card"
-        :class="{ selected: id === provider.id }"
+        :class="{ 'border-primary bg-accent': id === provider.id }"
         :disabled="busy"
         :aria-pressed="id === provider.id"
         :aria-label="`编辑模型 ${provider.name}`"
+        variant="outline"
+        class="provider-card mb-2 h-auto min-h-20 w-full justify-start gap-3 whitespace-normal px-3 py-3 text-left"
+        type="button"
         @click="edit(provider)"
       >
         <span
@@ -110,23 +126,27 @@ onMounted(() => { if (desktop) void load() })
         ><AppIcon :name="provider.modelKind === 'image' ? 'image' : 'pen'" /></span>
         <span class="provider-description">
           <strong>{{ provider.name }}</strong>
-          <span class="provider-meta"><span class="badge">{{ provider.modelKind === 'image' ? '图片' : '文本' }}</span><span
+          <span class="provider-meta"><Badge variant="secondary">{{ provider.modelKind === 'image' ? '图片' : '文本' }}</Badge><Badge
             v-if="provider.isDefault"
-            class="badge green"
-          >默认</span><span
+            variant="secondary"
+            class="bg-accent text-primary"
+          >默认</Badge><Badge
             v-if="!provider.isEnabled"
-            class="badge warm"
-          >已停用</span></span>
+            variant="secondary"
+            class="bg-amber-50 text-amber-800"
+          >已停用</Badge></span>
           <small>{{ { available: '密钥已保存', missing: '无密钥', unavailable: '凭据库不可用' }[provider.credentialStatus] }}</small>
         </span>
-      </button>
-      <button
-        class="secondary model-new"
+      </Button>
+      <Button
         :disabled="!desktop || busy"
+        variant="outline"
+        class="model-new"
+        type="button"
         @click="edit()"
       >
         <AppIcon name="plus" />新增模型
-      </button>
+      </Button>
       <p class="model-list-note">
         文本模型用于内容创作，图片模型用于生成封面背景。每种用途可设置一个默认模型。
       </p>
@@ -137,10 +157,13 @@ onMounted(() => { if (desktop) void load() })
         @submit.prevent="save"
       >
         <div class="section-heading">
-          <h2>{{ id ? '编辑模型' : '添加一个新模型' }}</h2><span
+          <h2>{{ id ? '编辑模型' : '添加一个新模型' }}</h2><Badge
             v-if="dirty"
-            class="badge warm"
-          >未保存</span>
+            variant="secondary"
+            class="bg-amber-50 text-amber-800"
+          >
+            未保存
+          </Badge>
         </div>
         <p class="muted">
           {{ id ? '调整连接信息，或测试当前服务是否可用。' : '填好服务信息，开始你的第一次 AI 创作。' }}
@@ -148,46 +171,54 @@ onMounted(() => { if (desktop) void load() })
         <fieldset :disabled="!desktop || busy">
           <div class="form-grid">
             <div>
-              <label for="provider-name">服务名称 *</label><input
+              <label for="provider-name">服务名称 *</label><Input
                 id="provider-name"
                 v-model="form.name"
                 required
                 maxlength="100"
                 placeholder="给服务起一个好记的名字"
-              >
+              />
             </div>
             <div>
-              <label for="model-kind">模型用途</label><select
-                id="model-kind"
+              <label for="model-kind">模型用途</label><Select
                 v-model="form.modelKind"
+                :disabled="!desktop || busy"
               >
-                <option value="text">
-                  文本 · 发布文案
-                </option><option value="image">
-                  图片 · AI 封面背景
-                </option>
-              </select>
+                <SelectTrigger
+                  id="model-kind"
+                  class="w-full min-w-0"
+                >
+                  <SelectValue placeholder="请选择" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="text">
+                    文本 · 发布文案
+                  </SelectItem><SelectItem value="image">
+                    图片 · AI 封面背景
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
-          <label for="base-url">服务地址 · Base URL *</label><input
+          <label for="base-url">服务地址 · Base URL *</label><Input
             id="base-url"
             v-model="form.baseUrl"
             type="url"
             required
             placeholder="https://可信服务/v1"
-          >
+          />
           <p class="muted">
             密钥和书籍资料会发送到此地址，请仅连接可信服务。
           </p>
-          <label for="model-name">模型名称 *</label><input
+          <label for="model-name">模型名称 *</label><Input
             id="model-name"
             v-model="form.modelName"
             required
             maxlength="200"
             placeholder="填写服务实际支持的模型 ID"
-          >
+          />
           <label for="api-key">API Key <span class="optional">{{ id ? '· 留空保留已有密钥' : '· 本机免密服务可留空' }}</span></label>
-          <input
+          <Input
             id="api-key"
             v-model="apiKey"
             type="password"
@@ -195,56 +226,64 @@ onMounted(() => { if (desktop) void load() })
             spellcheck="false"
             maxlength="4096"
             :placeholder="id ? '已保存的密钥不会回显' : '输入服务提供的 API Key'"
+          />
+          <Collapsible
+            class="connection-help"
+            :unmount-on-hide="false"
           >
-          <details class="connection-help">
-            <summary>连接与密钥说明</summary>
-            <p class="muted">
-              填写 API 根地址，系统会追加 {{ form.modelKind === 'image' ? '/images/generations' : '/chat/completions' }}，本机服务支持 HTTP。更换服务地址时请重新输入密钥。
-            </p>
-            <p class="muted">
-              密钥存入 Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service，不随数据库备份。
-            </p>
-            <p
-              v-if="form.modelKind === 'image'"
-              class="muted"
-            >
-              支持兼容 GPT Image、返回 base64 PNG、JPEG 或 WebP 的服务。保存后到封面工坊生成背景验证，可能产生服务费用。不配置图片模型也可使用本地模板。
-            </p>
-          </details>
+            <CollapsibleTrigger class="disclosure-trigger">
+              连接与密钥说明
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <p class="muted">
+                填写 API 根地址，系统会追加 {{ form.modelKind === 'image' ? '/images/generations' : '/chat/completions' }}，本机服务支持 HTTP。更换服务地址时请重新输入密钥。
+              </p>
+              <p class="muted">
+                密钥存入 Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service，不随数据库备份。
+              </p>
+              <p
+                v-if="form.modelKind === 'image'"
+                class="muted"
+              >
+                支持兼容 GPT Image、返回 base64 PNG、JPEG 或 WebP 的服务。保存后到封面工坊生成背景验证，可能产生服务费用。不配置图片模型也可使用本地模板。
+              </p>
+            </CollapsibleContent>
+          </Collapsible>
           <div class="model-options">
-            <label class="check-label"><input
-              v-model="form.isEnabled"
-              type="checkbox"
-              @change="!form.isEnabled && (form.isDefault = false)"
-            >启用模型</label>
-            <label class="check-label"><input
-              v-model="form.isDefault"
-              type="checkbox"
-              :disabled="!form.isEnabled"
-            >设为默认{{ form.modelKind === 'image' ? '图片' : '文本' }}模型</label>
+            <label class="check-label"><Checkbox
+              :model-value="form.isEnabled"
+              :disabled="!desktop || busy"
+              @update:model-value="form.isEnabled = $event === true; if (!form.isEnabled) form.isDefault = false"
+            />启用模型</label>
+            <label class="check-label"><Checkbox
+              :model-value="form.isDefault"
+              :disabled="!desktop || busy || !form.isEnabled"
+              @update:model-value="form.isDefault = $event === true"
+            />设为默认{{ form.modelKind === 'image' ? '图片' : '文本' }}模型</label>
           </div>
           <div class="actions wrap">
-            <button type="submit">
+            <Button type="submit">
               <AppIcon name="save" />保存模型
-            </button>
-            <button
+            </Button>
+            <Button
               v-if="form.modelKind === 'text'"
               type="button"
-              class="secondary"
               :disabled="!id || dirty"
               :title="!id || dirty ? '先保存配置，再测试连接' : '测试当前服务'"
+              variant="outline"
               @click="test"
             >
               测试连接
-            </button>
-            <button
+            </Button>
+            <Button
               v-if="id"
               type="button"
-              class="ghost delete-model"
+              variant="ghost"
+              class="delete-model"
               @click="deleting = true"
             >
               删除模型
-            </button>
+            </Button>
           </div>
           <p
             v-if="busy"
@@ -265,19 +304,21 @@ onMounted(() => { if (desktop) void load() })
           确认删除此模型及密钥？
         </h2><p>历史创作版本保留。使用此模型的运行任务需要先结束。</p>
         <div class="actions">
-          <button
-            class="danger"
+          <Button
             :disabled="busy"
+            variant="destructive"
+            type="button"
             @click="remove"
           >
             确认删除
-          </button><button
-            class="secondary"
+          </Button><Button
             :disabled="busy"
+            variant="outline"
+            type="button"
             @click="deleting = false"
           >
             取消
-          </button>
+          </Button>
         </div>
       </section>
       <p class="settings-footer muted">
@@ -288,6 +329,5 @@ onMounted(() => { if (desktop) void load() })
 </template>
 <style scoped>
 .connection-help { margin-top: 12px; color: #8a9780; font-size: 11px; }
-.connection-help summary { cursor: pointer; }
 .delete-model { margin-left: auto; }
 </style>

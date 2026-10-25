@@ -1,4 +1,11 @@
 <script setup lang="ts">
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import * as api from '../../services/publishing'
@@ -35,6 +42,9 @@ const video = computed(() => videos.value.find(a => a.id === draft.value.videoAs
 const recordOpen = ref(false)
 const record = ref({ publishedAt: '', postUrl: '', notes: '' })
 const { busy, error, message, run } = useOperation()
+
+const taskLabel = (task: PublishTask) => `${task.title || '未填写标题'} · ${publishStatuses[task.status]} · ${new Date(task.createdAt).toLocaleString()}`
+const videoLabel = (asset: Asset) => `${asset.originalName}${asset.existsStatus !== 'available' ? '（文件不可用）' : ''}`
 
 function defaults(): PublishInput {
   const content = writing.value[0]?.content
@@ -74,10 +84,8 @@ const refresh = () => run(async () => {
   message.value = '素材与任务状态已刷新。'
 })
 function newTask() { if (canDiscard()) { accept(null); recordOpen.value = false; error.value = ''; message.value = '' } }
-function switchTask(event: globalThis.Event) {
-  const control = event.target as globalThis.HTMLSelectElement
-  if (canDiscard()) { accept(tasks.value.find(t => t.id === control.value) ?? null); recordOpen.value = false }
-  else control.value = selected.value?.id ?? ''
+function switchTask(id: string | null) {
+  if (canDiscard()) { accept(tasks.value.find(t => t.id === id) ?? null); recordOpen.value = false }
 }
 async function persist() {
   if (!selected.value || dirty.value) update(await api.savePublishTask(selected.value?.id ?? null, { ...draft.value }))
@@ -124,7 +132,9 @@ onMounted(() => { if (desktop) void load() })
         {{ title || '书籍' }} · 选好素材与文案，生成任务包后到抖音手动发布。
       </p>
     </div>
-    <span class="badge"><AppIcon name="upload" />发布前的最后一步</span>
+    <Badge variant="secondary">
+      <AppIcon name="upload" />发布前的最后一步
+    </Badge>
   </header>
   <ProjectNavigation :id="id" />
   <p
@@ -138,68 +148,85 @@ onMounted(() => { if (desktop) void load() })
     :message="message"
     @dismiss="message = ''"
   />
-  <button
+  <Button
     v-if="!loaded"
     :disabled="busy || !desktop"
+    type="button"
     @click="load"
   >
     {{ busy ? '读取中…' : '重新读取' }}
-  </button>
+  </Button>
   <template v-if="loaded">
     <section class="panel">
       <div class="result-heading">
-        <h2>本书发布任务</h2><span class="badge">{{ selected ? publishStatuses[selected.status] : '新任务' }}</span>
+        <h2>本书发布任务</h2><Badge variant="secondary">
+          {{ selected ? publishStatuses[selected.status] : '新任务' }}
+        </Badge>
       </div>
       <label
         v-if="tasks.length"
         for="publish-task"
       >选择任务</label>
-      <select
+      <Select
         v-if="tasks.length"
-        id="publish-task"
-        :value="selected?.id ?? ''"
+        :model-value="selected?.id ?? null"
         :disabled="busy || recordOpen"
-        @change="switchTask"
+        @update:model-value="switchTask"
       >
-        <option value="">
-          新任务
-        </option>
-        <option
-          v-for="task in tasks"
-          :key="task.id"
-          :value="task.id"
+        <SelectTrigger
+          id="publish-task"
+          class="w-full min-w-0"
         >
-          {{ task.title || '未填写标题' }} · {{ publishStatuses[task.status] }} · {{ new Date(task.createdAt).toLocaleString() }}
-        </option>
-      </select>
+          <SelectValue>{{ selected ? taskLabel(selected) : '新任务' }}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem :value="null">
+            新任务
+          </SelectItem>
+          <SelectItem
+            v-for="task in tasks"
+            :key="task.id"
+            :value="task.id"
+          >
+            {{ taskLabel(task) }}
+          </SelectItem>
+        </SelectContent>
+      </Select>
       <div class="actions">
-        <button
-          class="secondary"
+        <Button
           :disabled="busy || recordOpen"
+          variant="outline"
+          type="button"
           @click="newTask"
         >
           新建发布任务
-        </button><button
-          class="secondary"
+        </Button><Button
           :disabled="busy || recordOpen"
+          variant="outline"
+          type="button"
           @click="refresh"
         >
           刷新素材与状态
-        </button>
+        </Button>
       </div>
     </section>
-    <details
+    <Collapsible
       v-if="!published"
       class="history-panel"
+      :unmount-on-hide="false"
     >
-      <summary>关联视频 / 重新定位素材</summary>
-      <fieldset :disabled="busy || recordOpen">
-        <ProjectAssets
-          :project-id="id"
-          @changed="refresh"
-        />
-      </fieldset>
-    </details>
+      <CollapsibleTrigger class="disclosure-trigger">
+        关联视频 / 重新定位素材
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <fieldset :disabled="busy || recordOpen">
+          <ProjectAssets
+            :project-id="id"
+            @changed="refresh"
+          />
+        </fieldset>
+      </CollapsibleContent>
+    </Collapsible>
     <form @submit.prevent="save">
       <fieldset
         class="publish-form-grid"
@@ -208,50 +235,59 @@ onMounted(() => { if (desktop) void load() })
         <section class="panel">
           <h2>发布文字</h2>
           <label for="publish-title">发布标题</label>
-          <input
+          <Input
             id="publish-title"
             v-model="draft.title"
             maxlength="30"
             @input="draft.titleConfirmed = false"
-          >
-          <label class="check-label"><input
+          />
+          <label class="check-label"><Checkbox
             id="title-confirmed"
-            v-model="draft.titleConfirmed"
-            type="checkbox"
-          >我已确认发布标题</label>
+            :model-value="draft.titleConfirmed"
+            :disabled="busy || published || recordOpen"
+            @update:model-value="draft.titleConfirmed = $event === true"
+          />我已确认发布标题</label>
           <label for="publish-description">发布内容</label>
-          <textarea
+          <Textarea
             id="publish-description"
             v-model="draft.description"
             rows="6"
             maxlength="1000"
           />
           <label for="publish-tags">标签（选填，按平台格式填写）</label>
-          <input
+          <Input
             id="publish-tags"
             v-model="draft.tags"
             maxlength="500"
             placeholder="#读书 #十分钟读懂一本书"
-          >
+          />
         </section>
         <section class="panel">
           <h2>视频与封面</h2>
           <label for="publish-video">本地视频</label>
-          <select
-            id="publish-video"
+          <Select
             v-model="draft.videoAssetId"
+            :disabled="busy || published || recordOpen"
           >
-            <option :value="null">
-              请选择视频
-            </option>
-            <option
-              v-for="file in videos"
-              :key="file.id"
-              :value="file.id"
+            <SelectTrigger
+              id="publish-video"
+              class="w-full min-w-0"
             >
-              {{ file.originalName }}{{ file.existsStatus !== 'available' ? '（文件不可用）' : '' }}
-            </option>
-          </select>
+              <SelectValue>{{ video ? videoLabel(video) : '请选择视频' }}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem :value="null">
+                请选择视频
+              </SelectItem>
+              <SelectItem
+                v-for="file in videos"
+                :key="file.id"
+                :value="file.id"
+              >
+                {{ videoLabel(file) }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
           <p
             v-if="video"
             class="file-path"
@@ -272,38 +308,54 @@ onMounted(() => { if (desktop) void load() })
           </p>
           <div class="form-grid">
             <div>
-              <label for="publish-landscape">横版封面 · 4:3</label><select
-                id="publish-landscape"
+              <label for="publish-landscape">横版封面 · 4:3</label><Select
                 v-model="draft.landscapeCoverId"
-                @change="draft.coversConfirmed = false"
+                :disabled="busy || published || recordOpen"
+                @update:model-value="draft.coversConfirmed = false"
               >
-                <option :value="null">
-                  请选择已导出封面
-                </option><option
-                  v-for="cover in landscape"
-                  :key="cover.id"
-                  :value="cover.id"
+                <SelectTrigger
+                  id="publish-landscape"
+                  class="w-full min-w-0"
                 >
-                  v{{ cover.versionNo }} · {{ cover.config.title }}
-                </option>
-              </select>
+                  <SelectValue placeholder="请选择" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem :value="null">
+                    请选择已导出封面
+                  </SelectItem><SelectItem
+                    v-for="cover in landscape"
+                    :key="cover.id"
+                    :value="cover.id"
+                  >
+                    v{{ cover.versionNo }} · {{ cover.config.title }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div>
-              <label for="publish-portrait">竖版封面 · 3:4</label><select
-                id="publish-portrait"
+              <label for="publish-portrait">竖版封面 · 3:4</label><Select
                 v-model="draft.portraitCoverId"
-                @change="draft.coversConfirmed = false"
+                :disabled="busy || published || recordOpen"
+                @update:model-value="draft.coversConfirmed = false"
               >
-                <option :value="null">
-                  请选择已导出封面
-                </option><option
-                  v-for="cover in portrait"
-                  :key="cover.id"
-                  :value="cover.id"
+                <SelectTrigger
+                  id="publish-portrait"
+                  class="w-full min-w-0"
                 >
-                  v{{ cover.versionNo }} · {{ cover.config.title }}
-                </option>
-              </select>
+                  <SelectValue placeholder="请选择" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem :value="null">
+                    请选择已导出封面
+                  </SelectItem><SelectItem
+                    v-for="cover in portrait"
+                    :key="cover.id"
+                    :value="cover.id"
+                  >
+                    v{{ cover.versionNo }} · {{ cover.config.title }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <p
@@ -312,29 +364,30 @@ onMounted(() => { if (desktop) void load() })
           >
             请先在封面工坊一次导出横版和竖版两张封面。
           </p>
-          <label class="check-label"><input
+          <label class="check-label"><Checkbox
             id="covers-confirmed"
-            v-model="draft.coversConfirmed"
-            type="checkbox"
-          >我已确认所选两张封面</label>
+            :model-value="draft.coversConfirmed"
+            :disabled="busy || published || recordOpen"
+            @update:model-value="draft.coversConfirmed = $event === true"
+          />我已确认所选两张封面</label>
         </section>
         <div
           v-if="!published"
           class="sticky-actions publish-save"
         >
-          <button
+          <Button
             type="submit"
-            class="secondary"
             :disabled="!!selected && !dirty"
+            variant="outline"
           >
             保存发布草稿
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             @click="prepare"
           >
             {{ busy ? '处理中…' : '生成完整任务包' }}
-          </button>
+          </Button>
           <span class="muted">{{ dirty ? '有未保存修改，生成时会先保存' : '每次生成都保留已有任务包' }}</span>
         </div>
       </fieldset>
@@ -342,31 +395,35 @@ onMounted(() => { if (desktop) void load() })
     <section class="panel publish-actions">
       <h2>复制发布文字</h2>
       <div class="actions wrap">
-        <button
-          class="secondary"
+        <Button
           :disabled="!draft.title"
+          variant="outline"
+          type="button"
           @click="copy('title')"
         >
           复制标题
-        </button><button
-          class="secondary"
+        </Button><Button
           :disabled="!draft.description"
+          variant="outline"
+          type="button"
           @click="copy('description')"
         >
           复制内容
-        </button><button
-          class="secondary"
+        </Button><Button
           :disabled="!draft.tags"
+          variant="outline"
+          type="button"
           @click="copy('tags')"
         >
           复制标签
-        </button><button
-          class="secondary"
+        </Button><Button
           :disabled="!draft.title || !draft.description"
+          variant="outline"
+          type="button"
           @click="copy('all')"
         >
           一键复制全部
-        </button>
+        </Button>
       </div>
     </section>
     <section
@@ -396,52 +453,58 @@ onMounted(() => { if (desktop) void load() })
         {{ selected.taskDirectory }}
       </p>
       <div class="actions wrap">
-        <button
+        <Button
           v-if="selected.taskDirectory"
-          class="secondary"
           :disabled="busy"
+          variant="outline"
+          type="button"
           @click="open('directory')"
         >
           打开任务包
-        </button>
-        <button
+        </Button>
+        <Button
           v-if="video"
-          class="secondary"
           :disabled="busy || video.existsStatus !== 'available' || dirty"
+          variant="outline"
+          type="button"
           @click="open('video')"
         >
           打开视频
-        </button>
-        <button
+        </Button>
+        <Button
           v-if="selected.taskDirectory"
-          class="secondary"
           :disabled="busy"
+          variant="outline"
+          type="button"
           @click="open('landscape')"
         >
           查看横版封面
-        </button>
-        <button
+        </Button>
+        <Button
           v-if="selected.taskDirectory"
-          class="secondary"
           :disabled="busy"
+          variant="outline"
+          type="button"
           @click="open('portrait')"
         >
           查看竖版封面
-        </button>
-        <button
-          class="secondary"
+        </Button>
+        <Button
           :disabled="busy"
+          variant="outline"
+          type="button"
           @click="open('portal')"
         >
           打开抖音创作者中心
-        </button>
-        <button
+        </Button>
+        <Button
           v-if="!published"
           :disabled="busy || dirty || recordOpen || selected.status !== 'ready'"
+          type="button"
           @click="confirmPublish"
         >
           记录发布成功
-        </button>
+        </Button>
       </div>
       <p class="muted">
         任务包保留视频原路径，上传和最终发布由你在平台完成。打开入口或生成任务包不会标记已发布。
@@ -472,35 +535,35 @@ onMounted(() => { if (desktop) void load() })
       </h2>
       <p>请在平台看到作品发布成功后再确认。这里仅记录结果。</p>
       <fieldset :disabled="busy">
-        <label for="published-at">实际发布时间</label><input
+        <label for="published-at">实际发布时间</label><Input
           id="published-at"
           v-model="record.publishedAt"
           type="datetime-local"
           required
-        >
-        <label for="post-url">作品链接（选填）</label><input
+        />
+        <label for="post-url">作品链接（选填）</label><Input
           id="post-url"
           v-model="record.postUrl"
           type="url"
           maxlength="2048"
           placeholder="https://…"
-        >
-        <label for="publish-notes">备注（选填）</label><textarea
+        />
+        <label for="publish-notes">备注（选填）</label><Textarea
           id="publish-notes"
           v-model="record.notes"
           rows="3"
           maxlength="2000"
         />
         <div class="actions">
-          <button type="submit">
+          <Button type="submit">
             确认已发布并保存
-          </button><button
+          </Button><Button
             type="button"
-            class="secondary"
+            variant="outline"
             @click="recordOpen = false"
           >
             取消
-          </button>
+          </Button>
         </div>
       </fieldset>
     </form>

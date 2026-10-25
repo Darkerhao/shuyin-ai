@@ -17,11 +17,17 @@ M5 本机交付已完成正式安装 0.1.0→0.5.1 升级及 ZIP 启动验证，
 - Visual Studio C++ Build Tools、Windows SDK、WebView2 Runtime。
 - 主工具安装在 D 盘；微软安装器、SDK 共享组件及应用的用户数据仍使用 Windows 标准目录。
 
-本机新终端先载入安装时生成的本地环境（不入 Git）：
+本机 Rust 的 `CARGO_HOME`、`RUSTUP_HOME` 和 Cargo `bin` 路径已保存到当前用户环境变量。修改前已打开的终端仍使用旧环境；请完整退出并重开终端，IDE 集成终端需重开 IDE。
+
+若当前 PowerShell 运行 `desktop:dev` 报 `cargo metadata ... program not found`，先载入安装时生成的本地环境（不入 Git），再验证并启动：
 
 ```powershell
 . .\.tools\env.ps1
+cargo --version
+npm run desktop:dev
 ```
+
+该脚本只更新当前会话；无需重新安装已有的 Rust 或修改 npm 启动脚本。
 
 其他机器应安装 Rust MSVC 工具链并确保 cargo 在 PATH。若也采用本机的 D 盘位置，可设置：
 
