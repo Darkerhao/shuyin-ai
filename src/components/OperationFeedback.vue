@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Button } from '@/components/ui/button'
 import AppIcon from './AppIcon.vue'
 defineProps<{ error?: string; message?: string }>()
 defineEmits<{ dismiss: [] }>()
@@ -20,14 +21,15 @@ defineEmits<{ dismiss: [] }>()
     >
       <AppIcon name="check" />
       <span>{{ message }}</span>
-      <button
+      <Button
         type="button"
-        class="icon-button ghost"
         aria-label="关闭提示"
+        variant="ghost"
+        size="icon-sm"
         @click="$emit('dismiss')"
       >
         <AppIcon name="close" />
-      </button>
+      </Button>
     </div>
   </Transition>
 </template>

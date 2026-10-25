@@ -1,4 +1,11 @@
 <script setup lang="ts">
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Slider } from '@/components/ui/slider'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import * as api from '../../services/covers'
@@ -11,7 +18,7 @@ import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
-import EditorTabs from '../../components/EditorTabs.vue'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 
 const props = defineProps<{ id: string }>()
@@ -123,18 +130,15 @@ function paint() {
 watch(() => draft.value.backgroundAssetId, id => { if (!id || id !== loadedBackgroundId) void loadBackground(id) })
 watch(draft, paint, { deep: true, flush: 'post' })
 
-function applyTemplate(event: globalThis.Event) {
-  const key = (event.target as globalThis.HTMLSelectElement).value as CoverConfig['templateId']
+function applyTemplate(key: CoverConfig['templateId']) {
   Object.assign(draft.value, coverTemplates[key].style, { templateId: key })
 }
-function changeSize(event: globalThis.Event) {
-  const size = coverSizes[Number((event.target as globalThis.HTMLSelectElement).value)]!
+function changeSize(index: number) {
+  const size = coverSizes[index]!
   draft.value.width = size.width; draft.value.height = size.height
 }
-function switchVersion(event: globalThis.Event) {
-  const select = event.target as globalThis.HTMLSelectElement
-  if (canDiscard()) accept(versions.value.find(v => v.id === select.value) ?? null)
-  else select.value = selected.value?.id ?? ''
+function switchVersion(id: string | null) {
+  if (canDiscard()) accept(versions.value.find(v => v.id === id) ?? null)
 }
 const chooseImage = () => run(async () => {
   const path = await api.chooseBackground()
@@ -209,12 +213,16 @@ onMounted(async () => {
         让故事的第一眼，就有吸引力。
       </p>
     </div>
-    <RouterLink
-      class="button secondary"
-      :to="`/projects/${id}/publishing`"
+    <Button
+      variant="outline"
+      as-child
     >
-      发布准备<AppIcon name="arrow" />
-    </RouterLink>
+      <RouterLink
+        :to="`/projects/${id}/publishing`"
+      >
+        发布准备<AppIcon name="arrow" />
+      </RouterLink>
+    </Button>
   </header>
   <ProjectNavigation :id="id" />
   <p
@@ -228,392 +236,466 @@ onMounted(async () => {
     :message="message"
     @dismiss="message = ''"
   />
-  <button
+  <Button
     v-if="!ready && desktop"
     :disabled="busy"
+    type="button"
     @click="load"
   >
     <AppIcon
       name="refresh"
       :class="{ spin: busy }"
     />{{ busy ? '读取中…' : '重新读取' }}
-  </button>
+  </Button>
   <template v-if="ready">
     <p
       v-if="writingError"
       class="notice"
     >
-      {{ writingError }}<button
-        class="secondary"
+      {{ writingError }}<Button
         :disabled="busy"
+        variant="outline"
+        type="button"
         @click="loadWriting"
       >
         重新读取
-      </button>
+      </Button>
     </p>
     <div class="cover-workbench">
       <div class="cover-controls panel">
         <div class="section-heading">
-          <h2><AppIcon name="settings" /> 编辑封面</h2><span
-            class="badge"
-            :class="{ warm: dirty }"
-          >{{ dirty ? '未保存' : '已保存' }}</span>
+          <h2><AppIcon name="settings" /> 编辑封面</h2><Badge
+            :class="{ 'bg-amber-50 text-amber-800': dirty }"
+            variant="secondary"
+          >
+            {{ dirty ? '未保存' : '已保存' }}
+          </Badge>
         </div>
-        <EditorTabs
-          id="cover"
+        <Tabs
           v-model="activeTab"
-          label="封面编辑"
-          :tabs="tabs"
-        />
-        <form
-          id="cover-edit-form"
-          @submit.prevent="save(false)"
+          :unmount-on-hide="false"
         >
-          <fieldset :disabled="busy">
-            <div
-              id="cover-panel-text"
-              :hidden="activeTab !== 'text'"
-              role="tabpanel"
-              aria-labelledby="cover-tab-text"
-              tabindex="0"
+          <TabsList
+            class="w-full"
+            aria-label="封面编辑"
+          >
+            <TabsTrigger
+              v-for="tab in tabs"
+              :key="tab.value"
+              :value="tab.value"
             >
-              <label for="cover-title">主标题 *</label><textarea
-                id="cover-title"
-                v-model="draft.title"
-                rows="3"
-                maxlength="200"
-                required
-                placeholder="一句话，让人想了解这本书"
-              />
-              <label for="cover-subtitle">副标题</label><textarea
-                id="cover-subtitle"
-                v-model="draft.subtitle"
-                rows="2"
-                maxlength="300"
-                placeholder="补充书名或这一期的看点"
-              />
-              <label for="cover-brand">品牌标识</label><input
-                id="cover-brand"
-                v-model="draft.brand"
-                maxlength="60"
-                placeholder="你的名字或栏目名称"
-              >
-              <details class="cover-suggestions">
-                <summary><AppIcon name="sparkle" /> 使用本书生成的封面文案</summary>
-                <section aria-label="本书封面素材">
-                  <template v-if="writing?.coverTitle && writing.coverSubtitle">
-                    <p>{{ writing.coverTitle }}</p><p class="muted">
-                      {{ writing.coverSubtitle }}
-                    </p><button
-                      type="button"
-                      class="secondary"
+              {{ tab.label }}
+            </TabsTrigger>
+          </TabsList>
+          <form
+            id="cover-edit-form"
+            @submit.prevent="save(false)"
+          >
+            <fieldset :disabled="busy">
+              <TabsContent value="text">
+                <label for="cover-title">主标题 *</label><Textarea
+                  id="cover-title"
+                  v-model="draft.title"
+                  rows="3"
+                  maxlength="200"
+                  required
+                  placeholder="一句话，让人想了解这本书"
+                />
+                <label for="cover-subtitle">副标题</label><Textarea
+                  id="cover-subtitle"
+                  v-model="draft.subtitle"
+                  rows="2"
+                  maxlength="300"
+                  placeholder="补充书名或这一期的看点"
+                />
+                <label for="cover-brand">品牌标识</label><Input
+                  id="cover-brand"
+                  v-model="draft.brand"
+                  maxlength="60"
+                  placeholder="你的名字或栏目名称"
+                />
+                <Collapsible
+                  class="cover-suggestions"
+                  :unmount-on-hide="false"
+                >
+                  <CollapsibleTrigger class="disclosure-trigger">
+                    <AppIcon name="sparkle" /> 使用本书生成的封面文案
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <section aria-label="本书封面素材">
+                      <template v-if="writing?.coverTitle && writing.coverSubtitle">
+                        <p>{{ writing.coverTitle }}</p><p class="muted">
+                          {{ writing.coverSubtitle }}
+                        </p><Button
+                          type="button"
+                          :disabled="busy"
+                          variant="outline"
+                          @click="applyWritingTitles"
+                        >
+                          使用这组主副标题
+                        </Button>
+                      </template>
+                      <p
+                        v-else
+                        class="muted"
+                      >
+                        还没有封面文案，可前往 <RouterLink :to="`/projects/${id}/writing`">
+                          书籍内容
+                        </RouterLink> 一键生成，也可以直接填写。
+                      </p>
+                    </section>
+                  </CollapsibleContent>
+                </Collapsible>
+              </TabsContent>
+              <TabsContent value="style">
+                <label for="cover-template">封面模板</label><Select
+                  :model-value="draft.templateId"
+                  :disabled="busy"
+                  @update:model-value="applyTemplate"
+                >
+                  <SelectTrigger
+                    id="cover-template"
+                    class="w-full min-w-0"
+                  >
+                    <SelectValue placeholder="请选择" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem
+                      v-for="(template, key) in coverTemplates"
+                      :key="key"
+                      :value="key"
+                    >
+                      {{ template.label }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p class="muted">
+                  切换模板会应用配色、字体与布局，文字和背景图片保持不变。
+                </p>
+                <div class="form-grid">
+                  <div>
+                    <label for="cover-font">字体</label><Select
+                      v-model="draft.fontFamily"
                       :disabled="busy"
-                      @click="applyWritingTitles"
                     >
-                      使用这组主副标题
-                    </button>
-                  </template>
-                  <p
-                    v-else
-                    class="muted"
-                  >
-                    还没有封面文案，可前往 <RouterLink :to="`/projects/${id}/writing`">
-                      书籍内容
-                    </RouterLink> 一键生成，也可以直接填写。
-                  </p>
-                </section>
-              </details>
-            </div>
-            <div
-              id="cover-panel-style"
-              :hidden="activeTab !== 'style'"
-              role="tabpanel"
-              aria-labelledby="cover-tab-style"
-              tabindex="0"
-            >
-              <label for="cover-template">封面模板</label><select
-                id="cover-template"
-                :value="draft.templateId"
-                @change="applyTemplate"
-              >
-                <option
-                  v-for="(template, key) in coverTemplates"
-                  :key="key"
-                  :value="key"
-                >
-                  {{ template.label }}
-                </option>
-              </select>
-              <p class="muted">
-                切换模板会应用配色、字体与布局，文字和背景图片保持不变。
-              </p>
-              <div class="form-grid">
-                <div>
-                  <label for="cover-font">字体</label><select
-                    id="cover-font"
-                    v-model="draft.fontFamily"
-                  >
-                    <option value="serif">
-                      宋体 / 系统衬线
-                    </option><option value="sans">
-                      黑体 / 系统无衬线
-                    </option>
-                  </select>
+                      <SelectTrigger
+                        id="cover-font"
+                        class="w-full min-w-0"
+                      >
+                        <SelectValue placeholder="请选择" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="serif">
+                          宋体 / 系统衬线
+                        </SelectItem><SelectItem value="sans">
+                          黑体 / 系统无衬线
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label for="cover-align">对齐方式</label><Select
+                      v-model="draft.align"
+                      :disabled="busy"
+                    >
+                      <SelectTrigger
+                        id="cover-align"
+                        class="w-full min-w-0"
+                      >
+                        <SelectValue placeholder="请选择" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="left">
+                          左对齐
+                        </SelectItem><SelectItem value="center">
+                          居中
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label for="cover-title-size">标题字号</label><Input
+                      id="cover-title-size"
+                      v-model.number="draft.titleSize"
+                      type="number"
+                      min="40"
+                      max="160"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label for="cover-subtitle-size">副标题字号</label><Input
+                      id="cover-subtitle-size"
+                      v-model.number="draft.subtitleSize"
+                      type="number"
+                      min="24"
+                      max="80"
+                      required
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label for="cover-align">对齐方式</label><select
-                    id="cover-align"
-                    v-model="draft.align"
+                <label for="cover-position">文字位置</label><Select
+                  v-model="draft.position"
+                  :disabled="busy"
+                >
+                  <SelectTrigger
+                    id="cover-position"
+                    class="w-full min-w-0"
                   >
-                    <option value="left">
-                      左对齐
-                    </option><option value="center">
+                    <SelectValue placeholder="请选择" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="top">
+                      靠上
+                    </SelectItem><SelectItem value="center">
                       居中
-                    </option>
-                  </select>
+                    </SelectItem><SelectItem value="bottom">
+                      靠下
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <div class="cover-colors">
+                  <div>
+                    <label for="cover-bg-color">底色</label><Input
+                      id="cover-bg-color"
+                      v-model="draft.backgroundColor"
+                      type="color"
+                      class="cursor-pointer p-1"
+                    />
+                  </div>
+                  <div>
+                    <label for="cover-text-color">文字色</label><Input
+                      id="cover-text-color"
+                      v-model="draft.textColor"
+                      type="color"
+                      class="cursor-pointer p-1"
+                    />
+                  </div>
+                  <div>
+                    <label for="cover-accent-color">点缀色</label><Input
+                      id="cover-accent-color"
+                      v-model="draft.accentColor"
+                      type="color"
+                      class="cursor-pointer p-1"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label for="cover-title-size">标题字号</label><input
-                    id="cover-title-size"
-                    v-model.number="draft.titleSize"
-                    type="number"
-                    min="40"
-                    max="160"
-                    required
-                  >
-                </div>
-                <div>
-                  <label for="cover-subtitle-size">副标题字号</label><input
-                    id="cover-subtitle-size"
-                    v-model.number="draft.subtitleSize"
-                    type="number"
-                    min="24"
-                    max="80"
-                    required
-                  >
-                </div>
-              </div>
-              <label for="cover-position">文字位置</label><select
-                id="cover-position"
-                v-model="draft.position"
+              </TabsContent>
+            </fieldset>
+          </form>
+          <TabsContent value="background">
+            <fieldset :disabled="busy">
+              <div
+                class="local-background"
               >
-                <option value="top">
-                  靠上
-                </option><option value="center">
-                  居中
-                </option><option value="bottom">
-                  靠下
-                </option>
-              </select>
-              <div class="cover-colors">
-                <div>
-                  <label for="cover-bg-color">底色</label><input
-                    id="cover-bg-color"
-                    v-model="draft.backgroundColor"
-                    type="color"
-                  >
-                </div>
-                <div>
-                  <label for="cover-text-color">文字色</label><input
-                    id="cover-text-color"
-                    v-model="draft.textColor"
-                    type="color"
-                  >
-                </div>
-                <div>
-                  <label for="cover-accent-color">点缀色</label><input
-                    id="cover-accent-color"
-                    v-model="draft.accentColor"
-                    type="color"
-                  >
-                </div>
-              </div>
-            </div>
-            <div
-              v-show="activeTab === 'background'"
-              class="local-background"
-            >
-              <label for="cover-background">背景来源</label><select
-                id="cover-background"
-                v-model="draft.backgroundAssetId"
-              >
-                <option :value="null">
-                  纯色背景
-                </option>
-                <option
-                  v-if="draft.backgroundAssetId && !images.some(a => a.id === draft.backgroundAssetId)"
-                  :value="draft.backgroundAssetId"
+                <label for="cover-background">背景来源</label><Select
+                  v-model="draft.backgroundAssetId"
+                  :disabled="busy"
                 >
-                  背景关联已失效，请重新选择
-                </option>
-                <option
-                  v-for="asset in images"
-                  :key="asset.id"
-                  :value="asset.id"
-                >
-                  {{ asset.originalName }}{{ asset.existsStatus !== 'available' ? '（文件不可用）' : '' }}
-                </option>
-              </select>
-              <button
-                type="button"
-                class="secondary choose-image"
-                @click="chooseImage"
-              >
-                <AppIcon name="upload" />选择本地图片
-              </button>
-              <p class="muted">
-                支持 PNG、JPEG、WebP，图片将居中裁切。
-              </p>
-              <template v-if="draft.backgroundAssetId">
-                <label for="cover-overlay">底色蒙层 <span class="optional">· {{ Math.round(draft.overlayOpacity * 100) }}%</span></label><input
-                  id="cover-overlay"
-                  v-model.number="draft.overlayOpacity"
-                  type="range"
-                  min="0"
-                  max="0.85"
-                  step="0.05"
-                >
-                <button
-                  type="button"
-                  class="secondary"
-                  :disabled="backgroundLoading"
-                  @click="loadBackground(draft.backgroundAssetId)"
-                >
-                  重新读取背景
-                </button>
-              </template>
-            </div>
-          </fieldset>
-        </form>
-        <div
-          id="cover-panel-background"
-          :hidden="activeTab !== 'background'"
-          role="tabpanel"
-          aria-labelledby="cover-tab-background"
-          tabindex="0"
-        >
-          <section
-            class="ai-background"
-            aria-label="可选 AI 背景"
-          >
-            <button
-              type="button"
-              class="secondary ai-toggle"
-              :disabled="busy"
-              :aria-expanded="useAi"
-              @click="toggleAi"
-            >
-              <AppIcon name="sparkle" />{{ useAi ? '收起 AI 背景' : '使用 AI 生成背景（可选）' }}
-            </button>
-            <template v-if="useAi">
-              <p
-                v-if="!imageModels.length"
-                class="notice"
-              >
-                尚无已启用的图片模型。可继续使用本地模板，或前往 <RouterLink to="/settings/models">
-                  模型设置
-                </RouterLink> 添加。
-              </p>
-              <form @submit.prevent="generateBackground">
-                <fieldset :disabled="busy || !imageModels.length">
-                  <label for="cover-model">图片模型</label><select
-                    id="cover-model"
-                    v-model="providerId"
-                    required
+                  <SelectTrigger
+                    id="cover-background"
+                    class="w-full min-w-0"
                   >
-                    <option
-                      v-for="model in imageModels"
-                      :key="model.id"
-                      :value="model.id"
+                    <SelectValue placeholder="纯色背景" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem :value="null">
+                      纯色背景
+                    </SelectItem>
+                    <SelectItem
+                      v-if="draft.backgroundAssetId && !images.some(a => a.id === draft.backgroundAssetId)"
+                      :value="draft.backgroundAssetId"
                     >
-                      {{ model.name }}
-                    </option>
-                  </select>
-                  <label for="cover-description">画面描述</label><textarea
-                    id="cover-description"
-                    v-model="description"
-                    rows="5"
-                    maxlength="2000"
-                    required
+                      背景关联已失效，请重新选择
+                    </SelectItem>
+                    <SelectItem
+                      v-for="asset in images"
+                      :key="asset.id"
+                      :value="asset.id"
+                    >
+                      {{ asset.originalName }}{{ asset.existsStatus !== 'available' ? '（文件不可用）' : '' }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  class="choose-image"
+                  @click="chooseImage"
+                >
+                  <AppIcon name="upload" />选择本地图片
+                </Button>
+                <p class="muted">
+                  支持 PNG、JPEG、WebP，图片将居中裁切。
+                </p>
+                <template v-if="draft.backgroundAssetId">
+                  <label for="cover-overlay">底色蒙层 <span class="optional">· {{ Math.round(draft.overlayOpacity * 100) }}%</span></label><Slider
+                    id="cover-overlay"
+                    aria-label="底色蒙层"
+                    :model-value="[draft.overlayOpacity]"
+                    :min="0"
+                    :max="0.85"
+                    :step="0.05"
+                    :disabled="busy"
+                    class="my-4"
+                    @update:model-value="draft.overlayOpacity = $event![0]!"
                   />
-                  <p class="muted">
-                    AI 生成无字背景，中文由本地排版。书名、作者和画面描述会发送至所选服务，可能产生费用。
-                  </p>
-                  <button
-                    type="submit"
-                    :disabled="!description.trim() || !providerId"
+                  <Button
+                    type="button"
+                    :disabled="backgroundLoading"
+                    variant="outline"
+                    @click="loadBackground(draft.backgroundAssetId)"
                   >
-                    <AppIcon name="sparkle" />生成 AI 背景
-                  </button>
-                </fieldset>
-              </form>
-              <button
+                    重新读取背景
+                  </Button>
+                </template>
+              </div>
+            </fieldset>
+            <section
+              class="ai-background"
+              aria-label="可选 AI 背景"
+            >
+              <Button
                 type="button"
-                class="ghost refresh-models"
                 :disabled="busy"
-                @click="loadImageModels"
+                :aria-expanded="useAi"
+                variant="outline"
+                class="ai-toggle"
+                @click="toggleAi"
               >
-                <AppIcon name="refresh" />刷新图片模型
-              </button>
-            </template>
-            <div
-              v-if="taskId"
-              class="notice"
-              role="status"
+                <AppIcon name="sparkle" />{{ useAi ? '收起 AI 背景' : '使用 AI 生成背景（可选）' }}
+              </Button>
+              <template v-if="useAi">
+                <p
+                  v-if="!imageModels.length"
+                  class="notice"
+                >
+                  尚无已启用的图片模型。可继续使用本地模板，或前往 <RouterLink to="/settings/models">
+                    模型设置
+                  </RouterLink> 添加。
+                </p>
+                <form @submit.prevent="generateBackground">
+                  <fieldset :disabled="busy || !imageModels.length">
+                    <label for="cover-model">图片模型</label><Select
+                      v-model="providerId"
+                      required
+                      :disabled="busy || !imageModels.length"
+                    >
+                      <SelectTrigger
+                        id="cover-model"
+                        class="w-full min-w-0"
+                      >
+                        <SelectValue placeholder="请选择图片模型" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem
+                          v-for="model in imageModels"
+                          :key="model.id"
+                          :value="model.id"
+                        >
+                          {{ model.name }}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <label for="cover-description">画面描述</label><Textarea
+                      id="cover-description"
+                      v-model="description"
+                      rows="5"
+                      maxlength="2000"
+                      required
+                    />
+                    <p class="muted">
+                      AI 生成无字背景，中文由本地排版。书名、作者和画面描述会发送至所选服务，可能产生费用。
+                    </p>
+                    <Button
+                      type="submit"
+                      :disabled="!description.trim() || !providerId"
+                    >
+                      <AppIcon name="sparkle" />生成 AI 背景
+                    </Button>
+                  </fieldset>
+                </form>
+                <Button
+                  type="button"
+                  :disabled="busy"
+                  variant="ghost"
+                  class="refresh-models"
+                  @click="loadImageModels"
+                >
+                  <AppIcon name="refresh" />刷新图片模型
+                </Button>
+              </template>
+              <div
+                v-if="taskId"
+                class="notice"
+                role="status"
+              >
+                正在生成背景，最多等待 180 秒…<Button
+                  type="button"
+                  :disabled="cancelling"
+                  variant="outline"
+                  @click="cancelImage"
+                >
+                  {{ cancelling ? '正在取消…' : '取消生成' }}
+                </Button>
+              </div>
+            </section>
+            <Collapsible
+              v-if="writing?.coverPromptLandscape || writing?.coverPromptPortrait"
+              class="cover-suggestions"
+              :unmount-on-hide="false"
             >
-              正在生成背景，最多等待 180 秒…<button
-                type="button"
-                class="secondary"
-                :disabled="cancelling"
-                @click="cancelImage"
-              >
-                {{ cancelling ? '正在取消…' : '取消生成' }}
-              </button>
-            </div>
-          </section>
-          <details
-            v-if="writing?.coverPromptLandscape || writing?.coverPromptPortrait"
-            class="cover-suggestions"
-          >
-            <summary>本书的画面提示词</summary>
-            <label for="cover-prompt-ratio">封面提示词比例</label><select
-              id="cover-prompt-ratio"
-              v-model="promptRatio"
-            >
-              <option value="landscape">
-                横版 4:3 · 1440 × 1080
-              </option><option value="portrait">
-                竖版 3:4 · 1080 × 1440
-              </option>
-            </select>
-            <label for="cover-suggested-prompt">书籍专属画面提示词</label><textarea
-              id="cover-suggested-prompt"
-              :value="suggestedPrompt"
-              rows="5"
-              readonly
-            />
-            <div class="actions wrap">
-              <button
-                type="button"
-                class="secondary"
-                :disabled="!suggestedPrompt.trim()"
-                @click="copyPrompt"
-              >
-                复制封面提示词
-              </button><button
-                type="button"
-                class="secondary"
-                :disabled="busy || !suggestedPrompt.trim()"
-                @click="usePrompt"
-              >
-                用于 AI 背景
-              </button>
-            </div>
-            <p class="muted">
-              外部工具请选择对应比例；内置 AI 生成一张可双向裁切的背景，再排版导出两种比例。切换提示词不会替换你的画面描述。
-            </p>
-          </details>
-        </div>
+              <CollapsibleTrigger class="disclosure-trigger">
+                本书的画面提示词
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <label for="cover-prompt-ratio">封面提示词比例</label><Select
+                  v-model="promptRatio"
+                >
+                  <SelectTrigger
+                    id="cover-prompt-ratio"
+                    class="w-full min-w-0"
+                  >
+                    <SelectValue placeholder="请选择" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="landscape">
+                      横版 4:3 · 1440 × 1080
+                    </SelectItem><SelectItem value="portrait">
+                      竖版 3:4 · 1080 × 1440
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <label for="cover-suggested-prompt">书籍专属画面提示词</label><Textarea
+                  id="cover-suggested-prompt"
+                  :model-value="suggestedPrompt"
+                  rows="5"
+                  readonly
+                />
+                <div class="actions wrap">
+                  <Button
+                    type="button"
+                    :disabled="!suggestedPrompt.trim()"
+                    variant="outline"
+                    @click="copyPrompt"
+                  >
+                    复制封面提示词
+                  </Button><Button
+                    type="button"
+                    :disabled="busy || !suggestedPrompt.trim()"
+                    variant="outline"
+                    @click="usePrompt"
+                  >
+                    用于 AI 背景
+                  </Button>
+                </div>
+                <p class="muted">
+                  外部工具请选择对应比例；内置 AI 生成一张可双向裁切的背景，再排版导出两种比例。切换提示词不会替换你的画面描述。
+                </p>
+              </CollapsibleContent>
+            </Collapsible>
+          </TabsContent>
+        </Tabs>
       </div>
       <section
         class="cover-preview panel"
@@ -625,20 +707,27 @@ onMounted(async () => {
         <label
           class="sr-only"
           for="cover-size"
-        >预览比例</label><select
-          id="cover-size"
-          :value="coverSizes.findIndex(s => s.width === draft.width && s.height === draft.height)"
+        >预览比例</label><Select
+          :model-value="coverSizes.findIndex(s => s.width === draft.width && s.height === draft.height)"
           :disabled="busy"
-          @change="changeSize"
+          @update:model-value="changeSize"
         >
-          <option
-            v-for="(size, index) in coverSizes"
-            :key="index"
-            :value="index"
+          <SelectTrigger
+            id="cover-size"
+            class="mb-4 w-full min-w-0 sm:w-64"
           >
-            {{ size.label }}
-          </option>
-        </select>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem
+              v-for="(size, index) in coverSizes"
+              :key="index"
+              :value="index"
+            >
+              {{ size.label }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
         <p
           v-if="backgroundLoading"
           class="muted"
@@ -664,21 +753,32 @@ onMounted(async () => {
           同一份内容，两种精心排版的封面
         </p>
         <div class="export-formats">
-          <span><i class="ratio-icon landscape" />横版 4:3</span><span><i class="ratio-icon portrait" />竖版 3:4</span><span class="badge">高清 PNG</span>
+          <span><i class="ratio-icon landscape" />横版 4:3</span><span><i class="ratio-icon portrait" />竖版 3:4</span><Badge variant="secondary">
+            高清 PNG
+          </Badge>
         </div>
-        <details class="preview-details">
-          <summary>排版与导出信息</summary><p class="muted">
-            文字自动换行，过长时缩小字号。当前标题 {{ actualSizes.titleSize }} px，副标题 {{ actualSizes.subtitleSize }} px。每次保存或导出都会新建版本。
-          </p><p class="file-path">
-            导出目录：{{ workspace }} / covers
-          </p><button
-            class="secondary"
-            :disabled="busy"
-            @click="run(() => openProjectDirectory(id))"
-          >
-            <AppIcon name="folder" />打开项目目录
-          </button>
-        </details>
+        <Collapsible
+          class="preview-details"
+          :unmount-on-hide="false"
+        >
+          <CollapsibleTrigger class="disclosure-trigger">
+            排版与导出信息
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <p class="muted">
+              文字自动换行，过长时缩小字号。当前标题 {{ actualSizes.titleSize }} px，副标题 {{ actualSizes.subtitleSize }} px。每次保存或导出都会新建版本。
+            </p><p class="file-path">
+              导出目录：{{ workspace }} / covers
+            </p><Button
+              :disabled="busy"
+              variant="outline"
+              type="button"
+              @click="run(() => openProjectDirectory(id))"
+            >
+              <AppIcon name="folder" />打开项目目录
+            </Button>
+          </CollapsibleContent>
+        </Collapsible>
       </section>
     </div>
     <div class="sticky-actions">
@@ -687,74 +787,83 @@ onMounted(async () => {
         :class="{ 'is-dirty': dirty }"
       ><i class="status-dot" />{{ dirty ? '有未保存修改' : '编辑配置已保存' }}</span>
       <div class="actions wrap">
-        <button
+        <Button
           type="submit"
           form="cover-edit-form"
-          class="secondary"
           :disabled="busy"
+          variant="outline"
         >
           <AppIcon name="save" />保存编辑配置
-        </button><button
+        </Button><Button
           type="button"
           :disabled="busy || backgroundLoading || !!previewError || !!backgroundError"
           @click="save(true)"
         >
           <AppIcon name="download" />导出两张封面
-        </button>
+        </Button>
       </div>
     </div>
-    <details class="history-panel">
-      <summary>封面历史 · {{ versions.length }} 个版本</summary><label for="cover-history">恢复编辑配置</label><select
-        id="cover-history"
-        :value="selected?.id ?? ''"
-        :disabled="busy"
-        @change="switchVersion"
-      >
-        <option
-          value=""
-          disabled
+    <Collapsible
+      class="history-panel"
+      :unmount-on-hide="false"
+    >
+      <CollapsibleTrigger class="disclosure-trigger">
+        封面历史 · {{ versions.length }} 个版本
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <label for="cover-history">恢复编辑配置</label><Select
+          :model-value="selected?.id ?? null"
+          :disabled="busy"
+          @update:model-value="switchVersion"
         >
-          尚未保存
-        </option><option
-          v-for="version in versions"
-          :key="version.id"
-          :value="version.id"
+          <SelectTrigger
+            id="cover-history"
+            class="w-full min-w-0"
+          >
+            <SelectValue placeholder="尚未保存" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem
+              :value="null"
+              disabled
+            >
+              尚未保存
+            </SelectItem><SelectItem
+              v-for="version in versions"
+              :key="version.id"
+              :value="version.id"
+            >
+              v{{ version.versionNo }} · {{ version.config.width }} × {{ version.config.height }} · {{ version.exportedPath ? '已导出' : '编辑配置' }} · {{ new Date(version.createdAt).toLocaleString() }}
+            </SelectItem>
+          </SelectContent>
+        </Select><p
+          v-if="selected?.exportedPath"
+          class="file-path"
         >
-          v{{ version.versionNo }} · {{ version.config.width }} × {{ version.config.height }} · {{ version.exportedPath ? '已导出' : '编辑配置' }} · {{ new Date(version.createdAt).toLocaleString() }}
-        </option>
-      </select><p
-        v-if="selected?.exportedPath"
-        class="file-path"
-      >
-        {{ selected.exportedPath }}
-      </p>
-    </details>
+          {{ selected.exportedPath }}
+        </p>
+      </CollapsibleContent>
+    </Collapsible>
   </template>
 </template>
 <style scoped>
-.cover-workbench { display: grid; grid-template-columns: minmax(270px, .85fr) minmax(0, 1.15fr); gap: 23px; align-items: start; }
+.cover-workbench { display: grid; grid-template-columns: minmax(310px, .85fr) minmax(0, 1.15fr); gap: 23px; align-items: start; }
 .cover-controls, .cover-preview { padding: 22px; margin-bottom: 0; }
-.cover-controls .editor-tabs { margin-bottom: 7px; }
 .cover-controls label { margin-top: 16px; }
-.cover-controls .muted { font-size: 11px; }
-.cover-controls textarea { font-size: 12px; }
+.cover-controls .muted { font-size: 13px; }
 .cover-controls .form-grid { gap: 0 12px; }
-.cover-controls .editor-tabs :deep(button) { padding: 8px 4px; font-size: 11px; }
 .cover-colors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .cover-preview { position: sticky; top: 20px; }
 .cover-preview h2 { font-size: 13px; }
 .preview-dimensions { font-size: 10px; color: #8b9980; }
-#cover-size { font-size: 11px; min-height: 35px; max-width: 235px; padding: 7px 10px; margin-bottom: 15px; }
 .canvas-stage { display: flex; align-items: center; justify-content: center; height: clamp(280px, 43vh, 470px); padding: 24px; background-color: #eef0e9; background-image: radial-gradient(#cbd4c0 0.8px, transparent 0.8px); background-size: 12px 12px; border: 1px solid #e4e8db; border-radius: 9px; overflow: hidden; }
 canvas { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; box-shadow: 0 6px 18px #22352224; }
-.preview-caption { text-align: center; color: #8d9b81; font-size: 11px; margin: 17px 0 11px; }
+.preview-caption { text-align: center; color: var(--muted-foreground); font-size: 12px; margin: 17px 0 11px; }
 .export-formats { display: flex; align-items: center; justify-content: center; gap: 17px; }
 .export-formats > span { display: inline-flex; align-items: center; gap: 6px; color: #829274; font-size: 10px; }
 .ratio-icon { width: 17px; height: 13px; border: 1px solid #99ae8a; border-radius: 2px; }
 .ratio-icon.portrait { width: 12px; height: 16px; }
-.cover-suggestions, .preview-details { margin-top: 21px; padding-top: 15px; border-top: 1px solid var(--line); color: #8c9b7f; font-size: 11px; }
-.cover-suggestions summary, .preview-details summary { cursor: pointer; }
-.cover-suggestions summary .app-icon { width: 14px; height: 14px; }
+.cover-suggestions, .preview-details { margin-top: 21px; padding-top: 15px; border-top: 1px solid var(--line); color: var(--muted-foreground); font-size: 12px; }
 .ai-background { border-top: 1px solid var(--line); padding-top: 17px; margin-top: 17px; }
 .ai-toggle, .choose-image { width: 100%; margin-top: 11px; }
 .refresh-models { margin-top: 8px; }
