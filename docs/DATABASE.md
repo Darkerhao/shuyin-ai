@@ -376,3 +376,9 @@ publishing 的 content_json 为 `{format:"publishing",title,description,audioPro
 完整备份格式版本为1，与数据库版本独立。目录包含一致性 SQLite 快照、文件清单及 SHA-256，登记的素材/导出封面/当前任务包均复制；可选原始视频。草稿及样式随数据库保留。恢复在内存核验/迁移快照，将文件复制到新目录后重建 `workspace_path`、`file_path`、`exported_path`、`task_directory` 及包内引用，再自动备份当前库并替换。不复制未登记文件、旧的无引用任务包或系统凭据；未包含视频继续引用原路径，缺失时记录保留且任务退回草稿。
 
 回归覆盖 v8→v9 保留/失败回滚、草稿重启、样式白名单、跨书来源拒绝、备份目录搬移、源文件移除后的恢复、遗漏视频、同大小损坏与越界路径拒绝。Windows 真实文件/数据库证据见 `CREATOR-WORKFLOW-VERIFICATION.md`。
+
+## 19. M6 辅助发布（2026-10-26）
+
+schema 仍为 v9，无迁移或新增持久化状态。`publish_snapshot` 只读取已校验 ready 任务的文字快照、视频引用和包内封面；上传会话与停止标志保留在 Rust 内存，不存网页、账号、Cookie 或浏览器进度。上传/填写完成不改任务状态、不插入发布记录；仅原有人工确认事务写入 published。会话数据不纳入业务备份，旧版数据库备份继续按原校验/恢复路径处理。独立安装版的完整性、外键、备份及升级数据比较见 `M6-VERIFICATION.md`。
+
+M7沿用相同schema：全局任务列表关联book_projects读取书名，逐项使用现有checked校验；不新增队列表或缓存状态。文案来源仍是publish_tasks.writing_version_id，作品链接仍是publish_records.post_url；记录成功仅释放匹配任务的内存快照。备份恢复保留这些已有行，测试与隔离安装模拟记录边界见`M7-VERIFICATION.md`。

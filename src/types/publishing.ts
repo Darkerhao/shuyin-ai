@@ -21,6 +21,7 @@ export interface PublishTask extends PublishInput {
   record: PublishRecord | null
 }
 export const publishStatuses = { draft: '草稿', ready: '待发布', published: '已发布' } as const
+export interface PublishQueueItem extends PublishTask { projectTitle: string }
 export function publishInput(task: PublishInput): PublishInput {
   const { projectId, title, description, tags, videoAssetId, landscapeCoverId, portraitCoverId, titleConfirmed, coversConfirmed } = task
   return { projectId, title, description, tags, videoAssetId, landscapeCoverId, portraitCoverId, titleConfirmed, coversConfirmed, writingVersionId: task.writingVersionId ?? null }

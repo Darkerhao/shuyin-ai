@@ -52,6 +52,104 @@ fn record() -> PublishRecordInput {
 }
 
 #[test]
+fn publish_queue_rechecks_files_and_keeps_each_books_task_and_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let first_book = project(&db);
+    let mut second_book_input = first_book.input.clone();
+    second_book_input.title = "另一本书".into();
+    let second_book = db.save_project(None, second_book_input).unwrap();
+    let first = db.save_publish_task(None, input(&db, &first_book)).unwrap();
+    db.prepare_publish_task(&first.id).unwrap();
+    let second = db
+        .save_publish_task(None, input(&db, &second_book))
+        .unwrap();
+    db.prepare_publish_task(&second.id).unwrap();
+    db.record_publish_success(&second.id, record()).unwrap();
+    let queue = db.list_publish_queue().unwrap();
+    assert_eq!(queue.len(), 2);
+    let item = queue.iter().find(|item| item.task.id == second.id).unwrap();
+    assert_eq!(item.project_title, "另一本书");
+    assert_eq!(item.task.input.project_id, second_book.id);
+    assert_eq!(item.task.status, "published");
+    assert_eq!(
+        item.task.record.as_ref().unwrap().post_url,
+        record().post_url
+    );
+    let manifest = db.publish_snapshot(&first.id).unwrap();
+    fs::remove_file(&manifest.landscape).unwrap();
+    let queue = db.list_publish_queue().unwrap();
+    assert_eq!(
+        queue
+            .iter()
+            .find(|item| item.task.id == first.id)
+            .unwrap()
+            .task
+            .status,
+        "draft"
+    );
+    assert_eq!(
+        queue
+            .iter()
+            .find(|item| item.task.id == second.id)
+            .unwrap()
+            .task
+            .status,
+        "published"
+    );
+    let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    db.restore_backup(&backup).unwrap();
+    assert_eq!(
+        serde_json::to_value(db.list_publish_queue().unwrap()).unwrap(),
+        serde_json::to_value(queue).unwrap()
+    );
+}
+
+#[test]
+fn upload_snapshot_uses_selected_task_and_package_covers() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let p = project(&db);
+    let i = input(&db, &p);
+    let task = db.save_publish_task(None, i.clone()).unwrap();
+    assert!(db.publish_snapshot(&task.id).is_err());
+    let ready = db.prepare_publish_task(&task.id).unwrap();
+    let snapshot = db.publish_snapshot(&task.id).unwrap();
+    assert_eq!(snapshot.task_id, task.id);
+    assert_eq!(snapshot.input, i);
+    assert_eq!(snapshot.project_title, p.input.title);
+    let pack = Path::new(ready.task_directory.as_ref().unwrap());
+    assert_eq!(
+        Path::new(&snapshot.landscape),
+        pack.join("cover-landscape.png")
+    );
+    assert_eq!(
+        Path::new(&snapshot.portrait),
+        pack.join("cover-portrait.png")
+    );
+    assert_eq!(fs::read(&snapshot.video).unwrap(), b"original video");
+
+    let other = project(&db);
+    let mut different = input(&db, &other);
+    different.title = "另一本书的发布标题".into();
+    let second = db.save_publish_task(None, different).unwrap();
+    db.prepare_publish_task(&second.id).unwrap();
+    assert_eq!(db.publish_snapshot(&task.id).unwrap(), snapshot);
+    assert_ne!(
+        db.publish_snapshot(&second.id).unwrap().video,
+        snapshot.video
+    );
+
+    fs::write(pack.join("cover-landscape.png"), b"damaged").unwrap();
+    assert!(db.publish_snapshot(&task.id).is_err());
+    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
+    db.prepare_publish_task(&task.id).unwrap();
+    db.record_publish_success(&task.id, record()).unwrap();
+    assert!(db.publish_snapshot(&task.id).is_err());
+    assert_eq!(fs::read(&snapshot.video).unwrap(), b"original video");
+}
+
+#[test]
 fn incomplete_and_foreign_materials_cannot_be_ready() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(dir.path().join("db.sqlite3"));

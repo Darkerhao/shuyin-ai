@@ -144,3 +144,18 @@
 - New API 兼容服务默认 `response_format=url`；图片客户端必须显式请求 `b64_json`，不能仅假定端点兼容。
 - UGQ 的 `gpt-image-2` 在 `b64_json` 请求下返回 1024×1024 PNG；其绘图日志中单次实际费用为 $0.15。
 - 图片格式应由响应真实内容决定，而不是固定为 PNG；完整解码后再按 PNG/JPEG/WebP 扩展名保存，避免伪造扩展名。
+# M6 续作核对（2026-10-26）
+
+- M7不需要新队列表：原PublishTask、writing_version_id和publish_records已覆盖来源/归档。全局查询关联书名后复用checked，精确task ID进入旧任务可避免默认选最新导致串篇；记录事务成功后释放匹配内存上传会话，避免下一篇被旧快照永久阻塞。
+- 安装版clipboard.writeText可用；CDP触发额外clipboard.readText会等待授权，不用于产品。测试改为PowerShell只比较已知本轮写入链接，不读取其他剪贴板内容。隔离模拟记录必须明确“未在抖音发布”，真实M6任务不标记成功。
+
+- 最新安装版首次上传的真实时序：标题/简介/封面区先挂载，预览面板稍后加载，视频再进入可预览状态。只用左侧控件判断 editorReady 会过早尝试切换视频预览；就绪检查必须包含真实预览页签。该页签包含提示图标，不能用“无子节点”的通用文字查找。
+- 独立安装版远程网页调用workspace_settings返回ACL拒绝；官方暂存后已有草稿提示可拦截原生重传。升级前SQLite备份与当前12表逐行一致，schema9、完整性和外键通过。用户开发实例的人工合集/章节草稿仍需保护；仅重置本轮安装版自动生成的测试草稿以验证完整链。
+
+- 当前真实页面验证了四个行为：非空简介恢复后移除 data-placeholder，改用 contenteditable/data-slate-editor/editor-comp-publish 唯一定位；预览封面页签移除 video 节点，开始填写前切换预览视频；只保存横封面会提示设置竖封面，改为同一弹窗依次设置后完成；暂存离开后上传页出现“上次未发布”入口，必须拒绝重新选视频。
+- M6.1 真实 265922746 字节、697.621 秒视频已进入官方编辑页；文案与两张 1440×1080/1080×1440 图回读并保存草稿，未执行最终发布。正在复验新宿主命令完整链。
+
+- 工作区已有独立抖音窗口、页面检查和技术验证组件，尚无文字/文件操作；设计文档状态未随初始代码更新。
+- 当前 Tauri 2.12.5 / webview2-com 0.39.1 支持 with_webview、eval_with_callback、宿主 CallDevToolsProtocolMethod。文件操作应限定已校验任务的路径，远程窗口不授予 IPC。
+- 发布包校验集中在 database/publishing.rs 的 checked/manifest/package_valid；直接在这里提供快照，不另建解析器。
+- 初次 npx --no-install playwright-cli 无可执行项，改用当前可用 Playwright 工具和隔离 WebView2 联调。

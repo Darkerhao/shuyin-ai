@@ -28,5 +28,9 @@ png = "=0.18.1"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 sha2 = "=0.11.1"
 
+[target.'cfg(windows)'.dependencies]
+# Already locked by Tauri; used only for host-side, task-bound file selection.
+webview2-com = "=0.39.1"
+
 [dev-dependencies]
 tempfile = "=3.27.0"

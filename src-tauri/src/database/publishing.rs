@@ -71,6 +71,27 @@ pub struct PublishTask {
     pub record: Option<PublishRecord>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishQueueItem {
+    pub project_title: String,
+    #[serde(flatten)]
+    pub task: PublishTask,
+}
+
+/// A validated, saved task. Callers cannot supply arbitrary upload paths or text.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishSnapshot {
+    pub task_id: String,
+    pub project_title: String,
+    pub task_directory: String,
+    pub input: PublishInput,
+    pub video: String,
+    pub landscape: String,
+    pub portrait: String,
+}
+
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct FileReference {
@@ -354,6 +375,39 @@ fn checked(c: &Connection, id: &str) -> Result<PublishTask, String> {
 }
 
 impl Database {
+    pub fn list_publish_queue(&self) -> Result<Vec<PublishQueueItem>, String> {
+        self.with_connection(|c| {
+            let mut statement = c.prepare("SELECT t.id,p.title FROM publish_tasks t JOIN book_projects p ON p.id=t.project_id ORDER BY t.created_at,t.id").map_err(|e|e.to_string())?;
+            let rows = statement.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(|e|e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())?;
+            rows.into_iter().map(|(id, project_title)| Ok(PublishQueueItem { project_title, task: checked(c,&id)? })).collect()
+        })
+    }
+
+    pub fn publish_snapshot(&self, id: &str) -> Result<PublishSnapshot, String> {
+        self.with_connection(|c| {
+            let task = checked(c, id)?;
+            if task.status != "ready" {
+                return Err("请先生成有效任务包；已发布任务不能再次上传。".into());
+            }
+            let directory = Path::new(task.task_directory.as_deref().ok_or("任务包位置缺失。")?);
+            Ok(PublishSnapshot {
+                task_id: task.id.clone(),
+                project_title: get(c, &task.input.project_id)?.input.title,
+                task_directory: directory.to_string_lossy().into_owned(),
+                video: video_path(c, &task.input)?,
+                landscape: directory
+                    .join("cover-landscape.png")
+                    .to_string_lossy()
+                    .into_owned(),
+                portrait: directory
+                    .join("cover-portrait.png")
+                    .to_string_lossy()
+                    .into_owned(),
+                input: task.input,
+            })
+        })
+    }
+
     pub fn list_publish_tasks(&self, project_id: &str) -> Result<Vec<PublishTask>, String> {
         self.with_connection(|c| {
             get(c,project_id)?;

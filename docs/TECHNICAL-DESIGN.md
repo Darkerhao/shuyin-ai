@@ -2,7 +2,7 @@
 
 品牌图形统一使用 `assets/app-icon.svg`；应用侧栏直接导入，favicon 与桌面 PNG/ICO/ICNS 通过 `npm run icons:generate` 同步生成。设计、色值和维护规则见 `BRAND.md`。
 
-当前产品范围为七项生成与按项调整、自动草稿、封面工坊（裁切/个人样式/可选 AI 背景）、明确文案来源的半自动发布准备、资料导入与完整备份。本文前面的完整工作台设计及里程碑切片保留为历史记录；当前扩展见文末，历史验收见各里程碑验证报告。
+当前产品范围为七项生成与按项调整、自动草稿、封面工坊（裁切/个人样式/可选 AI 背景）、明确文案来源的半自动发布准备、Windows 应用内抖音辅助填写、资料导入与完整备份。本文前面的完整工作台设计及里程碑切片保留为历史记录；当前扩展见文末，历史验收见各里程碑验证报告。
 
 应用更新（2026-10-25）：`services/updates.ts` 封装 Tauri Updater/Process 与设置 IPC；`useAppUpdates.ts` 仅维护一份跨页面更新状态，应用壳启动初始化并显示新版本提示，`AboutPage.vue` 展示版本、说明、进度及确认安装。只在关于页确认安装，创作页先按原导航守卫完成草稿暂存。Updater 2.14.0 / Process 2.4.0 使用官方当前 Tauri 2 稳定版 API，并已核对安装源码；主窗口只授予 check/download/install、资源释放、读取版本、重启和两条设置命令。公钥内置，私钥仅在打包时读取。发布脚本从实际提交生成统一说明与四平台更新清单，签名校验由官方插件执行。无需新增通用网络、任意文件执行或进程退出权限。
 
@@ -358,6 +358,21 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 - 完整恢复先核验清单、哈希、schema、完整性/外键及路径边界，再复制到所选位置的新目录，重建项目目录、素材/封面路径和任务包清单、视频引用及文字文件。恢复出的 `projects/{书名}` 与 `packages/{书名}-发布任务包` 复用同一目录命名函数，重名编号。共享 `backup.rs` 的快照读取/替换流程，替换前保存当前库；失败只清理本次新建目录，原文件及源备份保留。不包含的视频保持原路径，失效就绪任务退回草稿。跨系统引用按源目录分隔符匹配，跨系统实机仍待验证。
 - `note_import.rs` 只读取 TXT/MD、UTF-8/BOM，限制1 MB/10万字并规范化换行；ProjectPage 预览后追加正文及来源，随原书籍保存流程写入，不新增解析依赖或资料状态表。
 - schema v9 的兼容迁移和本轮验收见 `DATABASE.md`、`CREATOR-WORKFLOW-VERIFICATION.md`。
+
+## 应用内抖音辅助发布（2026-10-26）
+
+- `services/douyin.ts` 封装五个主窗口命令和定向进度事件；`DouyinVerification.vue` 提供打开、检查、账号确认、上传填写、重新核对后继续和停止。`PublishingPage.vue` 在操作期间锁定编辑、任务切换与路由，沿用现有人工发布记录。
+- `douyin.rs` 统一持有一个活动快照、操作锁和停止标志。`database/publishing.rs::publish_snapshot` 复用 checked/manifest/package_valid，仅接受当前 ready 任务，从有效包取横竖图、引用原视频。接收命令的主窗口不能提供任意路径或脚本。上传前、填写和设置封面期间重查任务/素材；文件目标已定位后、发送前预留任务，超时不自动重传。
+- 独立 `douyin-publish` WebView 仅允许 `https://creator.douyin.com`，拒绝新窗口，使用专用 `douyin-webview` 数据目录。capability 仍只绑定 main；命令检查调用窗口，事件只发 main。主窗口销毁时关闭发布窗口；浏览器会话不进入 SQLite、备份或日志。
+- Windows `douyin_webview.rs` 通过 WebView2 宿主 CallDevToolsProtocolMethod 调用 Runtime.evaluate / DOM.setFileInputFiles，释放临时节点引用。直接声明锁文件已有的 webview2-com 0.39.1；产品不开放远程调试端口。非 Windows 明确返回未支持。
+- `douyin_page.js` 只读来源、登录/联网和编辑器就绪情况；`douyin_editor.js` 集中维护真实页面的有限动作，包含带提示图标的视频预览页签、恢复后的 Slate 编辑器、同一弹窗上传两种封面及完成后回读。没有最终发布动作；页面缺项或已有不同内容即停止。
+- 视频等待上限30分钟，封面处理/保存上限120秒；停止只阻止后续操作，已送入网页的上传由官方页面控制。会话不持久化，重开先检查官方草稿并人工核对，不自动重传；schema v9 和既有备份格式不变。真实脚本、原生命令与安装证据分列于 `M6-VERIFICATION.md`。
+
+## 日常发布任务列表（2026-10-26）
+
+- `PublishQueuePage.vue` 从书架进入，提供待发布/草稿/已发布、搜索、缺项说明和作品链接复制，沿用同一套组件。`list_publish_queue` 只给主窗口，SQL关联书名并按创建时间排序，每项复用 checked；类型通过flatten复用PublishTask，没有第二套状态或任务表。
+- 列表链接携带明确task ID，路由把它传给PublishingPage。页面只在本书已校验列表中查找，找不到时报错并不显示可操作表单；同一路径更换query经过原导航守卫后重新加载，避免默认选最新任务。来源版本及内容继续以已保存任务为准，新任务不隐式带入来源。
+- `record_publish_success` 仍先提交原有记录/任务/项目事务，成功后仅释放匹配ID的内存上传快照；失败和其他任务均不释放。下一篇仍由用户点击，官方页面仍须回到空白上传页，已有草稿保护不变。版本、数据与原生安装验证见 `M7-VERIFICATION.md`。
 
 ## 全局滚动条样式（2026-10-25）
 

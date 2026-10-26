@@ -11,12 +11,12 @@ const { initialize, status: updateStatus, update } = useAppUpdates()
 onMounted(() => { void initialize() })
 
 const route = useRoute()
-const inProjects = computed(() => route.path.startsWith('/projects'))
+const inProjects = computed(() => route.path.startsWith('/projects') || route.path === '/publishing')
 const navigation = computed(() => [
   { to: '/projects', label: '我的书籍', icon: 'shelf', active: inProjects.value },
   { to: '/settings/models', label: '模型设置', icon: 'settings', active: route.path === '/settings/models' },
 ] as const)
-const workspaceTitle = computed(() => inProjects.value ? '我的书籍' : route.path === '/settings/models' ? '模型设置' : route.path === '/about' ? '关于书引 AI' : '数据与备份')
+const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任务' : inProjects.value ? '我的书籍' : route.path === '/settings/models' ? '模型设置' : route.path === '/about' ? '关于书引 AI' : '数据与备份')
 </script>
 
 <template>
