@@ -1,11 +1,14 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { log, error } from 'node:console'
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { rename } from 'node:fs/promises'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { clearTimeout, setTimeout } from 'node:timers'
+import { setTimeout as delay } from 'node:timers/promises'
+import { fileURLToPath, pathToFileURL, URL } from 'node:url'
 import { parseArgs } from 'node:util'
 
 const instructions = `你正在执行串行任务队列中的一项任务，这是独立的新会话。
@@ -32,9 +35,15 @@ const reportSchema = {
   required: ['status', 'summary', 'files', 'database', 'checks', 'risks', 'acceptance', 'nextSteps'],
 }
 
-function saveJson(file, value) {
+async function saveJson(file, value) {
   writeFileSync(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`)
-  renameSync(`${file}.tmp`, file)
+  // Windows 本机回归中原子替换出现短暂 EPERM；只对此类占用有限等待，其他错误直接上报。
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(`${file}.tmp`, file); return } catch (cause) {
+      if (!['EPERM', 'EBUSY'].includes(cause.code) || attempt === 3) throw cause
+      await delay(50 * (attempt + 1))
+    }
+  }
 }
 
 // Windows 的 npm codex.cmd 不能直接交给 spawn；启动同一安装的 JS 入口，避免 shell 转义。
@@ -100,6 +109,7 @@ async function execute(command, args, cwd, prompt, directory, timeoutMinutes) {
       if (event.type === 'thread.started') { threadId = event.thread_id; log(`  新会话：${threadId}`) }
       if (event.type === 'turn.failed') turnFailed = true
       if (event.type === 'item.completed' && event.item?.type === 'agent_message') log(event.item.text)
+      if (event.type === 'item.started' && event.item?.type === 'command_execution') log(`  执行：${event.item.command}`)
     })
     timer = setTimeout(() => stop(`超过 ${timeoutMinutes} 分钟时限`), timeoutMinutes * 60_000)
     // 大段中文提示经 UTF-8 stdin 传递，不进入 shell 或命令行参数。
@@ -107,7 +117,8 @@ async function execute(command, args, cwd, prompt, directory, timeoutMinutes) {
     child.stdin.end(prompt, 'utf8')
     const exitCode = await new Promise((accept, reject) => {
       child.once('error', reject)
-      child.once('close', code => accept(code))
+      // npm 启动器退出后，MCP 子进程可能仍持有 stdout；等待进程退出，避免误等管道关闭。
+      child.once('exit', code => accept(code))
     })
     if (stopReason) throw new Error(stopReason)
     if (exitCode !== 0 || turnFailed) throw new Error(`Codex 执行失败，退出码：${exitCode}；详情见 stderr.log 和 events.jsonl。`)
@@ -116,6 +127,8 @@ async function execute(command, args, cwd, prompt, directory, timeoutMinutes) {
   } finally {
     clearTimeout(timer)
     lines?.close()
+    child?.stdout.destroy()
+    child?.stdin.destroy()
     process.off('SIGINT', interrupt)
     process.off('SIGTERM', terminate)
     closeSync(events)
@@ -141,41 +154,45 @@ export async function runQueue(config, { baseDir = process.cwd(), dryRun = false
   }
   const command = config.command ?? ['codex']
   if (!Array.isArray(command) || !command.length || command.some(value => typeof value !== 'string' || !value)) throw new Error('command 必须是非空字符串数组。')
-  const stateFile = join(output, 'state.json')
-  const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { tasks: {} }
-  let fingerprint = JSON.stringify({ cwd, sandbox, model: config.model, command, instructions, extra: config.instructions })
-  const queue = tasks.map(task => {
-    fingerprint = createHash('sha256').update(fingerprint + JSON.stringify(task)).digest('hex')
-    const previous = state.tasks[task.id]
-    const done = previous?.status === 'completed' && previous.fingerprint === fingerprint && existsSync(join(output, previous.directory, 'report.md'))
-    return { ...task, fingerprint, done }
-  })
-  log(`项目：${cwd}\n验收汇总：${join(output, 'SUMMARY.md')}`)
-  for (const [index, task] of queue.entries()) log(`${index + 1}. ${task.id} ${task.title} — ${task.done ? '已完成，跳过' : '待执行，新会话'}`)
-  if (dryRun) return
-  const executable = resolveCommand(command)
-  mkdirSync(output, { recursive: true })
+  const executable = dryRun ? undefined : resolveCommand(command)
   const lockFile = join(output, 'queue.lock')
   let lock
-  try { lock = openSync(lockFile, 'wx') } catch (cause) {
-    if (cause.code === 'EEXIST') throw new Error(`队列已锁定：${lockFile}。确认原进程及其 Codex 子进程已停止后，才能删除此锁。`)
-    throw cause
-  }
-  const save = () => {
-    saveJson(stateFile, state)
-    const rows = queue.map(task => {
-      const record = state.tasks[task.id]
-      const current = record?.fingerprint === task.fingerprint ? record : undefined
-      const report = current?.directory ? `[报告目录](./${current.directory}/)` : ''
-      return `| ${task.id} | ${task.title.replace(/[|\r\n]/g, ' ')} | ${current?.status ?? 'pending'} | ${report} |`
-    })
-    writeFileSync(join(output, 'SUMMARY.md'), `# Codex 任务验收汇总\n\n项目：${cwd}\n\ncompleted 表示执行结束且模型报告完成，最终仍待用户验收；failed / blocked 后队列停止。\n\n| ID | 任务 | 执行状态 | 记录 |\n| --- | --- | --- | --- |\n${rows.join('\n')}\n`)
+  if (!dryRun) {
+    mkdirSync(output, { recursive: true })
+    try { lock = openSync(lockFile, 'wx') } catch (cause) {
+      if (cause.code === 'EEXIST') throw new Error(`队列已锁定：${lockFile}。确认原进程及其 Codex 子进程已停止后，才能删除此锁。`, { cause })
+      throw cause
+    }
   }
   try {
+    const stateFile = join(output, 'state.json')
+    const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { tasks: {} }
+    let fingerprint = JSON.stringify({ cwd, sandbox, model: config.model, command, instructions, reportSchema, extra: config.instructions })
+    let predecessorsDone = true
+    const queue = tasks.map(task => {
+      fingerprint = createHash('sha256').update(fingerprint + JSON.stringify(task)).digest('hex')
+      const previous = state.tasks[task.id]
+      const done = predecessorsDone && previous?.status === 'completed' && previous.fingerprint === fingerprint && existsSync(join(output, previous.directory, 'report.md'))
+      predecessorsDone = Boolean(done)
+      return { ...task, fingerprint, done }
+    })
+    log(`项目：${cwd}\n验收汇总：${join(output, 'SUMMARY.md')}`)
+    for (const [index, task] of queue.entries()) log(`${index + 1}. ${task.id} ${task.title} — ${task.done ? '已完成，跳过' : '待执行，新会话'}`)
+    if (dryRun) return
+    const save = async () => {
+      await saveJson(stateFile, state)
+      const rows = queue.map(task => {
+        const record = state.tasks[task.id]
+        const current = record?.fingerprint === task.fingerprint ? record : undefined
+        const report = current?.directory ? `[报告目录](./${current.directory}/)` : ''
+        return `| ${task.id} | ${task.title.replace(/[|\r\n]/g, ' ')} | ${current?.status ?? 'pending'} | ${report} |`
+      })
+      writeFileSync(join(output, 'SUMMARY.md'), `# Codex 任务验收汇总\n\n项目：${cwd}\n\ncompleted 表示执行结束且模型报告完成，最终仍待用户验收；failed / blocked 后队列停止。\n\n| ID | 任务 | 执行状态 | 记录 |\n| --- | --- | --- | --- |\n${rows.join('\n')}\n`)
+    }
     writeSync(lock, JSON.stringify({ pid: process.pid, cwd, startedAt: new Date().toISOString() }))
     const schemaFile = join(output, 'report.schema.json')
-    saveJson(schemaFile, reportSchema)
-    save()
+    await saveJson(schemaFile, reportSchema)
+    await save()
     for (const task of queue) {
       if (task.done) continue
       const directory = join(task.id, `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`)
@@ -183,9 +200,9 @@ export async function runQueue(config, { baseDir = process.cwd(), dryRun = false
       mkdirSync(absoluteDirectory, { recursive: true })
       const record = state.tasks[task.id] = { fingerprint: task.fingerprint, status: 'running', directory: directory.replaceAll('\\', '/'), startedAt: new Date().toISOString() }
       const preceding = queue.slice(0, queue.indexOf(task)).map(previous => join(output, state.tasks[previous.id].directory, 'report.md'))
-      const prompt = `${instructions}\n\n${config.instructions ?? ''}\n\n前序任务报告（需要时读取）：\n${preceding.join('\n') || '无'}\n\n当前任务：${task.id} ${task.title}\n${task.prompt}\n`
+      const prompt = `${instructions}\n\n${config.instructions ?? ''}\n\n前序任务报告（需要时读取）：\n${preceding.join('\n') || '无'}\n\n当前任务：${task.id} ${task.title}\n${task.prompt}\n\n最终报告必须只输出符合以下 JSON Schema 的 JSON 对象，不加代码块；所有列表字段均为字符串数组，无内容时写 []，不得遗漏字段：\n${JSON.stringify(reportSchema)}\n`
       writeFileSync(join(absoluteDirectory, 'prompt.md'), prompt)
-      save()
+      await save()
       log(`\n开始：${task.id} ${task.title}`)
       const reportFile = join(absoluteDirectory, 'report.json')
       const args = ['exec', '-C', cwd, '--sandbox', sandbox, '-c', 'approval_policy="never"', '--json', '--color', 'never', '--output-schema', schemaFile, '--output-last-message', reportFile]
@@ -203,13 +220,15 @@ export async function runQueue(config, { baseDir = process.cwd(), dryRun = false
         throw cause
       } finally {
         record.finishedAt = new Date().toISOString()
-        save()
+        await save()
       }
     }
     log('\n所有任务执行结束，请查看 SUMMARY.md 和各任务 report.md 进行验收。')
   } finally {
-    closeSync(lock)
-    unlinkSync(lockFile)
+    if (lock !== undefined) {
+      closeSync(lock)
+      unlinkSync(lockFile)
+    }
   }
 }
 
