@@ -59,9 +59,14 @@ npm run desktop:build
 ```
 
 `dev` 与 `desktop:dev` 不要同时运行，二者使用同一个固定端口 1420。
+
 `desktop:build` 根据当前系统自动选择平台配置：Windows 生成 NSIS，macOS 生成 APP/DMG，Linux 生成 DEB/RPM/AppImage。安装包在 `src-tauri/target/release/bundle/`，显式指定 Rust target 时在 `src-tauri/target/<target>/release/bundle/`。
 
 macOS 需安装 Xcode Command Line Tools；Linux 构建需 WebKitGTK 4.1、GTK 与对应开发依赖，完整安装命令见工作流。Windows 本地环境沿用上面的配置。
+
+## Codex 串行任务
+
+编辑根目录 `codex-tasks.mjs`，填写每项任务的 `prompt` 并将 `enabled` 改为 `true`。运行 `npm run codex:queue -- --dry-run` 预览，再运行 `npm run codex:queue`。脚本按清单顺序启动独立 Codex CLI 会话，共用项目文件；每项完成后才进入下一项，失败或受阻即停，再次运行跳过已完成任务。验收入口为 `output/codex-queue/SUMMARY.md`。完整用法、续跑及权限说明见 [任务队列说明](docs/CODEX-TASK-QUEUE.md)。
 
 ## 自动打包与版本同步
 
