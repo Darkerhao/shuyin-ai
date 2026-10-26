@@ -33,7 +33,7 @@ jobs:
           persist-credentials: true
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '22.21.1'
+          node-version: '24.22.1'
           cache: npm
       - name: Prepare one version commit and export it without pushing
         id: version
@@ -96,7 +96,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '22.21.1'
+          node-version: '24.22.1'
           cache: npm
       - uses: actions/download-artifact@v8.0.2
         with:
@@ -164,7 +164,7 @@ jobs:
           persist-credentials: true
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '22.21.1'
+          node-version: '24.22.1'
           package-manager-cache: false
       - uses: actions/download-artifact@v8.0.2
         with:
@@ -205,7 +205,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '22.21.1'
+          node-version: '24.22.1'
           package-manager-cache: false
       - uses: actions/download-artifact@v8.0.2
         with:
