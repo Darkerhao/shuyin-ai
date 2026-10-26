@@ -597,6 +597,7 @@ mod tests {
                 description: "第一行\r\n第二行".into(),
                 tags: "#读书".into(),
                 video_asset_id: Some("video".into()),
+                audio_asset_id: Some("audio".into()),
                 landscape_cover_id: Some("landscape".into()),
                 portrait_cover_id: Some("portrait".into()),
                 title_confirmed: true,

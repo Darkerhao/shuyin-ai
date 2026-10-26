@@ -219,6 +219,67 @@ fn v8_upgrade_preserves_old_rows_and_rolls_back_a_conflicting_v9_schema() {
 }
 
 #[test]
+fn v9_upgrade_preserves_assets_and_publish_records_for_audio_workflow() {
+    let dir = tempfile::tempdir().unwrap();
+    for conflict in [false, true] {
+        let path = dir.path().join(format!("audio-{conflict}.sqlite3"));
+        let c = Connection::open(&path).unwrap();
+        for sql in MIGRATIONS.iter().take(9) {
+            c.execute_batch(sql).unwrap();
+        }
+        c.execute_batch(
+            "INSERT INTO book_projects(id,title,source_notes,target_duration_seconds,status,workspace_path,created_at,updated_at) VALUES('old','旧书','原始笔记',600,'draft','missing','original','original');
+             INSERT INTO assets VALUES('video','old','video','video.mp4','video.mp4',10,0,'original');
+             INSERT INTO publish_tasks(id,project_id,title,description,tags,video_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,created_at,updated_at,writing_version_id) VALUES('task','old','旧标题','旧内容','', 'video',NULL,NULL,1,0,'published','original','original',NULL);
+             INSERT INTO publish_records VALUES('task','2026-10-26T00:00:00Z','https://www.douyin.com/video/1','保留','original');
+             PRAGMA user_version=9;",
+        )
+        .unwrap();
+        if conflict {
+            c.execute_batch("CREATE TABLE assets_v10(original TEXT)")
+                .unwrap();
+        }
+        drop(c);
+        let db = Database::open(path.clone());
+        if conflict {
+            assert!(db.read().is_err());
+            let c = Connection::open(path).unwrap();
+            assert_eq!(
+                c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                9
+            );
+            assert_eq!(
+                c.query_row("SELECT count(*) FROM publish_tasks", [], |r| r
+                    .get::<_, u32>(0))
+                    .unwrap(),
+                1
+            );
+        } else {
+            assert_eq!(db.get_project("old").unwrap().input.title, "旧书");
+            assert_eq!(db.list_assets("old").unwrap()[0].asset_type, "video");
+            let task = db.list_publish_tasks("old").unwrap().remove(0);
+            assert!(task.input.audio_asset_id.is_none());
+            assert_eq!(task.record.unwrap().notes, "保留");
+            db.with_connection(|c| {
+                assert_eq!(
+                    c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+                        .unwrap(),
+                    MIGRATIONS.len() as u32
+                );
+                assert!(!c
+                    .prepare("PRAGMA foreign_key_check")
+                    .unwrap()
+                    .exists([])
+                    .unwrap());
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+}
+
+#[test]
 fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_new_paths() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(dir.path().join("data.sqlite3"));
@@ -296,7 +357,7 @@ fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_ne
                 .file_path
         )
         .unwrap(),
-        b"original video"
+        crate::database::m4_tests::PORTRAIT_VIDEO
     );
     assert_eq!(
         db.read_cover_background(&p.id, &asset).unwrap(),
@@ -332,7 +393,13 @@ fn excluded_video_keeps_original_reference_and_missing_video_downgrades_ready_ta
     let i = input(&db, &p);
     let task = db.save_publish_task(None, i.clone()).unwrap();
     db.prepare_publish_task(&task.id).unwrap();
-    let video = db.list_assets(&p.id).unwrap()[0].file_path.clone();
+    let video = db
+        .list_assets(&p.id)
+        .unwrap()
+        .into_iter()
+        .find(|asset| asset.asset_type == "video")
+        .unwrap()
+        .file_path;
     let backup = db
         .create_full_backup(dir.path().to_str().unwrap(), false)
         .unwrap();
@@ -340,8 +407,24 @@ fn excluded_video_keeps_original_reference_and_missing_video_downgrades_ready_ta
     fs::remove_file(&video).unwrap();
     db.restore_full_backup(&backup.manifest_path, dir.path().to_str().unwrap())
         .unwrap();
-    assert_eq!(db.list_assets(&p.id).unwrap()[0].file_path, video);
-    assert_eq!(db.list_assets(&p.id).unwrap()[0].exists_status, "missing");
+    assert_eq!(
+        db.list_assets(&p.id)
+            .unwrap()
+            .into_iter()
+            .find(|asset| asset.asset_type == "video")
+            .unwrap()
+            .file_path,
+        video
+    );
+    assert_eq!(
+        db.list_assets(&p.id)
+            .unwrap()
+            .into_iter()
+            .find(|asset| asset.asset_type == "video")
+            .unwrap()
+            .exists_status,
+        "missing"
+    );
     assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
 }
 

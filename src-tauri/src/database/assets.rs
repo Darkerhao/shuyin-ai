@@ -41,10 +41,11 @@ fn asset_type(path: &Path) -> Result<&'static str, String> {
         .as_str()
     {
         "mp4" | "mov" | "mkv" | "avi" | "webm" | "m4v" => Ok("video"),
+        "mp3" | "m4a" | "wav" | "aac" | "flac" | "ogg" => Ok("audio"),
         "png" | "jpg" | "jpeg" | "webp" => Ok("image"),
         "srt" | "ass" | "vtt" => Ok("subtitle"),
         "txt" | "md" | "pdf" | "docx" | "epub" => Ok("document"),
-        _ => Err("暂不支持此素材格式。请选择视频、图片、字幕或文档。".into()),
+        _ => Err("暂不支持此素材格式。请选择视频、音频、图片、字幕或文档。".into()),
     }
 }
 #[cfg(target_os = "windows")]

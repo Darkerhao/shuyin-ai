@@ -380,3 +380,12 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 - 不支持 WebKit 滚动条伪元素的浏览器使用标准 `scrollbar-width: thin` 和相同配色；Reka Select 已隐藏的视口滚动条继续由组件管理，保留原有上下滚动按钮和键盘选择。
 - 仅修改共享 CSS，无新增依赖、组件、脚本状态或数据库迁移。发布影响为 `style`，默认 patch。
 - 验证：`npm run lint`、`npm run build`（含 TypeScript）、`npx vitest run`（95 项通过）及 `git diff --check` 通过。Playwright CLI 在 Chrome 有界面模式下运行本地 `output/playwright/scrollbars-verify.js`，确认页面 6px 实际宽度、滚轮与滑块拖动、文本框滚轮/键盘滚动及纵向缩放、40 项下拉列表的键盘选择，以及 360px 布局检查；页面错误为 0，截图保留在同目录的 `scrollbars-*.png`。浏览器使用隔离内存数据，未验证 Tauri 安装版及 macOS/Linux 实机。
+
+## 音频制作与成片回填（2026-10-26）
+
+- `WritingPage` 的“音频提示词”页签改为“音频制作”：保留现有 `audioPrompt`，增加固定 HTTPS 入口 `open_audio_tool`、音频导入与打开。入口只交给系统浏览器，不自动登录、生成、下载或读取 Cookie。
+- `assets.asset_type` 增加 `audio`，文件类型为 MP3/M4A/WAV/AAC/FLAC/OGG；仍只保存原路径与文件元数据，不复制音频。`publish_tasks.audio_asset_id` 记录任务所用音频，任务包 manifest 升级到 schema 2，并保存可空音频引用。
+- 发布页将“本地视频”明确为“剪映导出的最终成片”，并分别选择音频与成片。抖音上传仍只接收成片、文字和双封面，不接收音频。
+- 新增纯 Rust `media` 模块，使用锁定版本 `mp4parse 0.17.0` 解析 MP4/MOV/M4V 的 `ftyp` 与 `moov` 盒。只读取元数据盒，不遍历完整 `mdat`，避免每次任务查询扫描大视频。检查最终视频时长为正、显示尺寸为竖版 9:16（允许 2% 偏差）且至少有一条音轨。
+- 发布检查是只读验证，不转码、不修复、不复制视频。解析失败或格式不支持时任务保持草稿，源文件和历史不变。旧任务包 manifest 没有音频字段时仍可反序列化，但旧待发布任务会因缺少音频退回草稿。
+- UI 与数据迁移验证覆盖音频导入、外部入口、任务关联、v9→v10 保留、旧记录、MP4 元数据、损坏/非竖版成片拒绝以及完整备份恢复。

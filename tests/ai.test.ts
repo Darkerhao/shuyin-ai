@@ -9,10 +9,10 @@ import * as api from '../src/services/ai'
 import * as projects from '../src/services/projects'
 import * as drafts from '../src/services/drafts'
 vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
-import { emptyProject } from '../src/types/project'
+import { emptyProject, type Asset } from '../src/types/project'
 import { emptyProvider, emptyPublishing, type ModelProvider, type WritingVersion } from '../src/types/ai'
-vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
-vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn() }))
+vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), openAudioTool: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
+vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn() }))
 const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模型', modelName: 'model', isDefault: true, credentialStatus: 'available' }
 const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'publishing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
 const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
@@ -42,6 +42,7 @@ beforeEach(() => {
   vi.mocked(api.listProviders).mockResolvedValue([provider])
   vi.mocked(api.listVersions).mockImplementation(async (_id, kind) => kind === 'publishing' ? [initial] : [])
   vi.mocked(api.startGeneration).mockResolvedValue('t1')
+  vi.mocked(projects.listAssets).mockResolvedValue([])
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
@@ -118,11 +119,11 @@ describe('publishing workflow', () => {
   it('retains edits across tabs and saves all fields with the keyboard shortcut', async () => {
     const { wrapper } = await render()
     expect(tabPanel(wrapper, '发布文案').attributes('hidden')).toBeUndefined()
-    expect(tabPanel(wrapper, '音频提示词').attributes('hidden')).toBeDefined()
+    expect(tabPanel(wrapper, '音频制作').attributes('hidden')).toBeDefined()
     await wrapper.get('#result-title').setValue('跨页签保留的标题')
     ;(tab(wrapper, '发布文案').element as HTMLButtonElement).focus()
     await tab(wrapper, '发布文案').trigger('keydown', { key: 'ArrowRight' }); await flushPromises()
-    expect(tab(wrapper, '音频提示词').attributes('aria-selected')).toBe('true')
+    expect(tab(wrapper, '音频制作').attributes('aria-selected')).toBe('true')
     expect(tabPanel(wrapper, '发布文案').attributes('hidden')).toBeDefined()
     await wrapper.get('#result-audioPrompt').setValue('修改后的音频提示词')
     await tab(wrapper, '封面素材').trigger('click')
@@ -253,6 +254,22 @@ describe('publishing workflow', () => {
     expect(api.cancelGeneration).toHaveBeenCalledWith('t1')
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('原有标题')
     await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects')
+  })
+  it('opens the external audio tool and imports the finished audio without changing the prompt', async () => {
+    const audio: Asset = { id: 'audio-1', projectId: 'p1', assetType: 'audio', filePath: 'D:/本期音频.m4a', originalName: '本期音频.m4a', fileSize: 2048, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
+    vi.mocked(projects.chooseAudio).mockResolvedValue('D:/本期音频.m4a')
+    vi.mocked(projects.linkAsset).mockResolvedValue('audio-1')
+    vi.mocked(projects.listAssets).mockResolvedValueOnce([]).mockResolvedValueOnce([audio])
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    await button(wrapper, '打开 Gemini Notebook').trigger('click'); await flushPromises()
+    expect(api.openAudioTool).toHaveBeenCalledOnce()
+    await button(wrapper, '导入音频成品').trigger('click'); await flushPromises()
+    expect(projects.linkAsset).toHaveBeenCalledWith('p1', 'D:/本期音频.m4a')
+    expect(wrapper.text()).toContain('本期音频.m4a')
+    expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('原有提示词')
+    await button(wrapper, '打开音频').trigger('click'); await flushPromises()
+    expect(projects.openAsset).toHaveBeenCalledWith('audio-1')
   })
   it('copies the current edited field, reports failure, and preserves content', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)

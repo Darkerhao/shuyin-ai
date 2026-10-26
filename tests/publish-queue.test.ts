@@ -8,7 +8,7 @@ import type { PublishQueueItem } from '../src/types/publishing'
 
 vi.mock('../src/services/publishing', () => ({ listPublishQueue: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn() }))
-const ready: PublishQueueItem = { id: 'older', projectId: 'book-one', projectTitle: '第一本书', writingVersionId: 'writing-one', title: '第一篇标题', description: '发布内容', tags: '', videoAssetId: 'video-one', landscapeCoverId: 'cover-one', portraitCoverId: 'cover-two', titleConfirmed: true, coversConfirmed: true, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [], record: null }
+const ready: PublishQueueItem = { id: 'older', projectId: 'book-one', projectTitle: '第一本书', writingVersionId: 'writing-one', title: '第一篇标题', description: '发布内容', tags: '', videoAssetId: 'video-one', audioAssetId: 'audio-one', landscapeCoverId: 'cover-one', portraitCoverId: 'cover-two', titleConfirmed: true, coversConfirmed: true, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [], record: null }
 const tasks: PublishQueueItem[] = [ready, { ...ready, id: 'second', projectId: 'book-two', projectTitle: '第二本书', title: '第二篇标题' }, { ...ready, id: 'draft', status: 'draft', title: '待完善', checklist: [{ key: 'video', label: '视频已关联且文件可用', passed: false }] }, { ...ready, id: 'published', status: 'published', title: '已完成', record: { publishedAt: '2026-10-25T00:00:00Z', postUrl: 'https://www.douyin.com/video/123', notes: '人工确认的记录' } }]
 const wrappers: ReturnType<typeof mount>[] = []
 async function render() {

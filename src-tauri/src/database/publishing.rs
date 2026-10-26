@@ -4,6 +4,7 @@ use super::{
     projects::{create_named_directory, get, new_id, NOW},
     Database,
 };
+use crate::media;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -26,6 +27,8 @@ pub struct PublishInput {
     pub description: String,
     pub tags: String,
     pub video_asset_id: Option<String>,
+    #[serde(default)]
+    pub audio_asset_id: Option<String>,
     pub landscape_cover_id: Option<String>,
     pub portrait_cover_id: Option<String>,
     pub title_confirmed: bool,
@@ -108,6 +111,8 @@ struct Manifest {
     platform: String,
     input: PublishInput,
     video: FileReference,
+    #[serde(default)]
+    audio: Option<FileReference>,
     landscape: FileReference,
     portrait: FileReference,
 }
@@ -138,7 +143,26 @@ fn video_path(c: &Connection, input: &PublishInput) -> Result<String, String> {
     )
     .optional()
     .map_err(|e| e.to_string())?
-    .ok_or_else(|| "请选择本书的视频素材。".into())
+    .ok_or_else(|| "请选择本书剪映导出的最终成片。".into())
+}
+
+fn audio_path(c: &Connection, input: &PublishInput) -> Result<String, String> {
+    c.query_row(
+        "SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='audio'",
+        params![input.audio_asset_id, input.project_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "请选择本书的音频成品。".into())
+}
+
+fn final_video_ready(c: &Connection, input: &PublishInput) -> bool {
+    video_path(c, input)
+        .and_then(|path| media::inspect(Path::new(&path)))
+        .is_ok_and(|metadata| {
+            metadata.duration_seconds > 0.0 && metadata.is_portrait_9_16() && metadata.has_audio
+        })
 }
 
 fn cover_path(
@@ -163,8 +187,8 @@ fn cover_path(
 }
 
 fn load(c: &Connection, id: &str) -> Result<PublishTask, String> {
-    let mut task = c.query_row("SELECT id,project_id,title,description,tags,video_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,task_directory,created_at,updated_at,writing_version_id FROM publish_tasks WHERE id=?1", [id], |r| Ok(PublishTask {
-        id: r.get(0)?, input: PublishInput { project_id:r.get(1)?, title:r.get(2)?, description:r.get(3)?, tags:r.get(4)?, video_asset_id:r.get(5)?, landscape_cover_id:r.get(6)?, portrait_cover_id:r.get(7)?, title_confirmed:r.get(8)?, covers_confirmed:r.get(9)?, writing_version_id:r.get(14)? }, status:r.get(10)?, task_directory:r.get(11)?, created_at:r.get(12)?, updated_at:r.get(13)?, checklist:Vec::new(), record:None
+    let mut task = c.query_row("SELECT id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,task_directory,created_at,updated_at,writing_version_id FROM publish_tasks WHERE id=?1", [id], |r| Ok(PublishTask {
+        id: r.get(0)?, input: PublishInput { project_id:r.get(1)?, title:r.get(2)?, description:r.get(3)?, tags:r.get(4)?, video_asset_id:r.get(5)?, audio_asset_id:r.get(6)?, landscape_cover_id:r.get(7)?, portrait_cover_id:r.get(8)?, title_confirmed:r.get(9)?, covers_confirmed:r.get(10)?, writing_version_id:r.get(15)? }, status:r.get(11)?, task_directory:r.get(12)?, created_at:r.get(13)?, updated_at:r.get(14)?, checklist:Vec::new(), record:None
     })).optional().map_err(|e| e.to_string())?.ok_or("发布任务不存在。")?;
     task.record = c
         .query_row(
@@ -186,11 +210,16 @@ fn load(c: &Connection, id: &str) -> Result<PublishTask, String> {
 fn manifest(c: &Connection, task: &PublishTask) -> Result<Manifest, String> {
     let i = &task.input;
     Ok(Manifest {
-        schema_version: 1,
+        schema_version: 2,
         task_id: task.id.clone(),
         platform: "douyin".into(),
         input: i.clone(),
         video: reference(&video_path(c, i)?)?,
+        audio: i
+            .audio_asset_id
+            .as_ref()
+            .map(|_| audio_path(c, i).and_then(|path| reference(&path)))
+            .transpose()?,
         landscape: reference(&cover_path(
             c,
             &i.project_id,
@@ -243,7 +272,7 @@ fn text_files(m: &Manifest) -> Vec<(&'static str, String)> {
     vec![
         ("title.txt",m.input.title.clone()), ("description.txt",m.input.description.clone()), ("tags.txt",m.input.tags.clone()),
         ("video-path.txt",m.video.path.clone()),
-        ("README.txt",format!("书引 AI · 抖音发布准备\n\n1. 在 {PORTAL} 登录自己的账号。\n2. 从 video-path.txt 的原路径选择视频上传；任务包未复制视频。\n3. 分别上传 cover-landscape.png（4:3）和 cover-portrait.png（3:4）。\n4. 复制 title.txt、description.txt 与可选 tags.txt，检查预览后手动发布。\n5. 发布成功后回到书引 AI，确认并记录作品链接。\n\n请保留视频源文件；此任务包不代表已发布。\n")),
+        ("README.txt",format!("书引 AI · 抖音发布准备\n\n1. 在 {PORTAL} 登录自己的账号。\n2. 从 video-path.txt 的原路径选择视频上传；任务包未复制视频。\n3. 分别上传 cover-landscape.png（4:3）和 cover-portrait.png（3:4）。\n4. 复制 title.txt、description.txt 与可选 tags.txt，检查预览后手动发布。\n5. 发布成功后回到书引 AI，确认并记录作品链接。\n\n音频仅作制作记录，不上传抖音；请保留音频和视频源文件。此任务包不代表已发布。\n")),
     ]
 }
 
@@ -295,6 +324,11 @@ pub(super) fn rebase_package(c: &Connection, id: &str) -> Result<(), String> {
         size: m.video.size,
         modified: m.video.modified,
     });
+    m.audio = if m.input.audio_asset_id.is_some() {
+        Some(reference(&audio_path(c, &m.input)?)?)
+    } else {
+        None
+    };
     m.landscape = reference(&cover_path(
         c,
         &m.input.project_id,
@@ -335,9 +369,14 @@ fn checked(c: &Connection, id: &str) -> Result<PublishTask, String> {
             !i.description.trim().is_empty(),
         ),
         (
+            "audio",
+            "音频成品已导入且文件可用",
+            audio_path(c, i).and_then(|p| reference(&p)).is_ok(),
+        ),
+        (
             "video",
-            "视频已关联且文件可用",
-            video_path(c, i).and_then(|p| reference(&p)).is_ok(),
+            "最终成片为竖版、含音轨且文件可用",
+            final_video_ready(c, i),
         ),
         (
             "landscape",
@@ -437,13 +476,14 @@ impl Database {
                 if !tx.query_row("SELECT EXISTS(SELECT 1 FROM writing_versions WHERE id=?1 AND project_id=?2 AND kind='publishing')",params![version,input.project_id],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("文案版本不属于当前书籍。".into()); }
             }
             if input.video_asset_id.is_some() { video_path(&tx,&input)?; }
+            if input.audio_asset_id.is_some() { audio_path(&tx,&input)?; }
             for (id,w,h) in [(&input.landscape_cover_id,1440,1080),(&input.portrait_cover_id,1080,1440)] { if id.is_some() { cover_path(&tx,&input.project_id,id,w,h)?; } }
             let id = if let Some(id)=id {
                 let old = load(&tx,id)?;
                 if old.input.project_id != input.project_id || old.status=="published" { return Err("已发布任务不能修改，或任务不属于这本书；请新建任务。".into()); }
                 id.to_owned()
             } else { new_id(&tx)? };
-            tx.execute(&format!("INSERT INTO publish_tasks(id,project_id,title,description,tags,video_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'draft',{NOW},{NOW}) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,tags=excluded.tags,video_asset_id=excluded.video_asset_id,landscape_cover_id=excluded.landscape_cover_id,portrait_cover_id=excluded.portrait_cover_id,title_confirmed=excluded.title_confirmed,covers_confirmed=excluded.covers_confirmed,status='draft',task_directory=NULL,updated_at=excluded.updated_at"),params![id,input.project_id,input.title,input.description,input.tags,input.video_asset_id,input.landscape_cover_id,input.portrait_cover_id,input.title_confirmed,input.covers_confirmed]).map_err(|e|e.to_string())?;
+            tx.execute(&format!("INSERT INTO publish_tasks(id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'draft',{NOW},{NOW}) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,tags=excluded.tags,video_asset_id=excluded.video_asset_id,audio_asset_id=excluded.audio_asset_id,landscape_cover_id=excluded.landscape_cover_id,portrait_cover_id=excluded.portrait_cover_id,title_confirmed=excluded.title_confirmed,covers_confirmed=excluded.covers_confirmed,status='draft',task_directory=NULL,updated_at=excluded.updated_at"),params![id,input.project_id,input.title,input.description,input.tags,input.video_asset_id,input.audio_asset_id,input.landscape_cover_id,input.portrait_cover_id,input.title_confirmed,input.covers_confirmed]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE book_projects SET updated_at={NOW} WHERE id=?1"),[&input.project_id]).map_err(|e|e.to_string())?;
             tx.execute("UPDATE publish_tasks SET writing_version_id=?1 WHERE id=?2",params![input.writing_version_id,id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;
@@ -535,7 +575,7 @@ impl Database {
                 video_path(c, &task.input)?;
                 task.input
                     .video_asset_id
-                    .ok_or_else(|| "请先关联视频。".into())
+                    .ok_or_else(|| "请先关联最终成片。".into())
             })?;
             return self.open_asset(&asset_id, false);
         }

@@ -7,8 +7,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/ai'
-import { getProject, isDesktop } from '../../services/projects'
+import { chooseAudio, getProject, isDesktop, linkAsset, listAssets, openAsset } from '../../services/projects'
 import { emptyPublishing, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type WritingVersion } from '../../types/ai'
+import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import { useEditorDraft } from '../../composables/useEditorDraft'
 import { readDraft } from '../../services/drafts'
@@ -24,6 +25,7 @@ const ready = ref(false)
 const providers = ref<ModelProvider[]>([])
 const providerId = ref('')
 const versions = ref<WritingVersion[]>([])
+const audioAssets = ref<Asset[]>([])
 const selected = ref<WritingVersion | null>(null)
 const draft = ref(emptyPublishing())
 const original = ref(JSON.stringify(draft.value))
@@ -41,7 +43,7 @@ const copiedField = ref('')
 let copyTimer: ReturnType<typeof globalThis.setTimeout> | undefined
 const tabs = [
   { value: 'publishing', label: '发布文案' },
-  { value: 'audio', label: '音频提示词' },
+  { value: 'audio', label: '音频制作' },
   { value: 'cover', label: '封面素材' },
 ]
 const { busy, error, message, run } = useOperation()
@@ -62,8 +64,9 @@ function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || 
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(copyTimer) })
 const load = () => run(async () => {
-  const [project, models, saved, recovery] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing'), readDraft<PublishingContent>(props.id, 'writing')])
+  const [project, models, saved, recovery, files] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing'), readDraft<PublishingContent>(props.id, 'writing'), listAssets(props.id)])
   title.value = project.title
+  audioAssets.value = files.filter(asset => asset.assetType === 'audio')
   providers.value = models.filter(p => p.isEnabled && p.modelKind === 'text')
   providerId.value = providers.value.find(p => p.isDefault)?.id ?? providers.value[0]?.id ?? ''
   versions.value = saved
@@ -81,6 +84,16 @@ async function persistWriting() {
   await autosave.flush()
 }
 const save = () => run(async () => { await persistWriting(); message.value = '修改已保存。' })
+const openAudioSite = () => run(async () => { await api.openAudioTool(); message.value = '已在浏览器打开 Gemini Notebook。下载音频后回到这里导入。' })
+const importAudio = () => run(async () => {
+  const path = await chooseAudio()
+  if (!path) return
+  await linkAsset(props.id, path)
+  const files = await listAssets(props.id)
+  audioAssets.value = files.filter(asset => asset.assetType === 'audio')
+  message.value = '音频已导入。请到剪映生成字幕、添加视频背景并导出最终成片。'
+})
+const playAudio = (id: string) => run(() => openAsset(id))
 const generate = () => run(async () => {
   try {
     taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value })
@@ -138,7 +151,7 @@ async function copy(field: keyof Omit<PublishingContent, 'format'>, label: strin
 const fields: { key: PublishingField; label: string; rows: number; limit: number; help?: string }[] = [
   { key: 'title', label: '发布标题', rows: 2, limit: 30 },
   { key: 'description', label: '发布内容', rows: 7, limit: 1000 },
-  { key: 'audioPrompt', label: '音频生成提示词', rows: 18, limit: 20000, help: '复制到音频工具的自定义提示词中，并在该工具中选择对应书籍来源。' },
+  { key: 'audioPrompt', label: '音频生成提示词', rows: 18, limit: 20000, help: '复制到音频工具的自定义提示词中，并在该工具中选择对应书籍来源。生成音频后导入下方音频素材，再交给剪映制作。' },
   { key: 'coverTitle', label: '封面主标题', rows: 2, limit: 30, help: '提炼本书的悬念或看点，与发布标题分开使用。旧版本没有封面内容，可再次一键生成，也可手动填写。' },
   { key: 'coverSubtitle', label: '封面副标题', rows: 2, limit: 60, help: '用书名和具体看点补充主标题，可直接带入制作封面。' },
   { key: 'coverPromptLandscape', label: '横版 4:3 封面提示词', rows: 7, limit: 2000, help: '用于 1440 × 1080 横版构图，复制到图片工具并选择 4:3。只生成无字背景，主副标题在制作封面时添加。' },
@@ -417,7 +430,7 @@ onMounted(() => { if (desktop) void load() })
           :value="tab.value"
         >
           <p class="tab-intro">
-            {{ tab.value === 'publishing' ? '一份有吸引力的标题，一段让人想点开的介绍。' : tab.value === 'audio' ? '复制到音频工具的自定义指导，并选择对应的书籍来源。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
+            {{ tab.value === 'publishing' ? '一份有吸引力的标题，一段让人想点开的介绍。' : tab.value === 'audio' ? '生成音频后导入项目，再交给剪映生成字幕、添加背景并导出最终成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
           </p>
           <section
             v-for="field in fields.filter(item => fieldTab(item.key) === tab.value)"
@@ -457,6 +470,71 @@ onMounted(() => { if (desktop) void load() })
             >
               {{ [...draft[field.key]].length }} / {{ field.limit }}
             </p>
+          </section>
+          <section
+            v-if="tab.value === 'audio'"
+            class="panel editor-section"
+            aria-labelledby="audio-assets-title"
+          >
+            <div class="result-heading">
+              <h2 id="audio-assets-title">
+                音频成品与剪映制作
+              </h2>
+              <Badge variant="secondary">
+                {{ audioAssets.length }} 个音频
+              </Badge>
+            </div>
+            <p class="muted">
+              外部生成并下载音频后导入这里；随后在剪映生成字幕、添加视频背景，导出最终成片，再到发布准备关联成片。
+            </p>
+            <div class="actions wrap">
+              <Button
+                type="button"
+                :disabled="!desktop || busy"
+                variant="outline"
+                @click="openAudioSite"
+              >
+                <AppIcon name="headphones" />打开 Gemini Notebook
+              </Button>
+              <Button
+                type="button"
+                :disabled="!desktop || busy"
+                @click="importAudio"
+              >
+                <AppIcon name="upload" />导入音频成品
+              </Button>
+            </div>
+            <p
+              v-if="!audioAssets.length"
+              class="muted"
+            >
+              还没有音频成品。支持 MP3、M4A、WAV、AAC、FLAC 和 OGG。
+            </p>
+            <article
+              v-for="asset in audioAssets"
+              :key="asset.id"
+              class="asset-row"
+            >
+              <h3>
+                {{ asset.originalName }} <Badge variant="secondary">
+                  音频
+                </Badge>
+              </h3>
+              <p class="file-path">
+                {{ asset.filePath }}
+              </p>
+              <p :class="asset.existsStatus === 'available' ? 'muted' : 'error'">
+                {{ asset.existsStatus === 'available' ? '文件可用' : '文件已丢失，请到发布准备页重新定位' }} · {{ (asset.fileSize / 1024 / 1024).toFixed(2) }} MB
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                :disabled="busy || asset.existsStatus !== 'available'"
+                @click="playAudio(asset.id)"
+              >
+                打开音频
+              </Button>
+            </article>
           </section>
         </TabsContent>
       </Tabs>

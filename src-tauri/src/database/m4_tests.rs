@@ -5,6 +5,8 @@ use super::{
 };
 use std::{fs, path::Path};
 
+pub(super) const PORTRAIT_VIDEO: &[u8] = include_bytes!("../../tests/fixtures/portrait.mp4");
+
 pub(super) fn project(db: &Database) -> Project {
     db.save_project(None,serde_json::from_value(serde_json::json!({"title":"中文书籍","author":"作者","publisher":"","isbn":"","description":"","sourceNotes":"原始资料","theme":"","targetAudience":"","contentStyle":"","targetDurationSeconds":600,"status":"draft"})).unwrap()).unwrap()
 }
@@ -25,7 +27,9 @@ fn cover(db: &Database, id: &str, width: u32, height: u32) -> String {
 }
 pub(super) fn input(db: &Database, project: &Project) -> PublishInput {
     let path = Path::new(&project.workspace_path).join("中文 视频.mp4");
-    fs::write(&path, b"original video").unwrap();
+    fs::write(&path, PORTRAIT_VIDEO).unwrap();
+    let audio = Path::new(&project.workspace_path).join("中文 音频.mp3");
+    fs::write(&audio, b"original audio").unwrap();
     PublishInput {
         writing_version_id: None,
         project_id: project.id.clone(),
@@ -34,6 +38,10 @@ pub(super) fn input(db: &Database, project: &Project) -> PublishInput {
         tags: "#读书 #中文".into(),
         video_asset_id: Some(
             db.link_asset(&project.id, path.to_str().unwrap(), None)
+                .unwrap(),
+        ),
+        audio_asset_id: Some(
+            db.link_asset(&project.id, audio.to_str().unwrap(), None)
                 .unwrap(),
         ),
         landscape_cover_id: Some(cover(db, &project.id, 1440, 1080)),
@@ -127,7 +135,7 @@ fn upload_snapshot_uses_selected_task_and_package_covers() {
         Path::new(&snapshot.portrait),
         pack.join("cover-portrait.png")
     );
-    assert_eq!(fs::read(&snapshot.video).unwrap(), b"original video");
+    assert_eq!(fs::read(&snapshot.video).unwrap(), PORTRAIT_VIDEO);
 
     let other = project(&db);
     let mut different = input(&db, &other);
@@ -146,7 +154,7 @@ fn upload_snapshot_uses_selected_task_and_package_covers() {
     db.prepare_publish_task(&task.id).unwrap();
     db.record_publish_success(&task.id, record()).unwrap();
     assert!(db.publish_snapshot(&task.id).is_err());
-    assert_eq!(fs::read(&snapshot.video).unwrap(), b"original video");
+    assert_eq!(fs::read(&snapshot.video).unwrap(), PORTRAIT_VIDEO);
 }
 
 #[test]
@@ -178,6 +186,30 @@ fn incomplete_and_foreign_materials_cannot_be_ready() {
 }
 
 #[test]
+fn audio_and_final_video_checks_are_required() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let p = project(&db);
+    let original = input(&db, &p);
+    let mut missing_audio = original.clone();
+    missing_audio.audio_asset_id = None;
+    let task = db.save_publish_task(None, missing_audio).unwrap();
+    assert!(db
+        .prepare_publish_task(&task.id)
+        .unwrap_err()
+        .contains("音频成品"));
+    let bad = Path::new(&p.workspace_path).join("不是成片.mp4");
+    fs::write(&bad, b"not a video").unwrap();
+    let mut bad_video = original;
+    bad_video.video_asset_id = Some(db.link_asset(&p.id, bad.to_str().unwrap(), None).unwrap());
+    let task = db.save_publish_task(None, bad_video).unwrap();
+    assert!(db
+        .prepare_publish_task(&task.id)
+        .unwrap_err()
+        .contains("最终成片"));
+}
+
+#[test]
 fn package_is_complete_unique_and_preserves_sources_and_unicode() {
     let dir = tempfile::tempdir().unwrap();
     let dbpath = dir.path().join("db.sqlite3");
@@ -197,7 +229,7 @@ fn package_is_complete_unique_and_preserves_sources_and_unicode() {
     );
     assert_eq!(fs::read_to_string(pack.join("tags.txt")).unwrap(), i.tags);
     let video = fs::read_to_string(pack.join("video-path.txt")).unwrap();
-    assert_eq!(fs::read(&video).unwrap(), b"original video");
+    assert_eq!(fs::read(&video).unwrap(), PORTRAIT_VIDEO);
     assert!(!pack.join("中文 视频.mp4").exists());
     for (name, w, h) in [
         ("cover-landscape.png", 1440, 1080),
@@ -220,7 +252,7 @@ fn package_is_complete_unique_and_preserves_sources_and_unicode() {
     assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "ready");
     db.delete_project(&p.id).unwrap();
     assert!(pack.is_dir());
-    assert_eq!(fs::read(video).unwrap(), b"original video");
+    assert_eq!(fs::read(video).unwrap(), PORTRAIT_VIDEO);
 }
 
 #[test]
@@ -259,7 +291,7 @@ fn missing_relocated_changed_or_unlinked_materials_invalidate_ready_packages() {
     assert!(current.input.video_asset_id.is_none());
     assert_eq!(current.status, "draft");
     assert!(pack.is_dir());
-    assert_eq!(fs::read(moved).unwrap(), b"original video");
+    assert_eq!(fs::read(moved).unwrap(), PORTRAIT_VIDEO);
 }
 
 #[test]
@@ -289,7 +321,7 @@ fn package_io_and_commit_failure_keep_draft_sources_and_previous_package() {
     db.save_publish_task(Some(&task.id), edit).unwrap();
     assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
     let source = Path::new(&p.workspace_path).join("中文 视频.mp4");
-    assert_eq!(fs::read(source).unwrap(), b"original video");
+    assert_eq!(fs::read(source).unwrap(), PORTRAIT_VIDEO);
     let p2 = project(&db);
     let i2 = input(&db, &p2);
     let t2 = db.save_publish_task(None, i2).unwrap();
@@ -565,9 +597,12 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
             tasks
         );
         assert_eq!(db.list_ai_tasks(&id).unwrap().len(), 2);
-        assert_eq!(
-            fs::read(&db.list_assets(&id).unwrap()[0].file_path).unwrap(),
-            b"original video"
-        );
+        let video = db
+            .list_assets(&id)
+            .unwrap()
+            .into_iter()
+            .find(|asset| asset.asset_type == "video")
+            .unwrap();
+        assert_eq!(fs::read(&video.file_path).unwrap(), PORTRAIT_VIDEO);
     }
 }

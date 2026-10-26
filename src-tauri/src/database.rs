@@ -75,6 +75,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0007_publish_tasks.sql"),
     include_str!("../migrations/0008_generation_preview.sql"),
     include_str!("../migrations/0009_creator_workflow.sql"),
+    include_str!("../migrations/0010_audio_workflow.sql"),
 ];
 
 impl Database {

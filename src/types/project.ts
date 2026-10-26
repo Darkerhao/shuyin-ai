@@ -12,7 +12,7 @@ export interface Project extends ProjectInput {
   id: string; workspacePath: string; createdAt: string; updatedAt: string; archivedAt: string | null
 }
 export interface Asset {
-  id: string; projectId: string; assetType: 'video' | 'image' | 'cover' | 'subtitle' | 'document'
+  id: string; projectId: string; assetType: 'video' | 'audio' | 'image' | 'cover' | 'subtitle' | 'document'
   filePath: string; originalName: string; fileSize: number; modifiedAt: number
   existsStatus: 'available' | 'missing' | 'unknown'; createdAt: string
 }
