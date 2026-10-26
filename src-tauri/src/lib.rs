@@ -4,6 +4,8 @@ mod commands;
 mod cover_commands;
 mod credentials;
 mod database;
+mod douyin;
+mod douyin_webview;
 mod note_import;
 mod publish_commands;
 mod updates;
@@ -40,7 +42,15 @@ pub fn run() {
                 app.config().identifier.clone(),
             ));
             app.manage(ai::ActiveTasks::default());
+            app.manage(douyin::DouyinPublisher::default());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(publishing) = window.app_handle().get_webview_window("douyin-publish") {
+                    let _ = publishing.destroy();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             read_probe,
@@ -68,10 +78,16 @@ pub fn run() {
             commands::inspect_full_backup,
             commands::restore_full_backup,
             publish_commands::list_publish_tasks,
+            publish_commands::list_publish_queue,
             publish_commands::save_publish_task,
             publish_commands::prepare_publish_task,
             publish_commands::record_publish_success,
             publish_commands::open_publish_item,
+            douyin::open_douyin_window,
+            douyin::inspect_douyin_window,
+            douyin::upload_douyin_video,
+            douyin::complete_douyin_task,
+            douyin::stop_douyin_task,
             cover_commands::list_cover_versions,
             cover_commands::save_cover_version,
             cover_commands::read_cover_background,

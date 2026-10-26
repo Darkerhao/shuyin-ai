@@ -6,7 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import * as api from '../../services/publishing'
 import { getProject, isDesktop, listAssets } from '../../services/projects'
@@ -22,8 +22,9 @@ import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import CoverThumbnail from '../../components/CoverThumbnail.vue'
+import DouyinVerification from './DouyinVerification.vue'
 
-const props = defineProps<{ id: string }>()
+const props = defineProps<{ id: string; taskId?: string }>()
 const desktop = isDesktop()
 const title = ref('')
 const loaded = ref(false)
@@ -44,7 +45,9 @@ const selectedLandscape = computed(() => landscape.value.find(c => c.id === draf
 const selectedPortrait = computed(() => portrait.value.find(c => c.id === draft.value.portraitCoverId))
 const recordOpen = ref(false)
 const record = ref({ publishedAt: '', postUrl: '', notes: '' })
-const { busy, error, message, run } = useOperation()
+const { busy: operationBusy, error, message, run } = useOperation()
+const douyinBusy = ref(false)
+const busy = computed(() => operationBusy.value || douyinBusy.value)
 
 const taskLabel = (task: PublishTask) => `${task.title || '未填写标题'} · ${publishStatuses[task.status]} · ${new Date(task.createdAt).toLocaleString()}`
 const videoLabel = (asset: Asset) => `${asset.originalName}${asset.existsStatus !== 'available' ? '（文件不可用）' : ''}`
@@ -78,10 +81,14 @@ globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => globalThis.removeEventListener('beforeunload', beforeUnload))
 
 const load = () => run(async () => {
+  loaded.value = false
   const [project, saved, files, exported, versions] = await Promise.all([getProject(props.id), api.listPublishTasks(props.id), listAssets(props.id), listCovers(props.id), listVersions(props.id, 'publishing')])
+  const target = props.taskId ? saved.find(task => task.id === props.taskId) : saved[0] ?? null
+  if (props.taskId && !target) throw new Error('此任务不属于当前书籍或已不存在，请返回发布任务列表。')
   title.value = project.title; tasks.value = saved; assets.value = files; covers.value = exported; writing.value = versions
-  accept(saved[0] ?? null); loaded.value = true
+  accept(target ?? null); loaded.value = true
 })
+watch(() => props.taskId, () => { if (desktop) void load() })
 const refresh = () => run(async () => {
   const [files, exported, saved] = await Promise.all([listAssets(props.id), listCovers(props.id), api.listPublishTasks(props.id)])
   assets.value = files; covers.value = exported; tasks.value = saved
@@ -142,6 +149,12 @@ onMounted(() => { if (desktop) void load() })
         {{ title || '书籍' }} · 选好素材与文案，生成任务包后到抖音手动发布。
       </p>
     </div>
+    <RouterLink
+      to="/publishing"
+      class="back-link"
+    >
+      {{ published ? '继续处理下一篇' : '发布任务列表' }}
+    </RouterLink>
     <Badge variant="secondary">
       <AppIcon name="upload" />发布前的最后一步
     </Badge>
@@ -167,6 +180,13 @@ onMounted(() => { if (desktop) void load() })
     {{ busy ? '读取中…' : '重新读取' }}
   </Button>
   <template v-if="loaded">
+    <DouyinVerification
+      :key="selected?.id ?? 'new'"
+      :desktop="desktop"
+      :task="selected"
+      :disabled="busy || dirty || recordOpen"
+      @working="douyinBusy = $event"
+    />
     <section class="panel">
       <div class="result-heading">
         <h2>本书发布任务</h2><Badge variant="secondary">

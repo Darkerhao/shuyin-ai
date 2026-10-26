@@ -8,6 +8,7 @@ import * as api from '../src/services/publishing'
 import * as projects from '../src/services/projects'
 import * as ai from '../src/services/ai'
 import * as covers from '../src/services/covers'
+import * as douyin from '../src/services/douyin'
 import { emptyPublishing } from '../src/types/ai'
 import { emptyProject, type Asset } from '../src/types/project'
 import { newCover } from '../src/types/cover'
@@ -16,22 +17,24 @@ vi.mock('../src/services/publishing', () => ({ listPublishTasks: vi.fn(), savePu
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), linkAsset: vi.fn(), chooseAsset: vi.fn(), unlinkAsset: vi.fn(), openAsset: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listVersions: vi.fn() }))
 vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), readCoverExport: vi.fn() }))
+vi.mock('../src/services/douyin', () => ({ openDouyinWindow: vi.fn(), inspectDouyinWindow: vi.fn(), uploadDouyinVideo: vi.fn(), completeDouyinTask: vi.fn(), stopDouyinTask: vi.fn(), onDouyinProgress: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ decodeBackground: vi.fn(async () => ({ src: 'data:image/png;base64,thumbnail' })) }))
 const task: PublishTask = { id: 't1', projectId: 'p1', writingVersionId: null, title: '中文标题', description: '第一行\n第二行', tags: '#读书', videoAssetId: 'a1', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: true, coversConfirmed: true, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [{ key: 'video', label: '视频已关联且文件可用', passed: true }], record: null }
 const asset: Asset = { id: 'a1', projectId: 'p1', assetType: 'video', originalName: '视频.mp4', filePath: 'D:/视频.mp4', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
 const wrappers: ReturnType<typeof mount>[] = []
-async function render() {
+async function render(path = '/projects/p1/publishing') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
-    { path: '/projects/:id/publishing', component: PublishingPage, props: true },
+    { path: '/projects/:id/publishing', component: PublishingPage, props: route => ({ id: route.params.id, taskId: route.query.task }) },
     ...['/settings', '/projects', '/projects/:id/writing', '/projects/:id/covers', '/settings/models'].map(path => ({ path, component: { template: '<p>other page</p>' } })),
   ] })
-  await router.push('/projects/p1/publishing'); await router.isReady()
+  await router.push(path); await router.isReady()
   const wrapper = mount(App, { attachTo: document.body, global: { plugins: [router] } }); wrappers.push(wrapper); await flushPromises()
   return { wrapper, router }
 }
 function button(w: ReturnType<typeof mount>, label: string) { return w.findAll('button').find(b => b.text() === label)! }
 beforeEach(() => {
   vi.resetAllMocks(); vi.stubGlobal('confirm', vi.fn(() => false))
+  vi.mocked(douyin.onDouyinProgress).mockResolvedValue(vi.fn())
   vi.mocked(covers.readCoverExport).mockResolvedValue(new ArrayBuffer(0))
   vi.mocked(projects.isDesktop).mockReturnValue(true)
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), id: 'p1', title: '测试书', workspacePath: 'D:/书籍', createdAt: '', updatedAt: '', archivedAt: null })
@@ -48,6 +51,40 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 
 describe('M4 publish preparation', () => {
+  it('loads the exact older task from the queue and keeps its saved writing source', async () => {
+    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, id: 'newer', title: '新任务' }, { ...task, writingVersionId: 'saved-source' }])
+    vi.mocked(ai.listVersions).mockResolvedValue([{ id: 'saved-source', projectId: 'p1', kind: 'publishing', content: { ...emptyPublishing(), title: '来源标题', description: '来源正文' }, versionNo: 1, sourceType: 'manual', modelName: '', promptVersion: '', isConfirmed: false, createdAt: '' }])
+    const { wrapper, router } = await render('/projects/p1/publishing?task=t1')
+    expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe(task.title)
+    expect(wrapper.get('#publish-writing-version').text()).toContain('来源标题')
+    await router.push('/projects/p1/publishing?task=newer'); await flushPromises()
+    expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('新任务')
+  })
+  it('refuses an unknown or foreign task from the queue instead of selecting a different task', async () => {
+    const { wrapper } = await render('/projects/p1/publishing?task=foreign')
+    expect(wrapper.text()).toContain('此任务不属于当前书籍或已不存在')
+    expect(wrapper.find('#publish-title').exists()).toBe(false)
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+  })
+  it('keeps the task, material selection and route fixed during assisted publishing', async () => {
+    vi.mocked(douyin.inspectDouyinWindow).mockResolvedValue({ supported: true, open: true, path: '/creator-micro/content/upload', loginVisible: false, online: true })
+    let finish!: () => void
+    vi.mocked(douyin.uploadDouyinVideo).mockImplementation(() => new Promise<void>(resolve => { finish = resolve }))
+    const { wrapper, router } = await render()
+    await button(wrapper, '检查抖音页面').trigger('click'); await flushPromises()
+    await wrapper.get('#douyin-account-confirmed').trigger('click')
+    await button(wrapper, '上传并自动填写当前任务').trigger('click'); await flushPromises()
+    expect(douyin.uploadDouyinVideo).toHaveBeenCalledWith('t1', true)
+    expect(wrapper.get('#publish-title').element.matches(':disabled')).toBe(true)
+    expect(wrapper.get('#publish-video').element.matches(':disabled')).toBe(true)
+    expect(button(wrapper, '新建发布任务').attributes()).toHaveProperty('disabled')
+    expect(button(wrapper, '打开 / 显示抖音窗口').attributes('disabled')).toBeUndefined()
+    await router.push('/projects')
+    expect(router.currentRoute.value.path).toBe('/projects/p1/publishing')
+    finish(); await flushPromises()
+    expect(wrapper.get('#publish-title').element.matches(':disabled')).toBe(false)
+    expect(api.recordPublishSuccess).not.toHaveBeenCalled()
+  })
   it('updates the selected task label after saving the same task with a new title and status', async () => {
     const { wrapper } = await render()
     await wrapper.get('#publish-title').setValue('重新编辑的发布标题')

@@ -46,13 +46,23 @@ onMounted(() => { if (desktop) void load() })
         把读过的好书，变成值得分享的内容。
       </p>
     </div>
-    <RouterLink
+    <div
       v-if="desktop"
-      to="/projects/new"
-      :class="buttonVariants()"
+      class="flex flex-wrap gap-2"
     >
-      <AppIcon name="plus" />添加一本书
-    </RouterLink>
+      <RouterLink
+        to="/publishing"
+        :class="buttonVariants({ variant: 'outline' })"
+      >
+        <AppIcon name="upload" />发布任务
+      </RouterLink>
+      <RouterLink
+        to="/projects/new"
+        :class="buttonVariants()"
+      >
+        <AppIcon name="plus" />添加一本书
+      </RouterLink>
+    </div>
     <Button
       v-else
       disabled

@@ -1,0 +1,61 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link "书引 AI 首页" [ref=e5] [cursor=pointer]:
+      - /url: "#/projects"
+      - generic [ref=e6]:
+        - generic [ref=e7]:
+          - text: 书引
+          - generic [ref=e8]: AI
+        - generic [ref=e9]: 让阅读，成为创作。
+    - paragraph [ref=e10]: 工作空间
+    - navigation "主导航" [ref=e11]:
+      - link "我的书籍" [ref=e12] [cursor=pointer]:
+        - /url: "#/projects"
+      - link "模型设置" [ref=e14] [cursor=pointer]:
+        - /url: "#/settings/models"
+    - generic [ref=e16]:
+      - generic [ref=e17]:
+        - paragraph [ref=e20]: 让阅读，成为创作。
+        - paragraph [ref=e21]: 从一个好故事开始，分享你的独特视角。
+      - generic [ref=e22]:
+        - link "数据与备份" [ref=e23] [cursor=pointer]:
+          - /url: "#/settings"
+        - link "关于与更新" [ref=e25] [cursor=pointer]:
+          - /url: "#/about"
+        - paragraph [ref=e27]: 本地保存，安心创作
+  - generic [ref=e29]:
+    - generic [ref=e30]:
+      - generic [ref=e31]:
+        - generic [ref=e32]: 工作台
+        - generic [ref=e33]: /
+        - generic [ref=e34]: 数据与备份
+      - generic [ref=e35]: 资料保存在本机
+    - main [ref=e38]:
+      - generic [ref=e39]:
+        - generic [ref=e40]:
+          - paragraph [ref=e41]: M0 / 工程初始化与技术验证
+          - heading "先让基础能力可靠运行" [level=1] [ref=e42]
+          - paragraph [ref=e43]: 验证桌面容器、本地数据库和文件选择。此页面不包含创作业务。
+          - generic [ref=e44]: 浏览器预览
+        - status [ref=e45]: 当前为浏览器预览。请使用桌面应用验证 SQLite 和原生文件选择。
+        - region [ref=e46]:
+          - heading "应用内抖音 · 技术验证" [level=2] [ref=e47]
+          - paragraph [ref=e48]: 先在独立窗口验证扫码登录，再使用指定任务验证文字、视频和双封面。最终发布由你在抖音网页操作。
+          - generic [ref=e49]:
+            - button "打开抖音验证窗口" [disabled]
+            - button "检查抖音页面" [disabled]
+        - region [ref=e50]:
+          - heading "01 · SQLite 持久化" [level=2] [ref=e51]
+          - paragraph [ref=e52]: 保存一段文字，关闭并重新打开应用后检查是否仍然存在。
+          - generic [ref=e53]:
+            - generic [ref=e54]: 验证文字
+            - textbox "验证文字" [disabled] [ref=e55]:
+              - /placeholder: 例如：书引 AI，重启后见。
+            - generic [ref=e56]:
+              - button "写入并回读" [disabled]
+              - button "重新读取" [disabled]
+        - region [ref=e57]:
+          - heading "02 · 本地视频选择" [level=2] [ref=e58]
+          - paragraph [ref=e59]: 通过 Windows 原生对话框选择视频，仅显示路径，不复制、修改或删除文件。
+          - button "选择本地视频" [disabled]
+          - paragraph [ref=e60]: 尚未选择视频

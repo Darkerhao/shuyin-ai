@@ -1,8 +1,13 @@
 use crate::database::{
-    publishing::{PublishInput, PublishRecordInput, PublishTask},
+    publishing::{PublishInput, PublishQueueItem, PublishRecordInput, PublishTask},
     Database,
 };
 use tauri::State;
+
+#[tauri::command]
+pub fn list_publish_queue(database: State<'_, Database>) -> Result<Vec<PublishQueueItem>, String> {
+    database.list_publish_queue()
+}
 
 #[tauri::command]
 pub fn list_publish_tasks(
@@ -29,10 +34,13 @@ pub fn prepare_publish_task(
 #[tauri::command]
 pub fn record_publish_success(
     database: State<'_, Database>,
+    publisher: State<'_, crate::douyin::DouyinPublisher>,
     id: String,
     input: PublishRecordInput,
 ) -> Result<PublishTask, String> {
-    database.record_publish_success(&id, input)
+    let task = database.record_publish_success(&id, input)?;
+    publisher.release_recorded(&id);
+    Ok(task)
 }
 #[tauri::command]
 pub fn open_publish_item(
