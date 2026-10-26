@@ -7,6 +7,20 @@ use std::{fs, path::Path};
 
 pub(super) const PORTRAIT_VIDEO: &[u8] = include_bytes!("../../tests/fixtures/portrait.mp4");
 
+fn landscape_video() -> Vec<u8> {
+    let mut bytes = PORTRAIT_VIDEO.to_vec();
+    let marker = bytes
+        .windows(4)
+        .position(|window| window == b"tkhd")
+        .expect("fixture contains a video track header");
+    let start = marker - 4;
+    let size = u32::from_be_bytes(bytes[start..start + 4].try_into().unwrap()) as usize;
+    let end = start + size;
+    bytes[end - 8..end - 4].copy_from_slice(&(1920u32 << 16).to_be_bytes());
+    bytes[end - 4..end].copy_from_slice(&(1080u32 << 16).to_be_bytes());
+    bytes
+}
+
 pub(super) fn project(db: &Database) -> Project {
     db.save_project(None,serde_json::from_value(serde_json::json!({"title":"中文书籍","author":"作者","publisher":"","isbn":"","description":"","sourceNotes":"原始资料","theme":"","targetAudience":"","contentStyle":"","targetDurationSeconds":600,"status":"draft"})).unwrap()).unwrap()
 }
@@ -207,6 +221,34 @@ fn audio_and_final_video_checks_are_required() {
         .prepare_publish_task(&task.id)
         .unwrap_err()
         .contains("最终成片"));
+}
+
+#[test]
+fn non_portrait_final_video_with_audio_can_be_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let p = project(&db);
+    let mut publish = input(&db, &p);
+    let landscape = Path::new(&p.workspace_path).join("横版 成片.mp4");
+    fs::write(&landscape, landscape_video()).unwrap();
+    let metadata = crate::media::inspect(&landscape).unwrap();
+    assert_eq!((metadata.width, metadata.height), (1920, 1080));
+    assert!(metadata.has_audio);
+    publish.video_asset_id = Some(
+        db.link_asset(&p.id, landscape.to_str().unwrap(), None)
+            .unwrap(),
+    );
+    let task = db.save_publish_task(None, publish).unwrap();
+    let ready = db.prepare_publish_task(&task.id).unwrap();
+    assert_eq!(ready.status, "ready");
+    assert!(
+        ready
+            .checklist
+            .iter()
+            .find(|item| item.key == "video")
+            .unwrap()
+            .passed
+    );
 }
 
 #[test]
