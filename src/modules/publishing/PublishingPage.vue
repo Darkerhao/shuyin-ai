@@ -33,14 +33,16 @@ const selected = ref<PublishTask | null>(null)
 const assets = ref<Asset[]>([])
 const covers = ref<CoverVersion[]>([])
 const writing = ref<WritingVersion[]>([])
-const draft = ref<PublishInput>({ projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: null, landscapeCoverId: null, portraitCoverId: null, titleConfirmed: false, coversConfirmed: false })
+const draft = ref<PublishInput>({ projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: null, audioAssetId: null, landscapeCoverId: null, portraitCoverId: null, titleConfirmed: false, coversConfirmed: false })
 const original = ref(JSON.stringify(draft.value))
 const dirty = computed(() => JSON.stringify(draft.value) !== original.value)
 const published = computed(() => selected.value?.status === 'published')
 const videos = computed(() => assets.value.filter(a => a.assetType === 'video'))
+const audios = computed(() => assets.value.filter(a => a.assetType === 'audio'))
 const landscape = computed(() => covers.value.filter(c => c.exportedPath && c.config.width === 1440 && c.config.height === 1080))
 const portrait = computed(() => covers.value.filter(c => c.exportedPath && c.config.width === 1080 && c.config.height === 1440))
 const video = computed(() => videos.value.find(a => a.id === draft.value.videoAssetId))
+const audio = computed(() => audios.value.find(a => a.id === draft.value.audioAssetId))
 const selectedLandscape = computed(() => landscape.value.find(c => c.id === draft.value.landscapeCoverId))
 const selectedPortrait = computed(() => portrait.value.find(c => c.id === draft.value.portraitCoverId))
 const recordOpen = ref(false)
@@ -50,10 +52,10 @@ const douyinBusy = ref(false)
 const busy = computed(() => operationBusy.value || douyinBusy.value)
 
 const taskLabel = (task: PublishTask) => `${task.title || '未填写标题'} · ${publishStatuses[task.status]} · ${new Date(task.createdAt).toLocaleString()}`
-const videoLabel = (asset: Asset) => `${asset.originalName}${asset.existsStatus !== 'available' ? '（文件不可用）' : ''}`
+const assetLabel = (asset: Asset) => `${asset.originalName}${asset.existsStatus !== 'available' ? '（文件不可用）' : ''}`
 
 function defaults(): PublishInput {
-  return { projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: videos.value.find(v => v.existsStatus === 'available')?.id ?? null, landscapeCoverId: landscape.value[0]?.id ?? null, portraitCoverId: portrait.value[0]?.id ?? null, titleConfirmed: false, coversConfirmed: false }
+  return { projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: videos.value.find(v => v.existsStatus === 'available')?.id ?? null, audioAssetId: audios.value.find(v => v.existsStatus === 'available')?.id ?? null, landscapeCoverId: landscape.value[0]?.id ?? null, portraitCoverId: portrait.value[0]?.id ?? null, titleConfirmed: false, coversConfirmed: false }
 }
 function selectWriting(id: string | null) {
   if (id === draft.value.writingVersionId) return
@@ -321,8 +323,52 @@ onMounted(() => { if (desktop) void load() })
           />
         </section>
         <section class="panel">
-          <h2>视频与封面</h2>
-          <label for="publish-video">本地视频</label>
+          <h2>音频、成片与封面</h2>
+          <label for="publish-audio">音频成品</label>
+          <Select
+            v-model="draft.audioAssetId"
+            :disabled="busy || published || recordOpen"
+          >
+            <SelectTrigger
+              id="publish-audio"
+              class="w-full min-w-0"
+            >
+              <SelectValue>{{ audio ? assetLabel(audio) : '请选择用于制作的音频' }}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem :value="null">
+                请选择用于制作的音频
+              </SelectItem>
+              <SelectItem
+                v-for="file in audios"
+                :key="file.id"
+                :value="file.id"
+              >
+                {{ assetLabel(file) }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p
+            v-if="audio"
+            class="file-path"
+          >
+            {{ audio.filePath }}
+          </p>
+          <p
+            v-if="audio && audio.existsStatus !== 'available'"
+            class="error"
+          >
+            音频文件不可用，请展开上方素材管理重新定位。
+          </p>
+          <p
+            v-if="!audios.length"
+            class="muted"
+          >
+            先在 <RouterLink :to="`/projects/${id}/writing`">
+              音频制作
+            </RouterLink> 导入音频成品；音频仅用于制作记录，不会上传抖音。
+          </p>
+          <label for="publish-video">剪映导出的最终成片</label>
           <Select
             v-model="draft.videoAssetId"
             :disabled="busy || published || recordOpen"
@@ -331,18 +377,18 @@ onMounted(() => { if (desktop) void load() })
               id="publish-video"
               class="w-full min-w-0"
             >
-              <SelectValue>{{ video ? videoLabel(video) : '请选择视频' }}</SelectValue>
+              <SelectValue>{{ video ? assetLabel(video) : '请选择最终成片' }}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem :value="null">
-                请选择视频
+                请选择最终成片
               </SelectItem>
               <SelectItem
                 v-for="file in videos"
                 :key="file.id"
                 :value="file.id"
               >
-                {{ videoLabel(file) }}
+                {{ assetLabel(file) }}
               </SelectItem>
             </SelectContent>
           </Select>
@@ -362,7 +408,7 @@ onMounted(() => { if (desktop) void load() })
             v-if="!videos.length"
             class="muted"
           >
-            先展开上方“关联视频 / 重新定位素材”，关联本地视频。
+            先展开上方“关联素材”，关联剪映导出的最终成片。发布检查会验证 MP4/MOV 的竖版画面和音轨。
           </p>
           <div class="form-grid">
             <div>

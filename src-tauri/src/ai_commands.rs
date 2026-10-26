@@ -14,6 +14,13 @@ use crate::{
 };
 use tauri::State;
 
+const AUDIO_TOOL: &str = "https://notebooklm.google.com/";
+
+#[tauri::command]
+pub fn open_audio_tool() -> Result<(), String> {
+    crate::external::open_url(AUDIO_TOOL)
+}
+
 #[tauri::command]
 pub fn list_model_providers(
     database: State<'_, Database>,

@@ -18,4 +18,5 @@ export const createBackup = (directory: string) => invoke<string>('create_backup
 export const restoreBackup = (path: string) => invoke<string>('restore_backup', { path })
 export const chooseDirectory = () => open({ title: '选择目录', directory: true, multiple: false })
 export const chooseBackup = () => open({ title: '选择书引 AI 数据库备份', multiple: false, filters: [{ name: 'SQLite 备份', extensions: ['sqlite3'] }] })
-export const chooseAsset = () => open({ title: '关联本地素材', multiple: false, filters: [{ name: '视频、图片、字幕和文档', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'png', 'jpg', 'jpeg', 'webp', 'srt', 'ass', 'vtt', 'txt', 'md', 'pdf', 'docx', 'epub'] }] })
+export const chooseAsset = () => open({ title: '关联本地素材', multiple: false, filters: [{ name: '视频、音频、图片、字幕和文档', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'mp3', 'm4a', 'wav', 'aac', 'flac', 'ogg', 'png', 'jpg', 'jpeg', 'webp', 'srt', 'ass', 'vtt', 'txt', 'md', 'pdf', 'docx', 'epub'] }] })
+export const chooseAudio = () => open({ title: '导入音频成品', multiple: false, filters: [{ name: '音频', extensions: ['mp3', 'm4a', 'wav', 'aac', 'flac', 'ogg'] }] })

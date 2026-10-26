@@ -19,8 +19,9 @@ vi.mock('../src/services/ai', () => ({ listVersions: vi.fn() }))
 vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), readCoverExport: vi.fn() }))
 vi.mock('../src/services/douyin', () => ({ openDouyinWindow: vi.fn(), inspectDouyinWindow: vi.fn(), uploadDouyinVideo: vi.fn(), completeDouyinTask: vi.fn(), stopDouyinTask: vi.fn(), onDouyinProgress: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ decodeBackground: vi.fn(async () => ({ src: 'data:image/png;base64,thumbnail' })) }))
-const task: PublishTask = { id: 't1', projectId: 'p1', writingVersionId: null, title: '中文标题', description: '第一行\n第二行', tags: '#读书', videoAssetId: 'a1', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: true, coversConfirmed: true, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [{ key: 'video', label: '视频已关联且文件可用', passed: true }], record: null }
+const task: PublishTask = { id: 't1', projectId: 'p1', writingVersionId: null, title: '中文标题', description: '第一行\n第二行', tags: '#读书', videoAssetId: 'a1', audioAssetId: 'a2', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: true, coversConfirmed: true, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [{ key: 'video', label: '视频已关联且文件可用', passed: true }], record: null }
 const asset: Asset = { id: 'a1', projectId: 'p1', assetType: 'video', originalName: '视频.mp4', filePath: 'D:/视频.mp4', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
+const audio: Asset = { id: 'a2', projectId: 'p1', assetType: 'audio', originalName: '本期音频.m4a', filePath: 'D:/本期音频.m4a', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
 const wrappers: ReturnType<typeof mount>[] = []
 async function render(path = '/projects/p1/publishing') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
@@ -38,7 +39,7 @@ beforeEach(() => {
   vi.mocked(covers.readCoverExport).mockResolvedValue(new ArrayBuffer(0))
   vi.mocked(projects.isDesktop).mockReturnValue(true)
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), id: 'p1', title: '测试书', workspacePath: 'D:/书籍', createdAt: '', updatedAt: '', archivedAt: null })
-  vi.mocked(projects.listAssets).mockResolvedValue([asset])
+  vi.mocked(projects.listAssets).mockResolvedValue([asset, audio])
   vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task }])
   vi.mocked(ai.listVersions).mockResolvedValue([])
   vi.mocked(covers.listCovers).mockResolvedValue([
@@ -96,12 +97,12 @@ describe('M4 publish preparation', () => {
     expect(wrapper.get('#covers-confirmed').attributes('aria-checked')).toBe('true')
     await chooseSelect(wrapper, '#publish-landscape', '请选择已导出封面')
     expect(wrapper.get('#covers-confirmed').attributes('aria-checked')).toBe('false')
-    await chooseSelect(wrapper, '#publish-video', '请选择视频')
+    await chooseSelect(wrapper, '#publish-video', '请选择最终成片')
     await wrapper.get('#title-confirmed').trigger('click')
     expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
     expect(api.savePublishTask).not.toHaveBeenCalled()
     await wrapper.get('form').trigger('submit'); await flushPromises()
-    expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ videoAssetId: null, landscapeCoverId: null, titleConfirmed: false, coversConfirmed: false }))
+    expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ videoAssetId: null, audioAssetId: 'a2', landscapeCoverId: null, titleConfirmed: false, coversConfirmed: false }))
   })
 
   it('keeps task selection and edits when discarding is declined', async () => {
@@ -175,12 +176,13 @@ describe('M4 publish preparation', () => {
   })
   it('refreshes missing-video state without discarding current edits', async () => {
     const { wrapper } = await render(); await wrapper.get('#publish-tags').setValue('#新标签')
-    vi.mocked(projects.listAssets).mockResolvedValue([{ ...asset, existsStatus: 'missing' }])
+    vi.mocked(projects.listAssets).mockResolvedValue([{ ...asset, existsStatus: 'missing' }, audio])
     vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, status: 'draft' }])
     await button(wrapper, '刷新素材与状态').trigger('click'); await flushPromises()
     expect((wrapper.get('#publish-tags').element as HTMLInputElement).value).toBe('#新标签')
     expect(wrapper.text()).toContain('视频文件不可用'); expect(button(wrapper, '记录发布成功').element.disabled).toBe(true)
     expect(wrapper.get('#publish-video').text()).toContain('视频.mp4（文件不可用）')
+    expect(wrapper.get('#publish-audio').text()).toContain('本期音频.m4a')
   })
   it('opening portal does not publish; confirmation cancellation and failed record preserve data', async () => {
     const { wrapper } = await render(); await button(wrapper, '打开抖音创作者中心').trigger('click'); await flushPromises()

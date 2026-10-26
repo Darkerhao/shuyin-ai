@@ -371,7 +371,7 @@ publishing 的 content_json 为 `{format:"publishing",title,description,audioPro
 
 `cover_versions.config_json` 的 `schemaVersion=1` 增加 `backgroundX`、`backgroundY`（0–1）和 `backgroundZoom`（1–3）；旧 JSON 不重写，读取缺省0.5/0.5/1。所有比例共用同一草稿裁切值，分别追加导出版本。
 
-当前 `user_version=9`，支持顺序升级和 v2–v9 数据库备份恢复。兼容迁移不删除旧行；结构冲突回滚整个 v9，保留 v8 数据与版本。回退旧程序需使用升级前数据库备份。
+v9 当时的 `user_version=9`，支持顺序升级和 v2–v9 数据库备份恢复。兼容迁移不删除旧行；结构冲突回滚整个 v9，保留 v8 数据与版本。回退旧程序需使用升级前数据库备份。
 
 完整备份格式版本为1，与数据库版本独立。目录包含一致性 SQLite 快照、文件清单及 SHA-256，登记的素材/导出封面/当前任务包均复制；可选原始视频。草稿及样式随数据库保留。恢复在内存核验/迁移快照，将文件复制到新目录后重建 `workspace_path`、`file_path`、`exported_path`、`task_directory` 及包内引用，再自动备份当前库并替换。不复制未登记文件、旧的无引用任务包或系统凭据；未包含视频继续引用原路径，缺失时记录保留且任务退回草稿。
 
@@ -379,6 +379,16 @@ publishing 的 content_json 为 `{format:"publishing",title,description,audioPro
 
 ## 19. M6 辅助发布（2026-10-26）
 
-schema 仍为 v9，无迁移或新增持久化状态。`publish_snapshot` 只读取已校验 ready 任务的文字快照、视频引用和包内封面；上传会话与停止标志保留在 Rust 内存，不存网页、账号、Cookie 或浏览器进度。上传/填写完成不改任务状态、不插入发布记录；仅原有人工确认事务写入 published。会话数据不纳入业务备份，旧版数据库备份继续按原校验/恢复路径处理。独立安装版的完整性、外键、备份及升级数据比较见 `M6-VERIFICATION.md`。
+M6 当时 schema 为 v9，无迁移或新增持久化状态。`publish_snapshot` 只读取已校验 ready 任务的文字快照、视频引用和包内封面；上传会话与停止标志保留在 Rust 内存，不存网页、账号、Cookie 或浏览器进度。上传/填写完成不改任务状态、不插入发布记录；仅原有人工确认事务写入 published。会话数据不纳入业务备份，旧版数据库备份继续按原校验/恢复路径处理。独立安装版的完整性、外键、备份及升级数据比较见 `M6-VERIFICATION.md`。
 
 M7沿用相同schema：全局任务列表关联book_projects读取书名，逐项使用现有checked校验；不新增队列表或缓存状态。文案来源仍是publish_tasks.writing_version_id，作品链接仍是publish_records.post_url；记录成功仅释放匹配任务的内存快照。备份恢复保留这些已有行，测试与隔离安装模拟记录边界见`M7-VERIFICATION.md`。
+
+## 20. 音频制作与成片回填 v10（2026-10-26）
+
+新增 `0010_audio_workflow.sql`，在同一事务内重建 `assets`、`publish_tasks` 与 `publish_records`：
+
+- `assets.asset_type` 增加 `audio`，原视频、图片、封面、字幕与文档行原样复制。
+- `publish_tasks` 增加可空 `audio_asset_id`，同项目音频外键；旧任务该字段为空。其余文字快照、视频、封面、状态、时间戳、任务目录和文案来源不变。
+- `publish_records` 原样保留并继续引用重建后的任务。迁移后重新建立 `assets_project` 与 `publish_tasks_project` 索引。
+
+当前 `user_version=10`，数据库备份支持 v2–v10。任务包 manifest 从 schema 1 升至 2，增加可空 `audio` 文件引用；旧任务包仍可读取，但缺少音频的待发布任务不会保持 ready。发布检查使用 `mp4parse 0.17.0` 只读取 MP4 ftyp/moov，不扫描完整 mdat，验证正时长、竖版 9:16 与音轨。音频只登记路径，不复制，不写入发布记录，也不上传抖音。

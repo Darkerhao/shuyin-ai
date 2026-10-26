@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { GenerationInput, GenerationResult, ModelProvider, ProviderInput, SaveWritingInput, WritingKind, WritingVersion } from '../types/ai'
 export const listProviders = () => invoke<ModelProvider[]>('list_model_providers')
+export const openAudioTool = () => invoke<void>('open_audio_tool')
 export const saveProvider = (id: string | null, input: ProviderInput, apiKey: string | null) => invoke<{ provider: ModelProvider; warning: string | null }>('save_model_provider', { id, input, apiKey })
 export const deleteProvider = (id: string) => invoke<void>('delete_model_provider', { id })
 export const testConnection = (id: string) => invoke<string>('test_model_connection', { id })

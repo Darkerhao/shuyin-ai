@@ -12,7 +12,7 @@ const loaded = ref(false)
 const removing = ref<Asset | null>(null)
 const { busy, error, message, run } = useOperation()
 const openFile = (id: string, directory = false) => run(() => api.openAsset(id, directory))
-const labels = { video: '视频', image: '图片', cover: '封面', subtitle: '字幕', document: '文档' }
+const labels = { video: '视频', audio: '音频', image: '图片', cover: '封面', subtitle: '字幕', document: '文档' }
 async function refresh() { assets.value = await api.listAssets(props.projectId); loaded.value = true }
 const select = (asset?: Asset) => run(async () => {
   const path = await api.chooseAsset()
@@ -40,7 +40,7 @@ onMounted(() => { void run(refresh) })
     <h2 id="assets-title">
       项目素材
     </h2><p class="muted">
-      关联本地视频、图片、字幕与文档。移除关联或删除项目都会保留源文件。
+      关联本地视频、音频、图片、字幕与文档。移除关联或删除项目都会保留源文件。
     </p>
     <div class="actions">
       <Button

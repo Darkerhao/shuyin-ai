@@ -27,6 +27,7 @@ base64 = "=0.23.1"
 png = "=0.18.1"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 sha2 = "=0.11.1"
+mp4parse = "=0.17.0"
 
 [target.'cfg(windows)'.dependencies]
 # Already locked by Tauri; used only for host-side, task-bound file selection.

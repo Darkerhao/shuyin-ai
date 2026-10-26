@@ -5,6 +5,7 @@ export interface PublishInput {
   description: string
   tags: string
   videoAssetId: string | null
+  audioAssetId: string | null
   landscapeCoverId: string | null
   portraitCoverId: string | null
   titleConfirmed: boolean
@@ -23,6 +24,6 @@ export interface PublishTask extends PublishInput {
 export const publishStatuses = { draft: '草稿', ready: '待发布', published: '已发布' } as const
 export interface PublishQueueItem extends PublishTask { projectTitle: string }
 export function publishInput(task: PublishInput): PublishInput {
-  const { projectId, title, description, tags, videoAssetId, landscapeCoverId, portraitCoverId, titleConfirmed, coversConfirmed } = task
-  return { projectId, title, description, tags, videoAssetId, landscapeCoverId, portraitCoverId, titleConfirmed, coversConfirmed, writingVersionId: task.writingVersionId ?? null }
+  const { projectId, title, description, tags, videoAssetId, audioAssetId, landscapeCoverId, portraitCoverId, titleConfirmed, coversConfirmed } = task
+  return { projectId, title, description, tags, videoAssetId, audioAssetId, landscapeCoverId, portraitCoverId, titleConfirmed, coversConfirmed, writingVersionId: task.writingVersionId ?? null }
 }

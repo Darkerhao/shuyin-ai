@@ -6,6 +6,8 @@ mod credentials;
 mod database;
 mod douyin;
 mod douyin_webview;
+mod external;
+mod media;
 mod note_import;
 mod publish_commands;
 mod updates;
@@ -107,7 +109,8 @@ pub fn run() {
             ai_commands::start_generation,
             ai_commands::execute_generation,
             ai_commands::apply_generation,
-            ai_commands::cancel_generation
+            ai_commands::cancel_generation,
+            ai_commands::open_audio_tool
         ])
         .run(tauri::generate_context!())
         .expect("书引 AI 桌面容器启动失败");
