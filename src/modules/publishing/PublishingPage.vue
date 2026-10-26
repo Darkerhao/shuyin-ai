@@ -408,7 +408,7 @@ onMounted(() => { if (desktop) void load() })
             v-if="!videos.length"
             class="muted"
           >
-            先展开上方“关联素材”，关联剪映导出的最终成片。发布检查会验证 MP4/MOV 的竖版画面和音轨。
+            先展开上方“关联素材”，关联剪映导出的最终成片。发布检查会验证 MP4/MOV 文件、可读取画面和音轨。
           </p>
           <div class="form-grid">
             <div>

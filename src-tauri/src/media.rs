@@ -16,13 +16,6 @@ pub struct VideoMetadata {
     pub has_audio: bool,
 }
 
-impl VideoMetadata {
-    pub fn is_portrait_9_16(&self) -> bool {
-        let ratio = self.width as f64 / self.height as f64;
-        self.width > 0 && self.height > self.width && (ratio - 9.0 / 16.0).abs() <= 0.02
-    }
-}
-
 fn read_exact(file: &mut File, length: usize) -> Result<Vec<u8>, String> {
     let mut bytes = vec![0; length];
     file.read_exact(&mut bytes)
@@ -131,25 +124,6 @@ mod tests {
         assert_eq!((metadata.width, metadata.height), (1080, 1920));
         assert!(metadata.has_audio);
         assert!((metadata.duration_seconds - 1.0).abs() < 0.2);
-        assert!(metadata.is_portrait_9_16());
-    }
-
-    #[test]
-    fn rejects_landscape_or_three_by_four_as_vertical_nine_by_sixteen() {
-        let landscape = VideoMetadata {
-            duration_seconds: 1.0,
-            width: 1920,
-            height: 1080,
-            has_audio: true,
-        };
-        let three_by_four = VideoMetadata {
-            duration_seconds: 1.0,
-            width: 1080,
-            height: 1440,
-            has_audio: true,
-        };
-        assert!(!landscape.is_portrait_9_16());
-        assert!(!three_by_four.is_portrait_9_16());
     }
 
     #[test]

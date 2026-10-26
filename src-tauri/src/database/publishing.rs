@@ -161,7 +161,10 @@ fn final_video_ready(c: &Connection, input: &PublishInput) -> bool {
     video_path(c, input)
         .and_then(|path| media::inspect(Path::new(&path)))
         .is_ok_and(|metadata| {
-            metadata.duration_seconds > 0.0 && metadata.is_portrait_9_16() && metadata.has_audio
+            metadata.duration_seconds > 0.0
+                && metadata.width > 0
+                && metadata.height > 0
+                && metadata.has_audio
         })
 }
 
@@ -373,11 +376,7 @@ fn checked(c: &Connection, id: &str) -> Result<PublishTask, String> {
             "音频成品已导入且文件可用",
             audio_path(c, i).and_then(|p| reference(&p)).is_ok(),
         ),
-        (
-            "video",
-            "最终成片为竖版、含音轨且文件可用",
-            final_video_ready(c, i),
-        ),
+        ("video", "最终成片含音轨且文件可用", final_video_ready(c, i)),
         (
             "landscape",
             "横版 4:3 封面已导出且可用",

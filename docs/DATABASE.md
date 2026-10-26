@@ -391,4 +391,4 @@ M7沿用相同schema：全局任务列表关联book_projects读取书名，逐�
 - `publish_tasks` 增加可空 `audio_asset_id`，同项目音频外键；旧任务该字段为空。其余文字快照、视频、封面、状态、时间戳、任务目录和文案来源不变。
 - `publish_records` 原样保留并继续引用重建后的任务。迁移后重新建立 `assets_project` 与 `publish_tasks_project` 索引。
 
-当前 `user_version=10`，数据库备份支持 v2–v10。任务包 manifest 从 schema 1 升至 2，增加可空 `audio` 文件引用；旧任务包仍可读取，但缺少音频的待发布任务不会保持 ready。发布检查使用 `mp4parse 0.17.0` 只读取 MP4 ftyp/moov，不扫描完整 mdat，验证正时长、竖版 9:16 与音轨。音频只登记路径，不复制，不写入发布记录，也不上传抖音。
+当前 `user_version=10`，数据库备份支持 v2–v10。任务包 manifest 从 schema 1 升至 2，增加可空 `audio` 文件引用；旧任务包仍可读取，但缺少音频的待发布任务不会保持 ready。发布检查使用 `mp4parse 0.17.0` 只读取 MP4 ftyp/moov，不扫描完整 mdat，验证正时长、可读取画面尺寸与音轨，不限制横竖屏比例。音频只登记路径，不复制，不写入发布记录，也不上传抖音。
