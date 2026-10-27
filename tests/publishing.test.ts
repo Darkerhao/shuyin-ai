@@ -13,11 +13,11 @@ import { emptyPublishing } from '../src/types/ai'
 import { emptyProject, type Asset } from '../src/types/project'
 import { newCover } from '../src/types/cover'
 import type { PublishTask } from '../src/types/publishing'
-vi.mock('../src/services/publishing', () => ({ listPublishTasks: vi.fn(), savePublishTask: vi.fn(), preparePublishTask: vi.fn(), recordPublishSuccess: vi.fn(), openPublishItem: vi.fn() }))
+vi.mock('../src/services/publishing', () => ({ listPublishTasks: vi.fn(), listPublishQueue: vi.fn(), savePublishTask: vi.fn(), preparePublishTask: vi.fn(), recordPublishSuccess: vi.fn(), openPublishItem: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), linkAsset: vi.fn(), chooseAsset: vi.fn(), unlinkAsset: vi.fn(), openAsset: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listVersions: vi.fn() }))
 vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), readCoverExport: vi.fn() }))
-vi.mock('../src/services/douyin', () => ({ openDouyinWindow: vi.fn(), inspectDouyinWindow: vi.fn(), uploadDouyinVideo: vi.fn(), completeDouyinTask: vi.fn(), stopDouyinTask: vi.fn(), onDouyinProgress: vi.fn() }))
+vi.mock('../src/services/douyin', () => ({ openDouyinWindow: vi.fn(), getDouyinSession: vi.fn(), startDouyinTask: vi.fn(), continueDouyinTask: vi.fn(), stopDouyinTask: vi.fn(), onDouyinProgress: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ decodeBackground: vi.fn(async () => ({ src: 'data:image/png;base64,thumbnail' })) }))
 const task: PublishTask = { id: 't1', projectId: 'p1', writingVersionId: null, title: '中文标题', description: '第一行\n第二行', tags: '#读书', videoAssetId: 'a1', audioAssetId: 'a2', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: true, coversConfirmed: true, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [{ key: 'video', label: '视频已关联且文件可用', passed: true }], record: null }
 const asset: Asset = { id: 'a1', projectId: 'p1', assetType: 'video', originalName: '视频.mp4', filePath: 'D:/视频.mp4', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
@@ -36,6 +36,7 @@ function button(w: ReturnType<typeof mount>, label: string) { return w.findAll('
 beforeEach(() => {
   vi.resetAllMocks(); vi.stubGlobal('confirm', vi.fn(() => false))
   vi.mocked(douyin.onDouyinProgress).mockResolvedValue(vi.fn())
+  vi.mocked(api.listPublishQueue).mockResolvedValue([])
   vi.mocked(covers.readCoverExport).mockResolvedValue(new ArrayBuffer(0))
   vi.mocked(projects.isDesktop).mockReturnValue(true)
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), id: 'p1', title: '测试书', workspacePath: 'D:/书籍', createdAt: '', updatedAt: '', archivedAt: null })
@@ -52,6 +53,35 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 
 describe('M4 publish preparation', () => {
+  it('starts assistance only after saving changes and preparing the resulting task', async () => {
+    const { wrapper } = await render()
+    await wrapper.get('#publish-description').setValue('保留当前修改')
+    await button(wrapper, '开始抖音辅助发布').trigger('click'); await flushPromises()
+    expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ description: '保留当前修改' }))
+    expect(api.preparePublishTask).toHaveBeenCalledWith('t1')
+    expect(douyin.startDouyinTask).toHaveBeenCalledWith('t1')
+    expect(vi.mocked(api.savePublishTask).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.preparePublishTask).mock.invocationCallOrder[0]!)
+    expect(vi.mocked(api.preparePublishTask).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(douyin.startDouyinTask).mock.invocationCallOrder[0]!)
+  })
+  it('records successfully before starting the explicitly selected next task and consumes the action', async () => {
+    const nextTask = { ...task, id: 't2', title: '下一篇', projectTitle: '测试书' }
+    vi.mocked(api.listPublishQueue).mockResolvedValue([nextTask])
+    vi.mocked(api.listPublishTasks).mockResolvedValue([task, nextTask])
+    vi.mocked(douyin.startDouyinTask).mockResolvedValue({ runId: 2, taskId: 't2', status: 'review', step: 'review', message: '检查并发布', waitingFor: null, account: null, completed: [], manual: [], collection: null, options: [] })
+    const { wrapper, router } = await render('/projects/p1/publishing?task=t1')
+    await button(wrapper, '记录发布成功').trigger('click'); await flushPromises()
+    expect(button(wrapper, '确认记录并准备下一篇').attributes()).toHaveProperty('disabled')
+    await chooseSelect(wrapper, '#publish-next-task', '测试书 · 下一篇')
+    vi.mocked(api.recordPublishSuccess).mockRejectedValueOnce('记录写入失败')
+    await button(wrapper, '确认记录并准备下一篇').trigger('click'); await flushPromises()
+    expect(douyin.startDouyinTask).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.query.task).toBe('t1')
+    vi.mocked(api.recordPublishSuccess).mockResolvedValue({ ...task, status: 'published' })
+    await button(wrapper, '确认记录并准备下一篇').trigger('click'); await flushPromises()
+    expect(douyin.startDouyinTask).toHaveBeenCalledWith('t2')
+    expect(router.currentRoute.value.query).toEqual({ task: 't2' })
+    expect(vi.mocked(api.recordPublishSuccess).mock.invocationCallOrder.at(-1)).toBeLessThan(vi.mocked(douyin.startDouyinTask).mock.invocationCallOrder[0]!)
+  })
   it('loads the exact older task from the queue and keeps its saved writing source', async () => {
     vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, id: 'newer', title: '新任务' }, { ...task, writingVersionId: 'saved-source' }])
     vi.mocked(ai.listVersions).mockResolvedValue([{ id: 'saved-source', projectId: 'p1', kind: 'publishing', content: { ...emptyPublishing(), title: '来源标题', description: '来源正文' }, versionNo: 1, sourceType: 'manual', modelName: '', promptVersion: '', isConfirmed: false, createdAt: '' }])
@@ -68,21 +98,18 @@ describe('M4 publish preparation', () => {
     expect(api.savePublishTask).not.toHaveBeenCalled()
   })
   it('keeps the task, material selection and route fixed during assisted publishing', async () => {
-    vi.mocked(douyin.inspectDouyinWindow).mockResolvedValue({ supported: true, open: true, path: '/creator-micro/content/upload', loginVisible: false, online: true })
-    let finish!: () => void
-    vi.mocked(douyin.uploadDouyinVideo).mockImplementation(() => new Promise<void>(resolve => { finish = resolve }))
+    let finish!: (value: douyin.DouyinSession) => void
+    vi.mocked(douyin.startDouyinTask).mockImplementation(() => new Promise(resolve => { finish = resolve }))
     const { wrapper, router } = await render()
-    await button(wrapper, '检查抖音页面').trigger('click'); await flushPromises()
-    await wrapper.get('#douyin-account-confirmed').trigger('click')
-    await button(wrapper, '上传并自动填写当前任务').trigger('click'); await flushPromises()
-    expect(douyin.uploadDouyinVideo).toHaveBeenCalledWith('t1', true)
+    await button(wrapper, '开始抖音辅助发布').trigger('click'); await flushPromises()
+    expect(douyin.startDouyinTask).toHaveBeenCalledWith('t1')
     expect(wrapper.get('#publish-title').element.matches(':disabled')).toBe(true)
     expect(wrapper.get('#publish-video').element.matches(':disabled')).toBe(true)
     expect(button(wrapper, '新建发布任务').attributes()).toHaveProperty('disabled')
-    expect(button(wrapper, '打开 / 显示抖音窗口').attributes('disabled')).toBeUndefined()
+    expect(button(wrapper, '显示抖音窗口').attributes('disabled')).toBeUndefined()
     await router.push('/projects')
     expect(router.currentRoute.value.path).toBe('/projects/p1/publishing')
-    finish(); await flushPromises()
+    finish({ runId: 1, taskId: 't1', status: 'review', step: 'review', message: '检查并发布', waitingFor: null, account: null, completed: [], manual: [], collection: null, options: [] }); await flushPromises()
     expect(wrapper.get('#publish-title').element.matches(':disabled')).toBe(false)
     expect(api.recordPublishSuccess).not.toHaveBeenCalled()
   })

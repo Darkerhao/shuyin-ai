@@ -72,6 +72,17 @@ pub struct PublishTask {
     pub updated_at: String,
     pub checklist: Vec<CheckItem>,
     pub record: Option<PublishRecord>,
+    pub douyin_collection: Option<CollectionChoice>,
+}
+
+/// Online classification is independent of the immutable media package.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CollectionChoice {
+    pub account_id: Option<String>,
+    pub account_name: String,
+    pub id: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,8 +202,17 @@ fn cover_path(
 
 fn load(c: &Connection, id: &str) -> Result<PublishTask, String> {
     let mut task = c.query_row("SELECT id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,task_directory,created_at,updated_at,writing_version_id FROM publish_tasks WHERE id=?1", [id], |r| Ok(PublishTask {
-        id: r.get(0)?, input: PublishInput { project_id:r.get(1)?, title:r.get(2)?, description:r.get(3)?, tags:r.get(4)?, video_asset_id:r.get(5)?, audio_asset_id:r.get(6)?, landscape_cover_id:r.get(7)?, portrait_cover_id:r.get(8)?, title_confirmed:r.get(9)?, covers_confirmed:r.get(10)?, writing_version_id:r.get(15)? }, status:r.get(11)?, task_directory:r.get(12)?, created_at:r.get(13)?, updated_at:r.get(14)?, checklist:Vec::new(), record:None
+        id: r.get(0)?, input: PublishInput { project_id:r.get(1)?, title:r.get(2)?, description:r.get(3)?, tags:r.get(4)?, video_asset_id:r.get(5)?, audio_asset_id:r.get(6)?, landscape_cover_id:r.get(7)?, portrait_cover_id:r.get(8)?, title_confirmed:r.get(9)?, covers_confirmed:r.get(10)?, writing_version_id:r.get(15)? }, status:r.get(11)?, task_directory:r.get(12)?, created_at:r.get(13)?, updated_at:r.get(14)?, checklist:Vec::new(), record:None, douyin_collection:None
     })).optional().map_err(|e| e.to_string())?.ok_or("发布任务不存在。")?;
+    task.douyin_collection = c
+        .query_row(
+            "SELECT douyin_collection FROM publish_tasks WHERE id=?1",
+            [id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .map_err(|e| e.to_string())?
+        .map(|json| serde_json::from_str(&json).map_err(|_| "合集设置无法读取。".to_string()))
+        .transpose()?;
     task.record = c
         .query_row(
             "SELECT published_at,post_url,notes FROM publish_records WHERE publish_task_id=?1",
@@ -413,6 +433,68 @@ fn checked(c: &Connection, id: &str) -> Result<PublishTask, String> {
 }
 
 impl Database {
+    pub fn douyin_collection(&self, id: &str) -> Result<Option<CollectionChoice>, String> {
+        self.with_connection(|c| Ok(load(c, id)?.douyin_collection))
+    }
+
+    pub fn default_douyin_collection(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<CollectionChoice>, String> {
+        self.with_connection(|c| {
+            let json: Option<String> = c
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key=?1",
+                    [format!("douyin_collection:{account_id}")],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            json.map(|json| serde_json::from_str(&json).map_err(|_| "默认合集无法读取。".into()))
+                .transpose()
+        })
+    }
+
+    pub fn save_douyin_collection(
+        &self,
+        id: &str,
+        choice: &CollectionChoice,
+        remember: bool,
+    ) -> Result<(), String> {
+        if choice.account_name.trim().is_empty()
+            || choice.account_name.chars().count() > 200
+            || choice
+                .account_id
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > 200)
+            || choice
+                .id
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > 200)
+            || choice
+                .name
+                .as_ref()
+                .is_some_and(|v| v.trim().is_empty() || v.chars().count() > 200)
+            || (choice.id.is_some() && choice.name.is_none())
+        {
+            return Err("合集设置无效。".into());
+        }
+        if remember && choice.account_id.is_none() {
+            return Err("网页没有可验证的稳定账号标识，不能跨重启记住默认合集。".into());
+        }
+        let json = serde_json::to_string(choice).map_err(|e| e.to_string())?;
+        self.with_connection(|c| {
+            let task = load(c, id)?;
+            if task.status == "published" { return Err("已发布任务的合集记录不能修改。".into()); }
+            let tx = c.transaction().map_err(|e| e.to_string())?;
+            tx.execute("UPDATE publish_tasks SET douyin_collection=?2 WHERE id=?1", params![id, json]).map_err(|e| e.to_string())?;
+            if let Some(account_id) = choice.account_id.as_ref().filter(|_| remember) {
+                tx.execute("INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("douyin_collection:{account_id}"), json]).map_err(|e| e.to_string())?;
+            }
+            tx.commit().map_err(|e| e.to_string())
+        })
+    }
+
     pub fn list_publish_queue(&self) -> Result<Vec<PublishQueueItem>, String> {
         self.with_connection(|c| {
             let mut statement = c.prepare("SELECT t.id,p.title FROM publish_tasks t JOIN book_projects p ON p.id=t.project_id ORDER BY t.created_at,t.id").map_err(|e|e.to_string())?;

@@ -106,4 +106,44 @@ describe('official editor adapter safeguards (local DOM fixtures)', () => {
     expect(act('fill', payload).ok).toBe(true)
     expect(act('read')).toMatchObject({ coverDialog: false, description: '第一段\n第二段\n\n#读书' })
   })
+  it('does not infer authentication from a missing login form or processing from playable video', () => {
+    const inspect = () => runInNewContext(readFileSync('src-tauri/src/douyin_page.js', 'utf8'), { document, location: pageLocation, navigator, getComputedStyle })
+    expect(inspect()).toMatchObject({ authenticated: false, processed: false })
+    document.body.insertAdjacentHTML('beforeend', '<div id="header-avatar"><div class="avatar-a" style="background-image:url(https://example.test/avatar.png)"></div></div><span id="douyin-creator-master-side-upload">作品发布</span>')
+    expect(inspect()).toMatchObject({ authenticated: true, account: { id: null } })
+    const avatar = document.querySelector('.avatar-a') as HTMLElement
+    const background = avatar.style.backgroundImage
+    avatar.style.backgroundImage = 'none'
+    expect(inspect()).toMatchObject({ account: { key: '0' } })
+    avatar.style.backgroundImage = background
+    document.body.insertAdjacentHTML('beforeend', '<span>上传成功</span><div role="progressbar"></div>')
+    expect(inspect()).toMatchObject({ processed: false, uploading: true })
+    document.querySelector('[role=progressbar]')!.remove()
+    expect(inspect()).toMatchObject({ processed: true })
+    document.body.insertAdjacentHTML('beforeend', '<input placeholder="请输入手机号">')
+    expect(inspect()).toMatchObject({ authenticated: false, loginVisible: true, account: null })
+  })
+  it('reads the captured collection control and selects only an exact unique option', () => {
+    document.body.insertAdjacentHTML('beforeend', '<div class="semi-select select-collection-a"><span class="semi-select-selection-text">请选择合集</span></div><div role="listbox"><div role="option"><span class="option-title-a">读书</span></div><div role="option"><span class="option-title-b">历史</span></div></div>')
+    expect(act('collections')).toMatchObject({ available: true, loaded: true, selected: null, options: [{ id: null, name: '读书' }, { id: null, name: '历史' }] })
+    const click = vi.fn(); document.querySelector('[role=option]')!.addEventListener('click', click)
+    expect(act('selectCollection', { name: '读书' })).toMatchObject({ ok: true })
+    expect(click).toHaveBeenCalledOnce()
+    document.querySelector('[role=listbox]')!.append(document.querySelector('[role=option]')!.cloneNode(true))
+    expect(act('selectCollection', { name: '读书' })).toMatchObject({ ok: false })
+    expect(act('selectCollection', { name: '失效合集' })).toMatchObject({ ok: false })
+    expect(click).toHaveBeenCalledOnce()
+  })
+  it('cannot claim no collection while another selection is present or accept an unloaded list', () => {
+    document.body.insertAdjacentHTML('beforeend', '<div class="semi-select select-collection-a"><span class="semi-select-selection-text">手工合集</span></div>')
+    expect(act('selectCollection', { name: null })).toMatchObject({ ok: false })
+    expect(act('selectCollection', { name: '读书' })).toMatchObject({ ok: false })
+    expect(act('collections')).toMatchObject({ selected: '手工合集', loaded: false })
+    expect(act('read')).toMatchObject({ title: '', description: '' })
+  })
+  it('detects background-image cover changes and retains a video identity for recovery', () => {
+    document.querySelector('.coverControl-a')!.insertAdjacentHTML('afterbegin', '<div class="background-a" style="background-image:url(https://example.test/cover.png?identity=1)"></div>')
+    document.querySelector('video')!.src = 'blob:current-video'
+    expect(act('read')).toMatchObject({ videoKey: 'blob:current-video', covers: [{ preview: 'url("https://example.test/cover.png?identity=1")' }, { preview: '' }] })
+  })
 })

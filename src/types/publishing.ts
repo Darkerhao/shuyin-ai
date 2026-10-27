@@ -12,6 +12,7 @@ export interface PublishInput {
   coversConfirmed: boolean
 }
 export interface PublishRecord { publishedAt: string; postUrl: string; notes: string }
+export interface DouyinCollection { accountId: string | null; accountName: string; id: string | null; name: string | null }
 export interface PublishTask extends PublishInput {
   id: string
   status: 'draft' | 'ready' | 'published'
@@ -20,6 +21,7 @@ export interface PublishTask extends PublishInput {
   updatedAt: string
   checklist: { key: string; label: string; passed: boolean }[]
   record: PublishRecord | null
+  douyinCollection?: DouyinCollection | null
 }
 export const publishStatuses = { draft: '草稿', ready: '待发布', published: '已发布' } as const
 export interface PublishQueueItem extends PublishTask { projectTitle: string }

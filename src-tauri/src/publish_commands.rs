@@ -19,16 +19,20 @@ pub fn list_publish_tasks(
 #[tauri::command]
 pub fn save_publish_task(
     database: State<'_, Database>,
+    publisher: State<'_, crate::douyin::DouyinPublisher>,
     id: Option<String>,
     input: PublishInput,
 ) -> Result<PublishTask, String> {
+    publisher.ensure_idle()?;
     database.save_publish_task(id.as_deref(), input)
 }
 #[tauri::command]
 pub fn prepare_publish_task(
     database: State<'_, Database>,
+    publisher: State<'_, crate::douyin::DouyinPublisher>,
     id: String,
 ) -> Result<PublishTask, String> {
+    publisher.ensure_idle()?;
     database.prepare_publish_task(&id)
 }
 #[tauri::command]
@@ -38,6 +42,7 @@ pub fn record_publish_success(
     id: String,
     input: PublishRecordInput,
 ) -> Result<PublishTask, String> {
+    publisher.ensure_idle()?;
     let task = database.record_publish_success(&id, input)?;
     publisher.release_recorded(&id);
     Ok(task)
