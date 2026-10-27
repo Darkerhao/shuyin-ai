@@ -1,5 +1,13 @@
 # 书引 AI 开发计划与验收标准
 
+## 封面文件命名（2026-10-27）
+
+- 新导出使用 `书名-比例-尺寸-v版本.png`，例如 `围城-3比4-1080x1440-v3.png`。版本对应封面历史；已有同名文件或目录则递增版本，原文件保留。AI 背景使用真实比例/尺寸及「背景」标记，同名背景独立递增版本。旧随机文件名与数据库引用不迁移，schema v12 不变，无新增依赖；本次按 fix/patch 处理，不手动升版本、不提交或发布。
+- 修改文件：`src-tauri/src/database/{covers,image_generation,projects,m3_tests}.rs`、`src-tauri/src/ai/{images,tests}.rs`、`docs/{PRD,TECHNICAL-DESIGN,USER-GUIDE,DEVELOPMENT-PLAN}.md`。书名清理复用项目目录规则，比例约分并以「比」代替 Windows 禁用冒号；图片格式和尺寸直接取已有完整解码结果。
+- 验收覆盖三种封面比例、版本与历史一致、同名文件/目录跳过、中文/非法/保留名/过长书名、改书名后导出、旧随机路径重启可读、PNG/JPEG/WebP 背景真实尺寸、备份恢复后跳过磁盘占用版本，以及既有写入/事务失败清理与发布/完整备份流程。
+- 实际验证：修复前 `cargo test --manifest-path src-tauri/Cargo.toml --locked database::m3_tests:: -- --nocapture` 为9通过、4项命名回归失败；修复后同范围13通过，后续补充背景实际尺寸及备份恢复回归纳入全量。`npm run test:rust` 为100通过、1项既有原生凭据测试忽略；`npm run check:rust`（fmt/Clippy）、`npm run lint`、`npm run build`（含 TypeScript）及 `git diff --check` 通过；`npx vitest run tests/covers.test.ts tests/coverRenderer.test.ts tests/publishing.test.ts` 为68通过。Rust 先加载 `. ./.tools/env.ps1`，进程 `TEMP`、`TMP`、`SQLITE_TMPDIR` 指向仓库 `output/cover-naming-test-temp`。Cargo 构建锁与 Vite 清理 dist 首次遭受限环境拒绝，在确认仓库输出路径后于受限环境外重跑通过。
+- 未构建安装包或执行桌面人工验收。下一步在新版 Windows 桌面中导出三种比例并再次导出，核对文件名、历史版本和旧封面读取。
+
 ## 音频目标时长增量（2026-10-27）
 
 已实现AI首次推荐/再次推荐、生成前自定义分钟与快捷选项、按书籍保存、离页和正常关闭前等待保存，以及全量/按项的时长贯通。模板统一调整总时长、预计字数、开场、五部分安排、结尾与系列文案；新封面和发布示例不预设十分钟。v12仅增加来源标记，复用原目标秒数，旧历史不改写。

@@ -1,16 +1,47 @@
 use super::{
-    projects::{get, new_id, NOW},
+    projects::{get, new_id, safe_book_name, NOW},
     Database,
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::OpenOptions,
-    io::{Read, Write},
-    path::Path,
+    fs::{File, OpenOptions},
+    io::{ErrorKind, Read, Write},
+    path::{Path, PathBuf},
 };
 
 const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
+
+pub(super) fn cover_file_stem(title: &str, width: u32, height: u32) -> String {
+    let (mut divisor, mut remainder) = (width, height);
+    while remainder != 0 {
+        (divisor, remainder) = (remainder, divisor % remainder);
+    }
+    format!(
+        "{}-{}比{}-{width}x{height}",
+        safe_book_name(title),
+        width / divisor,
+        height / divisor
+    )
+}
+
+pub(super) fn create_versioned_image(
+    directory: &Path,
+    stem: &str,
+    extension: &str,
+    mut version_no: u32,
+) -> std::io::Result<(File, PathBuf, u32)> {
+    loop {
+        let path = directory.join(format!("{stem}-v{version_no}.{extension}"));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((file, path, version_no)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists || path.exists() => {
+                version_no += 1
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -269,13 +300,14 @@ impl Database {
             // Saving a draft is allowed even when its background file is missing.
             if let Some(id) = &config.background_asset_id { background_path(&tx, project_id, id)?; }
             let id = new_id(&tx)?;
-            let version_no: u32 = tx.query_row("SELECT coalesce(max(version_no),0)+1 FROM cover_versions WHERE project_id=?1", [project_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+            let mut version_no: u32 = tx.query_row("SELECT coalesce(max(version_no),0)+1 FROM cover_versions WHERE project_id=?1", [project_id], |r| r.get(0)).map_err(|e| e.to_string())?;
             let mut created_file = None;
             if let Some(bytes) = png {
                 let directory = Path::new(&project.workspace_path).join("covers");
                 std::fs::create_dir_all(&directory).map_err(|e| format!("封面目录不可写：{e}"))?;
-                let path = directory.join(format!("cover-{}x{}-v{version_no}-{id}.png", config.width, config.height));
-                let mut file = OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| format!("封面导出失败：{e}"))?;
+                let stem = cover_file_stem(&project.input.title, config.width, config.height);
+                let (mut file, path, file_version) = create_versioned_image(&directory, &stem, "png", version_no).map_err(|e| format!("封面导出失败：{e}"))?;
+                version_no = file_version;
                 let written = file.write_all(bytes).and_then(|()| file.sync_all());
                 drop(file);
                 if let Err(error) = written {
