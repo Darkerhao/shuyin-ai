@@ -280,6 +280,103 @@ fn v9_upgrade_preserves_assets_and_publish_records_for_audio_workflow() {
 }
 
 #[test]
+fn collection_intent_is_independent_of_media_and_survives_restart_and_backup() {
+    use publishing::CollectionChoice;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("collection.sqlite3");
+    let db = Database::open(path.clone());
+    let p = project(&db);
+    let task = db.save_publish_task(None, input(&db, &p)).unwrap();
+    let ready = db.prepare_publish_task(&task.id).unwrap();
+    let manifest_path = Path::new(ready.task_directory.as_ref().unwrap()).join("manifest.json");
+    let manifest = fs::read(&manifest_path).unwrap();
+    let snapshot = db.publish_snapshot(&task.id).unwrap();
+    let choice = CollectionChoice {
+        account_id: Some("public-account-a".into()),
+        account_name: "昵称".into(),
+        id: None,
+        name: Some("读书合集".into()),
+    };
+    db.save_douyin_collection(&task.id, &choice, true).unwrap();
+    assert_eq!(db.publish_snapshot(&task.id).unwrap(), snapshot);
+    assert_eq!(fs::read(&manifest_path).unwrap(), manifest);
+    assert_eq!(
+        db.default_douyin_collection("public-account-a").unwrap(),
+        Some(choice.clone())
+    );
+    assert!(db
+        .default_douyin_collection("public-account-b")
+        .unwrap()
+        .is_none());
+    let mut nickname_only = choice.clone();
+    nickname_only.account_id = None;
+    assert!(db
+        .save_douyin_collection(&task.id, &nickname_only, true)
+        .is_err());
+    let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    let mut no_collection = choice.clone();
+    no_collection.name = None;
+    db.save_douyin_collection(&task.id, &no_collection, false)
+        .unwrap();
+    // Changing a task does not mutate the account default or package.
+    assert_eq!(
+        db.default_douyin_collection("public-account-a").unwrap(),
+        Some(choice.clone())
+    );
+    drop(db);
+    let db = Database::open(path);
+    assert_eq!(db.douyin_collection(&task.id).unwrap(), Some(no_collection));
+    db.restore_backup(&backup).unwrap();
+    assert_eq!(db.douyin_collection(&task.id).unwrap(), Some(choice));
+    assert_eq!(db.publish_snapshot(&task.id).unwrap(), snapshot);
+    db.delete_project(&p.id).unwrap();
+    assert!(db.douyin_collection(&task.id).is_err());
+}
+
+#[test]
+fn v10_collection_migration_preserves_history_and_rolls_back_on_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    for conflict in [false, true] {
+        let path = dir.path().join(format!("collection-{conflict}.sqlite3"));
+        let c = Connection::open(&path).unwrap();
+        for sql in MIGRATIONS.iter().take(10) {
+            c.execute_batch(sql).unwrap();
+        }
+        c.execute_batch("INSERT INTO book_projects(id,title,source_notes,target_duration_seconds,status,workspace_path,created_at,updated_at) VALUES('old','旧书','手工资料',600,'published','missing','original','original'); INSERT INTO publish_tasks(id,project_id,title,description,tags,title_confirmed,covers_confirmed,status,created_at,updated_at) VALUES('task','old','旧标题','手工内容','',1,1,'published','original','original'); INSERT INTO publish_records VALUES('task','2026-10-26T00:00:00Z','','手工记录','original'); PRAGMA user_version=10;").unwrap();
+        if conflict {
+            c.execute_batch("ALTER TABLE publish_tasks ADD COLUMN douyin_collection TEXT")
+                .unwrap();
+        }
+        drop(c);
+        let db = Database::open(path.clone());
+        if conflict {
+            assert!(db.read().is_err());
+            let c = Connection::open(path).unwrap();
+            assert_eq!(
+                c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                10
+            );
+            assert_eq!(
+                c.query_row(
+                    "SELECT description FROM publish_tasks WHERE id='task'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                "手工内容"
+            );
+        } else {
+            let task = db.list_publish_tasks("old").unwrap().remove(0);
+            assert_eq!(task.status, "published");
+            assert!(task.douyin_collection.is_none());
+            assert_eq!(task.updated_at, "original");
+            assert_eq!(task.record.unwrap().notes, "手工记录");
+        }
+    }
+}
+
+#[test]
 fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_new_paths() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(dir.path().join("data.sqlite3"));
@@ -290,6 +387,14 @@ fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_ne
     i.writing_version_id = Some(text.id.clone());
     let task = db.save_publish_task(None, i).unwrap();
     db.prepare_publish_task(&task.id).unwrap();
+    let collection = publishing::CollectionChoice {
+        account_id: Some("backup-account".into()),
+        account_name: "公开昵称".into(),
+        id: None,
+        name: Some("保留合集".into()),
+    };
+    db.save_douyin_collection(&task.id, &collection, true)
+        .unwrap();
     let image = Path::new(&p.workspace_path).join("原始背景.png");
     fs::write(&image, crate::ai::images::test_png()).unwrap();
     let asset = db.link_asset(&p.id, image.to_str().unwrap(), None).unwrap();
@@ -379,6 +484,11 @@ fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_ne
         "中文书籍-发布任务包"
     );
     assert_eq!(restored.status, "ready");
+    assert_eq!(restored.douyin_collection, Some(collection.clone()));
+    assert_eq!(
+        db.default_douyin_collection("backup-account").unwrap(),
+        Some(collection)
+    );
     assert!(restored.checklist.iter().all(|c| c.passed));
     assert_eq!(restored.input.writing_version_id, Some(text.id));
     db.restore_backup(&result.previous_database).unwrap();

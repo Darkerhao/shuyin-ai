@@ -1,26 +1,24 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import type { DouyinCollection } from '../types/publishing'
 
-export interface DouyinEditor {
-  title: string
-  description: string
-  videoPreview: boolean
-  coverDialog: boolean
-  covers: { ratio: 'landscape' | 'portrait'; selected: boolean; preview: string }[]
+export interface DouyinSession {
+  runId: number
+  taskId: string
+  status: 'running' | 'waiting' | 'review' | 'stopped' | 'failed'
+  step: 'connect' | 'video' | 'text' | 'covers' | 'collection' | 'review'
+  message: string
+  waitingFor: 'account' | 'video' | 'processing' | 'page' | 'text' | 'covers' | 'collection' | null
+  account: { id: string | null; name: string; key: string } | null
+  completed: string[]
+  manual: string[]
+  collection: DouyinCollection | null
+  options: { id: string | null; name: string }[]
 }
-
-export interface DouyinPage {
-  supported: boolean
-  open: boolean
-  path: string
-  loginVisible: boolean
-  online: boolean
-  editor?: DouyinEditor | null
-}
-
+export type DouyinDecision = { kind: 'account'; name: string } | { kind: 'existingVideo' | 'processing' | 'page' | 'text' | 'covers' } | { kind: 'collection'; name: string | null; remember: boolean; manual: boolean }
 export const openDouyinWindow = () => invoke<void>('open_douyin_window')
-export const inspectDouyinWindow = () => invoke<DouyinPage>('inspect_douyin_window')
-export const uploadDouyinVideo = (id: string, accountConfirmed: boolean) => invoke<void>('upload_douyin_video', { id, accountConfirmed })
-export const completeDouyinTask = (id: string, existingVideoConfirmed: boolean) => invoke<DouyinEditor>('complete_douyin_task', { id, existingVideoConfirmed })
-export const stopDouyinTask = () => invoke<void>('stop_douyin_task')
-export const onDouyinProgress = (callback: (progress: { taskId: string; message: string }) => void) => listen<{ taskId: string; message: string }>('douyin-progress', event => callback(event.payload))
+export const getDouyinSession = () => invoke<DouyinSession | null>('douyin_session')
+export const startDouyinTask = (id: string) => invoke<DouyinSession>('start_douyin_task', { id })
+export const continueDouyinTask = (runId: number, decision: DouyinDecision) => invoke<DouyinSession>('continue_douyin_task', { runId, decision })
+export const stopDouyinTask = (runId: number) => invoke<DouyinSession>('stop_douyin_task', { runId })
+export const onDouyinProgress = (callback: (session: DouyinSession) => void) => listen<DouyinSession>('douyin-progress', event => callback(event.payload))

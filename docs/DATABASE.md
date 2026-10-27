@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 智能辅助发布 v11（2026-10-27）
+
+`0011_douyin_collection.sql` 仅为 `publish_tasks` 增加可空且校验 JSON 的 `douyin_collection`。NULL 表示未选择；对象的 `name=null` 表示明确不加入合集，否则为真实选项名称，另存可空合集 ID、公开账号 ID 和显示昵称。既有任务、时间戳、素材、文字快照与发布记录不回填、不重写。
+
+`save_douyin_collection` 在同一事务内保存任务意图及可选默认值。默认值复用 `app_settings` 的 `douyin_collection:{公开账号ID}`，昵称不足以启用记忆。当前适配器尚未验证稳定公开 ID，会返回 null，因此 UI 不提供持久化默认复选框。更改本次合集不会改账号默认；修改默认不会改旧任务。在线归类不属于媒体 manifest，修改合集不会失效 ready 包，也不修改包或原文件。
+
+当前 `user_version=11`，数据库备份接受 v2–v11，旧备份在内存中升级。合集意图与默认随 SQLite 和完整目录备份恢复；浏览器会话、上传进度、头像指纹及 Cookie 不持久化。任务删除继续随项目级联。回归覆盖 v10→v11 原数据保留、迁移冲突回滚、旧备份逐版本恢复、合集重启/恢复与完整备份恢复；实际结果见 `DOUYIN-FLOW-VERIFICATION.md`。
+
 应用更新偏好（2026-10-25）：复用既有 `app_settings`，键 `auto_update` 保存字符串 `true` / `false`，未设置默认为开启；通过受限 bool 命令读取/修改，随数据库备份恢复。版本、下载内容与进度属于运行状态，不新增业务表。schema 保持 v9，无迁移脚本。
 
 ## 1. 设计原则
@@ -391,4 +399,4 @@ M7沿用相同schema：全局任务列表关联book_projects读取书名，逐�
 - `publish_tasks` 增加可空 `audio_asset_id`，同项目音频外键；旧任务该字段为空。其余文字快照、视频、封面、状态、时间戳、任务目录和文案来源不变。
 - `publish_records` 原样保留并继续引用重建后的任务。迁移后重新建立 `assets_project` 与 `publish_tasks_project` 索引。
 
-当前 `user_version=10`，数据库备份支持 v2–v10。任务包 manifest 从 schema 1 升至 2，增加可空 `audio` 文件引用；旧任务包仍可读取，但缺少音频的待发布任务不会保持 ready。发布检查使用 `mp4parse 0.17.0` 只读取 MP4 ftyp/moov，不扫描完整 mdat，验证正时长、可读取画面尺寸与音轨，不限制横竖屏比例。音频只登记路径，不复制，不写入发布记录，也不上传抖音。
+v10 当时的 `user_version=10`，数据库备份支持 v2–v10。任务包 manifest 从 schema 1 升至 2，增加可空 `audio` 文件引用；旧任务包仍可读取，但缺少音频的待发布任务不会保持 ready。发布检查使用 `mp4parse 0.17.0` 只读取 MP4 ftyp/moov，不扫描完整 mdat，验证正时长、可读取画面尺寸与音轨，不限制横竖屏比例。音频只登记路径，不复制，不写入发布记录，也不上传抖音。

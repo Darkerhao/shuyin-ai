@@ -6,13 +6,13 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import * as api from '../../services/publishing'
 import { getProject, isDesktop, listAssets } from '../../services/projects'
 import { listVersions } from '../../services/ai'
 import { listCovers } from '../../services/covers'
-import { publishInput, publishStatuses, type PublishInput, type PublishTask } from '../../types/publishing'
+import { publishInput, publishStatuses, type PublishInput, type PublishQueueItem, type PublishTask } from '../../types/publishing'
 import type { Asset } from '../../types/project'
 import type { CoverVersion } from '../../types/cover'
 import type { WritingVersion } from '../../types/ai'
@@ -25,6 +25,11 @@ import CoverThumbnail from '../../components/CoverThumbnail.vue'
 import DouyinVerification from './DouyinVerification.vue'
 
 const props = defineProps<{ id: string; taskId?: string }>()
+const router = useRouter()
+const route = useRoute()
+const assistant = ref<InstanceType<typeof DouyinVerification> | null>(null)
+const nextTasks = ref<PublishQueueItem[]>([])
+const nextTaskId = ref<string | null>(null)
 const desktop = isDesktop()
 const title = ref('')
 const loaded = ref(false)
@@ -90,7 +95,18 @@ const load = () => run(async () => {
   title.value = project.title; tasks.value = saved; assets.value = files; covers.value = exported; writing.value = versions
   accept(target ?? null); loaded.value = true
 })
-watch(() => props.taskId, () => { if (desktop) void load() })
+async function loadTask() {
+  await load()
+  if (loaded.value && route.query.assist === '1') {
+    // Consume the explicit next-task action before running, so refresh cannot replay it.
+    const query = { ...route.query }
+    delete query.assist
+    await router.replace({ path: route.path, query })
+    await nextTick()
+    await assistant.value?.start()
+  }
+}
+watch(() => props.taskId, () => { if (desktop) void loadTask() })
 const refresh = () => run(async () => {
   const [files, exported, saved] = await Promise.all([listAssets(props.id), listCovers(props.id), api.listPublishTasks(props.id)])
   assets.value = files; covers.value = exported; tasks.value = saved
@@ -110,6 +126,11 @@ async function persist() {
   if (!selected.value || dirty.value) update(await api.savePublishTask(selected.value?.id ?? null, { ...draft.value }))
   return selected.value!.id
 }
+async function prepareDouyinTask() {
+  const id = await persist()
+  if (selected.value?.status !== 'ready') update(await api.preparePublishTask(id))
+  return selected.value!
+}
 const save = () => run(async () => { await persist(); message.value = '发布草稿已保存。' })
 const prepare = () => run(async () => {
   const id = await persist()
@@ -128,13 +149,21 @@ function confirmPublish() {
   const now = new Date()
   record.value = { publishedAt: new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16), postUrl: '', notes: '' }
   recordOpen.value = true
+  nextTaskId.value = null; nextTasks.value = []
+  void api.listPublishQueue().then(tasks => { if (recordOpen.value) nextTasks.value = tasks.filter(task => task.status === 'ready' && task.id !== selected.value?.id) }).catch(cause => { error.value = String(cause) })
 }
-const recordSuccess = () => run(async () => {
-  if (!selected.value) return
-  const saved = await api.recordPublishSuccess(selected.value.id, { ...record.value, publishedAt: new Date(record.value.publishedAt).toISOString(), confirmed: true })
-  update(saved); recordOpen.value = false; message.value = '已记录发布成功。'
-})
-onMounted(() => { if (desktop) void load() })
+async function recordSuccess(startNext = false) {
+  const target = startNext ? nextTasks.value.find(task => task.id === nextTaskId.value) : null
+  if (startNext && !target) return
+  let recorded = false
+  await run(async () => {
+    if (!selected.value) return
+    const saved = await api.recordPublishSuccess(selected.value.id, { ...record.value, publishedAt: new Date(record.value.publishedAt).toISOString(), confirmed: true })
+    update(saved); recordOpen.value = false; message.value = '已记录发布成功。'; recorded = true
+  })
+  if (recorded && target) await router.push({ path: `/projects/${target.projectId}/publishing`, query: { task: target.id, assist: '1' } })
+}
+onMounted(() => { if (desktop) void loadTask() })
 </script>
 
 <template>
@@ -148,7 +177,7 @@ onMounted(() => { if (desktop) void load() })
       </RouterLink>
       <h1>准备好，分享你的作品</h1>
       <p class="muted">
-        {{ title || '书籍' }} · 选好素材与文案，生成任务包后到抖音手动发布。
+        {{ title || '书籍' }} · 选好素材与文案，开始辅助发布，检查后亲自发布。
       </p>
     </div>
     <RouterLink
@@ -183,12 +212,30 @@ onMounted(() => { if (desktop) void load() })
   </Button>
   <template v-if="loaded">
     <DouyinVerification
-      :key="selected?.id ?? 'new'"
+      v-if="!published"
+      ref="assistant"
       :desktop="desktop"
       :task="selected"
-      :disabled="busy || dirty || recordOpen"
+      :disabled="operationBusy || recordOpen || published"
+      :prepare-task="prepareDouyinTask"
       @working="douyinBusy = $event"
-    />
+    >
+      <template #summary>
+        <p class="muted">
+          {{ title }} · 成片：{{ video?.originalName || '尚未选择' }}
+        </p>
+        <div class="actions wrap">
+          <CoverThumbnail
+            v-if="selectedLandscape"
+            :cover="selectedLandscape"
+          />
+          <CoverThumbnail
+            v-if="selectedPortrait"
+            :cover="selectedPortrait"
+          />
+        </div>
+      </template>
+    </DouyinVerification>
     <section class="panel">
       <div class="result-heading">
         <h2>本书发布任务</h2><Badge variant="secondary">
@@ -436,7 +483,7 @@ onMounted(() => { if (desktop) void load() })
                 </SelectContent>
               </Select>
               <CoverThumbnail
-                v-if="selectedLandscape"
+                v-if="published && selectedLandscape"
                 :cover="selectedLandscape"
               />
             </div>
@@ -465,7 +512,7 @@ onMounted(() => { if (desktop) void load() })
                 </SelectContent>
               </Select>
               <CoverThumbnail
-                v-if="selectedPortrait"
+                v-if="published && selectedPortrait"
                 :cover="selectedPortrait"
               />
             </div>
@@ -496,6 +543,7 @@ onMounted(() => { if (desktop) void load() })
           </Button>
           <Button
             type="button"
+            variant="outline"
             @click="prepare"
           >
             {{ busy ? '处理中…' : '生成完整任务包' }}
@@ -640,7 +688,7 @@ onMounted(() => { if (desktop) void load() })
       class="panel confirmation"
       role="alertdialog"
       aria-labelledby="publish-confirm-title"
-      @submit.prevent="recordSuccess"
+      @submit.prevent="recordSuccess()"
     >
       <h2 id="publish-confirm-title">
         确认作品已在抖音发布成功？
@@ -677,6 +725,33 @@ onMounted(() => { if (desktop) void load() })
             取消
           </Button>
         </div>
+        <template v-if="nextTasks.length">
+          <label for="publish-next-task">接下来处理的作品（选填）</label>
+          <Select
+            v-model="nextTaskId"
+            :disabled="busy"
+          >
+            <SelectTrigger id="publish-next-task">
+              <SelectValue placeholder="请选择下一篇，不会自动选择" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem
+                v-for="task in nextTasks"
+                :key="task.id"
+                :value="task.id"
+              >
+                {{ task.projectTitle }} · {{ task.title }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            :disabled="busy || !nextTaskId"
+            @click="recordSuccess(true)"
+          >
+            确认记录并准备下一篇
+          </Button>
+        </template>
       </fieldset>
     </form>
   </template>

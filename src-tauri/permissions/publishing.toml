@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "allow-publishing"
 description = "发布草稿、素材检查、任务包和人工确认记录；只打开任务相关文件或固定抖音入口。"
-commands.allow = ["list_publish_tasks", "list_publish_queue", "save_publish_task", "prepare_publish_task", "record_publish_success", "open_publish_item", "open_douyin_window", "inspect_douyin_window", "upload_douyin_video", "complete_douyin_task", "stop_douyin_task"]
+commands.allow = ["list_publish_tasks", "list_publish_queue", "save_publish_task", "prepare_publish_task", "record_publish_success", "open_publish_item", "open_douyin_window", "start_douyin_task", "continue_douyin_task", "douyin_session", "stop_douyin_task"]
