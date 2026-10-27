@@ -81,7 +81,11 @@ fn generated_background_persists_with_history_and_backup_without_overwriting_fil
     let task = image_task(&db, &p.id, &image.id);
     db.prepare_cover_generation(&task).unwrap();
     let asset = db.finish_cover_generation(&task, &bytes).unwrap();
-    assert!(asset.file_path.ends_with(".jpg"));
+    assert_eq!(asset.original_name, "M3测试书-1比1-4x4-背景-v1.jpg");
+    assert_eq!(
+        PathBuf::from(&asset.file_path).file_name().unwrap(),
+        asset.original_name.as_str()
+    );
     assert_eq!(db.read_cover_background(&p.id, &asset.id).unwrap(), bytes);
     assert!(db.finish_cover_generation(&task, &bytes).is_err());
     let mut draft = config();
@@ -92,6 +96,7 @@ fn generated_background_persists_with_history_and_backup_without_overwriting_fil
     let next = image_task(&db, &p.id, &image.id);
     db.prepare_cover_generation(&next).unwrap();
     let second = db.finish_cover_generation(&next, &bytes).unwrap();
+    assert_eq!(second.original_name, "M3测试书-1比1-4x4-背景-v2.jpg");
     assert_ne!(asset.file_path, second.file_path);
     db.restore_backup(&backup).unwrap();
     drop(db);
@@ -109,6 +114,39 @@ fn generated_background_persists_with_history_and_backup_without_overwriting_fil
         Ok(())
     })
     .unwrap();
+    let next = image_task(&db, &p.id, &image.id);
+    db.prepare_cover_generation(&next).unwrap();
+    let third = db.finish_cover_generation(&next, &bytes).unwrap();
+    assert_eq!(third.original_name, "M3测试书-1比1-4x4-背景-v3.jpg");
+    assert_eq!(fs::read(second.file_path).unwrap(), bytes);
+}
+
+#[test]
+fn generated_background_filenames_use_actual_dimensions_and_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let p = project(&db);
+    let provider = image_model(&db);
+    for (format, extension) in [
+        (image::ImageFormat::Png, "png"),
+        (image::ImageFormat::Jpeg, "jpg"),
+        (image::ImageFormat::WebP, "webp"),
+    ] {
+        let image = image::RgbImage::from_pixel(12, 8, image::Rgb([60, 90, 120]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, format).unwrap();
+        let task = image_task(&db, &p.id, &provider.id);
+        db.prepare_cover_generation(&task).unwrap();
+        let asset = db.finish_cover_generation(&task, bytes.get_ref()).unwrap();
+        assert_eq!(
+            asset.original_name,
+            format!("M3测试书-3比2-12x8-背景-v1.{extension}")
+        );
+        assert_eq!(
+            db.read_cover_background(&p.id, &asset.id).unwrap(),
+            *bytes.get_ref()
+        );
+    }
 }
 
 #[test]
@@ -242,7 +280,19 @@ fn covers_export_and_restore_all_three_supported_sizes() {
         bytes[20..24].copy_from_slice(&height.to_be_bytes());
         let saved = db.save_cover_version(&p.id, draft, Some(&bytes)).unwrap();
         let path = saved.exported_path.unwrap();
-        assert!(path.contains(&format!("{width}x{height}")));
+        let ratio = match (width, height) {
+            (1440, 1080) => "4比3",
+            (1080, 1440) => "3比4",
+            _ => "16比9",
+        };
+        assert_eq!(
+            PathBuf::from(&path).file_name().unwrap(),
+            format!(
+                "M3测试书-{ratio}-{width}x{height}-v{}.png",
+                saved.version_no
+            )
+            .as_str()
+        );
         assert_eq!(fs::read(path).unwrap(), bytes);
     }
     for (width, height) in [(1080, 1920), (1280, 720), (1080, 1080), (1440, 1440)] {
@@ -259,6 +309,90 @@ fn covers_export_and_restore_all_three_supported_sizes() {
         (versions[0].config.width, versions[0].config.height),
         (1920, 1080)
     );
+}
+
+#[test]
+fn cover_filenames_use_current_book_title_and_skip_existing_versions() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let p = project(&db);
+    let covers = PathBuf::from(&p.workspace_path).join("covers");
+    fs::create_dir_all(&covers).unwrap();
+    let occupied = covers.join("M3测试书-3比4-1080x1440-v1.png");
+    fs::write(&occupied, b"existing cover").unwrap();
+    fs::create_dir(covers.join("M3测试书-3比4-1080x1440-v2.png")).unwrap();
+    let saved = db
+        .save_cover_version(&p.id, config(), Some(&png()))
+        .unwrap();
+    assert_eq!(saved.version_no, 3);
+    assert_eq!(
+        PathBuf::from(saved.exported_path.unwrap())
+            .file_name()
+            .unwrap(),
+        "M3测试书-3比4-1080x1440-v3.png"
+    );
+    assert_eq!(fs::read(occupied).unwrap(), b"existing cover");
+    assert_eq!(db.read_cover_export(&p.id, &saved.id).unwrap(), png());
+
+    let long_title = "书".repeat(200);
+    let shortened_title = "书".repeat(40);
+    for (title, title_part) in [
+        ("围城", "围城"),
+        ("书名<>:\"/\\|?*\n结尾. ", "书名__________结尾"),
+        ("Con.txt", "_Con.txt"),
+        ("..", "未命名书籍"),
+        (long_title.as_str(), shortened_title.as_str()),
+    ] {
+        let mut input = p.input.clone();
+        input.title = title.into();
+        db.save_project(Some(&p.id), input).unwrap();
+        let saved = db
+            .save_cover_version(&p.id, config(), Some(&png()))
+            .unwrap();
+        let path = PathBuf::from(saved.exported_path.unwrap());
+        assert_eq!(
+            path.file_name().unwrap(),
+            format!("{title_part}-3比4-1080x1440-v{}.png", saved.version_no).as_str()
+        );
+        assert_eq!(path.parent().unwrap(), covers);
+        assert_eq!(db.read_cover_export(&p.id, &saved.id).unwrap(), png());
+    }
+}
+
+#[test]
+fn legacy_random_cover_paths_remain_readable_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("db.sqlite3");
+    let db = Database::open(db_path.clone());
+    let p = project(&db);
+    let saved = db
+        .save_cover_version(&p.id, config(), Some(&png()))
+        .unwrap();
+    let original = PathBuf::from(saved.exported_path.unwrap());
+    let legacy = original.with_file_name("cover-1080x1440-v1-78c71cba81e04bbaa09c1345c18f39e0.png");
+    fs::rename(original, &legacy).unwrap();
+    db.with_connection(|c| {
+        c.execute(
+            "UPDATE cover_versions SET exported_path=?1 WHERE id=?2",
+            rusqlite::params![legacy.to_str().unwrap(), saved.id],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    drop(db);
+    let db = Database::open(db_path);
+    assert_eq!(db.read_cover_export(&p.id, &saved.id).unwrap(), png());
+    let next = db
+        .save_cover_version(&p.id, config(), Some(&png()))
+        .unwrap();
+    assert_eq!(
+        PathBuf::from(next.exported_path.unwrap())
+            .file_name()
+            .unwrap(),
+        "M3测试书-3比4-1080x1440-v2.png"
+    );
+    assert_eq!(fs::read(legacy).unwrap(), png());
 }
 
 #[test]

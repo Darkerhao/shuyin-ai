@@ -1,12 +1,13 @@
 use super::{
     ai::ProviderConfig,
+    covers::{cover_file_stem, create_versioned_image},
     projects::{get, new_id, NOW},
     Asset, Database,
 };
 use crate::ai::images::{validate_image, PROMPT_VERSION, SYSTEM_PROMPT};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::{fs::OpenOptions, io::Write, path::Path, time::UNIX_EPOCH};
+use std::{io::Write, path::Path, time::UNIX_EPOCH};
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,17 +54,17 @@ impl Database {
         })
     }
     pub fn finish_cover_generation(&self, task_id: &str, bytes: &[u8]) -> Result<Asset, String> {
-        let extension = validate_image(bytes).map_err(|e| e.message)?;
+        let (extension, width, height) = validate_image(bytes).map_err(|e| e.message)?;
         self.with_connection(|c| {
             let tx = c.transaction().map_err(|e|e.to_string())?;
             let project_id: String = tx.query_row("SELECT project_id FROM ai_tasks WHERE id=?1 AND kind='cover' AND status='running'", [task_id], |r|r.get(0)).map_err(|_|"生成已取消或结束，图片未写入。")?;
             let project = get(&tx, &project_id)?;
             let id = new_id(&tx)?;
-            let name = format!("ai-background-{id}.{extension}");
             let directory = Path::new(&project.workspace_path).join("covers");
             std::fs::create_dir_all(&directory).map_err(|e|format!("封面目录不可写：{e}"))?;
-            let path = directory.join(&name);
-            let mut file = OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e|format!("背景保存失败：{e}"))?;
+            let stem = format!("{}-背景", cover_file_stem(&project.input.title, width, height));
+            let (mut file, path, _) = create_versioned_image(&directory, &stem, extension, 1).map_err(|e|format!("背景保存失败：{e}"))?;
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
             let written = file.write_all(bytes).and_then(|()|file.sync_all());
             drop(file);
             let result = (|| {

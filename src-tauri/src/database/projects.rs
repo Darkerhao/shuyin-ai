@@ -87,7 +87,7 @@ pub(super) fn new_id(connection: &Connection) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-pub(super) fn create_named_directory(parent: &Path, title: &str) -> Result<PathBuf, String> {
+pub(super) fn safe_book_name(title: &str) -> String {
     let mut name: String = title
         .trim()
         .chars()
@@ -130,6 +130,11 @@ pub(super) fn create_named_directory(parent: &Path, title: &str) -> Result<PathB
     } else {
         name
     };
+    name.to_owned()
+}
+
+pub(super) fn create_named_directory(parent: &Path, title: &str) -> Result<PathBuf, String> {
+    let name = safe_book_name(title);
     fs::create_dir_all(parent).map_err(|e| format!("无法创建工作目录：{e}"))?;
     let mut index = 1u64;
     loop {

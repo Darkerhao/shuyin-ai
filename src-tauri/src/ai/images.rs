@@ -55,7 +55,7 @@ pub trait ImageProvider {
 }
 
 // Decode all pixels before a remote response can become a project asset.
-pub fn validate_image(bytes: &[u8]) -> Result<&'static str, AiError> {
+pub fn validate_image(bytes: &[u8]) -> Result<(&'static str, u32, u32), AiError> {
     let invalid = || {
         AiError::new(
             "invalid_image",
@@ -80,7 +80,7 @@ pub fn validate_image(bytes: &[u8]) -> Result<&'static str, AiError> {
     if u64::from(decoded.width()) * u64::from(decoded.height()) > 40_000_000 {
         return Err(invalid());
     }
-    Ok(extension)
+    Ok((extension, decoded.width(), decoded.height()))
 }
 
 impl ImageProvider for OpenAiCompatible {

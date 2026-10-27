@@ -83,9 +83,9 @@ fn image_validation_rejects_truncated_corrupt_and_oversized_data() {
     let png = test_png();
     let jpeg = test_jpeg();
     let webp = test_webp();
-    assert_eq!(images::validate_image(&png).unwrap(), "png");
-    assert_eq!(images::validate_image(&jpeg).unwrap(), "jpg");
-    assert_eq!(images::validate_image(&webp).unwrap(), "webp");
+    assert_eq!(images::validate_image(&png).unwrap(), ("png", 4, 4));
+    assert_eq!(images::validate_image(&jpeg).unwrap(), ("jpg", 4, 4));
+    assert_eq!(images::validate_image(&webp).unwrap(), ("webp", 4, 4));
     assert!(images::validate_image(&png[..png.len() - 12]).is_err());
     assert!(images::validate_image(&jpeg[..jpeg.len() / 2]).is_err());
     let mut corrupt = png.clone();
