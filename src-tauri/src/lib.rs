@@ -110,7 +110,8 @@ pub fn run() {
             ai_commands::execute_generation,
             ai_commands::apply_generation,
             ai_commands::cancel_generation,
-            ai_commands::open_audio_tool
+            ai_commands::open_audio_tool,
+            ai_commands::set_audio_duration
         ])
         .run(tauri::generate_context!())
         .expect("书引 AI 桌面容器启动失败");

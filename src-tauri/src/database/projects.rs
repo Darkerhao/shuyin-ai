@@ -35,6 +35,7 @@ pub struct Project {
     pub created_at: String,
     pub updated_at: String,
     pub archived_at: Option<String>,
+    pub audio_duration_source: Option<String>,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,13 +63,14 @@ fn row_project(row: &Row<'_>) -> rusqlite::Result<Project> {
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
         archived_at: row.get(15)?,
+        audio_duration_source: row.get(16)?,
     })
 }
 pub(super) fn get(connection: &Connection, id: &str) -> Result<Project, String> {
     connection
         .query_row(
             &format!(
-                "SELECT {COLUMNS}
+                "SELECT {COLUMNS},audio_duration_source
                 FROM book_projects
                 WHERE id=?1"
             ),
@@ -172,7 +174,7 @@ impl Database {
             return Err("筛选状态无效。".into());
         }
         self.with_connection(|c| {
-            let mut query = c.prepare(&format!("SELECT {COLUMNS}
+            let mut query = c.prepare(&format!("SELECT {COLUMNS},audio_duration_source
                 FROM book_projects
                 WHERE (?1='' OR instr(lower(title),lower(?1))>0 OR instr(lower(author),lower(?1))>0 OR instr(isbn,?1)>0) AND (?2='' OR status=?2)
                 ORDER BY updated_at DESC,id" )).map_err(|e|e.to_string())?;

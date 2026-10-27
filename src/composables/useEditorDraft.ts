@@ -5,7 +5,7 @@ import { saveDraft, type DraftKind } from '../services/drafts'
 import { errorMessage } from '../services/verification'
 
 // One queue per mounted editor prevents slow writes from overtaking newer edits or explicit saves.
-export function useEditorDraft<T>(projectId: () => string, kind: DraftKind, content: Ref<T>, basedOn: () => string | null, dirty: Ref<boolean>, ready: Ref<boolean>, canClose: () => boolean) {
+export function useEditorDraft<T>(projectId: () => string, kind: DraftKind, content: Ref<T>, basedOn: () => string | null, dirty: Ref<boolean>, ready: Ref<boolean>, canClose: () => boolean | Promise<boolean>) {
   const status = ref('')
   const error = ref('')
   let timer: ReturnType<typeof globalThis.setTimeout> | undefined
@@ -33,7 +33,7 @@ export function useEditorDraft<T>(projectId: () => string, kind: DraftKind, cont
     if (!isTauri()) return
     try {
       const stop = await getCurrentWindow().onCloseRequested(async event => {
-        if (!canClose()) { event.preventDefault(); return }
+        if (!await canClose()) { event.preventDefault(); return }
         try { if (ready.value) await flush() } catch { event.preventDefault() }
       })
       if (disposed) stop(); else unlisten = stop
