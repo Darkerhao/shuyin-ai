@@ -45,5 +45,5 @@ export const coverTemplates = {
   ocean: { label: '蓝调纪实', description: '清晰利落 · 历史新知', style: { backgroundColor: '#102c46', textColor: '#ffffff', subtitleColor: '#a8e5ff', accentColor: '#ffcf66', titleSize: 144, subtitleSize: 52, overlayOpacity: 0.7, fontFamily: 'sans', align: 'left', position: 'center' } },
 } as const
 export function newCover(title = ''): CoverConfig {
-  return { schemaVersion: 1, templateId: 'spotlight', width: 1440, height: 1080, title, subtitle: '十分钟读懂一本书', brand: '甲子 · 书引', backgroundAssetId: null, backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1, ...coverTemplates.spotlight.style }
+  return { schemaVersion: 1, templateId: 'spotlight', width: 1440, height: 1080, title, subtitle: '读懂一本书', brand: '甲子 · 书引', backgroundAssetId: null, backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1, ...coverTemplates.spotlight.style }
 }

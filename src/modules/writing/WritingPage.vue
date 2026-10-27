@@ -5,10 +5,12 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/ai'
 import { chooseAudio, getProject, isDesktop, linkAsset, listAssets, openAsset } from '../../services/projects'
+import { errorMessage } from '../../services/verification'
 import { emptyPublishing, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type PublishingTextField, type WritingVersion } from '../../types/ai'
 import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
 import type { Asset } from '../../types/project'
@@ -23,6 +25,13 @@ const props = defineProps<{ id: string }>()
 const router = useRouter()
 const desktop = isDesktop()
 const title = ref('')
+const durationMinutes = ref<string | number>(10)
+const savedDurationSeconds = ref(600)
+const durationConfigured = ref(false)
+const durationReason = ref('')
+const recommending = ref(false)
+const durationValid = computed(() => Number.isInteger(Number(durationMinutes.value)) && Number(durationMinutes.value) >= 1 && Number(durationMinutes.value) <= 1440)
+const durationDirty = computed(() => Number(durationMinutes.value) * 60 !== savedDurationSeconds.value)
 const ready = ref(false)
 const providers = ref<ModelProvider[]>([])
 const providerId = ref('')
@@ -49,25 +58,33 @@ const tabs = [
   { value: 'cover', label: '封面素材' },
 ]
 const { busy, error, message, run } = useOperation()
-const autosave = useEditorDraft(() => props.id, 'writing', draft, () => selected.value?.id ?? null, dirty, ready, () => !busy.value && (!preview.value || canDiscard()))
+const autosave = useEditorDraft(() => props.id, 'writing', draft, () => selected.value?.id ?? null, dirty, ready, prepareLeave)
 function accept(version: WritingVersion | null) {
   selected.value = version
   draft.value = { ...emptyPublishing(), ...version?.content }
   original.value = JSON.stringify(draft.value)
 }
 function canDiscard() { return (!dirty.value && !preview.value) || globalThis.confirm(preview.value ? '候选结果尚未采用，确定放弃？' : '当前内容尚未保存，确定放弃修改？') }
-const canLeave = async () => {
+async function prepareLeave() {
   if (busy.value || (preview.value && !canDiscard())) return false
+  try { if (ready.value && durationDirty.value) await persistDuration(); return true }
+  catch (cause) { error.value = errorMessage(cause); return false }
+}
+const canLeave = async () => {
+  if (!await prepareLeave()) return false
   try { if (ready.value) await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate(canLeave)
-function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value || preview.value) event.preventDefault() }
+function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || durationDirty.value || busy.value || preview.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(copyTimer) })
 const load = () => run(async () => {
   const [project, models, saved, recovery, files] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing'), readDraft<PublishingContent>(props.id, 'writing'), listAssets(props.id)])
   title.value = project.title
+  durationMinutes.value = project.targetDurationSeconds / 60
+  savedDurationSeconds.value = project.targetDurationSeconds
+  durationConfigured.value = !!project.audioDurationSource
   audioAssets.value = files.filter(asset => asset.assetType === 'audio')
   providers.value = models.filter(p => p.isEnabled && p.modelKind === 'text')
   providerId.value = providers.value.find(p => p.isDefault)?.id ?? providers.value[0]?.id ?? ''
@@ -96,11 +113,35 @@ const importAudio = () => run(async () => {
   message.value = '音频已导入。请到剪映生成字幕、添加视频背景并导出最终成片。'
 })
 const playAudio = (id: string) => run(() => openAsset(id))
+async function persistDuration() {
+  if (!durationValid.value) throw new Error('音频目标时长须为 1—1440 分钟的整数。')
+  const seconds = Number(durationMinutes.value) * 60
+  if (durationDirty.value || !durationConfigured.value) {
+    await api.setAudioDuration(props.id, seconds)
+    savedDurationSeconds.value = seconds
+    durationConfigured.value = true
+  }
+}
+const saveDuration = () => run(async () => { await persistDuration(); message.value = '目标时长已保存，下次生成时生效。已有内容保持原样。' })
+const recommendDuration = () => run(async () => {
+  recommending.value = true
+  try {
+    taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value, recommendDuration: true })
+    const result = await api.executeGeneration(taskId.value)
+    if (!('minutes' in result)) throw new Error('时长推荐结果类型不符，原时长与内容保留。')
+    durationMinutes.value = result.minutes
+    savedDurationSeconds.value = result.minutes * 60
+    durationConfigured.value = true
+    durationReason.value = result.reason
+    message.value = `AI 推荐 ${result.minutes} 分钟，可直接修改后再生成。已有内容保持原样。`
+  } finally { taskId.value = ''; recommending.value = false }
+})
 const generate = () => run(async () => {
   try {
-    taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value })
+    await persistDuration()
+    taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60 })
     const saved = await api.executeGeneration(taskId.value)
-    if ('taskId' in saved) throw new Error('生成结果类型不符，当前内容保留。')
+    if (!('id' in saved)) throw new Error('生成结果类型不符，当前内容保留。')
     versions.value = [saved, ...versions.value]
     if (!dirty.value) accept(saved)
     message.value = dirty.value ? '生成完成，当前修改已保留。保存后可在历史版本中查看新结果。' : '发布文案、音频提示词、封面主副标题及两种比例的图片提示词已生成并保存。'
@@ -113,9 +154,10 @@ function selectRevision(field: PublishingField, checked: boolean | 'indeterminat
 const generateRevision = () => run(async () => {
   revising.value = true
   try {
+    await persistDuration()
     if (dirty.value) await persistWriting()
     if (!selected.value) throw new Error('请先生成或保存一套内容。')
-    taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value, revision: { basedOn: selected.value.id, fields: [...revisionFields.value], instruction: revisionInstruction.value.trim() } })
+    taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60, revision: { basedOn: selected.value.id, fields: [...revisionFields.value], instruction: revisionInstruction.value.trim() } })
     const result = await api.executeGeneration(taskId.value)
     if (!('taskId' in result)) throw new Error('调整结果类型不符，当前内容保留。')
     preview.value = result
@@ -170,7 +212,11 @@ function saveShortcut(event: globalThis.KeyboardEvent) {
 }
 onMounted(() => globalThis.addEventListener('keydown', saveShortcut))
 onBeforeUnmount(() => globalThis.removeEventListener('keydown', saveShortcut))
-onMounted(() => { if (desktop) void load() })
+onMounted(async () => {
+  if (!desktop) return
+  await load()
+  if (ready.value && !durationConfigured.value && providerId.value) await recommendDuration()
+})
 </script>
 <template>
   <header class="page-heading">
@@ -234,7 +280,7 @@ onMounted(() => { if (desktop) void load() })
           name="sparkle"
           :class="{ spin: !!taskId }"
         /></span>
-        <div><h2>让灵感，成为这一期内容</h2><p>甲子 · 十分钟读懂一本书 · 8—10 分钟</p></div>
+        <div><h2>让灵感，成为这一期内容</h2><p>甲子 · {{ durationValid ? `${durationMinutes}分钟读懂一本书 · 目标 ${durationMinutes} 分钟` : '读懂一本书 · 请设置目标时长' }}</p></div>
       </div>
       <div class="generation-actions">
         <template v-if="providers.length > 1">
@@ -264,11 +310,11 @@ onMounted(() => { if (desktop) void load() })
           </Select>
         </template>
         <Button
-          :disabled="busy || !providerId || !!preview"
+          :disabled="busy || !providerId || !!preview || !durationValid"
           type="button"
           @click="generate"
         >
-          <AppIcon name="sparkle" />{{ taskId ? '生成中…' : '一键生成' }}
+          <AppIcon name="sparkle" />{{ taskId && !recommending ? '生成中…' : '一键生成' }}
         </Button>
         <Button
           variant="outline"
@@ -289,6 +335,74 @@ onMounted(() => { if (desktop) void load() })
         </Button>
       </div>
     </section>
+    <section
+      class="panel mb-6 space-y-3"
+      aria-labelledby="audio-duration-heading"
+    >
+      <div class="flex flex-wrap items-end gap-3">
+        <div>
+          <label
+            id="audio-duration-heading"
+            for="audio-duration"
+          >音频目标时长（分钟）</label>
+          <Input
+            id="audio-duration"
+            v-model="durationMinutes"
+            type="number"
+            min="1"
+            max="1440"
+            step="1"
+            class="w-36"
+            :aria-invalid="!durationValid"
+            aria-describedby="audio-duration-help"
+            :disabled="busy || !!preview"
+          />
+        </div>
+        <Button
+          variant="outline"
+          :disabled="busy || !providerId || !!preview"
+          @click="recommendDuration"
+        >
+          <AppIcon name="sparkle" />{{ recommending ? '推荐中…' : 'AI 推荐时长' }}
+        </Button>
+        <Button
+          v-if="durationDirty"
+          variant="outline"
+          :disabled="busy || !!preview || !durationValid"
+          @click="saveDuration"
+        >
+          保存时长
+        </Button>
+        <div
+          class="flex flex-wrap gap-2"
+          aria-label="常用音频时长"
+        >
+          <Button
+            v-for="minutes in [5, 10, 15, 20, 30, 60]"
+            :key="minutes"
+            size="sm"
+            :variant="Number(durationMinutes) === minutes ? 'secondary' : 'ghost'"
+            :disabled="busy || !!preview"
+            @click="durationMinutes = minutes"
+          >
+            {{ minutes }} 分钟
+          </Button>
+        </div>
+      </div>
+      <p
+        id="audio-duration-help"
+        class="muted text-sm"
+      >
+        {{ durationValid ? '生成前可自由修改时长，生成时自动保存。开场、分段安排、结尾及相关文案按此时长生成；已有内容需重新生成或按项调整。' : '请输入 1—1440 分钟的整数。' }}
+      </p>
+      <p
+        v-if="durationReason"
+        class="muted text-sm"
+        role="status"
+      >
+        AI 推荐依据：{{ durationReason }}
+      </p>
+    </section>
     <p
       v-if="!providers.length"
       class="notice"
@@ -302,7 +416,7 @@ onMounted(() => { if (desktop) void load() })
       class="notice"
       role="status"
     >
-      {{ revising ? '正在调整选中的内容，最多等待 120 秒。完成后先预览，再决定是否采用。' : '正在生成文案、音频提示词和封面素材，最多等待 120 秒。你可以继续编辑，当前修改会保留。' }}
+      {{ recommending ? '正在根据书籍体量和内容重点推荐时长，最多等待 120 秒。可取消后手动设置。' : revising ? '正在调整选中的内容，最多等待 120 秒。完成后先预览，再决定是否采用。' : '正在生成文案、音频提示词和封面素材，最多等待 120 秒。你可以继续编辑，当前修改会保留。' }}
     </p>
     <section
       v-if="revisionOpen"
@@ -419,7 +533,7 @@ onMounted(() => { if (desktop) void load() })
         </Button>
         <Button
           v-else
-          :disabled="busy || !revisionFields.length || !canSave || !providerId"
+          :disabled="busy || !revisionFields.length || !canSave || !providerId || !durationValid"
           type="button"
           @click="generateRevision"
         >

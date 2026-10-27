@@ -1,7 +1,9 @@
 use crate::{
     ai::{
-        publishing::PublishingDraft, revision, ActiveTasks, AiError, OpenAiCompatible,
-        TextProvider, TextRequest, SYSTEM_PROMPT, TIMEOUT,
+        audio::{self, DurationRecommendation},
+        publishing::PublishingDraft,
+        revision, ActiveTasks, AiError, OpenAiCompatible, TextProvider, TextRequest, SYSTEM_PROMPT,
+        TIMEOUT,
     },
     credentials::{Credentials, SystemCredentials},
     database::{
@@ -19,6 +21,15 @@ const AUDIO_TOOL: &str = "https://notebooklm.google.com/";
 #[tauri::command]
 pub fn open_audio_tool() -> Result<(), String> {
     crate::external::open_url(AUDIO_TOOL)
+}
+
+#[tauri::command]
+pub fn set_audio_duration(
+    database: State<'_, Database>,
+    project_id: String,
+    seconds: i64,
+) -> Result<(), String> {
+    database.set_audio_duration(&project_id, seconds)
 }
 
 #[tauri::command]
@@ -176,7 +187,7 @@ pub async fn execute_generation(
     run_task(database, active.inner(), id, |mut receiver| async move {
         let prepared=database.prepare_generation(id).map_err(AiError::database)?;
         let model=prepared.provider.input.model_name.clone();
-        let system=if prepared.input.revision.is_some() { revision::SYSTEM_PROMPT } else { SYSTEM_PROMPT };
+        let system=if prepared.input.recommend_duration { audio::SYSTEM_PROMPT } else if prepared.input.revision.is_some() { revision::SYSTEM_PROMPT } else { SYSTEM_PROMPT };
         let req=request(prepared.provider,vault,system,prepared.user)?;
         let provider=OpenAiCompatible::new(TIMEOUT, &req.base_url)?;
         let raw=tokio::select! {
@@ -184,12 +195,17 @@ pub async fn execute_generation(
             _=receiver.changed()=>return Err(AiError::new("cancelled","生成已取消，原有内容保留。")),
             response=provider.generate(req)=>response?,
         };
+        if prepared.input.recommend_duration {
+            let recommendation=DurationRecommendation::parse(&raw).map_err(|s|AiError::new("invalid_content",&s))?;
+            return database.finish_duration_recommendation(id,recommendation).map(GenerationResult::Duration).map_err(AiError::database);
+        }
+        let duration=prepared.input.target_duration_seconds.ok_or_else(||AiError::new("invalid_content","任务缺少目标时长。"))?;
         if let (Some(revision),Some(base))=(&prepared.input.revision,&prepared.base) {
-            let content=revision::revise(&raw,&base.content,&revision.fields,&prepared.book_title).map_err(|s|AiError::new("invalid_content",&s))?;
+            let content=revision::revise(&raw,&base.content,&revision.fields,&prepared.book_title,duration).map_err(|s|AiError::new("invalid_content",&s))?;
             database.finish_revision(id,&prepared.input,content).map(GenerationResult::Preview).map_err(AiError::database)
         } else {
             let draft:PublishingDraft=serde_json::from_str(&raw).map_err(|_|AiError::new("invalid_content","模型输出不符合发布内容结构，原有内容保留。"))?;
-            let content=draft.into_content(&prepared.book_title).map_err(|s|AiError::new("invalid_content",&s))?;
+            let content=draft.into_content(&prepared.book_title,duration).map_err(|s|AiError::new("invalid_content",&s))?;
             database.finish_generation(id,&prepared.input,content,&model).map(GenerationResult::Version).map_err(AiError::database)
         }
     }).await

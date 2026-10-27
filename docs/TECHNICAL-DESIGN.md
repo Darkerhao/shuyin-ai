@@ -1,5 +1,13 @@
 # 书引 AI 技术设计文档
 
+## 音频时长贯通（2026-10-27）
+
+`audio.rs` 统一时长校验、展示、请求上下文与推荐输出解析。`GenerationInput` 新增可选 `targetDurationSeconds` 和默认false的 `recommendDuration`，复用原文本任务、Provider、凭据、120秒超时及取消；推荐使用 `audio-duration-v1`，不生成文案版本，成功时事务保存书籍时长和任务成功状态。任务创建时冻结实际时长，后续修改项目不会改变在途任务。普通生成仍兼容省略时长的调用，使用项目值。
+
+全量 `publishing-v4`、按项 `publishing-revision-v3` 接收 `audio` 中的秒数、中文时长、系列名和预计字数；指导正文不自带时间承诺，程序通过 `audio-template-v2` 统一插入时长。开场取总秒数三分之一且不超过60秒，结尾不超过45秒，余数精确分配到五段，总和等于目标。参考每分钟220字，并提示按时长取舍内容；短节目精简引入。原音频工具、音频/视频素材与发布边界保持原流程。
+
+创作页首次对未配置书籍自动推荐，手动值经独立受限 `set_audio_duration` 命令保存，输入与在途/候选状态互锁。退出准备支持异步等待目标时长保存，再串行暂存文案；失败保留页面和输入。新封面默认副标题及发布话题示例去掉固定十分钟；已有封面/历史均不改写。无新增依赖，数据库v12见DATABASE，验证边界见 `AUDIO-DURATION-VERIFICATION.md`。
+
 ## 封面排版推荐（2026-10-27）
 
 启用 `publishing-v3` 和 `publishing-revision-v2`，沿用统一文本 Provider，在发布内容中增加可选 `coverDesign`：titleSize、subtitleSize、textColor、subtitleColor、accentColor、backgroundColor、overlayOpacity。全量 AI 输出必须包含完整推荐，Rust 校验整数范围、六位颜色与蒙层后才存储；旧内容允许缺失。按项调整仅合并选中字段，推荐对象不进入文字编辑和复制循环，原有失败/取消/候选采用流程复用。

@@ -5,6 +5,7 @@ use super::{
 use crate::{
     ai::{
         self,
+        audio::{self, DurationRecommendation},
         revision::{self, PublishingField, RevisionInput},
         WritingContent, PROMPT_VERSION,
     },
@@ -115,6 +116,10 @@ pub struct GenerationInput {
     pub provider_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<RevisionInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_duration_seconds: Option<i64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recommend_duration: bool,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -129,6 +134,7 @@ pub struct GenerationPreview {
 pub enum GenerationResult {
     Version(WritingVersion),
     Preview(GenerationPreview),
+    Duration(DurationRecommendation),
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -318,14 +324,20 @@ impl Database {
         self.with_connection(|c| {let mut q=c.prepare(&format!("SELECT {TASK_COLUMNS} FROM ai_tasks WHERE project_id=?1 ORDER BY created_at DESC,id DESC LIMIT 30")).map_err(|e|e.to_string())?;
             let rows=q.query_map([project_id],row_task).map_err(|e|e.to_string())?; rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())})
     }
-    pub fn start_generation(&self, input: GenerationInput) -> Result<String, String> {
+    pub fn start_generation(&self, mut input: GenerationInput) -> Result<String, String> {
         self.with_connection(|c| {
-            get(c,&input.project_id)?;
+            let project = get(c,&input.project_id)?;
+            if input.recommend_duration && input.revision.is_some() { return Err("推荐时长不能同时调整内容。".into()); }
+            if !input.recommend_duration {
+                let seconds = input.target_duration_seconds.unwrap_or(project.input.target_duration_seconds);
+                audio::validate_duration(seconds)?;
+                input.target_duration_seconds = Some(seconds);
+            }
             revision_base(c, &input)?;
             let p=provider(c,&input.provider_id)?;
             if !p.input.is_enabled || p.input.model_kind != "text" {return Err("请选择已启用的文本模型。".into());}
             let id=new_id(c)?;
-            let prompt = if input.revision.is_some() { revision::PROMPT_VERSION } else { PROMPT_VERSION };
+            let prompt = if input.recommend_duration { audio::PROMPT_VERSION } else if input.revision.is_some() { revision::PROMPT_VERSION } else { PROMPT_VERSION };
             c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW})"),params![id,input.project_id,"publishing",input.provider_id,p.input.model_name,prompt,serde_json::to_string(&input).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
             Ok(id)
         })
@@ -339,12 +351,42 @@ impl Database {
             if !p.input.is_enabled || p.input.model_kind != "text" {return Err("请选择已启用的文本模型。".into());}
             let base = revision_base(c, &input)?;
             let mut user=serde_json::json!({"book":{"title":project.input.title,"author":project.input.author,"description":project.input.description,"sourceNotes":project.input.source_notes}});
+            if !input.recommend_duration {
+                user["audio"] = audio::context(input.target_duration_seconds.ok_or("任务缺少目标时长，请重新生成。")?);
+            }
             if let Some(base) = &base {
                 user["currentContent"] = serde_json::to_value(&base.content).map_err(|e|e.to_string())?;
                 user["revision"] = serde_json::to_value(&input.revision).map_err(|e|e.to_string())?;
             }
             c.execute("UPDATE ai_tasks SET status='running',model_name=?2 WHERE id=?1 AND status='pending'",params![id,p.input.model_name]).map_err(|e|e.to_string())?;
             Ok(PreparedGeneration{input,provider:p,user:user.to_string(),book_title:project.input.title,base})
+        })
+    }
+    pub fn set_audio_duration(&self, project_id: &str, seconds: i64) -> Result<(), String> {
+        audio::validate_duration(seconds)?;
+        self.with_connection(|c| {
+            let changed = c.execute(&format!("UPDATE book_projects SET target_duration_seconds=?2,audio_duration_source='manual',updated_at={NOW} WHERE id=?1"),params![project_id,seconds]).map_err(|e|e.to_string())?;
+            if changed == 0 { return Err("书籍不存在或已删除。".into()); }
+            Ok(())
+        })
+    }
+    pub fn finish_duration_recommendation(
+        &self,
+        id: &str,
+        recommendation: DurationRecommendation,
+    ) -> Result<DurationRecommendation, String> {
+        let recommendation = DurationRecommendation::parse(
+            &serde_json::to_string(&recommendation).map_err(|e| e.to_string())?,
+        )?;
+        self.with_connection(|c| {
+            let tx = c.transaction().map_err(|e|e.to_string())?;
+            let input: String = tx.query_row("SELECT input_json FROM ai_tasks WHERE id=?1 AND status='running'",[id],|r|r.get(0)).map_err(|_|"任务已取消或结束，时长未修改。")?;
+            let input: GenerationInput = serde_json::from_str(&input).map_err(|_|"时长任务输入无效。")?;
+            if !input.recommend_duration { return Err("此任务不是时长推荐。".into()); }
+            tx.execute(&format!("UPDATE book_projects SET target_duration_seconds=?2,audio_duration_source='ai',updated_at={NOW} WHERE id=?1"),params![input.project_id,recommendation.minutes * 60]).map_err(|e|e.to_string())?;
+            tx.execute(&format!("UPDATE ai_tasks SET status='succeeded',completed_at={NOW} WHERE id=?1"),[id]).map_err(|e|e.to_string())?;
+            tx.commit().map_err(|e|e.to_string())?;
+            Ok(recommendation)
         })
     }
     pub fn finish_generation(

@@ -42,6 +42,8 @@ fn image_and_text_defaults_are_independent_and_wrong_task_types_are_rejected() {
             project_id: p.id.clone(),
             provider_id: image.id.clone(),
             revision: None,
+            target_duration_seconds: None,
+            recommend_duration: false,
         })
         .is_err());
     assert!(db
@@ -143,13 +145,14 @@ fn v6_upgrade_and_v5_backup_keep_existing_models_credentials_and_covers() {
         c.execute_batch(sql).unwrap();
     }
     c.execute_batch("PRAGMA user_version=5; INSERT INTO model_providers VALUES('old','old','openai-compatible','https://example.com/v1','text',1,1,'keep-credential','created','updated');").unwrap();
-    let old_db = Database {
-        path: old.clone(),
-        connection: Mutex::new(Ok(c)),
-    };
-    let p = project(&old_db);
-    let version = old_db.save_cover_version(&p.id, config(), None).unwrap();
-    drop(old_db);
+    // Build the historical fixture with its own schema rather than current application APIs.
+    c.execute("INSERT INTO book_projects(id,title,source_notes,target_duration_seconds,status,workspace_path,created_at,updated_at) VALUES('p','M3测试书','保留笔记',600,'draft',?1,'created','updated')",[dir.path().to_string_lossy().as_ref()]).unwrap();
+    c.execute(
+        "INSERT INTO cover_versions VALUES('cover','p',1,?1,NULL,'created')",
+        [serde_json::to_string(&config()).unwrap()],
+    )
+    .unwrap();
+    drop(c);
     let original = fs::read(&old).unwrap();
     let current = dir.path().join("current.sqlite3");
     fs::copy(&old, &current).unwrap();
@@ -158,7 +161,7 @@ fn v6_upgrade_and_v5_backup_keep_existing_models_credentials_and_covers() {
     assert_eq!(model.input.model_kind, "text");
     assert_eq!(model.credential_ref.as_deref(), Some("keep-credential"));
     assert!(model.input.is_default);
-    assert_eq!(db.list_cover_versions(&p.id).unwrap()[0].id, version.id);
+    assert_eq!(db.list_cover_versions("p").unwrap()[0].id, "cover");
     image_model(&db);
     db.restore_backup(old.to_str().unwrap()).unwrap();
     assert_eq!(fs::read(&old).unwrap(), original);
@@ -166,7 +169,7 @@ fn v6_upgrade_and_v5_backup_keep_existing_models_credentials_and_covers() {
         db.get_provider("old").unwrap().credential_ref.as_deref(),
         Some("keep-credential")
     );
-    assert_eq!(db.list_cover_versions(&p.id).unwrap()[0].config, config());
+    assert_eq!(db.list_cover_versions("p").unwrap()[0].config, config());
 }
 
 #[test]

@@ -366,7 +366,7 @@ onMounted(() => { if (desktop) void loadTask() })
             id="publish-tags"
             v-model="draft.tags"
             maxlength="500"
-            placeholder="#读书 #十分钟读懂一本书"
+            placeholder="#读书 #好书分享"
           />
         </section>
         <section class="panel">

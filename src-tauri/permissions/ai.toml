@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "allow-ai-writing"
 description = "文本模型配置、系统凭据写入、连接测试、创作版本和生成任务；不允许密钥回读、任意 HTTP 或 SQL；只打开固定外部音频入口。"
-commands.allow = ["list_model_providers", "save_model_provider", "delete_model_provider", "test_model_connection", "list_writing_versions", "save_writing_version", "list_ai_tasks", "start_generation", "execute_generation", "apply_generation", "cancel_generation", "open_audio_tool"]
+commands.allow = ["list_model_providers", "save_model_provider", "delete_model_provider", "test_model_connection", "list_writing_versions", "save_writing_version", "list_ai_tasks", "start_generation", "execute_generation", "apply_generation", "cancel_generation", "open_audio_tool", "set_audio_duration"]

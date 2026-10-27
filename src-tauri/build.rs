@@ -55,6 +55,7 @@ fn main() {
             "apply_generation",
             "cancel_generation",
             "open_audio_tool",
+            "set_audio_duration",
         ]),
     ))
     .expect("Tauri build configuration failed");

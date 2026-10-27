@@ -10,6 +10,7 @@ export interface ProjectInput {
 }
 export interface Project extends ProjectInput {
   id: string; workspacePath: string; createdAt: string; updatedAt: string; archivedAt: string | null
+  audioDurationSource?: 'ai' | 'manual' | null
 }
 export interface Asset {
   id: string; projectId: string; assetType: 'video' | 'audio' | 'image' | 'cover' | 'subtitle' | 'document'

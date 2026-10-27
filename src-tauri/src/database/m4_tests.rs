@@ -563,6 +563,8 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
             project_id: p.id.clone(),
             provider_id: provider.id.clone(),
             revision: None,
+            target_duration_seconds: None,
+            recommend_duration: false,
         };
         let task = db.start_generation(generation.clone()).unwrap();
         db.prepare_generation(&task).unwrap();

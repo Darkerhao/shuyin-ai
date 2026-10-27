@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 音频目标时长 v12（2026-10-27）
+
+迁移 `0012_audio_duration.sql` 仅为 `book_projects` 新增可空 `audio_duration_source`（ai/manual），复用原 `target_duration_seconds`。NULL表示尚未设置，允许首次AI推荐；旧目标秒数、书籍资料、ID、时间戳和历史提示词均保留。迁移与user_version=12事务提交；冲突回滚保留v11。新入口只接受60—86400秒且为整分钟，数据库旧字段约束不收紧。
+
+推荐任务复用 `ai_tasks.kind=publishing`，Prompt版本为 `audio-duration-v1`，input_json存推荐标记及项目/模型ID；不保存凭据或原书全文。有效推荐成功时，项目目标秒数/source=ai与任务succeeded在同一事务提交，不追加writing_versions；取消、结构错误或事务失败均不改变书籍时长。手动时长只改目标/source=manual及更新时间，不回写整份项目资料。常规生成input_json冻结targetDurationSeconds，音频按项仍先预览再追加版本。
+
+既有备份校验按迁移清单支持v2—v12，保存的秒数和source随数据库备份恢复；旧备份在内存升级，不改写源文件。历史结果JSON不新增字段、不批量替换时长。回退旧程序需使用升级前数据库备份。
+
 ## 封面推荐兼容扩展（2026-10-27）
 
 无表结构变更，数据库保持 v11，不新增 SQL 迁移。`writing_versions.content_json` 可包含 `coverDesign` 推荐对象；旧记录读取为无推荐且不改写原 JSON。`cover_versions.config_json`、封面草稿和 `cover_presets.style_json` 增加 `subtitleColor`，缺失时沿用该配置的 textColor；兼容 classic/night，新增 spotlight/ember/ocean 模板 ID。推荐和副标题色使用原有追加历史与备份恢复流程。

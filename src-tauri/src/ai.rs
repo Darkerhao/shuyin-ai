@@ -2,11 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Mutex, time::Duration};
 use tokio::sync::watch;
 
+pub mod audio;
 pub mod images;
 pub mod publishing;
 pub mod revision;
-pub const PROMPT_VERSION: &str = "publishing-v3";
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v3.md");
+pub const PROMPT_VERSION: &str = "publishing-v4";
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v4.md");
 pub const TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
