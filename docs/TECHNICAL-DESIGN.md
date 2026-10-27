@@ -1,5 +1,11 @@
 # 书引 AI 技术设计文档
 
+## 封面排版推荐（2026-10-27）
+
+启用 `publishing-v3` 和 `publishing-revision-v2`，沿用统一文本 Provider，在发布内容中增加可选 `coverDesign`：titleSize、subtitleSize、textColor、subtitleColor、accentColor、backgroundColor、overlayOpacity。全量 AI 输出必须包含完整推荐，Rust 校验整数范围、六位颜色与蒙层后才存储；旧内容允许缺失。按项调整仅合并选中字段，推荐对象不进入文字编辑和复制循环，原有失败/取消/候选采用流程复用。
+
+`CoverConfig.subtitleColor` 是独立副标题色；旧 JSON 缺失时使用其 textColor。前端在历史、草稿和个人样式入口归一，渲染器为历史缩略图保留同一默认行为。五个内置样式仍由 `types/cover.ts` 的单一配置定义，卡片、应用和默认封面复用；Canvas 预览和三比例 PNG 导出继续使用同一渲染器。无新增依赖、IPC 或权限。新封面自动带入推荐；已有配置仅主动应用，保留标题、背景素材与裁切。
+
 ## 智能辅助发布实现（2026-10-27）
 
 `douyin.rs` 保留官方窗口、安全页面执行和原生文件选择；`douyin_flow.rs` 作为同一模块的会话编排，替代原 upload/complete 两条入口。Rust 独占运行 ID、任务快照、账号确认、视频/文案/封面回读证据和合集选择；前端订阅结构化事件，挂载重读快照，按任务与运行 ID 过滤。开始复用已保存 ready 快照；前端先保存修改并准备包，宿主重新校验。继续只接收当前运行的明确决定。停止先设置取消标志，再等待串行操作结束后回应，不在前端提前解锁。

@@ -108,6 +108,9 @@ fn style_presets_contain_only_reusable_style_and_old_covers_default_to_center() 
         ),
         (0.5, 0.5, 1.0)
     );
+    assert_eq!(config.subtitle_color, None);
+    config.subtitle_color = Some("#ffeeaa".into());
+    config.template_id = "spotlight".into();
     config.brand = "我的品牌".into();
     config.background_x = 0.1;
     config.background_zoom = 2.0;
@@ -116,6 +119,7 @@ fn style_presets_contain_only_reusable_style_and_old_covers_default_to_center() 
     let presets = db.list_cover_presets().unwrap();
     let style = &presets[0].style;
     assert_eq!(style["brand"], "我的品牌");
+    assert_eq!(style["subtitleColor"], "#ffeeaa");
     for key in [
         "title",
         "subtitle",
@@ -130,6 +134,10 @@ fn style_presets_contain_only_reusable_style_and_old_covers_default_to_center() 
     }
     let saved = db.save_cover_version(&p.id, config.clone(), None).unwrap();
     assert_eq!(saved.config.background_zoom, 2.0);
+    assert_eq!(saved.config.subtitle_color.as_deref(), Some("#ffeeaa"));
+    let mut invalid_color = config.clone();
+    invalid_color.subtitle_color = Some("#fff".into());
+    assert!(db.save_cover_version(&p.id, invalid_color, None).is_err());
     config.background_x = 1.01;
     assert!(db.save_cover_version(&p.id, config, None).is_err());
     assert_eq!(db.list_cover_versions(&p.id).unwrap().len(), 3);
@@ -143,6 +151,10 @@ fn style_presets_contain_only_reusable_style_and_old_covers_default_to_center() 
     let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
     db.delete_cover_preset(&presets[0].id).unwrap();
     db.restore_backup(&backup).unwrap();
+    assert_eq!(
+        db.list_cover_presets().unwrap()[0].style["subtitleColor"],
+        "#ffeeaa"
+    );
     assert_eq!(
         db.list_cover_presets().unwrap()[0].style["brand"],
         "我的品牌"

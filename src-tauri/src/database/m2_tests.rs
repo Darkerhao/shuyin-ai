@@ -323,6 +323,7 @@ fn publishing() -> WritingContent {
         cover_subtitle: "《生死疲劳》里的执念".into(),
         cover_prompt_landscape: "横版 4:3，田野横向展开\n中央留白，无文字。".into(),
         cover_prompt_portrait: "竖版 3:4，田垄向远方延伸\n中央留白，无文字。".into(),
+        cover_design: Some(serde_json::from_value(serde_json::json!({"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75})).unwrap()),
     }
 }
 

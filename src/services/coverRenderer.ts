@@ -95,7 +95,7 @@ export function renderCover(canvas: globalThis.HTMLCanvasElement, config: CoverC
   ctx.fillStyle = config.accentColor
   ctx.fillRect(config.align === 'center' ? width / 2 - 32 : padding, top - 28, 64, 6)
   draw(title, top, config.textColor, 700)
-  draw(subtitle, top + title.height + gap, config.textColor, 400)
+  draw(subtitle, top + title.height + gap, config.subtitleColor ?? config.textColor, 400)
   return { titleSize: title.size, subtitleSize: subtitle.size }
 }
 

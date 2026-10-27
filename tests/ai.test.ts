@@ -46,6 +46,29 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
+  it('previews and adopts only AI cover design for an existing version', async () => {
+    const design = { titleSize: 148, subtitleSize: 54, textColor: '#ffe45c', subtitleColor: '#ffffff', accentColor: '#ff7547', backgroundColor: '#141414', overlayOpacity: 0.75 }
+    const content = { ...initial.content, coverDesign: design }
+    vi.mocked(api.saveWriting).mockResolvedValue({ ...generated, content: { ...content, description: '保留排版的文字调整' } })
+    vi.mocked(api.executeGeneration).mockResolvedValue({ taskId: 't1', fields: ['coverDesign'], before: initial.content, content })
+    vi.mocked(api.applyGeneration).mockResolvedValue({ ...generated, content })
+    const { wrapper } = await render()
+    await button(wrapper, '按项调整').trigger('click')
+    await wrapper.get('#revision-title').trigger('click')
+    await wrapper.get('#revision-coverDesign').trigger('click')
+    await button(wrapper, '生成预览').trigger('click'); await flushPromises()
+    expect(api.startGeneration).toHaveBeenLastCalledWith(expect.objectContaining({ revision: { basedOn: initial.id, fields: ['coverDesign'], instruction: '' } }))
+    expect(wrapper.get('[aria-label="封面字号与配色调整对比"]').text()).toContain('148 px')
+    expect(wrapper.get('[aria-label="封面字号与配色调整对比"]').text()).toContain('此版本还没有排版推荐')
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', initial.content.title)
+    await button(wrapper, '采用并保存新版本').trigger('click'); await flushPromises()
+    await tab(wrapper, '封面素材').trigger('click')
+    expect(wrapper.get('[aria-label="AI 推荐排版"]').text()).toContain('#ffe45c')
+    expect(wrapper.get('#result-description').element).toHaveProperty('value', initial.content.description)
+    await wrapper.get('#result-description').setValue('保留排版的文字调整')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveWriting).toHaveBeenLastCalledWith(expect.objectContaining({ content: expect.objectContaining({ coverDesign: design }) }))
+  })
   it('previews selected changes without replacing the editor and adopts exactly one new version', async () => {
     const candidate = { ...initial.content, title: '更有悬念的标题' }
     vi.mocked(api.executeGeneration).mockResolvedValue({ taskId: 't1', fields: ['title'], before: initial.content, content: candidate })

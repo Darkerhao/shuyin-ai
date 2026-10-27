@@ -12,7 +12,7 @@ import * as api from '../../services/covers'
 import { listProviders, listVersions, cancelGeneration } from '../../services/ai'
 import { emptyPublishing, type ModelProvider, type PublishingContent } from '../../types/ai'
 import { getProject, isDesktop, linkAsset, listAssets, openProjectDirectory } from '../../services/projects'
-import { backgroundRect, coverPng, decodeBackground, renderCover } from '../../services/coverRenderer'
+import { backgroundRect, coverFonts, coverPng, decodeBackground, renderCover } from '../../services/coverRenderer'
 import { coverSizes, coverTemplates, newCover, type CoverConfig, type CoverVersion, type CoverPreset } from '../../types/cover'
 import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
@@ -22,6 +22,7 @@ import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OperationFeedback from '../../components/OperationFeedback.vue'
+import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -76,7 +77,7 @@ onBeforeUnmount(() => { disposed = true; backgroundRequest++; globalThis.removeE
 
 function accept(version: CoverVersion | null) {
   selected.value = version
-  const config = { ...newCover(bookTitle.value), ...version?.config }
+  const config = { ...newCover(bookTitle.value), ...version?.config, ...(version ? { subtitleColor: version.config.subtitleColor ?? version.config.textColor } : {}) }
   const size = coverSizes.find(s => s.width === config.width && s.height === config.height) ?? coverSizes[config.width > config.height ? 0 : 1]
   if (size.width !== config.width || size.height !== config.height) message.value = `历史封面为 ${config.width} × ${config.height}，当前按${size.label}继续编辑，原版本和文件保留。`
   draft.value = { ...config, width: size.width, height: size.height }
@@ -98,8 +99,11 @@ const load = () => run(async () => {
   versions.value = saved; images.value = assets.filter(a => a.assetType === 'image')
   presets.value = styles
   accept(recovery ? saved.find(v => v.id === recovery.basedOn) ?? null : saved[0] ?? null)
-  if (recovery) { draft.value = { ...newCover(), ...recovery.content }; message.value = '已恢复自动暂存的封面草稿，尚未新增历史版本。' }
-  else if (!saved.length && writing.value?.coverTitle && writing.value.coverSubtitle) applyWritingTitles()
+  if (recovery) { draft.value = { ...newCover(), ...recovery.content, subtitleColor: recovery.content.subtitleColor ?? recovery.content.textColor }; message.value = '已恢复自动暂存的封面草稿，尚未新增历史版本。' }
+  else if (!saved.length && writing.value?.coverTitle && writing.value.coverSubtitle) {
+    applyWritingTitles()
+    if (writing.value.coverDesign) applyWritingDesign()
+  }
   ready.value = true
   await nextTick(); paint()
 })
@@ -108,6 +112,12 @@ function applyWritingTitles() {
   draft.value.title = writing.value.coverTitle
   draft.value.subtitle = writing.value.coverSubtitle
   message.value = '已带入封面主副标题，确认预览后保存或导出。'
+}
+function applyWritingDesign() {
+  if (!writing.value?.coverDesign) return
+  Object.assign(draft.value, writing.value.coverDesign)
+  presetId.value = null
+  message.value = '已应用 AI 推荐字号、主副标题配色、点缀色和蒙层。可继续调整，确认预览后保存或导出。'
 }
 async function copyPrompt() {
   try { await globalThis.navigator.clipboard.writeText(suggestedPrompt.value); message.value = '已复制封面提示词。'; error.value = '' }
@@ -163,7 +173,7 @@ function moveDrag(event: globalThis.PointerEvent) {
 function applyPreset(id: string | null) {
   const preset = presets.value.find(p => p.id === id)
   if (!preset) return
-  Object.assign(draft.value, preset.style); presetId.value = id
+  Object.assign(draft.value, preset.style, { subtitleColor: preset.style.subtitleColor ?? preset.style.textColor }); presetId.value = id
   message.value = `已应用「${preset.name}」，可继续为本书调整。`
 }
 const savePreset = () => run(async () => {
@@ -180,6 +190,10 @@ watch(draft, paint, { deep: true, flush: 'post' })
 
 function applyTemplate(key: CoverConfig['templateId']) {
   Object.assign(draft.value, coverTemplates[key].style, { templateId: key })
+  presetId.value = null
+}
+function isTemplateApplied(key: CoverConfig['templateId']) {
+  return draft.value.templateId === key && Object.entries(coverTemplates[key].style).every(([field, value]) => draft.value[field as keyof CoverConfig] === value)
 }
 function changeSize(index: number) {
   const size = coverSizes[index]!
@@ -405,6 +419,30 @@ onMounted(async () => {
                 </Collapsible>
               </TabsContent>
               <TabsContent value="style">
+                <section
+                  v-if="writing?.coverDesign"
+                  class="mb-5 space-y-3 rounded-xl border p-4"
+                  aria-label="AI 推荐排版"
+                >
+                  <h3 class="text-sm font-semibold">
+                    AI 为这本书推荐
+                  </h3>
+                  <CoverDesignPreview :design="writing.coverDesign" />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    :disabled="busy"
+                    @click="applyWritingDesign"
+                  >
+                    应用 AI 推荐排版
+                  </Button>
+                </section>
+                <p
+                  v-else
+                  class="muted"
+                >
+                  一键生成内容时会同时推荐字号与配色；也可直接选择下方样式。
+                </p>
                 <label for="cover-preset">我的封面样式</label>
                 <Select
                   :model-value="presetId"
@@ -456,29 +494,47 @@ onMounted(async () => {
                 <p class="muted">
                   复用品牌文字、字体、字号、颜色和布局；每本书的标题、背景与裁切单独保留。
                 </p>
-                <label for="cover-template">封面模板</label><Select
-                  :model-value="draft.templateId"
-                  :disabled="busy"
-                  @update:model-value="applyTemplate"
+                <h3 class="mb-3 mt-6 text-sm font-semibold">
+                  推荐样式
+                </h3>
+                <div
+                  class="grid grid-cols-2 gap-3"
+                  aria-label="默认封面样式"
                 >
-                  <SelectTrigger
-                    id="cover-template"
-                    class="w-full min-w-0"
+                  <button
+                    v-for="(template, key) in coverTemplates"
+                    :key="key"
+                    type="button"
+                    class="style-card rounded-xl border p-3 text-left"
+                    :aria-label="template.label"
+                    :aria-pressed="isTemplateApplied(key)"
+                    :disabled="busy"
+                    @click="applyTemplate(key)"
                   >
-                    <SelectValue placeholder="请选择" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem
-                      v-for="(template, key) in coverTemplates"
-                      :key="key"
-                      :value="key"
+                    <span
+                      class="block rounded-lg px-3 py-4"
+                      :style="{ backgroundColor: template.style.backgroundColor, textAlign: template.style.align }"
+                      aria-hidden="true"
                     >
-                      {{ template.label }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                      <span
+                        class="mb-2 block h-1 w-6 rounded"
+                        :style="{ backgroundColor: template.style.accentColor, marginInline: template.style.align === 'center' ? 'auto' : undefined }"
+                      />
+                      <strong
+                        class="block text-lg"
+                        :style="{ color: template.style.textColor, fontFamily: coverFonts[template.style.fontFamily] }"
+                      >故事有引力</strong>
+                      <span
+                        class="mt-1 block text-xs"
+                        :style="{ color: template.style.subtitleColor }"
+                      >一本书，一种新视角</span>
+                    </span>
+                    <strong class="mt-2 block text-sm">{{ template.label }}</strong>
+                    <span class="muted text-xs">{{ template.description }}</span>
+                  </button>
+                </div>
                 <p class="muted">
-                  切换模板会应用配色、字体与布局，文字和背景图片保持不变。
+                  一键应用字号、主副标题配色、点缀色、蒙层与布局，保留本书文字和背景。
                 </p>
                 <div class="form-grid">
                   <div>
@@ -572,9 +628,17 @@ onMounted(async () => {
                     />
                   </div>
                   <div>
-                    <label for="cover-text-color">文字色</label><Input
+                    <label for="cover-text-color">主标题色</label><Input
                       id="cover-text-color"
                       v-model="draft.textColor"
+                      type="color"
+                      class="cursor-pointer p-1"
+                    />
+                  </div>
+                  <div>
+                    <label for="cover-subtitle-color">副标题色</label><Input
+                      id="cover-subtitle-color"
+                      v-model="draft.subtitleColor"
                       type="color"
                       class="cursor-pointer p-1"
                     />
@@ -1036,7 +1100,11 @@ onMounted(async () => {
 .cover-controls label { margin-top: 16px; }
 .cover-controls .muted { font-size: 13px; }
 .cover-controls .form-grid { gap: 0 12px; }
-.cover-colors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.cover-colors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.style-card { min-width: 0; transition: border-color .15s; }
+.style-card:hover, .style-card[aria-pressed="true"] { border-color: var(--primary); }
+.style-card[aria-pressed="true"] { box-shadow: 0 0 0 1px var(--primary); }
+.style-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
 .cover-preview { position: sticky; top: 20px; }
 .cover-preview h2 { font-size: 13px; }
 .preview-dimensions { font-size: 10px; color: #8b9980; }

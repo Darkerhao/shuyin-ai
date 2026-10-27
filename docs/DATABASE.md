@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 封面推荐兼容扩展（2026-10-27）
+
+无表结构变更，数据库保持 v11，不新增 SQL 迁移。`writing_versions.content_json` 可包含 `coverDesign` 推荐对象；旧记录读取为无推荐且不改写原 JSON。`cover_versions.config_json`、封面草稿和 `cover_presets.style_json` 增加 `subtitleColor`，缺失时沿用该配置的 textColor；兼容 classic/night，新增 spotlight/ember/ocean 模板 ID。推荐和副标题色使用原有追加历史与备份恢复流程。
+
 ## 智能辅助发布 v11（2026-10-27）
 
 `0011_douyin_collection.sql` 仅为 `publish_tasks` 增加可空且校验 JSON 的 `douyin_collection`。NULL 表示未选择；对象的 `name=null` 表示明确不加入合集，否则为真实选项名称，另存可空合集 ID、公开账号 ID 和显示昵称。既有任务、时间戳、素材、文字快照与发布记录不回填、不重写。

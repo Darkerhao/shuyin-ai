@@ -29,6 +29,8 @@ pub struct CoverConfig {
     pub position: String,
     pub background_color: String,
     pub text_color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_color: Option<String>,
     pub accent_color: String,
     pub background_asset_id: Option<String>,
     pub overlay_opacity: f64,
@@ -49,7 +51,10 @@ fn one() -> f64 {
 impl CoverConfig {
     fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1
-            || !matches!(self.template_id.as_str(), "classic" | "night")
+            || !matches!(
+                self.template_id.as_str(),
+                "classic" | "night" | "spotlight" | "ember" | "ocean"
+            )
             || !matches!(
                 (self.width, self.height),
                 (1440, 1080) | (1080, 1440) | (1920, 1080)
@@ -73,7 +78,12 @@ impl CoverConfig {
         {
             return Err("主标题必填且最多 200 字，副标题最多 300 字，品牌标识最多 60 字。".into());
         }
-        for color in [&self.background_color, &self.text_color, &self.accent_color] {
+        for color in [
+            &self.background_color,
+            &self.text_color,
+            &self.accent_color,
+            self.subtitle_color.as_ref().unwrap_or(&self.text_color),
+        ] {
             if color.len() != 7
                 || !color.starts_with('#')
                 || !color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
@@ -169,6 +179,7 @@ impl Database {
                     | "position"
                     | "backgroundColor"
                     | "textColor"
+                    | "subtitleColor"
                     | "accentColor"
                     | "overlayOpacity"
             )
