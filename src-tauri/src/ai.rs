@@ -5,8 +5,8 @@ use tokio::sync::watch;
 pub mod images;
 pub mod publishing;
 pub mod revision;
-pub const PROMPT_VERSION: &str = "publishing-v2";
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v2.md");
+pub const PROMPT_VERSION: &str = "publishing-v3";
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v3.md");
 pub const TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -31,6 +31,12 @@ pub enum WritingContent {
         cover_prompt_landscape: String,
         #[serde(rename = "coverPromptPortrait", default)]
         cover_prompt_portrait: String,
+        #[serde(
+            rename = "coverDesign",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        cover_design: Option<Box<publishing::CoverDesign>>,
     },
 }
 impl WritingContent {
@@ -46,9 +52,13 @@ impl WritingContent {
                     cover_subtitle,
                     cover_prompt_landscape,
                     cover_prompt_portrait,
+                    cover_design,
                 },
             ) => {
-                !title.trim().is_empty()
+                cover_design
+                    .as_ref()
+                    .is_none_or(|design| design.validate().is_ok())
+                    && !title.trim().is_empty()
                     && title.chars().count() <= 30
                     && !description.trim().is_empty()
                     && description.chars().count() <= 1000

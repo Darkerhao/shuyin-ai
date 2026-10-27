@@ -12,13 +12,13 @@ import { emptyProvider, emptyPublishing, type WritingVersion } from '../src/type
 import type { Asset } from '../src/types/project'
 import * as projects from '../src/services/projects'
 import * as renderer from '../src/services/coverRenderer'
-import { newCover, type CoverVersion } from '../src/types/cover'
+import { coverTemplates, newCover, type CoverVersion } from '../src/types/cover'
 import { emptyProject } from '../src/types/project'
 
 vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), saveCover: vi.fn(), readBackground: vi.fn(), chooseBackground: vi.fn(), startCoverGeneration: vi.fn(), executeCoverGeneration: vi.fn(), listPresets: vi.fn(), savePreset: vi.fn(), deletePreset: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), listVersions: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), linkAsset: vi.fn(), openProjectDirectory: vi.fn() }))
-vi.mock('../src/services/coverRenderer', () => ({ renderCover: vi.fn(), coverPng: vi.fn(), decodeBackground: vi.fn() }))
+vi.mock('../src/services/coverRenderer', () => ({ coverFonts: { sans: 'sans-serif', serif: 'serif' }, renderCover: vi.fn(), coverPng: vi.fn(), decodeBackground: vi.fn() }))
 const initial: CoverVersion = { id: 'v1', projectId: 'p1', versionNo: 1, config: newCover('最初的封面'), exportedPath: null, createdAt: '2026-10-23T00:00:00Z' }
 const aiAsset: Asset = { id: 'a1', projectId: 'p1', assetType: 'image', filePath: 'D:/ai.png', originalName: 'ai.png', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
 const wrappers: ReturnType<typeof mount>[] = []
@@ -60,10 +60,56 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M3 cover workflow', () => {
+  const design = { titleSize: 148, subtitleSize: 54, textColor: '#ffe45c', subtitleColor: '#fff8e8', accentColor: '#ff7547', backgroundColor: '#141414', overlayOpacity: 0.75 }
+  it('automatically carries AI design into new covers and exports the design in all ratios', async () => {
+    vi.mocked(ai.listVersions).mockResolvedValue([{ ...writing, content: { ...writing.content, coverDesign: design } }])
+    vi.mocked(api.listCovers).mockResolvedValue([])
+    const { wrapper } = await render()
+    await button(wrapper, '排版样式').trigger('click')
+    expect(wrapper.get('[aria-label="AI 推荐排版"]').text()).toContain('148 px')
+    expect((wrapper.get('#cover-subtitle-color').element as HTMLInputElement).value).toBe(design.subtitleColor)
+    await button(wrapper, '导出 3 张封面').trigger('click'); await flushPromises()
+    for (const [, config] of vi.mocked(api.saveCover).mock.calls) expect(config).toMatchObject(design)
+    expect(api.saveCover).toHaveBeenCalledTimes(3)
+  })
+  it('applies AI design to an existing cover only on request and preserves copy and crop', async () => {
+    vi.mocked(ai.listVersions).mockResolvedValue([{ ...writing, content: { ...writing.content, coverDesign: design } }])
+    const config = { ...initial.config, backgroundX: 0.2, backgroundZoom: 1.6 }
+    vi.mocked(api.listCovers).mockResolvedValue([{ ...initial, config }])
+    const { wrapper } = await render()
+    expect(renderer.renderCover).toHaveBeenCalledWith(expect.anything(), config, null)
+    await button(wrapper, '排版样式').trigger('click')
+    await button(wrapper, '应用 AI 推荐排版').trigger('click')
+    await wrapper.get('#cover-subtitle-color').setValue('#aabbcc')
+    await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
+    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...config, ...design, subtitleColor: '#aabbcc' }, null)
+  })
+  it.each(Object.entries(coverTemplates))('applies the complete %s preset while keeping this book content', async (key, template) => {
+    const { wrapper } = await render()
+    await button(wrapper, '排版样式').trigger('click')
+    const card = wrapper.get(`button[aria-label="${template.label}"]`)
+    await card.trigger('click')
+    expect(card.attributes('aria-pressed')).toBe('true')
+    await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
+    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...initial.config, ...template.style, templateId: key }, null)
+  })
+  it.each(['version', 'draft', 'preset'])('keeps the original text color for legacy %s data', async source => {
+    const config = { ...initial.config, textColor: '#abcdef' }
+    Reflect.deleteProperty(config, 'subtitleColor')
+    if (source === 'version') vi.mocked(api.listCovers).mockResolvedValue([{ ...initial, config }])
+    if (source === 'draft') vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: initial.id, content: config })
+    if (source === 'preset') vi.mocked(api.listPresets).mockResolvedValue([{ id: 'legacy', name: '旧个人样式', style: config }])
+    const { wrapper } = await render()
+    await button(wrapper, '排版样式').trigger('click')
+    if (source === 'preset') await chooseSelect(wrapper, '#cover-preset', '旧个人样式')
+    expect((wrapper.get('#cover-subtitle-color').element as HTMLInputElement).value).toBe('#abcdef')
+    await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
+    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ textColor: '#abcdef', subtitleColor: '#abcdef' }), null)
+  })
   it('applies template, typography and numeric controls without changing the cover copy', async () => {
     const { wrapper } = await render()
     await button(wrapper, '排版样式').trigger('click')
-    await chooseSelect(wrapper, '#cover-template', '深林')
+    await wrapper.get('button[aria-label="深林"]').trigger('click')
     expect(wrapper.get('#cover-font').text()).toBe('黑体 / 系统无衬线')
     await chooseSelect(wrapper, '#cover-align', '左对齐')
     await chooseSelect(wrapper, '#cover-position', '靠下')
@@ -101,13 +147,13 @@ describe('M3 cover workflow', () => {
     const slider = wrapper.get('[role=slider]')
     expect(slider.attributes('aria-label')).toBe('底色蒙层')
     await slider.trigger('keydown', { key: 'ArrowRight' })
-    expect(slider.attributes('aria-valuenow')).toBe('0.5')
+    expect(slider.attributes('aria-valuenow')).toBe('0.8')
     let finish!: (value: CoverVersion) => void
     vi.mocked(api.saveCover).mockReturnValue(new Promise(resolve => { finish = resolve }))
     await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ overlayOpacity: 0.5 }), null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ overlayOpacity: 0.8 }), null)
     expect(wrapper.get('#cover-background').element.matches(':disabled')).toBe(true)
-    expect(wrapper.get('#cover-template').element.matches(':disabled')).toBe(true)
+    expect(wrapper.get('button[aria-label="深林"]').element.matches(':disabled')).toBe(true)
     expect(slider.attributes('data-disabled')).toBeDefined()
     finish(initial); await flushPromises()
   })
@@ -350,7 +396,7 @@ describe('M3 cover workflow', () => {
     expect(drafts.saveDraft).toHaveBeenLastCalledWith('p1', 'cover', expect.objectContaining({ basedOn: initial.id, content: config }))
   })
   it('applies a personal style without replacing this book copy, background or crop', async () => {
-    const style = { templateId: 'night' as const, brand: '我的读书频道', fontFamily: 'sans' as const, titleSize: 96, subtitleSize: 36, align: 'center' as const, position: 'bottom' as const, backgroundColor: '#112233', textColor: '#ffffff', accentColor: '#ddaa11', overlayOpacity: 0.6 }
+    const style = { templateId: 'night' as const, brand: '我的读书频道', fontFamily: 'sans' as const, titleSize: 96, subtitleSize: 36, align: 'center' as const, position: 'bottom' as const, backgroundColor: '#112233', textColor: '#ffffff', subtitleColor: '#ffeeaa', accentColor: '#ddaa11', overlayOpacity: 0.6 }
     vi.mocked(api.listPresets).mockResolvedValue([{ id: 'preset1', name: '我的品牌', style }])
     const { wrapper } = await render()
     await button(wrapper, '排版样式').trigger('click')

@@ -1,5 +1,40 @@
 use super::WritingContent;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CoverDesign {
+    pub title_size: u32,
+    pub subtitle_size: u32,
+    pub text_color: String,
+    pub subtitle_color: String,
+    pub accent_color: String,
+    pub background_color: String,
+    pub overlay_opacity: f64,
+}
+impl CoverDesign {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(40..=160).contains(&self.title_size)
+            || !(24..=80).contains(&self.subtitle_size)
+            || !(0.0..=0.85).contains(&self.overlay_opacity)
+            || [
+                &self.text_color,
+                &self.subtitle_color,
+                &self.accent_color,
+                &self.background_color,
+            ]
+            .iter()
+            .any(|color| {
+                color.len() != 7
+                    || !color.starts_with('#')
+                    || !color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+            })
+        {
+            return Err("封面推荐字号、颜色或蒙层无效，原有内容保留。".into());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -12,6 +47,7 @@ pub struct PublishingDraft {
     cover_subtitle: String,
     cover_prompt_landscape: String,
     cover_prompt_portrait: String,
+    cover_design: CoverDesign,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,6 +99,7 @@ impl AudioDraft {
 }
 impl PublishingDraft {
     pub fn into_content(self, book: &str) -> Result<WritingContent, String> {
+        self.cover_design.validate()?;
         if [
             &self.cover_title,
             &self.cover_subtitle,
@@ -92,6 +129,7 @@ impl PublishingDraft {
             cover_subtitle: self.cover_subtitle.trim().into(),
             cover_prompt_landscape: self.cover_prompt_landscape.trim().into(),
             cover_prompt_portrait: self.cover_prompt_portrait.trim().into(),
+            cover_design: Some(Box::new(self.cover_design)),
         };
         content.validate("publishing", None)?;
         Ok(content)
@@ -102,7 +140,37 @@ impl PublishingDraft {
 mod tests {
     use super::*;
     fn draft() -> serde_json::Value {
-        serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "introduction":"今天我们要聊的这本书，是《明朝那些事儿》。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。"})
+        serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "introduction":"今天我们要聊的这本书，是《明朝那些事儿》。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。", "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}})
+    }
+    #[test]
+    fn validates_design_before_accepting_ai_output() {
+        let mut missing = draft();
+        missing.as_object_mut().unwrap().remove("coverDesign");
+        assert!(serde_json::from_value::<PublishingDraft>(missing).is_err());
+        for (field, invalid) in [
+            ("titleSize", serde_json::json!(161)),
+            ("titleSize", serde_json::json!(140.5)),
+            ("subtitleSize", serde_json::json!(23)),
+            ("textColor", serde_json::json!("red")),
+            ("subtitleColor", serde_json::json!("#fff")),
+            ("accentColor", serde_json::json!("#gggggg")),
+            ("backgroundColor", serde_json::json!("#12345678")),
+            ("overlayOpacity", serde_json::json!(0.9)),
+        ] {
+            let mut value = draft();
+            value["coverDesign"][field] = invalid;
+            if let Ok(value) = serde_json::from_value::<PublishingDraft>(value) {
+                assert!(value.into_content("书").is_err());
+            }
+        }
+        let content = serde_json::from_value::<PublishingDraft>(draft())
+            .unwrap()
+            .into_content("书")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(content).unwrap()["coverDesign"],
+            draft()["coverDesign"]
+        );
     }
     #[test]
     fn template_keeps_fixed_host_duration_and_book_specific_five_parts() {

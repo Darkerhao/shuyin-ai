@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -8,7 +9,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/ai'
 import { chooseAudio, getProject, isDesktop, linkAsset, listAssets, openAsset } from '../../services/projects'
-import { emptyPublishing, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type WritingVersion } from '../../types/ai'
+import { emptyPublishing, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type PublishingTextField, type WritingVersion } from '../../types/ai'
+import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
 import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import { useEditorDraft } from '../../composables/useEditorDraft'
@@ -139,7 +141,7 @@ async function makeCover() {
   if (dirty.value) await save()
   if (!dirty.value && selected.value) await router.push({ path: `/projects/${props.id}/covers`, query: { writingVersion: selected.value.id } })
 }
-async function copy(field: keyof Omit<PublishingContent, 'format'>, label: string) {
+async function copy(field: PublishingTextField, label: string) {
   try {
     await globalThis.navigator.clipboard.writeText(draft.value[field]); message.value = `已复制${label}。`; error.value = ''
     copiedField.value = field
@@ -148,7 +150,7 @@ async function copy(field: keyof Omit<PublishingContent, 'format'>, label: strin
   }
   catch { error.value = '复制失败，请选中文本后手动复制。' }
 }
-const fields: { key: PublishingField; label: string; rows: number; limit: number; help?: string }[] = [
+const fields: { key: PublishingTextField; label: string; rows: number; limit: number; help?: string }[] = [
   { key: 'title', label: '发布标题', rows: 2, limit: 30 },
   { key: 'description', label: '发布内容', rows: 7, limit: 1000 },
   { key: 'audioPrompt', label: '音频生成提示词', rows: 18, limit: 20000, help: '复制到音频工具的自定义提示词中，并在该工具中选择对应书籍来源。生成音频后导入下方音频素材，再交给剪映制作。' },
@@ -157,6 +159,7 @@ const fields: { key: PublishingField; label: string; rows: number; limit: number
   { key: 'coverPromptLandscape', label: '横版 4:3 封面提示词', rows: 7, limit: 2000, help: '用于 1440 × 1080 横版构图，复制到图片工具并选择 4:3。只生成无字背景，主副标题在制作封面时添加。' },
   { key: 'coverPromptPortrait', label: '竖版 3:4 封面提示词', rows: 7, limit: 2000, help: '用于 1080 × 1440 竖版构图，复制到图片工具并选择 3:4。与横版保持同一主题，分别安排主体和留白。' },
 ]
+const revisionOptions: { key: PublishingField; label: string }[] = [...fields, { key: 'coverDesign', label: '封面字号与配色' }]
 const canSave = computed(() => [draft.value.title, draft.value.description, draft.value.audioPrompt].every(value => value.trim()))
 function fieldTab(key: string) { return key.startsWith('cover') ? 'cover' : key === 'audioPrompt' ? 'audio' : 'publishing' }
 function saveShortcut(event: globalThis.KeyboardEvent) {
@@ -320,7 +323,7 @@ onMounted(() => { if (desktop) void load() })
         </legend>
         <div class="grid gap-3 sm:grid-cols-2">
           <label
-            v-for="field in fields"
+            v-for="field in revisionOptions"
             :key="field.key"
             :for="`revision-${field.key}`"
             class="flex items-center gap-2 text-sm"
@@ -346,6 +349,34 @@ onMounted(() => { if (desktop) void load() })
         />
       </div>
       <template v-if="preview">
+        <section
+          v-if="preview.fields.includes('coverDesign')"
+          class="space-y-3 border-t pt-4"
+          aria-label="封面字号与配色调整对比"
+        >
+          <h3 class="text-sm font-semibold">
+            封面字号与配色
+          </h3>
+          <div class="grid gap-4 lg:grid-cols-2">
+            <div class="space-y-3">
+              <p>原推荐</p>
+              <CoverDesignPreview
+                v-if="preview.before.coverDesign"
+                :design="preview.before.coverDesign"
+              />
+              <p v-else>
+                此版本还没有排版推荐。
+              </p>
+            </div>
+            <div class="space-y-3">
+              <p>候选推荐</p>
+              <CoverDesignPreview
+                v-if="preview.content.coverDesign"
+                :design="preview.content.coverDesign"
+              />
+            </div>
+          </div>
+        </section>
         <section
           v-for="field in fields.filter(item => preview?.fields.includes(item.key))"
           :key="field.key"
@@ -432,6 +463,19 @@ onMounted(() => { if (desktop) void load() })
           <p class="tab-intro">
             {{ tab.value === 'publishing' ? '一份有吸引力的标题，一段让人想点开的介绍。' : tab.value === 'audio' ? '生成音频后导入项目，再交给剪映生成字幕、添加背景并导出最终成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
           </p>
+          <section
+            v-if="tab.value === 'cover' && draft.coverDesign"
+            class="panel editor-section"
+            aria-label="AI 推荐排版"
+          >
+            <h2 class="mb-4 text-base font-semibold">
+              AI 推荐字号与配色
+            </h2>
+            <CoverDesignPreview :design="draft.coverDesign" />
+            <p class="muted">
+              制作新封面时自动带入；已有封面可在「排版样式」中应用，并单独调整每种颜色。
+            </p>
+          </section>
           <section
             v-for="field in fields.filter(item => fieldTab(item.key) === tab.value)"
             :key="field.key"

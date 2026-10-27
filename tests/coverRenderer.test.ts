@@ -10,6 +10,18 @@ function canvas() {
   return { ctx, canvas: { width: 0, height: 0, getContext: () => ctx } as unknown as HTMLCanvasElement }
 }
 describe('cover text layout', () => {
+  it.each(coverSizes)('draws title, subtitle and accents with independent colors at $width × $height', size => {
+    const target = canvas()
+    const colors: Record<string, string> = {}
+    target.ctx.fillText.mockImplementation((text: string) => { colors[text] = target.ctx.fillStyle })
+    const config = { ...newCover('主标题'), ...size, subtitle: '副标题', brand: '品牌', textColor: '#ffe45c', subtitleColor: '#a8e5ff', accentColor: '#ff7547' }
+    renderCover(target.canvas, config, null)
+    expect(colors).toEqual({ 主标题: config.textColor, 副标题: config.subtitleColor, 品牌: config.accentColor })
+    const legacy = { ...config }
+    Reflect.deleteProperty(legacy, 'subtitleColor')
+    renderCover(target.canvas, legacy, null)
+    expect(colors['副标题']).toBe(config.textColor)
+  })
   it.each(coverSizes)('preserves the chosen focal point and covers all edges at $width × $height', size => {
     const image = { naturalWidth: 2000, naturalHeight: 1000 } as HTMLImageElement
     const config = { ...newCover('主体'), width: size.width, height: size.height, backgroundAssetId: 'image', backgroundX: 0.2, backgroundY: 0.9, backgroundZoom: 1.5 }
