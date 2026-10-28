@@ -4,11 +4,13 @@ use crate::database::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     sync::Mutex,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -573,6 +575,9 @@ async fn handle_pipe_connection(
 
 #[cfg(target_os = "windows")]
 struct InstanceGuard(usize);
+
+#[cfg(not(target_os = "windows"))]
+type InstanceGuard = ();
 
 #[cfg(target_os = "windows")]
 impl Drop for InstanceGuard {
