@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import AppIcon from './components/AppIcon.vue'
 import AppNotifications from './components/AppNotifications.vue'
@@ -15,6 +15,7 @@ const updateMessage = computed(() => updateStatus.value === 'current' ? '当前�
 onMounted(() => { void initialize() })
 
 const route = useRoute()
+const mainContent = ref<globalThis.HTMLElement | null>(null)
 const inProjects = computed(() => route.path.startsWith('/projects') || route.path === '/publishing')
 const navigation = computed(() => [
   { to: '/projects', label: '我的书籍', icon: 'shelf', active: inProjects.value },
@@ -30,8 +31,13 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
     :message="['current', 'available', 'ready', 'restart'].includes(updateStatus) ? updateMessage : ''"
     variant="info"
   />
-  <div class="grid min-h-screen grid-cols-[64px_minmax(0,1fr)] md:grid-cols-[208px_minmax(0,1fr)] xl:grid-cols-[224px_minmax(0,1fr)]">
-    <aside class="sticky top-0 flex h-screen flex-col border-r border-sidebar-border bg-sidebar px-2 py-6 md:px-4">
+  <div class="app-shell grid min-h-screen grid-cols-[64px_minmax(0,1fr)] md:grid-cols-[208px_minmax(0,1fr)] xl:grid-cols-[224px_minmax(0,1fr)]">
+    <a
+      class="skip-link"
+      href="#main-content"
+      @click.prevent="mainContent?.focus()"
+    >跳到主要内容</a>
+    <aside class="app-sidebar sticky top-0 flex h-screen flex-col border-r border-sidebar-border bg-sidebar px-2 py-6 md:px-4">
       <RouterLink
         to="/projects"
         aria-label="书引 AI 首页"
@@ -44,12 +50,12 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
           height="40"
           class="size-10 shrink-0"
         >
-        <span class="hidden min-w-0 md:block">
-          <span class="flex items-center gap-2 text-[22px] font-semibold leading-tight tracking-[0.06em] text-[#153D32]">书引 <span class="rounded bg-[#D5F267] px-1.5 py-0.5 text-[10px] font-bold leading-none tracking-normal">AI</span></span>
-          <span class="mt-1 block whitespace-nowrap text-[11px] text-muted-foreground">让阅读，成为创作。</span>
+        <span class="brand-copy hidden min-w-0 md:block">
+          <span class="brand-name flex items-center gap-2 text-[22px] font-semibold leading-tight tracking-[0.06em]">书引 <span class="rounded px-1.5 py-0.5 text-[10px] font-bold leading-none tracking-normal">AI</span></span>
+          <span class="mt-1 block whitespace-nowrap text-[11px]">让阅读，成为创作。</span>
         </span>
       </RouterLink>
-      <p class="mb-2 mt-10 hidden px-3 text-xs font-medium text-muted-foreground md:block">
+      <p class="sidebar-caption mb-2 mt-10 hidden px-3 text-xs font-medium md:block">
         工作空间
       </p>
       <nav
@@ -63,7 +69,7 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
           :title="item.label"
           :aria-label="item.label"
           :aria-current="item.active ? 'page' : undefined"
-          :class="cn(buttonVariants({ variant: 'ghost' }), 'h-10 justify-center px-3 text-muted-foreground md:justify-start', item.active && 'bg-white text-primary shadow-xs hover:bg-white')"
+          :class="cn(buttonVariants({ variant: 'ghost' }), 'h-11 justify-center px-3 md:justify-start')"
         >
           <AppIcon :name="item.icon" />
           <span class="hidden md:inline">{{ item.label }}</span>
@@ -73,16 +79,16 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
           />
         </RouterLink>
       </nav>
-      <div class="mt-auto space-y-4 pt-8">
-        <div class="mx-2 hidden rounded-xl border border-sidebar-border bg-white/60 p-4 md:block">
+      <div class="sidebar-footer mt-auto space-y-4 pt-8">
+        <div class="sidebar-prompt mx-2 hidden rounded-xl border border-sidebar-border p-4 md:block">
           <AppIcon
             name="sparkle"
-            class="mb-3 text-primary"
+            class="mb-3 text-[#D5F267]"
           />
           <p class="m-0 text-sm font-medium leading-6">
             让阅读，成为创作。
           </p>
-          <p class="mb-0 mt-1 text-xs leading-5 text-muted-foreground">
+          <p class="mb-0 mt-1 text-xs leading-5 sidebar-caption">
             从一个好故事开始，分享你的独特视角。
           </p>
         </div>
@@ -92,7 +98,7 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
             title="数据与备份"
             aria-label="数据与备份"
             :aria-current="route.path === '/settings' ? 'page' : undefined"
-            :class="cn(buttonVariants({ variant: 'ghost' }), 'h-10 w-full justify-center px-3 text-muted-foreground md:justify-start', route.path === '/settings' && 'bg-white text-primary shadow-xs')"
+            :class="cn(buttonVariants({ variant: 'ghost' }), 'h-11 w-full justify-center px-3 md:justify-start')"
           >
             <AppIcon name="folder" /><span class="hidden md:inline">数据与备份</span>
           </RouterLink>
@@ -101,7 +107,7 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
             title="关于与更新"
             aria-label="关于与更新"
             :aria-current="route.path === '/about' ? 'page' : undefined"
-            :class="cn(buttonVariants({ variant: 'ghost' }), 'h-10 w-full justify-center px-3 text-muted-foreground md:justify-start', route.path === '/about' && 'bg-white text-primary shadow-xs')"
+            :class="cn(buttonVariants({ variant: 'ghost' }), 'h-11 w-full justify-center px-3 md:justify-start')"
           >
             <AppIcon name="info" /><span class="hidden md:inline">关于与更新</span>
             <span
@@ -109,14 +115,14 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
               class="size-1.5 rounded-full bg-primary md:ml-auto"
             />
           </RouterLink>
-          <p class="mb-0 mt-4 hidden items-center gap-2 px-3 text-xs text-muted-foreground md:flex">
+          <p class="sidebar-caption mb-0 mt-4 hidden items-center gap-2 px-3 text-xs md:flex">
             <span class="size-1.5 rounded-full bg-primary" />本地保存，安心创作
           </p>
         </div>
       </div>
     </aside>
-    <div class="min-w-0">
-      <div class="flex h-16 items-center justify-between gap-4 border-b bg-white/80 px-5 md:px-8">
+    <div class="app-workspace min-w-0">
+      <div class="app-topbar flex h-16 items-center justify-between gap-4 border-b bg-white/80 px-5 md:px-8">
         <div class="flex items-center gap-3 text-sm">
           <span class="text-muted-foreground">工作台</span><span class="text-border">/</span><span class="font-medium">{{ workspaceTitle }}</span>
         </div>
@@ -124,7 +130,9 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
       </div>
       <main
         id="main-content"
-        class="mx-auto w-full max-w-[1440px] px-5 py-7 md:px-8 md:py-9 xl:px-10"
+        ref="mainContent"
+        tabindex="-1"
+        class="app-main mx-auto w-full max-w-[1440px] px-5 py-7 md:px-8 md:py-9 xl:px-10"
       >
         <RouterLink
           v-if="update && route.path !== '/about'"

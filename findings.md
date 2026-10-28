@@ -189,3 +189,14 @@
 - 当前 Tauri 2.12.5 / webview2-com 0.39.1 支持 with_webview、eval_with_callback、宿主 CallDevToolsProtocolMethod。文件操作应限定已校验任务的路径，远程窗口不授予 IPC。
 - 发布包校验集中在 database/publishing.rs 的 checked/manifest/package_valid；直接在这里提供快照，不另建解析器。
 - 初次 npx --no-install playwright-cli 无可执行项，改用当前可用 Playwright 工具和隔离 WebView2 联调。
+
+## UI 与页面交互改造（2026-10-28）
+
+- 当前工作区最初无未提交代码改动；项目为 Vue 3 + TypeScript + Tailwind 4 + Reka/shadcn-vue + Tauri 2。
+- 现有 UI 已于 2026-10-25 接入 shadcn-vue 页面组件；应在此基础上收敛布局和交互，不新增第二套组件库。
+- `src/App.vue` 侧栏、顶栏和页面主区共用壳层；`src/style.css` 同时含主题 token、业务布局和历史语义类，需先检查真实页面再决定局部整理方式。
+- 用户授权仅涉及视觉与交互体验；不触及 schema、AI Provider、发布/音频业务流程。
+- 项目级已安装 `frontend-design` 与 `ui-ux-pro-max`；环境原有 `web-design-guidelines` 可用于实施后审查。
+- 实际浏览器证明普通 `#main-content` 锚点会被 hash 路由解析并退回书架；通过阻止默认跳转、聚焦 `main` 修正，测试核对路由不变。
+- 深色侧栏中的通用链接色覆盖了底部导航继承色；统一底部链接显式颜色后实测对比度为10.17:1。
+- 最终5个主要页面在1440/1024/390px均无横向溢出；浏览器隔离夹具不能替代Tauri桌面实机与真实平台验收。
