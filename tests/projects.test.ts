@@ -44,6 +44,15 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M1 projects and materials', () => {
+  it('provides a skip link and identifies the active top-level destination', async () => {
+    const { wrapper, router } = await render('/settings/models')
+    expect(wrapper.get('.skip-link').attributes('href')).toBe('#main-content')
+    expect(wrapper.get('#main-content').attributes('id')).toBe('main-content')
+    expect(wrapper.get('nav[aria-label="主导航"] a[aria-current="page"]').attributes('aria-label')).toBe('模型设置')
+    await wrapper.get('.skip-link').trigger('click')
+    expect(document.activeElement).toBe(wrapper.get('#main-content').element)
+    expect(router.currentRoute.value.path).toBe('/settings/models')
+  })
   it('previews imported notes and appends only after adoption, preserving existing notes and source', async () => {
     const imported = { text: '# 阅读笔记\n观点', sourceName: '笔记.md', sourcePath: 'D:/笔记.md' }
     vi.mocked(notes.chooseNote).mockResolvedValue('D:/笔记.md')
