@@ -2,6 +2,8 @@
 const paths = {
   book: 'M12 6.5C9 4.5 5.5 4 2 5v14c3.5-1 7-.5 10 1.5M12 6.5C15 4.5 18.5 4 22 5v14c-3.5-1-7-.5-10 1.5V6.5Z',
   shelf: 'M4 4v16M8 4v16M12 4v16M16 5l4 14M3 20h18',
+  grid: 'M3 3h7v7H3V3ZM14 3h7v7h-7V3ZM3 14h7v7H3v-7ZM14 14h7v7h-7v-7Z',
+  list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
   settings: 'M4 7h16M4 17h16M8 4v6M16 14v6',
   plus: 'M12 5v14M5 12h14',
   search: 'M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',

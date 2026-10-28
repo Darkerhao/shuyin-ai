@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import AppIcon from './components/AppIcon.vue'
 import AppNotifications from './components/AppNotifications.vue'
@@ -16,12 +16,22 @@ onMounted(() => { void initialize() })
 
 const route = useRoute()
 const mainContent = ref<globalThis.HTMLElement | null>(null)
-const inProjects = computed(() => route.path.startsWith('/projects') || route.path === '/publishing')
+const inProjects = computed(() => route.path.startsWith('/projects'))
 const navigation = computed(() => [
   { to: '/projects', label: '我的书籍', icon: 'shelf', active: inProjects.value },
+  { to: '/publishing', label: '发布任务', icon: 'upload', active: route.path === '/publishing' },
   { to: '/settings/models', label: '模型设置', icon: 'settings', active: route.path === '/settings/models' },
 ] as const)
-const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任务' : inProjects.value ? '我的书籍' : route.path === '/settings/models' ? '模型设置' : route.path === '/about' ? '关于书引 AI' : '数据与备份')
+const workspaceTitle = computed(() => {
+  if (route.path === '/projects/new') return '添加一本书'
+  if (route.params.id) return route.path.endsWith('/writing') ? '内容创作' : route.path.endsWith('/covers') ? '封面工坊' : route.path.endsWith('/publishing') ? '发布准备' : '书籍资料'
+  return route.path === '/publishing' ? '发布任务' : inProjects.value ? '我的书籍' : route.path === '/settings/models' ? '模型设置' : route.path === '/about' ? '关于书引 AI' : route.path === '/verification' ? '技术验证' : '数据与备份'
+})
+watch(() => route.path, async () => {
+  await nextTick()
+  globalThis.document.title = `${workspaceTitle.value} · 书引 AI`
+  mainContent.value?.focus({ preventScroll: true })
+}, { immediate: true })
 </script>
 
 <template>
@@ -83,7 +93,7 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
         <div class="sidebar-prompt mx-2 hidden rounded-xl border border-sidebar-border p-4 md:block">
           <AppIcon
             name="sparkle"
-            class="mb-3 text-[#D5F267]"
+            class="mb-3 text-[#d7e8ca]"
           />
           <p class="m-0 text-sm font-medium leading-6">
             让阅读，成为创作。
@@ -124,7 +134,18 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
     <div class="app-workspace min-w-0">
       <div class="app-topbar flex h-16 items-center justify-between gap-4 border-b bg-white/80 px-5 md:px-8">
         <div class="flex items-center gap-3 text-sm">
-          <span class="text-muted-foreground">工作台</span><span class="text-border">/</span><span class="font-medium">{{ workspaceTitle }}</span>
+          <RouterLink
+            to="/projects"
+            class="workspace-home"
+          >
+            工作台
+          </RouterLink><span
+            class="text-border"
+            aria-hidden="true"
+          >/</span><span
+            class="font-medium"
+            aria-current="page"
+          >{{ workspaceTitle }}</span>
         </div>
         <span class="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex"><AppIcon name="shield" />资料保存在本机</span>
       </div>

@@ -88,7 +88,7 @@ onMounted(() => { if (desktop) void load() })
         {{ publishStatuses[filter] }} <span class="text-xs tabular-nums">{{ tasks.filter(task => task.status === filter).length }}</span>
       </Button>
     </div>
-    <div class="w-64 max-w-full">
+    <div class="relative w-64 max-w-full">
       <label
         for="publish-search"
         class="sr-only"
@@ -96,9 +96,29 @@ onMounted(() => { if (desktop) void load() })
       <Input
         id="publish-search"
         v-model="search"
+        name="search"
+        type="search"
+        autocomplete="off"
+        class="bg-white pl-9 pr-9"
         placeholder="搜索书名或发布标题"
         :disabled="!desktop"
+        @keydown.esc="search = ''"
       />
+      <AppIcon
+        name="search"
+        class="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground"
+      />
+      <Button
+        v-if="search"
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        class="absolute right-0.5 top-0.5"
+        aria-label="清空任务搜索"
+        @click="search = ''"
+      >
+        <AppIcon name="close" />
+      </Button>
     </div>
   </div>
   <p
@@ -115,12 +135,39 @@ onMounted(() => { if (desktop) void load() })
     >
       共 {{ visible.length }} 项{{ publishStatuses[status] }}任务 · 按创建时间先后排列
     </p>
-    <p
+    <section
       v-if="!visible.length"
-      class="notice"
+      class="panel empty-state"
     >
-      {{ search ? '没有匹配的任务，请调整搜索。' : status === 'ready' ? '暂时没有待发布任务。可在草稿中补齐素材并生成任务包。' : status === 'draft' ? '暂时没有发布草稿。请从书籍的发布准备页新建任务。' : '暂时没有已确认的发布记录。' }}
-    </p>
+      <AppIcon :name="search ? 'search' : 'upload'" />
+      <h2>{{ search ? '没有匹配的任务' : status === 'ready' ? '作品就绪后，在这里开始发布' : status === 'draft' ? '还没有发布草稿' : '还没有发布记录' }}</h2>
+      <p class="muted">
+        {{ search ? '试试其他书名或发布标题。' : status === 'ready' ? '在草稿中补齐音频、成片和封面，生成任务包后继续。' : status === 'draft' ? '打开一本书，进入发布准备，选择文案与素材即可新建任务。' : '在官方页面完成发布后，回到发布准备页确认并记录结果。' }}
+      </p>
+      <div class="actions justify-center">
+        <Button
+          v-if="search"
+          variant="outline"
+          @click="search = ''"
+        >
+          清空搜索
+        </Button>
+        <Button
+          v-else-if="status === 'ready'"
+          variant="outline"
+          @click="status = 'draft'"
+        >
+          查看发布草稿
+        </Button>
+        <RouterLink
+          v-else
+          to="/projects"
+          :class="buttonVariants({ variant: 'outline' })"
+        >
+          前往我的书籍
+        </RouterLink>
+      </div>
+    </section>
     <article
       v-for="task in visible"
       :key="task.id"

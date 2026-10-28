@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { isDesktop, listProjects } from '../../services/projects'
 import { projectStatuses, type Project } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
@@ -12,9 +12,21 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 const desktop = isDesktop()
 const projects = ref<Project[]>([])
-const search = ref('')
-const filter = ref('all')
-const sort = ref('updated')
+const route = useRoute()
+const router = useRouter()
+function queryOption(key: string, fallback: string, options?: string[]) {
+  return computed({
+    get: () => {
+      const value = route.query[key]
+      return typeof value === 'string' && (!options || options.includes(value)) ? value : fallback
+    },
+    set: (value: string) => { void router.replace({ query: { ...route.query, [key]: value === fallback ? undefined : value } }) },
+  })
+}
+const search = queryOption('q', '')
+const filter = queryOption('status', 'all', ['all', 'active', 'published'])
+const sort = queryOption('sort', 'updated', ['updated', 'title'])
+const view = queryOption('view', 'grid', ['grid', 'list'])
 const loaded = ref(false)
 const { busy, error, run } = useOperation()
 const load = () => run(async () => { projects.value = await listProjects(); loaded.value = true })
@@ -30,7 +42,8 @@ const filters = computed(() => [
   { value: 'active', label: '创作中', count: projects.value.filter(p => p.status !== 'published' && p.status !== 'archived').length },
   { value: 'published', label: '已发布', count: projects.value.filter(p => p.status === 'published').length },
 ])
-function clearFilters() { search.value = ''; filter.value = 'all' }
+const recent = computed(() => projects.value.filter(p => p.status !== 'published' && p.status !== 'archived').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0])
+function clearFilters() { void router.replace({ query: { ...route.query, q: undefined, status: undefined } }) }
 function coverTone(id: string) { return [...id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4 }
 const date = (value: string) => new Date(value).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })
 onMounted(() => { if (desktop) void load() })
@@ -38,9 +51,9 @@ onMounted(() => { if (desktop) void load() })
 </script>
 
 <template>
-  <header class="mb-8 flex flex-wrap items-center justify-between gap-5">
+  <header class="library-heading mb-8 flex flex-wrap items-center justify-between gap-5">
     <div>
-      <h1 class="m-0 text-2xl font-semibold tracking-tight">
+      <h1 class="m-0 font-semibold tracking-tight">
         我的书籍
       </h1>
       <p class="mb-0 mt-2 text-sm text-muted-foreground">
@@ -81,7 +94,29 @@ onMounted(() => { if (desktop) void load() })
       class="mt-0.5"
     />当前为浏览器预览。请在桌面应用中管理书籍资料。
   </p>
-  <div class="mb-6 flex flex-wrap items-center justify-between gap-4 border-b pb-5">
+  <section
+    v-if="loaded && recent && !search && filter === 'all'"
+    class="resume-project"
+    aria-label="最近创作"
+  >
+    <span class="resume-icon"><AppIcon name="pen" /></span>
+    <div class="min-w-0 flex-1">
+      <p class="resume-label">
+        接着上次的灵感
+      </p>
+      <h2>{{ recent.title }}</h2>
+      <p class="resume-meta">
+        {{ recent.author || '作者待补充' }} · {{ date(recent.updatedAt) }}更新
+      </p>
+    </div>
+    <RouterLink
+      :to="`/projects/${recent.id}/writing`"
+      :class="buttonVariants({ variant: 'outline' })"
+    >
+      继续创作<AppIcon name="arrow" />
+    </RouterLink>
+  </section>
+  <div class="library-toolbar mb-6 flex flex-wrap items-center justify-between gap-4 border-b pb-5">
     <div
       class="library-filters flex gap-1 rounded-lg bg-muted p-1"
       aria-label="书籍筛选"
@@ -103,7 +138,7 @@ onMounted(() => { if (desktop) void load() })
     <form
       class="flex flex-wrap items-center gap-2"
       role="search"
-      @submit.prevent="load"
+      @submit.prevent
     >
       <div class="relative w-56">
         <label
@@ -117,6 +152,9 @@ onMounted(() => { if (desktop) void load() })
         <Input
           id="search"
           v-model="search"
+          name="q"
+          type="search"
+          autocomplete="off"
           class="bg-white pl-9 pr-9"
           placeholder="搜索书名、作者或 ISBN"
           :disabled="!desktop"
@@ -156,13 +194,14 @@ onMounted(() => { if (desktop) void load() })
         </SelectContent>
       </Select>
       <Button
-        type="submit"
+        type="button"
         variant="outline"
         size="icon"
         class="bg-white"
         :disabled="!desktop || busy"
         aria-label="刷新书架"
         title="刷新书架"
+        @click="load"
       >
         <AppIcon
           name="refresh"
@@ -183,16 +222,39 @@ onMounted(() => { if (desktop) void load() })
     />正在读取你的书架…
   </p>
   <template v-if="loaded">
-    <p
-      class="mb-4 text-xs text-muted-foreground"
-      role="status"
-    >
-      {{ search ? '搜索“' + search + '” · ' : '' }}共 {{ filtered.length }} 本书
-    </p>
+    <div class="library-results">
+      <p
+        class="m-0 text-sm text-muted-foreground"
+        role="status"
+        aria-live="polite"
+      >
+        {{ search ? '搜索“' + search + '” · ' : '' }}共 {{ filtered.length }} 本书
+      </p>
+      <div
+        class="library-views"
+        role="group"
+        aria-label="书架显示方式"
+      >
+        <Button
+          v-for="mode in (['grid', 'list'] as const)"
+          :key="mode"
+          variant="ghost"
+          size="icon"
+          :aria-label="mode === 'grid' ? '网格视图' : '列表视图'"
+          :title="mode === 'grid' ? '网格视图' : '列表视图'"
+          :aria-pressed="view === mode"
+          @click="view = mode"
+        >
+          <AppIcon :name="mode" />
+        </Button>
+      </div>
+    </div>
     <section
       v-if="filtered.length"
-      class="grid grid-cols-1 gap-5 min-[620px]:grid-cols-2 xl:grid-cols-3 min-[1600px]:grid-cols-4"
+      class="library-grid"
+      :class="{ 'is-list': view === 'list' }"
       aria-label="项目列表"
+      :aria-busy="busy"
     >
       <RouterLink
         v-for="project in filtered"
@@ -217,7 +279,7 @@ onMounted(() => { if (desktop) void load() })
             <AppIcon name="book" /><strong>{{ project.title }}</strong><small>{{ project.author || '我的读书计划' }}</small>
           </div>
         </div>
-        <div class="p-5">
+        <div class="project-card-copy p-5">
           <h2
             class="m-0 truncate text-base font-semibold"
             :title="project.title"
@@ -230,7 +292,7 @@ onMounted(() => { if (desktop) void load() })
           <p class="m-0 line-clamp-2 min-h-10 text-sm leading-5 text-muted-foreground">
             {{ project.description || project.sourceNotes || '记录一个想法，开始这本书的创作。' }}
           </p>
-          <div class="mt-5 flex items-center justify-between gap-2 border-t pt-4 text-xs">
+          <div class="project-card-footer mt-5 flex items-center justify-between gap-2 border-t pt-4 text-xs">
             <span class="text-muted-foreground">{{ date(project.updatedAt) }} 更新</span>
             <span class="flex items-center gap-1 font-medium text-primary">继续创作<AppIcon
               name="arrow"
@@ -241,7 +303,7 @@ onMounted(() => { if (desktop) void load() })
       </RouterLink>
       <RouterLink
         v-if="!search && filter === 'all'"
-        class="flex min-h-72 flex-col items-center justify-center gap-4 rounded-xl border border-dashed bg-muted/20 p-8 text-center text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent/50 hover:text-primary"
+        class="add-project-card flex min-h-72 flex-col items-center justify-center gap-4 rounded-xl border border-dashed bg-muted/20 p-8 text-center text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent/50 hover:text-primary"
         to="/projects/new"
       >
         <span class="flex size-12 items-center justify-center rounded-xl border bg-white"><AppIcon name="plus" /></span>
