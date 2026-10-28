@@ -48,16 +48,6 @@ pub(super) fn asset_type(path: &Path) -> Result<&'static str, String> {
         _ => Err("暂不支持此素材格式。请选择视频、音频、图片、字幕或文档。".into()),
     }
 }
-#[cfg(target_os = "windows")]
-fn shell_path(path: &Path) -> String {
-    let path = path.to_string_lossy();
-    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
-        format!(r"\\{unc}")
-    } else {
-        path.strip_prefix(r"\\?\").unwrap_or(&path).to_owned()
-    }
-}
-
 pub(super) fn open_path(path: &Path) -> Result<(), String> {
     let path = std::fs::canonicalize(path).map_err(|e| format!("路径不可用：{e}"))?;
     #[cfg(target_os = "windows")]
@@ -65,7 +55,7 @@ pub(super) fn open_path(path: &Path) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         let mut command = std::process::Command::new("explorer.exe");
         command
-            .arg(shell_path(&path))
+            .arg(crate::paths::shell_path(&path))
             .creation_flags(0x08000000)
             .spawn()
             .map_err(|e| e.to_string())?;
@@ -230,21 +220,5 @@ impl Database {
             inspect(path)?;
             open_path(path)
         }
-    }
-}
-
-#[cfg(all(test, target_os = "windows"))]
-mod tests {
-    use super::*;
-    #[test]
-    fn shell_paths_preserve_unicode_spaces_and_network_roots() {
-        assert_eq!(
-            shell_path(Path::new(r"\\?\D:\书籍 素材\视频.mp4")),
-            r"D:\书籍 素材\视频.mp4"
-        );
-        assert_eq!(
-            shell_path(Path::new(r"\\?\UNC\server\share\视频.mp4")),
-            r"\\server\share\视频.mp4"
-        );
     }
 }

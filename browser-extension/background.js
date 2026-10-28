@@ -68,17 +68,18 @@ function requestHost(host, message) {
 
 async function nativeRequest(payload) {
   const message = { ...payload, requestId: requestId() }
-  let lastError = null
+  const errors = []
   for (const host of await preferredHosts()) {
     try {
       const response = await requestHost(host, message)
       await store(HOST_KEY, host)
       return { host, response }
     } catch (error) {
-      lastError = error
+      const label = host.endsWith('.dev') ? '开发版' : '正式版'
+      errors.push(`${label}：${error?.message ?? String(error)}`)
     }
   }
-  throw lastError ?? new Error('未找到书引 AI 音频桥接。')
+  throw new Error(`无法连接书引 AI 本机桥接。\n${errors.join('\n')}`)
 }
 
 async function setStatus(patch) {

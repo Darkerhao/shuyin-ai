@@ -5,6 +5,7 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 header span { color: #5e6f63; font-size: 12px; }
 main { padding: 16px 18px 18px; }
 p { margin: 0 0 14px; line-height: 1.65; color: #46584b; font-size: 13px; }
+#message { white-space: pre-line; overflow-wrap: anywhere; }
 dl { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 7px 10px; margin: 0 0 16px; font-size: 12px; }
 dt { color: #708075; }
 dd { margin: 0; overflow-wrap: anywhere; }

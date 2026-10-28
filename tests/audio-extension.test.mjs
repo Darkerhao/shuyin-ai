@@ -29,7 +29,7 @@ function background() {
   return context.ShuyinAudioBackgroundCore
 }
 
-function workerHarness(job, tabUrl = job.notebookUrl) {
+function workerHarness(job, tabUrl = job.notebookUrl, hostErrors = {}) {
   const calls = { sendMessage: [], native: [] }
   const storage = {
     taskBinding: { jobId: job.id, runId: job.runId, tabId: 7, notebookUrl: job.notebookUrl, completed: false },
@@ -45,14 +45,21 @@ function workerHarness(job, tabUrl = job.notebookUrl) {
     },
     runtime: {
       lastError: null,
-      connectNative() {
+      connectNative(host) {
         let listener = null
+        let disconnected = null
         return {
           onMessage: { addListener(callback) { listener = callback } },
-          onDisconnect: { addListener() {} },
+          onDisconnect: { addListener(callback) { disconnected = callback } },
           postMessage(message) {
             calls.native.push(message)
             globalThis.setTimeout(() => {
+              if (hostErrors[host]) {
+                chromeMock.runtime.lastError = { message: hostErrors[host] }
+                disconnected()
+                chromeMock.runtime.lastError = null
+                return
+              }
               if (message.action === 'poll') listener({ ok: true, job })
               else listener({ ok: true })
             }, 0)
@@ -88,8 +95,50 @@ function workerHarness(job, tabUrl = job.notebookUrl) {
   context.globalThis = context
   context.importScripts = () => vm.runInContext(backgroundSource, context)
   vm.runInContext(backgroundWorkerSource, context)
-  return { calls, hooks }
+  return { calls, hooks, storage }
 }
+
+test('connection failure preserves the production error when the development host is missing', async () => {
+  const worker = workerHarness(textJob(), undefined, {
+    'com.shuyin.desktop.audio': 'Failed to start native messaging host.',
+    'com.shuyin.desktop.audio.dev': 'Specified native messaging host not found.',
+  })
+  await worker.hooks.tick()
+  assert.equal(worker.storage.bridgeState.connected, false)
+  assert.match(worker.storage.bridgeState.message, /正式版：Failed to start native messaging host\./)
+  assert.match(worker.storage.bridgeState.message, /开发版：Specified native messaging host not found\./)
+})
+
+test('a working development host still connects after a production host failure', async () => {
+  const worker = workerHarness(textJob({ status: 'paused' }), undefined, {
+    'com.shuyin.desktop.audio': 'Specified native messaging host not found.',
+  })
+  await worker.hooks.tick()
+  assert.equal(worker.storage.bridgeState.connected, true)
+  assert.equal(worker.storage.bridgeState.hostName, 'com.shuyin.desktop.audio.dev')
+  assert.equal(worker.storage.bridgeState.message, null)
+})
+
+test('popup shows progress during a manual check and restores the button after failure', async () => {
+  const dom = new JSDOM(readFileSync(join(extension, 'popup.html'), 'utf8'), { runScripts: 'outside-only' })
+  let finishCheck
+  dom.window.chrome = { runtime: { sendMessage: ({ type }) => type === 'GET_STATUS'
+    ? Promise.resolve({ connected: false })
+    : new Promise(resolve => { finishCheck = resolve }) } }
+  dom.window.eval(readFileSync(join(extension, 'popup.js'), 'utf8'))
+  await new Promise(resolve => globalThis.setTimeout(resolve, 0))
+  const button = dom.window.document.querySelector('#refresh')
+  button.click()
+  assert.equal(button.disabled, true)
+  assert.equal(button.textContent, '检查中…')
+  assert.equal(dom.window.document.querySelector('#connection').textContent, '检查中')
+  finishCheck({ connected: false, message: '正式版：Failed to start native messaging host.' })
+  await new Promise(resolve => globalThis.setTimeout(resolve, 0))
+  assert.equal(button.disabled, false)
+  assert.equal(button.textContent, '立即检查')
+  assert.match(dom.window.document.querySelector('#message').textContent, /正式版：Failed to start/)
+  dom.window.close()
+})
 
 function textJob(overrides = {}) {
   return {

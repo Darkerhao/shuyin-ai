@@ -2,6 +2,8 @@
 
 ## Gemini Notebook 自动音频（2026-10-28）
 
+宿主清单的可执行路径经过共享 `paths::shell_path` 转为普通 Windows 路径，与资源管理器打开素材共用转换。`canonicalize` 返回的 `\\?\` 前缀不能直接交给 Chrome 的 `cmd.exe` 启动链路：直接启动 helper 虽可成功，浏览器仍可能报通信错误。扩展保留正式版和开发版各自的失败原因，避免最后一次失败覆盖前一次。
+
 Windows 自动闭环采用正常 Chrome、固定 ID 的 MV3 扩展和独立 Native Messaging helper，不使用嵌入式 Google 登录、Cookie 导出或私有 RPC。当前入口为 `https://notebook.google.com/`，同时兼容旧 `notebooklm.google.com` Notebook 链接。扩展只在 `notebook.google.com` / `notebooklm.google.com` 页面运行，通过语义角色、ARIA 与中英文可见文本定位控件；定位不唯一、指导回读不一致或账号/笔记本身份不明时停止写入。
 
 Rust 是任务状态唯一写入者。`audio_jobs` 冻结发布文案版本、完整指导、目标时长、格式、唯一来源及文件 SHA-256；同一时间只允许一个未结束任务。扩展通过本机命名管道短连接轮询，携带 `jobId + runId` 执行创建笔记本、上传来源、配置音频、提交生成和获取精确下载目标。旧运行消息被拒绝；页面只能触发白名单动作，不能提交路径、URL、JavaScript 或命令。
