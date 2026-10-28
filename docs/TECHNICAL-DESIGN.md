@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## Gemini Notebook 自动音频（2026-10-28）
+
+Windows 自动闭环采用正常 Chrome、固定 ID 的 MV3 扩展和独立 Native Messaging helper，不使用嵌入式 Google 登录、Cookie 导出或私有 RPC。当前入口为 `https://notebook.google.com/`，同时兼容旧 `notebooklm.google.com` Notebook 链接。扩展只在 `notebook.google.com` / `notebooklm.google.com` 页面运行，通过语义角色、ARIA 与中英文可见文本定位控件；定位不唯一、指导回读不一致或账号/笔记本身份不明时停止写入。
+
+Rust 是任务状态唯一写入者。`audio_jobs` 冻结发布文案版本、完整指导、目标时长、格式、唯一来源及文件 SHA-256；同一时间只允许一个未结束任务。扩展通过本机命名管道短连接轮询，携带 `jobId + runId` 执行创建笔记本、上传来源、配置音频、提交生成和获取精确下载目标。旧运行消息被拒绝；页面只能触发白名单动作，不能提交路径、URL、JavaScript 或命令。
+
+应用启动时注册当前用户 Chrome Native Messaging host，开发与正式 host 名分离；helper 只转发小端长度帧，不访问数据库，不自动启动应用。Windows 包同时携带 helper 和扩展目录，macOS/Linux 仍可使用手动音频流程。生成完成后浏览器先下载到 `ShuyinAI/<jobId>/`，Rust 重新验证真实音频容器、复制到本书目录、比较大小与 SHA-256，再在单个 SQLite 事务中登记 `assets.audio` 并完成任务。数据库备份恢复将未完成自动任务置为人工核对，不自动重提生成。
+
+真实 Google 登录、页面上传、长任务生成与 blob/HTTPS 下载目标尚未在当前环境完成实际账号验收；代码完成及本地测试不能替代 P0。扩展正式上架、页面 DOM 变化和 Google 站点限制仍需按实施计划核验，详见 `NOTEBOOKLM-AUDIO-PLAN.md` 与 `AUDIO-AUTOMATION-VERIFICATION.md`。
+
 ## 音频时长贯通（2026-10-27）
 
 `audio.rs` 统一时长校验、展示、请求上下文与推荐输出解析。`GenerationInput` 新增可选 `targetDurationSeconds` 和默认false的 `recommendDuration`，复用原文本任务、Provider、凭据、120秒超时及取消；推荐使用 `audio-duration-v1`，不生成文案版本，成功时事务保存书籍时长和任务成功状态。任务创建时冻结实际时长，后续修改项目不会改变在途任务。普通生成仍兼容省略时长的调用，使用项目值。
@@ -403,7 +413,7 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 
 ## 音频制作与成片回填（2026-10-26）
 
-- `WritingPage` 的“音频提示词”页签改为“音频制作”：保留现有 `audioPrompt`，增加固定 HTTPS 入口 `open_audio_tool`、音频导入与打开。入口只交给系统浏览器，不自动登录、生成、下载或读取 Cookie。
+- 历史 v10 边界：`WritingPage` 的音频页签保留 `audioPrompt`，当时只提供固定 HTTPS 入口、音频导入与打开。2026-10-28 已由本文顶部自动任务替代旧 `open_audio_tool` 单一入口；手动导入和剪映流程继续保留。
 - `assets.asset_type` 增加 `audio`，文件类型为 MP3/M4A/WAV/AAC/FLAC/OGG；仍只保存原路径与文件元数据，不复制音频。`publish_tasks.audio_asset_id` 记录任务所用音频，任务包 manifest 升级到 schema 2，并保存可空音频引用。
 - 发布页将“本地视频”明确为“剪映导出的最终成片”，并分别选择音频与成片。抖音上传仍只接收成片、文字和双封面，不接收音频。
 - 新增纯 Rust `media` 模块，使用锁定版本 `mp4parse 0.17.0` 解析 MP4/MOV/M4V 的 `ftyp` 与 `moov` 盒。只读取元数据盒，不遍历完整 `mdat`，避免每次任务查询扫描大视频。检查最终视频时长为正、画面尺寸可读取且至少有一条音轨，不限制横竖屏比例。

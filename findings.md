@@ -1,3 +1,33 @@
+# NotebookLM 音频自动化规划发现（2026-10-27）
+
+## 续验发现（2026-10-28）
+
+- P0 仍不能由本地夹具替代：需用户选定试验书籍文件和授权一次真实生成；当前浏览器检查连接未能初始化，未导航至 Notebook 页面。
+- `docs/DEVELOPMENT-PLAN.md` 与实施计划引用 `docs/AUDIO-AUTOMATION-VERIFICATION.md`，但该文件原先不存在；本轮按实际证据创建，明确区分本地测试和真实账号验收。
+- `npm run test:queue` 可重复失败于缺失前置报告的重新执行用例；队列脚本及其测试均非本轮改动，音频功能的其他前端、Rust、扩展和 helper 检查通过。
+- 标准 Vite 清理 `dist` 与 Cargo 打开现有构建锁在受限执行中被拒绝；隔离输出构建和使用项目本机工具链重试分别通过。未删除或覆盖现有输出以绕过错误。
+
+## 实施验证发现（2026-10-28）
+
+- 当前网站品牌为 Gemini Notebook，入口重定向到 `notebook.google.com`；扩展必须同时保留旧域名兼容，不能继续只匹配 `notebooklm.google.com`。
+- Native Messaging helper 必须使用 GUI subsystem 仍保留继承 stdio；短连接轮询避免卸载时长期占用 helper，开发/正式 host 名需分离。
+- 扩展协议中出现过 source_chunk 嵌套、generation_complete 强制 URL、download_pending 阶段名和 verify_remote 登录短路四处跨层不一致，均已由联合测试和最小修复收敛为唯一扁平契约。
+- 归档事务失败后继续会更换 runId；只有同 jobId 且处于 verify_remote/downloading/importing 才能继承原精确 downloadId，否则可能重复下载或丢失恢复路径。
+- Chrome/Google 页面的真实 DOM、长提示词输入、音频生成和下载 URL 形态仍未在登录账号下验证；本地模拟和语义控件测试只能证明代码路径与防御行为。
+
+- 用户希望从现有音频提示词进入应用内网站，人工 Google 登录后自动新建笔记本、添加书籍来源、填写指导、生成、长时间等待并下载归档；本次仅编写计划。
+- 当前音频入口仍由 external::open_url 启动系统浏览器；现有抖音宿主已有独立 WebView2、页面脚本和受限文件上传，可复用底层经验，但 Google 登录需要独立验证。
+- 当前产品规则明确音频网站操作尚未实现；本次需求是下一阶段规划，不把旧规则当作必须再次审批的理由。
+- 开始时已有四份文档和六份 Rust 文件的未提交封面改动，保持原样。记忆索引无本项目相关命中。
+- Google 官方 OAuth 政策的 Use secure browsers 明确禁止开发者可控的嵌入式 user-agent 承载 Google OAuth；不能因为 Tauri 可以打开网页就承诺 Google 登录成功。来源：https://developers.google.com/identity/protocols/oauth2/policies 。
+- 用户随后确认接受独立浏览器窗口，优先完成自动化闭环。推荐收敛为现有 Tauri + 普通 Chrome + 专用小扩展 + Native Messaging；登录由浏览器与 Google 处理，程序不导出 Cookie、不采用私有 RPC。
+- 已读官方个人版音频帮助与企业 API：个人网页支持来源、自定义指导、后台生成和下载；深入探索为双主持人，简报才是短时单人，精确分钟数和甲子单人不能由提示词保证。Play Books 来源可能限制下载。企业音频 API 为独立 Cloud/IAM 路线，不把个人 Pro 当作企业 API 权限。
+- Chrome 官方接口提供页面 DOM、Native Messaging、downloads 与 alarms；扩展 worker 会休眠，不能用页面 setInterval 或一次长等待承载生成。downloads 文件名只能相对下载目录，需下载完成后由宿主复制到项目目录再事务登记。
+- 当前 schema 为 v12；ai_tasks 有120秒文本请求及中断处理，网站音频需一张独立且持久化的任务表；assets 和发布 audio_asset_id 继续复用。新库版本只在实施时追加迁移，本轮不执行。
+- 单一路线已写入 docs/NOTEBOOKLM-AUDIO-PLAN.md。P0要求证明File/DataTransfer原书上传、长指导完整回读和真实下载URL可用；不假设网页公开artifact ID，每任务独占笔记本，身份不明时暂停。
+- 长等待不使用固定总时限误判失败；明确仍生成中就持续低频观察。应用完全退出期间不承诺本地下载，重启先核对原远端任务；取消本地跟进不会取消Google生成。
+- 官方企业音频文档本次只确认create/delete与回网页加载下载，不把其“验证”章节误写为已确认GET接口。个人帮助的时长档位标English Only，中文控件可用性纳入P0。
+
 # 创作体验续作决策（2026-10-25）
 
 - SQLite v8 已有按项候选暂存；文案与封面的自动草稿使用独立表，不滥用正式版本或 app_settings。

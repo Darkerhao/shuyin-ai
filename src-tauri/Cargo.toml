@@ -22,7 +22,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "=1.0.154"
 reqwest = { version = "=0.13.5", default-features = false, features = ["json", "rustls"] }
 keyring = "=4.2.0"
-tokio = { version = "=1.54.1", features = ["sync", "macros", "time"] }
+tokio = { version = "=1.54.1", features = ["sync", "macros", "time", "net", "io-util"] }
 base64 = "=0.23.1"
 png = "=0.18.1"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
@@ -32,6 +32,7 @@ mp4parse = "=0.17.0"
 [target.'cfg(windows)'.dependencies]
 # Already locked by Tauri; used only for host-side, task-bound file selection.
 webview2-com = "=0.39.1"
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Registry", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile = "=3.27.0"

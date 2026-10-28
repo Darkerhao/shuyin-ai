@@ -1,5 +1,11 @@
 # 书引 AI 开发计划与验收标准
 
+## Gemini Notebook 自动音频（2026-10-28，功能已完成，真实账号待验收）
+
+按 [实施计划](NOTEBOOKLM-AUDIO-PLAN.md) 完成 Windows + Chrome + MV3 扩展 + Native Messaging helper + Rust/SQLite `audio_jobs` 闭环。数据库升至 v13；前端提供来源/格式/任务控制，Rust 冻结输入并唯一写状态，扩展执行受限页面动作，下载经精确 ID、容器与 SHA-256 校验后登记为 `assets.audio`。旧“只打开网站”命令已移除，手动导入、历史提示词、发布任务选择及最终抖音人工发布保持不变。
+
+本地验证覆盖前端 178 项、Rust 109 项、扩展/打包/发布脚本、lint、类型检查和生产构建；Windows helper 与 NSIS debug 安装包已实际生成，安装包包含 helper 和扩展目录。真实 Google 登录、上传、长任务生成、下载目标、正式扩展上架、签名安装升级/卸载未在当前环境执行，不能写成已通过。Windows ZIP/NSIS 安装包现在携带 `browser-bridge.exe` 与 `browser-extension/`；macOS/Linux 只保留手动音频流程。详见 `AUDIO-AUTOMATION-VERIFICATION.md`。自动能力属于兼容 `feat` / minor，不手动升版本、不提交或发布。
+
 ## 封面文件命名（2026-10-27）
 
 - 新导出使用 `书名-比例-尺寸-v版本.png`，例如 `围城-3比4-1080x1440-v3.png`。版本对应封面历史；已有同名文件或目录则递增版本，原文件保留。AI 背景使用真实比例/尺寸及「背景」标记，同名背景独立递增版本。旧随机文件名与数据库引用不迁移，schema v12 不变，无新增依赖；本次按 fix/patch 处理，不手动升版本、不提交或发布。

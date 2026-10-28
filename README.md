@@ -1,8 +1,8 @@
 # 书引 AI
 
-书引 AI 为每本书一次准备**发布标题、发布内容、音频制作指导、封面主标题、副标题，以及横版 4:3 / 竖版 3:4 图片提示词**。填写书名和可选资料即可生成、编辑并复制，封面素材可直接带入制作页面。音频默认采用“甲子 · 十分钟读懂一本书”的8—10分钟节目模板，按书籍内容设计不同的五段指导；应用不直接生成音频，可打开外部音频工具并回填下载后的音频成品。
+书引 AI 为每本书一次准备**发布标题、发布内容、音频制作指导、封面主标题、副标题，以及横版 4:3 / 竖版 3:4 图片提示词**。填写书名和可选资料即可生成、编辑并复制，封面素材可直接带入制作页面。Windows + Chrome 可在用户完成 Google 登录后，通过配套扩展自动操作 Gemini Notebook，新建专属笔记本、添加本书来源、生成、下载并归档音频；手动导入和剪映成片流程继续保留。
 
-从安装到备份、封面和发布准备的操作步骤见 [使用手册](docs/USER-GUIDE.md)；三本书试用、异常保护、Windows 安装升级与测试结果见 [M5 验证报告](docs/M5-VERIFICATION.md)。
+从安装到备份、自动音频、封面和发布准备的操作步骤见 [使用手册](docs/USER-GUIDE.md)；自动音频实现与证据边界见 [自动音频验收](docs/AUDIO-AUTOMATION-VERIFICATION.md)，三本书历史试用见 [M5 验证报告](docs/M5-VERIFICATION.md)。
 
 M5 本机交付已完成正式安装 0.1.0→0.5.1 升级及 ZIP 启动验证，旧数据和回退副本保留。本地 EXE、ZIP、使用手册和 SHA-256 清单位于 `output/delivery/m5-windows-0.5.1/`，属于尚未发布的本地验收构建。
 
@@ -17,6 +17,7 @@ M5 本机交付已完成正式安装 0.1.0→0.5.1 升级及 ZIP 启动验证，
 - Node.js 22.21.1 + npm 10.9.4（本机复用）；依赖精确版本及完整解析见 package.json / package-lock.json。
 - Rust MSVC stable，本次安装并使用 1.99.1；Rust crate 锁定见 src-tauri/Cargo.lock。
 - Visual Studio C++ Build Tools、Windows SDK、WebView2 Runtime。
+- 自动音频需 Windows x64、Google Chrome 120+ 和用户自行启用的配套 MV3 扩展；不读取 Cookie 或登录凭据。
 - 主工具安装在 D 盘；微软安装器、SDK 共享组件及应用的用户数据仍使用 Windows 标准目录。
 
 本机 Rust 的 `CARGO_HOME`、`RUSTUP_HOME` 和 Cargo `bin` 路径已保存到当前用户环境变量。修改前已打开的终端仍使用旧环境；请完整退出并重开终端，IDE 集成终端需重开 IDE。
@@ -56,6 +57,8 @@ npm run build
 npm run test:rust
 npm run check:rust
 npm run desktop:build
+npm run audio:bridge:dev     # 开发版 helper
+npm run audio:bridge:release # 发布版 helper
 ```
 
 `dev` 与 `desktop:dev` 不要同时运行，二者使用同一个固定端口 1420。
@@ -74,7 +77,7 @@ macOS 需安装 Xcode Command Line Tools；Linux 构建需 WebKitGTK 4.1、GTK �
 
 | 平台 | Release 下载文件 |
 | --- | --- |
-| Windows x64 | 安装 `.exe`、免安装 `.zip`（需要 WebView2，数据仍在系统用户目录） |
+| Windows x64 | 安装 `.exe`、免安装 `.zip`（含 Native Messaging helper 与 `browser-extension/`；需要 WebView2，数据仍在系统用户目录） |
 | macOS Apple Silicon | `.dmg`、`.zip` |
 | macOS Intel | `.dmg`、`.zip` |
 | Linux x64 | `.deb`、`.rpm`、`.AppImage`、含 AppImage 的 `.tar.gz` |

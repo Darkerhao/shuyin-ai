@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>书引 AI 音频助手</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <header>
+      <strong>书引 AI 音频助手</strong>
+      <span id="connection">检查中</span>
+    </header>
+    <main>
+      <p id="message">正在连接书引 AI。</p>
+      <dl>
+        <dt>本机桥接</dt><dd id="host">未连接</dd>
+        <dt>当前任务</dt><dd id="job">无</dd>
+      </dl>
+      <button id="refresh" type="button">立即检查</button>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

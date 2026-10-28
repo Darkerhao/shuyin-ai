@@ -1,5 +1,6 @@
 pub mod ai;
 mod assets;
+pub mod audio;
 mod backup;
 pub mod covers;
 pub mod drafts;
@@ -78,6 +79,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0010_audio_workflow.sql"),
     include_str!("../migrations/0011_douyin_collection.sql"),
     include_str!("../migrations/0012_audio_duration.sql"),
+    include_str!("../migrations/0013_audio_jobs.sql"),
 ];
 
 impl Database {
