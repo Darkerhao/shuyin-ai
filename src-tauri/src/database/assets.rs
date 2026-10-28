@@ -2,7 +2,7 @@ use super::{
     projects::{get, new_id, NOW},
     Database,
 };
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::{path::Path, time::UNIX_EPOCH};
 
@@ -19,7 +19,7 @@ pub struct Asset {
     pub exists_status: String,
     pub created_at: String,
 }
-fn inspect(path: &Path) -> Result<(i64, i64), String> {
+pub(super) fn inspect(path: &Path) -> Result<(i64, i64), String> {
     let metadata = std::fs::metadata(path).map_err(|e| format!("素材文件不可用：{e}"))?;
     if !metadata.is_file() {
         return Err("请选择文件。".into());
@@ -32,7 +32,7 @@ fn inspect(path: &Path) -> Result<(i64, i64), String> {
         .as_secs();
     Ok((metadata.len() as i64, modified as i64))
 }
-fn asset_type(path: &Path) -> Result<&'static str, String> {
+pub(super) fn asset_type(path: &Path) -> Result<&'static str, String> {
     match path
         .extension()
         .and_then(|x| x.to_str())
@@ -86,6 +86,65 @@ pub(super) fn open_path(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+pub(super) fn register_existing(
+    connection: &Connection,
+    project_id: &str,
+    path: &Path,
+    expected_kind: Option<&str>,
+    existing_id: Option<&str>,
+) -> Result<String, String> {
+    get(connection, project_id)?;
+    let path = std::fs::canonicalize(path).map_err(|e| format!("素材文件不可用：{e}"))?;
+    let kind = asset_type(&path)?;
+    if expected_kind.is_some_and(|value| value != kind) {
+        return Err("重新定位的文件必须与原素材类型相同。".into());
+    }
+    let (size, modified) = inspect(&path)?;
+    let original_name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .ok_or("素材文件名无效。")?;
+    let id = if let Some(id) = existing_id {
+        let original: Option<String> = connection
+            .query_row(
+                "SELECT asset_type FROM assets WHERE id=?1 AND project_id=?2",
+                params![id, project_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let original = original.ok_or("素材关联不存在。")?;
+        if original != kind {
+            return Err("重新定位的文件必须与原素材类型相同。".into());
+        }
+        id.to_owned()
+    } else {
+        let existing: Option<(String, String)> = connection
+            .query_row(
+                "SELECT id,asset_type FROM assets WHERE project_id=?1 AND file_path=?2",
+                params![project_id, path.to_string_lossy().as_ref()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some((_id, existing_kind)) = existing {
+            if existing_kind != kind {
+                return Err("该项目已关联同路径但不同类型的素材。".into());
+            }
+            return Err("该项目已关联此文件。".into());
+        }
+        new_id(connection)?
+    };
+    connection.execute(
+        &format!("INSERT INTO assets(id,project_id,asset_type,file_path,original_name,file_size,modified_at,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,{NOW}) ON CONFLICT(id) DO UPDATE SET file_path=excluded.file_path,original_name=excluded.original_name,file_size=excluded.file_size,modified_at=excluded.modified_at"),
+        params![id, project_id, kind, path.to_string_lossy().as_ref(), original_name, size, modified],
+    ).map_err(|error| match error {
+        rusqlite::Error::SqliteFailure(ref code, _) if code.code == rusqlite::ErrorCode::ConstraintViolation => "该项目已关联此文件。".to_owned(),
+        _ => error.to_string(),
+    })?;
+    Ok(id)
+}
+
 impl Database {
     pub fn list_assets(&self, project_id: &str) -> Result<Vec<Asset>, String> {
         self.with_connection(|c| {
@@ -131,23 +190,8 @@ impl Database {
         path: &str,
         asset_id: Option<&str>,
     ) -> Result<String, String> {
-        let path = std::fs::canonicalize(path).map_err(|e| format!("素材文件不可用：{e}"))?;
-        let kind = asset_type(&path)?;
-        let (size, modified) = inspect(&path)?;
-        self.with_connection(|c| {
-            get(c,project_id)?;
-            let id = if let Some(id)=asset_id {
-                let original: Option<String> = c.query_row("SELECT asset_type
-                FROM assets
-                WHERE id=?1 AND project_id=?2",params![id,project_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
-                let original=original.ok_or("素材关联不存在。")?;
-                if original!=kind { return Err("重新定位的文件必须与原素材类型相同。".into()); }
-                id.to_owned()
-            } else { new_id(c)? };
-            c.execute(&format!("INSERT INTO assets(id,project_id,asset_type,file_path,original_name,file_size,modified_at,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,{NOW})
-                ON CONFLICT(id) DO UPDATE SET
-                file_path=excluded.file_path,original_name=excluded.original_name,file_size=excluded.file_size,modified_at=excluded.modified_at"),params![id,project_id,kind,path.to_string_lossy().as_ref(),path.file_name().unwrap().to_string_lossy().as_ref(),size,modified]).map_err(|e|match e { rusqlite::Error::SqliteFailure(ref code,_) if code.code==rusqlite::ErrorCode::ConstraintViolation => "该项目已关联此文件。".to_owned(), _=>e.to_string() })?;
-            Ok(id)
+        self.with_connection(|connection| {
+            register_existing(connection, project_id, Path::new(path), None, asset_id)
         })
     }
     pub fn unlink_asset(&self, id: &str) -> Result<(), String> {

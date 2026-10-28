@@ -92,7 +92,7 @@ fn row_version(r: &Row<'_>) -> rusqlite::Result<WritingVersion> {
     })
 }
 const VERSION_COLUMNS: &str = "id,project_id,kind,version_no,content_json,source_type,model_name,prompt_version,is_confirmed,created_at";
-fn version(c: &Connection, id: &str) -> Result<WritingVersion, String> {
+pub(super) fn version(c: &Connection, id: &str) -> Result<WritingVersion, String> {
     c.query_row(
         &format!("SELECT {VERSION_COLUMNS} FROM writing_versions WHERE id=?1"),
         [id],

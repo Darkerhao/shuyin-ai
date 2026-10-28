@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { log } from 'node:console'
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import process from 'node:process'
@@ -44,7 +44,12 @@ function singleBundle(directory, extension) {
 }
 
 function nonEmpty(file) {
-  if (!statSync(file).isFile() || statSync(file).size === 0) throw new Error(`产物为空或不是文件：${file}`)
+  try {
+    if (!statSync(file).isFile() || statSync(file).size === 0) throw new Error(`产物为空或不是文件：${file}`)
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`缺少发布产物：${file}`, { cause: error })
+    throw error
+  }
 }
 
 export function collectAssets(cwd, platform, target, destination) {
@@ -65,13 +70,32 @@ export function collectAssets(cwd, platform, target, destination) {
   }
   if (platform === 'windows-x64') {
     copySigned('nsis', '.exe')
+    const helper = join(root, 'browser-bridge.exe')
+    const extension = join(cwd, 'browser-extension')
+    nonEmpty(helper)
+    try {
+      if (!statSync(extension).isDirectory()) throw new Error(`缺少 Chrome 扩展目录：${extension}`)
+    } catch (error) {
+      if (error.code === 'ENOENT') throw new Error(`缺少 Chrome 扩展目录：${extension}`, { cause: error })
+      throw error
+    }
+    nonEmpty(join(extension, 'manifest.json'))
+    nonEmpty(join(extension, 'background.js'))
     const staging = mkdtempSync(join(tmpdir(), 'shuyin-zip-'))
     try {
       copyFileSync(join(root, 'shuyin-ai.exe'), join(staging, 'shuyin-ai.exe'))
-      writeFileSync(join(staging, 'README.txt'), '书引 AI：解压后运行 shuyin-ai.exe。\n需要 Microsoft Edge WebView2 Runtime。\n数据保存在系统用户数据目录，不是随目录移动的数据便携版。\n')
+      copyFileSync(helper, join(staging, 'browser-bridge.exe'))
+      cpSync(extension, join(staging, 'browser-extension'), { recursive: true })
+      writeFileSync(join(staging, 'README.txt'), [
+        '书引 AI：解压后运行 shuyin-ai.exe。',
+        '需要 Microsoft Edge WebView2 Runtime。',
+        '自动音频需要 Chrome：打开书引 AI 的音频制作页，按提示加载 browser-extension 目录并在 chrome://extensions 启用扩展。',
+        '数据保存在系统用户数据目录，不是随目录移动的数据便携版。',
+        '',
+      ].join('\n'))
       // Git Bash may put GNU tar first; Windows' bundled bsdtar supports ZIP creation.
       execFileSync(join(process.env.SystemRoot, 'System32/tar.exe'),
-        ['-a', '-cf', join(output, `${prefix}.zip`), '-C', staging, 'shuyin-ai.exe', 'README.txt'])
+        ['-a', '-cf', join(output, `${prefix}.zip`), '-C', staging, 'shuyin-ai.exe', 'browser-bridge.exe', 'browser-extension', 'README.txt'])
     } finally {
       rmSync(staging, { recursive: true, force: true })
     }

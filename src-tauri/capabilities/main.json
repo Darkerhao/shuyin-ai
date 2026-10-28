@@ -3,5 +3,5 @@
   "identifier": "main",
   "description": "主窗口可访问业务命令、文件选择、签名应用更新及重启。",
   "windows": ["main"],
-  "permissions": ["allow-probe", "allow-projects", "allow-ai-writing", "allow-covers", "allow-publishing", "allow-update-settings", "dialog:allow-open", "core:app:allow-version", "core:resources:allow-close", "core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-destroy", "updater:allow-check", "updater:allow-download", "updater:allow-install", "process:allow-restart"]
+  "permissions": ["allow-probe", "allow-projects", "allow-ai-writing", "allow-audio-automation", "allow-covers", "allow-publishing", "allow-update-settings", "dialog:allow-open", "core:app:allow-version", "core:resources:allow-close", "core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-destroy", "updater:allow-check", "updater:allow-download", "updater:allow-install", "process:allow-restart"]
 }

@@ -1,12 +1,13 @@
 mod ai;
 mod ai_commands;
+mod audio;
+mod audio_commands;
 mod commands;
 mod cover_commands;
 mod credentials;
 mod database;
 mod douyin;
 mod douyin_webview;
-mod external;
 mod media;
 mod note_import;
 mod publish_commands;
@@ -38,8 +39,12 @@ pub fn run() {
             // Surface initialization errors through commands as before.
             if database.read().is_ok() {
                 database.recover_ai_tasks()?;
+                database.recover_audio_jobs()?;
             }
             app.manage(database);
+            app.manage(audio::AudioAutomation::initialize(app.handle()));
+            app.state::<audio::AudioAutomation>()
+                .start(app.handle().clone());
             app.manage(credentials::SystemCredentials(
                 app.config().identifier.clone(),
             ));
@@ -110,8 +115,11 @@ pub fn run() {
             ai_commands::execute_generation,
             ai_commands::apply_generation,
             ai_commands::cancel_generation,
-            ai_commands::open_audio_tool,
-            ai_commands::set_audio_duration
+            ai_commands::set_audio_duration,
+            audio_commands::audio_job_snapshot,
+            audio_commands::start_audio_job,
+            audio_commands::control_audio_job,
+            audio_commands::open_audio_extension_setup
         ])
         .run(tauri::generate_context!())
         .expect("书引 AI 桌面容器启动失败");

@@ -9,11 +9,13 @@ import { Input } from '@/components/ui/input'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/ai'
-import { chooseAudio, getProject, isDesktop, linkAsset, listAssets, openAsset } from '../../services/projects'
+import * as audioApi from '../../services/audio'
+import { chooseAudio, chooseSourceDocument, getProject, isDesktop, linkAsset, listAssets, openAsset } from '../../services/projects'
 import { errorMessage } from '../../services/verification'
 import { emptyPublishing, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type PublishingTextField, type WritingVersion } from '../../types/ai'
 import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
 import type { Asset } from '../../types/project'
+import type { AudioFormat, AudioJob, AudioJobAction, AudioJobStatus, AudioJobView } from '../../types/audio'
 import { useOperation } from '../../composables/useOperation'
 import { useEditorDraft } from '../../composables/useEditorDraft'
 import { readDraft } from '../../services/drafts'
@@ -37,6 +39,14 @@ const providers = ref<ModelProvider[]>([])
 const providerId = ref('')
 const versions = ref<WritingVersion[]>([])
 const audioAssets = ref<Asset[]>([])
+const documents = ref<Asset[]>([])
+const sourceNotes = ref('')
+const audioView = ref<AudioJobView | null>(null)
+const audioSourceKey = ref('')
+const audioFormat = ref<AudioFormat>('deep_dive')
+const clock = ref(Date.now())
+let audioPollTimer: ReturnType<typeof globalThis.setInterval> | undefined
+let clockTimer: ReturnType<typeof globalThis.setInterval> | undefined
 const selected = ref<WritingVersion | null>(null)
 const draft = ref(emptyPublishing())
 const original = ref(JSON.stringify(draft.value))
@@ -59,6 +69,34 @@ const tabs = [
 ]
 const { busy, error, message, run } = useOperation()
 const autosave = useEditorDraft(() => props.id, 'writing', draft, () => selected.value?.id ?? null, dirty, ready, prepareLeave)
+const audioBridge = computed(() => audioView.value?.bridge ?? null)
+const audioJob = computed(() => audioView.value?.job ?? null)
+const activeAudioJob = computed(() => {
+  const job = audioView.value?.activeJob
+  return job && !['succeeded', 'cancelled'].includes(job.status) ? job : null
+})
+const otherActiveAudioJob = computed(() => activeAudioJob.value && activeAudioJob.value.projectId !== props.id ? activeAudioJob.value : null)
+const shownAudioJob = computed(() => otherActiveAudioJob.value ?? audioJob.value)
+const selectedDocument = computed(() => documents.value.find(item => `asset:${item.id}` === audioSourceKey.value) ?? null)
+const audioSourceReady = computed(() => audioSourceKey.value === 'text'
+  ? !!sourceNotes.value.trim()
+  : !!selectedDocument.value && selectedDocument.value.existsStatus === 'available')
+const audioFieldsReady = computed(() => [draft.value.title, draft.value.description, draft.value.audioPrompt].every(value => value.trim()))
+const canStartAudio = computed(() => desktop && ready.value && !busy.value && !!audioBridge.value?.supported
+  && !!audioBridge.value.connected && !activeAudioJob.value && durationValid.value && audioFieldsReady.value
+  && audioSourceReady.value)
+const liveAudioStatuses = new Set<AudioJobStatus>(['created', 'waiting_login', 'preparing', 'generating', 'downloading', 'importing'])
+const audioStatusLabels: Record<AudioJobStatus, string> = {
+  created: '等待接续', waiting_login: '等待 Google 登录', preparing: '准备 Notebook', generating: '正在生成',
+  downloading: '正在下载', importing: '正在归档', succeeded: '音频已保存', waiting_user: '等待人工核对',
+  paused: '已暂停跟进', failed: '任务失败', cancelled: '已停止跟进',
+}
+const audioStageLabels: Record<string, string> = {
+  awaiting_extension: '等待 Chrome 扩展', login: '等待 Google 登录', creating_notebook: '创建笔记本文库',
+  adding_source: '添加原书来源', source_processing: '等待来源处理', configuring_audio: '填写音频指导',
+  submitting: '提交音频生成', generating: 'Gemini Notebook 正在生成音频', downloading: '获取音频下载',
+  importing: '复制并登记音频', verify_remote: '等待人工核对远端任务', completed: '归档完成', error: '任务已停止',
+}
 function accept(version: WritingVersion | null) {
   selected.value = version
   draft.value = { ...emptyPublishing(), ...version?.content }
@@ -79,13 +117,56 @@ onBeforeRouteUpdate(canLeave)
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || durationDirty.value || busy.value || preview.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(copyTimer) })
+function setAssets(files: Asset[]) {
+  documents.value = files.filter(asset => asset.assetType === 'document')
+  audioAssets.value = files.filter(asset => asset.assetType === 'audio')
+  if (audioSourceKey.value.startsWith('asset:') && documents.value.some(item => `asset:${item.id}` === audioSourceKey.value)) return
+  if (audioSourceKey.value === 'text') {
+    if (sourceNotes.value.trim()) return
+    audioSourceKey.value = ''
+  }
+  const available = documents.value.find(item => item.existsStatus === 'available')
+  audioSourceKey.value = available ? `asset:${available.id}` : sourceNotes.value.trim() ? 'text' : ''
+}
+async function refreshAudioAssets() {
+  setAssets(await listAssets(props.id))
+}
+function applyAudioView(next: AudioJobView, refreshOnSuccess = true) {
+  const previous = audioView.value
+  audioView.value = next
+  if (refreshOnSuccess && next.job?.status === 'succeeded' &&
+    (previous?.job?.status !== 'succeeded' || previous?.job?.assetId !== next.job.assetId)) {
+    void refreshAudioAssets().catch(cause => { error.value = errorMessage(cause) })
+  }
+}
+async function refreshAudio(showFailure = false) {
+  try { applyAudioView(await audioApi.getAudioJobView(props.id)) }
+  catch (cause) { if (showFailure) error.value = errorMessage(cause) }
+}
+function startAudioTimers() {
+  if (!desktop || audioPollTimer) return
+  audioPollTimer = globalThis.setInterval(() => {
+    if (!globalThis.document.hidden) void refreshAudio()
+  }, 15_000)
+  clockTimer = globalThis.setInterval(() => { clock.value = Date.now() }, 30_000)
+}
+function stopAudioTimers() {
+  globalThis.clearInterval(audioPollTimer)
+  globalThis.clearInterval(clockTimer)
+  audioPollTimer = undefined
+  clockTimer = undefined
+}
+function refreshAudioOnFocus() { if (desktop) void refreshAudio() }
+function refreshAudioOnVisibility() { if (desktop && !globalThis.document.hidden) void refreshAudio() }
 const load = () => run(async () => {
-  const [project, models, saved, recovery, files] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing'), readDraft<PublishingContent>(props.id, 'writing'), listAssets(props.id)])
+  const [project, models, saved, recovery, files, savedAudio] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing'), readDraft<PublishingContent>(props.id, 'writing'), listAssets(props.id), audioApi.getAudioJobView(props.id)])
   title.value = project.title
+  sourceNotes.value = project.sourceNotes
   durationMinutes.value = project.targetDurationSeconds / 60
   savedDurationSeconds.value = project.targetDurationSeconds
   durationConfigured.value = !!project.audioDurationSource
-  audioAssets.value = files.filter(asset => asset.assetType === 'audio')
+  setAssets(files)
+  audioView.value = savedAudio
   providers.value = models.filter(p => p.isEnabled && p.modelKind === 'text')
   providerId.value = providers.value.find(p => p.isDefault)?.id ?? providers.value[0]?.id ?? ''
   versions.value = saved
@@ -103,13 +184,62 @@ async function persistWriting() {
   await autosave.flush()
 }
 const save = () => run(async () => { await persistWriting(); message.value = '修改已保存。' })
-const openAudioSite = () => run(async () => { await api.openAudioTool(); message.value = '已在浏览器打开 Gemini Notebook。下载音频后回到这里导入。' })
+function audioStatusLabel(job: AudioJob) { return audioStatusLabels[job.status] }
+function audioStageLabel(job: AudioJob) { return audioStageLabels[job.stage] ?? job.stage }
+function audioElapsed(job: AudioJob) {
+  const started = Date.parse(job.submittedAt ?? job.createdAt)
+  if (!Number.isFinite(started)) return '等待时间未知'
+  const seconds = Math.max(0, Math.floor((clock.value - started) / 1000))
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`
+}
+function audioCheckedAt(job: AudioJob) { return job.lastCheckedAt ? new Date(job.lastCheckedAt).toLocaleString() : '尚未检查' }
+function isLiveAudio(job: AudioJob) { return liveAudioStatuses.has(job.status) }
+function needsDownloadRetry(job: AudioJob) { return job.status === 'waiting_user' && !!job.errorCode?.includes('download') }
+const installAudioExtension = () => run(async () => {
+  await audioApi.openAudioExtensionSetup()
+  message.value = '已打开 Chrome 扩展页和扩展目录。启用扩展后回到这里，状态会自动刷新。'
+})
+const addSourceDocument = () => run(async () => {
+  const path = await chooseSourceDocument()
+  if (!path) return
+  const id = await linkAsset(props.id, path)
+  await refreshAudioAssets()
+  const linked = documents.value.find(item => item.id === id)
+  if (!linked) throw new Error('所选文件不是支持的书籍资料。')
+  audioSourceKey.value = `asset:${linked.id}`
+  message.value = '原书文件已加入本书来源，启动自动任务时会核验文件指纹。'
+})
+const startAudio = () => run(async () => {
+  if (!audioBridge.value?.connected) throw new Error('请先安装并启用 Chrome 扩展。')
+  if (!audioSourceReady.value) throw new Error('请选择可用的原书文件或书籍资料文本。')
+  if (!durationValid.value) throw new Error('音频目标时长须为 1—1440 分钟的整数。')
+  await persistDuration()
+  if (dirty.value || !selected.value) await persistWriting()
+  if (!selected.value) throw new Error('请先保存一套音频提示词。')
+  const source = audioSourceKey.value === 'text'
+    ? { kind: 'text' as const }
+    : { kind: 'asset' as const, assetId: selectedDocument.value!.id }
+  applyAudioView(await audioApi.startAudioJob({ projectId: props.id, writingVersionId: selected.value.id, source, format: audioFormat.value }))
+  message.value = '自动音频任务已启动。请按提示完成 Google 登录，后续生成和下载会持续跟进。'
+})
+const controlAudio = (job: AudioJob, action: AudioJobAction) => {
+  if (action === 'cancel' && !globalThis.confirm('停止后将不再自动跟进。停止跟进不等于取消 Google 生成，确定继续？')) return
+  return run(async () => {
+    applyAudioView(await audioApi.controlAudioJob(job.id, action))
+    message.value = action === 'open_browser' ? '已在 Chrome 中显示任务浏览器。'
+      : action === 'pause' ? '已暂停本地跟进，Google 中的生成状态不受影响。'
+        : action === 'resume' ? '已继续跟进当前任务。'
+          : '已停止本地跟进。Google 中已提交的生成可能仍在继续。'
+  })
+}
 const importAudio = () => run(async () => {
   const path = await chooseAudio()
   if (!path) return
   await linkAsset(props.id, path)
-  const files = await listAssets(props.id)
-  audioAssets.value = files.filter(asset => asset.assetType === 'audio')
+  await refreshAudioAssets()
   message.value = '音频已导入。请到剪映生成字幕、添加视频背景并导出最终成片。'
 })
 const playAudio = (id: string) => run(() => openAsset(id))
@@ -195,7 +325,7 @@ async function copy(field: PublishingTextField, label: string) {
 const fields: { key: PublishingTextField; label: string; rows: number; limit: number; help?: string }[] = [
   { key: 'title', label: '发布标题', rows: 2, limit: 30 },
   { key: 'description', label: '发布内容', rows: 7, limit: 1000 },
-  { key: 'audioPrompt', label: '音频生成提示词', rows: 18, limit: 20000, help: '复制到音频工具的自定义提示词中，并在该工具中选择对应书籍来源。生成音频后导入下方音频素材，再交给剪映制作。' },
+  { key: 'audioPrompt', label: '音频生成提示词', rows: 18, limit: 20000, help: '自动任务会把这里已保存的完整指导写入 Gemini Notebook；也可手动复制到网站。网站格式和时间档位不保证精确分钟或单人效果。' },
   { key: 'coverTitle', label: '封面主标题', rows: 2, limit: 30, help: '提炼本书的悬念或看点，与发布标题分开使用。旧版本没有封面内容，可再次一键生成，也可手动填写。' },
   { key: 'coverSubtitle', label: '封面副标题', rows: 2, limit: 60, help: '用书名和具体看点补充主标题，可直接带入制作封面。' },
   { key: 'coverPromptLandscape', label: '横版 4:3 封面提示词', rows: 7, limit: 2000, help: '用于 1440 × 1080 横版构图，复制到图片工具并选择 4:3。只生成无字背景，主副标题在制作封面时添加。' },
@@ -211,7 +341,18 @@ function saveShortcut(event: globalThis.KeyboardEvent) {
   }
 }
 onMounted(() => globalThis.addEventListener('keydown', saveShortcut))
+onMounted(() => {
+  if (!desktop) return
+  globalThis.addEventListener('focus', refreshAudioOnFocus)
+  globalThis.document.addEventListener('visibilitychange', refreshAudioOnVisibility)
+  startAudioTimers()
+})
 onBeforeUnmount(() => globalThis.removeEventListener('keydown', saveShortcut))
+onBeforeUnmount(() => {
+  stopAudioTimers()
+  globalThis.removeEventListener('focus', refreshAudioOnFocus)
+  globalThis.document.removeEventListener('visibilitychange', refreshAudioOnVisibility)
+})
 onMounted(async () => {
   if (!desktop) return
   await load()
@@ -575,7 +716,7 @@ onMounted(async () => {
           :value="tab.value"
         >
           <p class="tab-intro">
-            {{ tab.value === 'publishing' ? '一份有吸引力的标题，一段让人想点开的介绍。' : tab.value === 'audio' ? '生成音频后导入项目，再交给剪映生成字幕、添加背景并导出最终成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
+            {{ tab.value === 'publishing' ? '一份有吸引力的标题，一段让人想点开的介绍。' : tab.value === 'audio' ? '自动生成或手动导入音频，再交给剪映生成字幕、添加背景并导出最终成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
           </p>
           <section
             v-if="tab.value === 'cover' && draft.coverDesign"
@@ -632,6 +773,253 @@ onMounted(async () => {
           <section
             v-if="tab.value === 'audio'"
             class="panel editor-section"
+            aria-labelledby="audio-automation-title"
+          >
+            <div class="result-heading">
+              <h2 id="audio-automation-title">
+                自动生成音频
+              </h2>
+              <Badge variant="secondary">
+                Gemini Notebook
+              </Badge>
+            </div>
+            <p class="muted">
+              在独立 Chrome 窗口完成 Google 登录后，书引 AI 会创建本次专属笔记本文库、添加所选来源、填写已保存指导、生成并下载音频。请保持应用和 Chrome 运行。
+            </p>
+            <div
+              v-if="audioBridge && !audioBridge.supported"
+              class="error"
+              role="alert"
+            >
+              <AppIcon name="info" />{{ audioBridge.message || '当前平台暂不支持自动音频，请使用手动导入。' }}
+            </div>
+            <template v-else-if="!audioBridge?.connected">
+              <div class="notice">
+                <strong>Chrome 扩展尚未连接。</strong>
+                {{ audioBridge?.message || '请安装并启用书引 AI 音频扩展，再打开 Gemini Notebook。' }}
+                <span v-if="audioBridge?.lastSeenSecondsAgo != null"> 上次连接：{{ audioBridge.lastSeenSecondsAgo }} 秒前。</span>
+              </div>
+              <div class="actions wrap">
+                <Button
+                  type="button"
+                  :disabled="!desktop || busy"
+                  @click="installAudioExtension"
+                >
+                  <AppIcon name="folder" />安装 / 检查 Chrome 扩展
+                </Button>
+              </div>
+            </template>
+            <template v-else>
+              <div class="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label for="audio-source">本次原书来源</label>
+                  <Select
+                    v-model="audioSourceKey"
+                    :disabled="busy || !!activeAudioJob"
+                  >
+                    <SelectTrigger
+                      id="audio-source"
+                      class="w-full"
+                    >
+                      <SelectValue placeholder="选择原书文件或资料文本" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="document in documents"
+                        :key="document.id"
+                        :value="`asset:${document.id}`"
+                        :disabled="document.existsStatus !== 'available'"
+                      >
+                        {{ document.originalName }} · {{ document.existsStatus === 'available' ? '文件可用' : '文件已丢失' }}
+                      </SelectItem>
+                      <SelectItem
+                        value="text"
+                        :disabled="!sourceNotes.trim()"
+                      >
+                        书籍资料文本（用户提供，不标为完整原著）
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p
+                    v-if="selectedDocument"
+                    class="muted file-path"
+                  >
+                    {{ selectedDocument.filePath }}
+                  </p>
+                  <p
+                    v-else-if="audioSourceKey === 'text' && sourceNotes.trim()"
+                    class="muted"
+                  >
+                    将使用「修改书籍资料」中保存的资料文本，不会标记为完整原著。
+                  </p>
+                  <p
+                    v-else
+                    class="muted"
+                  >
+                    还没有可选来源。请添加原书文件，或先在书籍资料中填写资料文本。
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    :disabled="busy || !!activeAudioJob"
+                    @click="addSourceDocument"
+                  >
+                    <AppIcon name="plus" />添加原书文件
+                  </Button>
+                </div>
+                <div>
+                  <label for="audio-format">Gemini Notebook 音频格式</label>
+                  <Select
+                    v-model="audioFormat"
+                    :disabled="busy || !!activeAudioJob"
+                  >
+                    <SelectTrigger
+                      id="audio-format"
+                      class="w-full"
+                    >
+                      <SelectValue placeholder="选择格式" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="deep_dive">
+                        深入探索
+                      </SelectItem>
+                      <SelectItem value="brief">
+                        简报
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p class="muted">
+                    「深入探索」通常是双主持人；「简报」较短。网站实际档位和提示词只影响创作要求，不保证精确分钟或单人效果。
+                  </p>
+                </div>
+              </div>
+              <div class="actions wrap">
+                <Button
+                  id="start-audio-job"
+                  type="button"
+                  :disabled="!canStartAudio"
+                  @click="startAudio"
+                >
+                  <AppIcon name="headphones" />开始生成音频
+                </Button>
+                <span class="muted">启动前会保存目标时长和当前提示词，再冻结来源与版本。</span>
+              </div>
+            </template>
+            <div
+              v-if="otherActiveAudioJob"
+              class="error"
+              role="alert"
+            >
+              当前已有《{{ otherActiveAudioJob.projectTitle }}》的音频任务。完成或停止该任务后才能开始本书任务。
+            </div>
+            <article
+              v-if="shownAudioJob"
+              class="asset-row"
+              aria-labelledby="audio-job-title"
+            >
+              <div class="result-heading">
+                <h3 id="audio-job-title">
+                  自动任务 · {{ shownAudioJob.projectTitle }}
+                </h3>
+                <Badge variant="secondary">
+                  {{ audioStatusLabel(shownAudioJob) }}
+                </Badge>
+              </div>
+              <p>{{ audioStageLabel(shownAudioJob) }}</p>
+              <p class="muted">
+                已等待 {{ audioElapsed(shownAudioJob) }} · 上次检查 {{ audioCheckedAt(shownAudioJob) }}
+              </p>
+              <p
+                v-if="shownAudioJob.status === 'waiting_login'"
+                class="notice"
+              >
+                请在独立 Chrome 窗口完成 Google 登录。完成后无需在网站手动点击生成，书引 AI 会继续跟进。
+              </p>
+              <p
+                v-if="shownAudioJob.errorMessage"
+                class="error"
+                role="alert"
+              >
+                {{ shownAudioJob.errorMessage }}
+              </p>
+              <p
+                v-if="shownAudioJob.status === 'waiting_user'"
+                class="notice"
+              >
+                {{ needsDownloadRetry(shownAudioJob) ? '音频已生成，但下载或归档未完成。继续后会只重试当前任务的下载和归档。' : '远端状态需要人工核对。确认原笔记本后继续跟进，不会自动重复点击生成。' }}
+              </p>
+              <p
+                v-if="shownAudioJob.status === 'succeeded'"
+                class="muted"
+              >
+                音频已保存到本书，可在下方音频列表打开。
+                <span v-if="shownAudioJob.outputSize"> 文件大小：{{ (shownAudioJob.outputSize / 1024 / 1024).toFixed(2) }} MB。</span>
+              </p>
+              <p
+                v-if="shownAudioJob.status === 'cancelled'"
+                class="muted"
+              >
+                已停止本地跟进。停止跟进不等于取消 Gemini Notebook 中已经提交的生成。
+              </p>
+              <div class="actions wrap">
+                <Button
+                  type="button"
+                  variant="outline"
+                  :disabled="busy"
+                  @click="controlAudio(shownAudioJob, 'open_browser')"
+                >
+                  <AppIcon name="headphones" />显示浏览器
+                </Button>
+                <Button
+                  v-if="isLiveAudio(shownAudioJob)"
+                  type="button"
+                  variant="outline"
+                  :disabled="busy"
+                  @click="controlAudio(shownAudioJob, 'pause')"
+                >
+                  暂停跟进
+                </Button>
+                <Button
+                  v-if="shownAudioJob.status === 'paused' || shownAudioJob.status === 'waiting_user'"
+                  type="button"
+                  :disabled="busy"
+                  @click="controlAudio(shownAudioJob, 'resume')"
+                >
+                  {{ needsDownloadRetry(shownAudioJob) ? '重试下载并归档' : '继续跟进' }}
+                </Button>
+                <Button
+                  v-if="shownAudioJob.status === 'failed'"
+                  type="button"
+                  variant="outline"
+                  :disabled="busy"
+                  @click="controlAudio(shownAudioJob, 'cancel')"
+                >
+                  停止跟进以允许新任务
+                </Button>
+                <Button
+                  v-else-if="shownAudioJob.status !== 'succeeded' && shownAudioJob.status !== 'cancelled'"
+                  type="button"
+                  variant="outline"
+                  :disabled="busy"
+                  @click="controlAudio(shownAudioJob, 'cancel')"
+                >
+                  停止跟进
+                </Button>
+                <Button
+                  v-if="shownAudioJob.status === 'succeeded' && shownAudioJob.assetId"
+                  type="button"
+                  variant="outline"
+                  :disabled="busy"
+                  @click="playAudio(shownAudioJob.assetId)"
+                >
+                  打开音频
+                </Button>
+              </div>
+            </article>
+          </section>
+          <section
+            v-if="tab.value === 'audio'"
+            class="panel editor-section"
             aria-labelledby="audio-assets-title"
           >
             <div class="result-heading">
@@ -643,17 +1031,9 @@ onMounted(async () => {
               </Badge>
             </div>
             <p class="muted">
-              外部生成并下载音频后导入这里；随后在剪映生成字幕、添加视频背景，导出最终成片，再到发布准备关联成片。
+              自动任务成功后，音频会出现在这里。也可继续手动导入外部生成的音频；随后在剪映生成字幕、添加视频背景，导出最终成片，再到发布准备关联成片。
             </p>
             <div class="actions wrap">
-              <Button
-                type="button"
-                :disabled="!desktop || busy"
-                variant="outline"
-                @click="openAudioSite"
-              >
-                <AppIcon name="headphones" />打开 Gemini Notebook
-              </Button>
               <Button
                 type="button"
                 :disabled="!desktop || busy"

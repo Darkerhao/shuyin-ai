@@ -1,3 +1,18 @@
 {
-  "bundle": { "targets": ["nsis"] }
+  "bundle": {
+    "targets": [
+      "nsis"
+    ],
+    "externalBin": [
+      "binaries/browser-bridge"
+    ],
+    "resources": {
+      "../browser-extension/": "browser-extension/"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
+    }
+  }
 }

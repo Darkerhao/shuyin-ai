@@ -8,14 +8,31 @@ import ModelsPage from '../src/modules/settings/ModelsPage.vue'
 import * as api from '../src/services/ai'
 import * as projects from '../src/services/projects'
 import * as drafts from '../src/services/drafts'
+import * as audio from '../src/services/audio'
 vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
 import { emptyProject, type Asset } from '../src/types/project'
 import { emptyProvider, emptyPublishing, type ModelProvider, type WritingVersion } from '../src/types/ai'
-vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), openAudioTool: vi.fn(), setAudioDuration: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
-vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn() }))
+import type { AudioJob, AudioJobStatus, AudioJobView } from '../src/types/audio'
+vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), setAudioDuration: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
+vi.mock('../src/services/audio', () => ({ getAudioJobView: vi.fn(), startAudioJob: vi.fn(), controlAudioJob: vi.fn(), openAudioExtensionSetup: vi.fn() }))
+vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn() }))
 const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模型', modelName: 'model', isDefault: true, credentialStatus: 'available' }
 const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'publishing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
 const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
+const bridge = { supported: true, connected: true, lastSeenSecondsAgo: 3, hostName: 'com.shuyin.desktop.audio', message: null }
+function makeAudioJob(status: AudioJobStatus, overrides: Partial<AudioJob> = {}): AudioJob {
+  return {
+    id: 'job-1', projectId: 'p1', projectTitle: '测试书', writingVersionId: 'v1', status, stage: 'generating', runId: 1,
+    errorCode: null, errorMessage: null, notebookUrl: 'https://notebook.google.com/notebook/one', remoteAudioRef: null,
+    outputSize: null, outputSha256: null, assetId: null, format: 'deep_dive', sourceLabel: '书籍资料文本',
+    targetDurationSeconds: 600, submittedAt: null, lastCheckedAt: '2026-10-27T10:05:00Z',
+    createdAt: '2026-10-27T10:00:00Z', updatedAt: '2026-10-27T10:05:00Z', ...overrides,
+  }
+}
+function audioView(job: AudioJob | null = null): AudioJobView {
+  const activeJob = job && !['succeeded', 'cancelled'].includes(job.status) ? job : null
+  return { job, activeJob, bridge }
+}
 const wrappers: ReturnType<typeof mount>[] = []
 async function render(path = '/projects/p1/writing') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
@@ -44,6 +61,11 @@ beforeEach(() => {
   vi.mocked(api.listVersions).mockImplementation(async (_id, kind) => kind === 'publishing' ? [initial] : [])
   vi.mocked(api.startGeneration).mockResolvedValue('t1')
   vi.mocked(projects.listAssets).mockResolvedValue([])
+  vi.mocked(projects.chooseSourceDocument).mockResolvedValue(null)
+  vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView())
+  vi.mocked(audio.startAudioJob).mockResolvedValue(audioView(makeAudioJob('created', { stage: 'awaiting_extension' })))
+  vi.mocked(audio.controlAudioJob).mockResolvedValue(audioView(makeAudioJob('paused')))
+  vi.mocked(audio.openAudioExtensionSetup).mockResolvedValue(undefined)
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
@@ -358,15 +380,13 @@ describe('publishing workflow', () => {
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('原有标题')
     await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects')
   })
-  it('opens the external audio tool and imports the finished audio without changing the prompt', async () => {
-    const audio: Asset = { id: 'audio-1', projectId: 'p1', assetType: 'audio', filePath: 'D:/本期音频.m4a', originalName: '本期音频.m4a', fileSize: 2048, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
+  it('imports finished audio manually without changing the prompt', async () => {
+    const audioAsset: Asset = { id: 'audio-1', projectId: 'p1', assetType: 'audio', filePath: 'D:/本期音频.m4a', originalName: '本期音频.m4a', fileSize: 2048, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
     vi.mocked(projects.chooseAudio).mockResolvedValue('D:/本期音频.m4a')
     vi.mocked(projects.linkAsset).mockResolvedValue('audio-1')
-    vi.mocked(projects.listAssets).mockResolvedValueOnce([]).mockResolvedValueOnce([audio])
+    vi.mocked(projects.listAssets).mockResolvedValueOnce([]).mockResolvedValueOnce([audioAsset])
     const { wrapper } = await render()
     await tab(wrapper, '音频制作').trigger('click')
-    await button(wrapper, '打开 Gemini Notebook').trigger('click'); await flushPromises()
-    expect(api.openAudioTool).toHaveBeenCalledOnce()
     await button(wrapper, '导入音频成品').trigger('click'); await flushPromises()
     expect(projects.linkAsset).toHaveBeenCalledWith('p1', 'D:/本期音频.m4a')
     expect(wrapper.text()).toContain('本期音频.m4a')
@@ -419,6 +439,159 @@ describe('publishing workflow', () => {
     vi.mocked(api.saveWriting).mockImplementation(async input => ({ ...initial, content: input.content }))
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.saveWriting).toHaveBeenCalledWith(expect.objectContaining({ content: { ...initial.content, description: '旧版本仍可编辑' } }))
+  })
+})
+
+describe('audio automation', () => {
+  const projectNotes = () => ({ ...emptyProject(), id: 'p1', title: '测试书', sourceNotes: '用户整理的原书资料', audioDurationSource: 'manual' as const, workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
+  const audioAsset: Asset = { id: 'audio-1', projectId: 'p1', assetType: 'audio', filePath: 'D:/本期音频.m4a', originalName: '本期音频.m4a', fileSize: 2048, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
+  const documentAsset: Asset = { id: 'doc-1', projectId: 'p1', assetType: 'document', filePath: 'D:/原书.pdf', originalName: '原书.pdf', fileSize: 4096, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
+
+  it('shows extension setup instead of the start form when the bridge is disconnected', async () => {
+    vi.mocked(audio.getAudioJobView).mockResolvedValue({
+      job: null,
+      activeJob: null,
+      bridge: { ...bridge, connected: false, message: '未检测到音频扩展。' },
+    })
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    expect(wrapper.text()).toContain('Chrome 扩展尚未连接')
+    expect(wrapper.find('#start-audio-job').exists()).toBe(false)
+    await button(wrapper, '安装 / 检查 Chrome 扩展').trigger('click'); await flushPromises()
+    expect(audio.openAudioExtensionSetup).toHaveBeenCalledOnce()
+  })
+
+  it('disables start when no original source is selected', async () => {
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    expect(wrapper.get('#start-audio-job').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('还没有可选来源')
+  })
+
+  it('does not start when saving the changed duration fails', async () => {
+    vi.mocked(projects.getProject).mockResolvedValue(projectNotes())
+    vi.mocked(api.setAudioDuration).mockRejectedValueOnce('时长保存失败')
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    await wrapper.get('#audio-duration').setValue('15')
+    await button(wrapper, '开始生成音频').trigger('click'); await flushPromises()
+    expect(audio.startAudioJob).not.toHaveBeenCalled()
+    expect(wrapper.get('[role="alert"]').text()).toContain('时长保存失败')
+  })
+
+  it('saves a dirty prompt and starts with the new version id', async () => {
+    vi.mocked(projects.getProject).mockResolvedValue(projectNotes())
+    vi.mocked(api.saveWriting).mockResolvedValue({ ...initial, id: 'v2', versionNo: 2 })
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    await wrapper.get('#result-audioPrompt').setValue('更新后的完整音频指导')
+    await button(wrapper, '开始生成音频').trigger('click'); await flushPromises()
+    expect(api.saveWriting).toHaveBeenCalledWith(expect.objectContaining({ basedOn: 'v1', content: expect.objectContaining({ audioPrompt: '更新后的完整音频指导' }) }))
+    expect(audio.startAudioJob).toHaveBeenCalledWith({
+      projectId: 'p1', writingVersionId: 'v2', source: { kind: 'text' }, format: 'deep_dive',
+    })
+  })
+
+  it('passes a document asset id and the selected format without leaking a path', async () => {
+    vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), id: 'p1', title: '测试书', audioDurationSource: 'manual', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
+    vi.mocked(projects.listAssets).mockResolvedValue([documentAsset])
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    await chooseSelect(wrapper, '#audio-format', '简报')
+    await button(wrapper, '开始生成音频').trigger('click'); await flushPromises()
+    expect(audio.startAudioJob).toHaveBeenCalledWith({
+      projectId: 'p1', writingVersionId: 'v1', source: { kind: 'asset', assetId: 'doc-1' }, format: 'brief',
+    })
+  })
+
+  it('adds a document through the existing asset registry and selects it', async () => {
+    vi.mocked(projects.chooseSourceDocument).mockResolvedValue('D:/原书.pdf')
+    vi.mocked(projects.linkAsset).mockResolvedValue('doc-1')
+    vi.mocked(projects.listAssets).mockResolvedValueOnce([]).mockResolvedValueOnce([documentAsset])
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    await button(wrapper, '添加原书文件').trigger('click'); await flushPromises()
+    expect(projects.linkAsset).toHaveBeenCalledWith('p1', 'D:/原书.pdf')
+    expect(wrapper.text()).toContain('原书.pdf')
+    expect(wrapper.get('#start-audio-job').attributes('disabled')).toBeUndefined()
+  })
+
+  it('shows login guidance and keeps a second start disabled for an active task', async () => {
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(makeAudioJob('waiting_login', { stage: 'login' })))
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    expect(wrapper.text()).toContain('等待 Google 登录')
+    expect(wrapper.text()).toContain('完成后无需在网站手动点击生成')
+    expect(wrapper.get('#start-audio-job').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '暂停跟进')).toBeDefined()
+    expect(button(wrapper, '停止跟进')).toBeDefined()
+  })
+
+  it('resumes a paused task through the backend control command', async () => {
+    const paused = makeAudioJob('paused', { stage: 'generating' })
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(paused))
+    vi.mocked(audio.controlAudioJob).mockResolvedValue(audioView(makeAudioJob('generating')))
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    await button(wrapper, '继续跟进').trigger('click'); await flushPromises()
+    expect(audio.controlAudioJob).toHaveBeenCalledWith('job-1', 'resume')
+  })
+
+  it('offers download-only retry for a generated but unarchived audio', async () => {
+    const waiting = makeAudioJob('waiting_user', { stage: 'downloading', errorCode: 'download_import_failed', errorMessage: '下载文件未能归档。' })
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(waiting))
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    expect(wrapper.text()).toContain('只重试当前任务的下载和归档')
+    await button(wrapper, '重试下载并归档').trigger('click'); await flushPromises()
+    expect(audio.controlAudioJob).toHaveBeenCalledWith('job-1', 'resume')
+  })
+
+  it('requires an explicit stop before a failed task can be replaced', async () => {
+    const failed = makeAudioJob('failed', { stage: 'error', errorMessage: 'Gemini Notebook 明确返回生成失败。' })
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(failed))
+    vi.mocked(audio.controlAudioJob).mockResolvedValue(audioView(makeAudioJob('cancelled')))
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    expect(wrapper.text()).toContain('Gemini Notebook 明确返回生成失败')
+    await button(wrapper, '停止跟进以允许新任务').trigger('click'); await flushPromises()
+    expect(audio.controlAudioJob).toHaveBeenCalledWith('job-1', 'cancel')
+  })
+
+  it('shows the archived audio and opens it from the completed task', async () => {
+    const succeeded = makeAudioJob('succeeded', { stage: 'completed', assetId: 'audio-1', outputSize: 2048 })
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(succeeded))
+    vi.mocked(projects.listAssets).mockResolvedValue([audioAsset])
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    expect(wrapper.text()).toContain('音频已保存')
+    const openButtons = wrapper.findAll('button').filter(item => item.text() === '打开音频')
+    await openButtons.at(-1)!.trigger('click'); await flushPromises()
+    expect(projects.openAsset).toHaveBeenCalledWith('audio-1')
+  })
+
+  it('blocks the current book while another book owns the active task', async () => {
+    const other = makeAudioJob('generating', { projectId: 'p2', projectTitle: '另一本书' })
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(other))
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    expect(wrapper.text()).toContain('当前已有《另一本书》的音频任务')
+    expect(wrapper.get('#start-audio-job').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '开始生成音频')).toBeDefined()
+  })
+
+  it('refreshes the asset list when focus discovers a completed task', async () => {
+    const generating = makeAudioJob('generating', { stage: 'generating' })
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(generating))
+    vi.mocked(projects.listAssets).mockResolvedValueOnce([]).mockResolvedValue([audioAsset])
+    const { wrapper } = await render()
+    await tab(wrapper, '音频制作').trigger('click')
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(makeAudioJob('succeeded', { stage: 'completed', assetId: 'audio-1', outputSize: 2048 })))
+    globalThis.dispatchEvent(new Event('focus'))
+    await flushPromises(); await flushPromises()
+    expect(vi.mocked(projects.listAssets).mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(wrapper.text()).toContain('本期音频.m4a')
   })
 })
 

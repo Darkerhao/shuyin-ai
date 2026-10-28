@@ -74,15 +74,44 @@ test('missing platform, empty artifact and unexpected files block publication', 
   assert.throws(() => verifyAssets(directory, '9.9.9', notes), /版本不一致/)
 })
 
-test('Windows ZIP contains the executable and runtime instructions', { skip: process.platform !== 'win32' }, t => {
+function addWindowsRuntime(directory, root) {
+  writeFileSync(join(root, 'browser-bridge.exe'), 'test native messaging helper')
+  const extension = join(directory, 'browser-extension')
+  mkdirSync(extension, { recursive: true })
+  writeFileSync(join(extension, 'manifest.json'), '{"manifest_version":3}')
+  writeFileSync(join(extension, 'background.js'), 'console.log("test service worker")')
+  writeFileSync(join(extension, 'content.js'), 'console.log("test content script")')
+}
+
+test('Windows ZIP contains the app, Native Messaging helper, extension and runtime instructions', { skip: process.platform !== 'win32' }, t => {
   const { directory, root, output } = buildFixture(t, [['nsis', '书引 AI_1.2.3_x64-setup.exe'], ['nsis', '书引 AI_1.2.3_x64-setup.exe.sig']])
   writeFileSync(join(root, 'shuyin-ai.exe'), 'test application binary')
+  addWindowsRuntime(directory, root)
   assert.deepEqual(collectAssets(directory, 'windows-x64', 'test-target', output), assetNames('1.2.3', 'windows-x64'))
   const archive = join(output, 'shuyin-ai-1.2.3-windows-x64.zip')
   assert.equal(readFileSync(archive).subarray(0, 2).toString(), 'PK')
   const contents = execFileSync(join(process.env.SystemRoot, 'System32/tar.exe'), ['-tf', archive], { encoding: 'utf8' })
   assert.match(contents, /shuyin-ai.exe/)
+  assert.match(contents, /browser-bridge.exe/)
+  assert.ok(contents.includes('browser-extension/manifest.json'))
+  assert.ok(contents.includes('browser-extension/background.js'))
+  assert.ok(contents.includes('browser-extension/content.js'))
   assert.match(contents, /README.txt/)
+})
+
+test('Windows release refuses an incomplete automatic-audio runtime', { skip: process.platform !== 'win32' }, t => {
+  const missingHelper = buildFixture(t, [['nsis', '书引 AI_1.2.3_x64-setup.exe'], ['nsis', '书引 AI_1.2.3_x64-setup.exe.sig']])
+  writeFileSync(join(missingHelper.root, 'shuyin-ai.exe'), 'test application binary')
+  const extension = join(missingHelper.directory, 'browser-extension')
+  mkdirSync(extension, { recursive: true })
+  writeFileSync(join(extension, 'manifest.json'), '{}')
+  writeFileSync(join(extension, 'background.js'), 'test')
+  assert.throws(() => collectAssets(missingHelper.directory, 'windows-x64', 'test-target', missingHelper.output), /缺少发布产物.*browser-bridge.exe/)
+
+  const missingExtension = buildFixture(t, [['nsis', '书引 AI_1.2.3_x64-setup.exe'], ['nsis', '书引 AI_1.2.3_x64-setup.exe.sig']])
+  writeFileSync(join(missingExtension.root, 'shuyin-ai.exe'), 'test application binary')
+  writeFileSync(join(missingExtension.root, 'browser-bridge.exe'), 'test helper')
+  assert.throws(() => collectAssets(missingExtension.directory, 'windows-x64', 'test-target', missingExtension.output), /缺少 Chrome 扩展目录/)
 })
 
 test('Linux TAR.GZ contains the AppImage instead of an unbundled binary', t => {

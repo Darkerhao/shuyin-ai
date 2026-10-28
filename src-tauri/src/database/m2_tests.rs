@@ -232,7 +232,11 @@ fn v12_duration_migration_preserves_old_data_and_rolls_back_conflicts() {
         assert_eq!(
             c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
                 .unwrap(),
-            if conflict { 11 } else { 12 }
+            if conflict {
+                11
+            } else {
+                MIGRATIONS.len() as u32
+            }
         );
         assert_eq!(
             c.query_row(

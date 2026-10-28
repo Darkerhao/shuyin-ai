@@ -1,3 +1,35 @@
+# NotebookLM 音频自动化规划（2026-10-27）
+
+## 恢复续验（2026-10-28）
+
+- 已核对计划、发现、进度、五份设计文档、音频代码与当前 Git 工作区；`session-catchup.py` 无未同步内容。`docs/DEVELOPMENT-PLAN.md` 引用的音频验收报告此前缺失，本轮补齐。
+- `npm test`：Vitest 178 项通过；release/打包脚本 58 项通过、1 项 macOS 专用跳过；queue 18 项通过、1 项失败。`a missing predecessor report reruns that task and its completed successors` 单独复跑仍失败；本轮未改动该测试或队列实现。
+- `npm run lint` 通过。`npm run build -- --outDir output/audio-build-continue`（含 TypeScript）及标准 `npm run build` 均通过；首次标准构建在沙箱中因清理 `dist/assets` 收到 EPERM，标准重跑成功。
+- `. ./.tools/env.ps1; npm run test:rust`：109 通过、1 项既有原生凭据测试忽略；`npm run check:rust` 的 fmt/Clippy 通过。首次受限运行被 `.cargo-build-lock` 访问拒绝，使用项目本机工具链重跑成功。
+- `cargo fmt --manifest-path src-tauri/browser-bridge/Cargo.toml --check`、helper Clippy 与测试通过，3 项 helper 测试通过。浏览器只读检查连接未能初始化，因此未打开网站；未使用 Google 账号、未上传资料、未触发真实生成或下载。
+- P0 尚待：用户指定试验书籍来源、确认使用一次音频生成额度，并准备已登录的专用 Chrome 环境与可用浏览器检查连接。数据库迁移仅由测试验证，未触碰正式库。无业务源码/数据库修改、无提交或发布。
+
+## 实施记录（2026-10-28）
+
+- 实测 `notebooklm.google.com` 重定向到 `notebook.google.com`，实现同步支持新入口与旧 Notebook 链接。
+- 前端完成自动任务面板、来源/格式选择、跨书互锁、15 秒状态刷新和手动导入保留；旧 `open_audio_tool` 删除。
+- Rust 完成 v13 迁移、冻结任务、状态机、命名管道、host 注册、下载校验与事务归档；备份恢复未完成任务置 `verify_remote`。
+- Chrome 扩展完成语义 DOM、标题回读、来源上传、音频配置、只读恢复、Audio Overview 限定与精确 downloadId 绑定；helper 完成无控制台 stdio/管道转发。
+- 修复联调中的三处协议问题：source_chunk 改为扁平响应；generation_complete 不依赖页面 URL；verify_remote 不再被 login_ready 短路且可识别已完成音频。
+- 修复跨 run 下载恢复，归档事务失败后可继续使用原 downloadId，不重新生成或下载。
+- 实际通过前端 178、Rust 109（1 忽略）、扩展 21、helper 3、发布/打包测试；lint、typecheck、build、fmt、Clippy 通过；debug NSIS 安装包已生成。真实 Google 账号与正式发布安装验收未执行。
+
+- 已检查工作区与实际依赖，阅读项目规范、现有规划和设计资料；本次采用 planning-with-files-zh，并参考 notebooklm 技能区分第三方工具和官方 API。
+- 正在核对提示词、来源上传、音频资产及长任务持久化边界；只交付规划文档，不安装库或触发外部生成。
+- 用户已确认接受独立浏览器窗口。已取得 Google OAuth、个人音频、企业音频 API 与 Chrome 扩展的官方文档证据，正在落成单一推荐路线与分阶段验收。
+- 一次 Cargo.lock 检索使用 PowerShell 双引号嵌套导致管道被误解析，改为单引号正则后重新核对；未执行任何修改操作。
+- 已新增完整计划并补开发计划入口：普通Chrome+扩展+Native Messaging；覆盖来源/提示词冻结、提交未知不重试、长等待与退出恢复、精确downloadId、项目归档及素材事务、兼容迁移和P0—P3验收。
+- 文档自查补齐Chrome非默认浏览器、取消释放任务、原书指纹、Play Books下载限制，以及“2小时只提醒、仍明确生成中就继续观察”的语义，保持用户长时间自动等待目标。
+- 实际执行 `PowerShell here-string | python -` 文档校验通过：27个现有源码/配置/文档路径存在、12节、10项官方来源无缺漏、3组代码围栏闭合、无行尾空白；开发计划引用存在，package版本0.19.0和12份实际迁移与计划一致。
+- 实际执行 `git diff --check` 通过；`git diff --numstat`、`git status --short`核对本轮仅五份文档。最终状态中原有封面改动已不再显示为未提交；本轮未对这些文件做恢复或代码修改，保留当前工作区状态。
+- 交付覆盖规划需求，功能验收尚未开始。未运行lint、单元测试、构建、扩展安装、Google登录、上传、音频生成下载或数据库迁移；下一步先做P0真实能力验证，无提交或发布。
+- 大批量文档读取出现输出截断，改为按文件和相关行分段读取。初次网页查询未返回可见内容，缩小检索后取得 Google 官方政策证据。
+
 # 创作体验与数据恢复续作（2026-10-25）
 
 - 当前 HEAD a9af075，工作区干净；按项调整已有源码与验收记录，不重复实现。
