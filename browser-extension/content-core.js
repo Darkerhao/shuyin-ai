@@ -373,16 +373,15 @@
     let offset = 0
     let totalSize = null
     let name = sourceName(job)
-    let expectedHash = job.source?.sha256 ?? ''
+    const expectedHash = job.source?.sha256 ?? ''
     for (let count = 0; count < 4096; count += 1) {
       const response = await context.sourceChunk({ jobId: job.id, runId: job.runId, offset })
-      if (!response?.ok) throw new UiError('source_transfer_failed', response?.error ?? '原书文件分块读取失败。')
+      if (!response?.ok) throw new UiError('source_transfer_failed', response?.error?.message ?? response?.error ?? '原书文件分块读取失败。')
       if (!Number.isInteger(response.totalSize) || response.totalSize <= 0) throw new UiError('source_invalid', '原书文件大小无效。')
       if (response.totalSize > MAX_SOURCE_BYTES) throw new UiError('source_too_large', '原书文件超过 256 MB，当前自动上传不支持。')
-      if (totalSize !== null && response.totalSize !== totalSize) throw new UiError('source_changed', '原书文件在传输过程中发生变化，已停止上传。')
+      if (response.totalSize !== job.source.size || response.sha256 !== expectedHash) throw new UiError('source_changed', '原书文件与任务快照不一致，已停止上传，请重新选择。')
       totalSize = response.totalSize
       name = response.name || name
-      expectedHash = response.sha256 || expectedHash
       const bytes = decodeBase64(response.data)
       if (!bytes.length && response.nextOffset < totalSize) throw new UiError('source_transfer_failed', '原书文件返回了空分块。')
       chunks.push(bytes)
@@ -398,6 +397,9 @@
       written += chunk.length
     }
     if (written !== totalSize) throw new UiError('source_transfer_failed', '原书文件分块长度不一致，已停止上传。')
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', combined)
+    const actualHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+    if (actualHash !== expectedHash) throw new UiError('source_changed', '原书文件在传输过程中发生变化，已停止上传，请重新选择。')
     return { file: new globalThis.File([combined], name, { type: mimeForName(name) }), name, totalSize, sha256: expectedHash }
   }
 

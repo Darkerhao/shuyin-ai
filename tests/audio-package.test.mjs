@@ -68,7 +68,8 @@ test('extension key, fixed ID and native host names stay aligned', () => {
 
 test('uninstall hook preserves updates and removes only this product host registration', () => {
   const hook = readFileSync(join(project, 'src-tauri/windows/installer-hooks.nsh'), 'utf8')
-  assert.match(hook, /!macro NSIS_HOOK_PREUNINSTALL/)
+  assert.match(hook, /!macro NSIS_HOOK_POSTUNINSTALL/)
+  assert.doesNotMatch(hook, /!macro NSIS_HOOK_PREUNINSTALL/)
   assert.match(hook, /\$UpdateMode <> 1/)
   for (const host of windowsHosts) assert.ok(hook.includes(`NativeMessagingHosts\\${host}`))
   assert.doesNotMatch(hook, /DeleteRegKey HKCU "Software\\Google\\Chrome\\NativeMessagingHosts"\s*$/m)

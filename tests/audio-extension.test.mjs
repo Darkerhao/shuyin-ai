@@ -1,6 +1,6 @@
 /* global URL, Buffer */
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import { createHash, webcrypto } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -17,6 +17,7 @@ const identity = JSON.parse(readFileSync(join(extension, 'identity.json'), 'utf8
 
 function page(html, url = 'https://notebook.google.com/notebook/notebook-1') {
   const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true })
+  Object.defineProperty(dom.window.crypto, 'subtle', { value: webcrypto.subtle })
   dom.window.eval(contentSource)
   return { dom, window: dom.window, document: dom.window.document, core: dom.window.ShuyinAudioContentCore }
 }
@@ -246,11 +247,12 @@ test('reads a source in bounded chunks without dropping bytes', async () => {
   for (let index = 0; index < totalSize; index += 1) original[index] = index % 251
   const { core, window } = page('')
   const offsets = []
-  const source = await core.readSourceFile(textJob({ source: { kind: 'asset', name: 'book.pdf', size: totalSize, sha256: 'a'.repeat(64) } }), {
+  const sha256 = createHash('sha256').update(original).digest('hex')
+  const source = await core.readSourceFile(textJob({ source: { kind: 'asset', name: 'book.pdf', size: totalSize, sha256 } }), {
     sourceChunk: async ({ offset }) => {
       offsets.push(offset)
       const end = Math.min(offset + 256 * 1024, totalSize)
-      return { ok: true, data: original.subarray(offset, end).toString('base64'), nextOffset: end, totalSize, name: 'book.pdf', sha256: 'a'.repeat(64) }
+      return { ok: true, data: original.subarray(offset, end).toString('base64'), nextOffset: end, totalSize, name: 'book.pdf', sha256 }
     },
   })
   assert.deepEqual(offsets, [0, 262144, 524288])
@@ -264,6 +266,45 @@ test('reads a source in bounded chunks without dropping bytes', async () => {
   })
   assert.equal(bytes.length, totalSize)
   assert.equal(bytes.equals(original), true)
+  assert.equal(source.sha256, sha256)
+})
+
+test('rejects same-size source changes between chunks even if the source is restored before the last chunk', async () => {
+  const original = Buffer.alloc(600_123, 97)
+  const sha256 = createHash('sha256').update(original).digest('hex')
+  const { core, document } = page('<section role="dialog"><button>Upload files</button><input type="file"></section>')
+  const input = document.querySelector('input')
+  let uploads = 0
+  for (const event of ['input', 'change']) input.addEventListener(event, () => { uploads += 1 })
+  await assert.rejects(() => core.runStep(textJob({ source: { kind: 'asset', name: 'book.pdf', size: original.length, sha256 } }), {
+    sourceChunk: async ({ offset }) => {
+      const end = Math.min(offset + 256 * 1024, original.length)
+      const chunk = Buffer.from(original.subarray(offset, end))
+      if (offset === 256 * 1024) chunk.fill(98)
+      return { ok: true, data: chunk.toString('base64'), nextOffset: end, totalSize: original.length, name: 'book.pdf', sha256 }
+    },
+  }), error => error.code === 'source_changed')
+  assert.equal(uploads, 0)
+  assert.equal(input.files.length, 0)
+})
+
+test('source transfer preserves the native snapshot mismatch message for user action', async () => {
+  const { core } = page('')
+  const message = '原书文件 SHA-256 与任务快照不一致，请重新选择。'
+  await assert.rejects(() => core.readSourceFile(textJob({ source: { kind: 'asset', name: 'book.pdf', size: 8, sha256: 'a'.repeat(64) } }), {
+    sourceChunk: async () => ({ ok: false, error: { code: 'source_chunk', message } }),
+  }), error => error.code === 'source_transfer_failed' && error.message === message)
+})
+
+test('rejects chunk metadata that replaces the frozen source digest or size', async () => {
+  const original = Buffer.from('original')
+  const sha256 = createHash('sha256').update(original).digest('hex')
+  const { core } = page('')
+  for (const changes of [{ sha256: 'b'.repeat(64) }, { totalSize: original.length + 1 }]) {
+    await assert.rejects(() => core.readSourceFile(textJob({ source: { kind: 'asset', name: 'book.pdf', size: original.length, sha256 } }), {
+      sourceChunk: async () => ({ ok: true, data: original.toString('base64'), nextOffset: original.length, totalSize: original.length, name: 'book.pdf', sha256, ...changes }),
+    }), error => error.code === 'source_changed')
+  }
 })
 
 test('refuses a different notebook when the task already recorded its notebook URL', async () => {

@@ -1,23 +1,27 @@
-use crate::database::{
-    audio::{AudioJob, BridgeObservation},
-    Database,
-};
+#[cfg(target_os = "windows")]
+use crate::database::audio::BridgeObservation;
+use crate::database::{audio::AudioJob, Database};
+#[cfg(target_os = "windows")]
 use base64::{engine::general_purpose::STANDARD, Engine};
-use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
+use serde::Deserialize;
+use serde::Serialize;
 #[cfg(target_os = "windows")]
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
-    collections::HashSet,
     path::{Path, PathBuf},
     sync::Mutex,
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
+#[cfg(target_os = "windows")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[cfg(target_os = "windows")]
 const EXTENSION_ID: &str = "nplahghodghepogenmdekjafojiljohf";
 const NOTEBOOK_HOME: &str = "https://notebook.google.com/";
 const CONNECTED_FOR: Duration = Duration::from_secs(5 * 60);
+#[cfg(target_os = "windows")]
 const MAX_BRIDGE_MESSAGE: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
@@ -44,7 +48,6 @@ pub struct AudioAutomation {
     pipe_name: String,
     last_seen: Mutex<Option<Instant>>,
     message: Mutex<Option<String>>,
-    verified_sources: Mutex<HashSet<(String, i64)>>,
     chrome_path: Option<PathBuf>,
     extension_dir: Option<PathBuf>,
     instance: Option<InstanceGuard>,
@@ -65,7 +68,6 @@ impl AudioAutomation {
                 pipe_name: String::new(),
                 last_seen: Mutex::new(None),
                 message: Mutex::new(Some("自动音频目前仅支持 Windows + Chrome。".into())),
-                verified_sources: Mutex::new(HashSet::new()),
                 chrome_path: None,
                 extension_dir: None,
                 instance: None,
@@ -94,6 +96,7 @@ impl AudioAutomation {
         }
     }
 
+    #[cfg(target_os = "windows")]
     fn touch(&self) {
         if let Ok(mut last_seen) = self.last_seen.lock() {
             *last_seen = Some(Instant::now());
@@ -138,19 +141,6 @@ impl AudioAutomation {
         Ok(())
     }
 
-    pub fn source_verified(&self, job_id: &str, run_id: i64) -> bool {
-        self.verified_sources
-            .lock()
-            .ok()
-            .is_some_and(|verified| verified.contains(&(job_id.to_owned(), run_id)))
-    }
-
-    pub fn mark_source_verified(&self, job_id: &str, run_id: i64) {
-        if let Ok(mut verified) = self.verified_sources.lock() {
-            verified.insert((job_id.to_owned(), run_id));
-        }
-    }
-
     pub fn open_notebook(&self, job_id: Option<&str>, database: &Database) -> Result<(), String> {
         let url = match job_id {
             Some(id) => database
@@ -191,7 +181,6 @@ impl AudioAutomation {
                     pipe_name: String::new(),
                     last_seen: Mutex::new(None),
                     message: Mutex::new(Some("另一实例正在管理音频任务。".into())),
-                    verified_sources: Mutex::new(HashSet::new()),
                     chrome_path,
                     extension_dir,
                     instance: None,
@@ -204,7 +193,6 @@ impl AudioAutomation {
                     pipe_name: String::new(),
                     last_seen: Mutex::new(None),
                     message: Mutex::new(Some(format!("音频桥接初始化失败：{error}"))),
-                    verified_sources: Mutex::new(HashSet::new()),
                     chrome_path,
                     extension_dir,
                     instance: None,
@@ -247,7 +235,6 @@ impl AudioAutomation {
             pipe_name: pipe,
             last_seen: Mutex::new(None),
             message: Mutex::new(message),
-            verified_sources: Mutex::new(HashSet::new()),
             chrome_path,
             extension_dir,
             instance: Some(instance),
@@ -271,11 +258,7 @@ fn pipe_name() -> String {
         .as_nanos();
     format!(r"\\.\pipe\shuyin-audio-{}-{stamp}", std::process::id())
 }
-#[cfg(not(target_os = "windows"))]
-fn pipe_name() -> String {
-    String::new()
-}
-
+#[cfg(target_os = "windows")]
 #[derive(Debug, Deserialize)]
 #[serde(
     tag = "action",
@@ -319,6 +302,7 @@ enum BridgeRequest {
     },
 }
 
+#[cfg(target_os = "windows")]
 impl BridgeRequest {
     fn request_id(&self) -> Option<String> {
         match self {
@@ -332,6 +316,7 @@ impl BridgeRequest {
     }
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BridgeFailure {
@@ -339,6 +324,7 @@ struct BridgeFailure {
     message: String,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SourceChunkPayload {
@@ -349,6 +335,7 @@ struct SourceChunkPayload {
     sha256: String,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BridgeResponse {
@@ -362,6 +349,7 @@ struct BridgeResponse {
     error: Option<BridgeFailure>,
 }
 
+#[cfg(target_os = "windows")]
 impl BridgeResponse {
     fn failure(request_id: Option<String>, code: &str, message: impl Into<String>) -> Self {
         Self {
@@ -377,6 +365,7 @@ impl BridgeResponse {
     }
 }
 
+#[cfg(target_os = "windows")]
 async fn read_frame<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut R,
 ) -> Result<Option<Vec<u8>>, String> {
@@ -398,6 +387,7 @@ async fn read_frame<R: tokio::io::AsyncRead + Unpin>(
     Ok(Some(payload))
 }
 
+#[cfg(target_os = "windows")]
 async fn write_frame<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
     payload: &[u8],
@@ -416,6 +406,7 @@ async fn write_frame<W: tokio::io::AsyncWrite + Unpin>(
     writer.flush().await.map_err(|error| error.to_string())
 }
 
+#[cfg(target_os = "windows")]
 async fn process_request(app: &AppHandle, request: BridgeRequest) -> BridgeResponse {
     let request_id = request.request_id();
     let Some(state) = app.try_state::<AudioAutomation>() else {
@@ -439,30 +430,22 @@ async fn process_request(app: &AppHandle, request: BridgeRequest) -> BridgeRespo
             run_id,
             offset,
             ..
-        } => {
-            let verify = !state.source_verified(&job_id, run_id);
-            match database.audio_source_chunk(&job_id, run_id, offset, verify) {
-                Ok(chunk) => {
-                    if verify {
-                        state.mark_source_verified(&job_id, run_id);
-                    }
-                    BridgeResponse {
-                        ok: true,
-                        request_id,
-                        job: None,
-                        source_chunk: Some(SourceChunkPayload {
-                            data: STANDARD.encode(chunk.bytes),
-                            next_offset: chunk.next_offset,
-                            total_size: chunk.total_size,
-                            name: chunk.name,
-                            sha256: chunk.sha256,
-                        }),
-                        error: None,
-                    }
-                }
-                Err(error) => BridgeResponse::failure(request_id, "source_chunk", error),
-            }
-        }
+        } => match database.audio_source_chunk(&job_id, run_id, offset) {
+            Ok(chunk) => BridgeResponse {
+                ok: true,
+                request_id,
+                job: None,
+                source_chunk: Some(SourceChunkPayload {
+                    data: STANDARD.encode(chunk.bytes),
+                    next_offset: chunk.next_offset,
+                    total_size: chunk.total_size,
+                    name: chunk.name,
+                    sha256: chunk.sha256,
+                }),
+                error: None,
+            },
+            Err(error) => BridgeResponse::failure(request_id, "source_chunk", error),
+        },
         BridgeRequest::Observe {
             job_id,
             run_id,
@@ -775,7 +758,7 @@ fn open_folder(_path: &Path) -> Result<(), String> {
     Err("自动音频目前仅支持 Windows + Chrome。".into())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
 

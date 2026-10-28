@@ -250,20 +250,27 @@ fn source_chunk_verifies_size_and_hash_and_rejects_cross_book_assets() {
             format: "brief".into(),
         })
         .unwrap();
-    let first = database
-        .audio_source_chunk(&job.id, job.run_id, 0, true)
-        .unwrap();
+    let first = database.audio_source_chunk(&job.id, job.run_id, 0).unwrap();
     assert_eq!(first.bytes.len(), 256 * 1024);
     assert_eq!(first.name, "原书.docx");
     assert_eq!(first.total_size, 600_000);
     let second = database
-        .audio_source_chunk(&job.id, job.run_id, first.next_offset, false)
+        .audio_source_chunk(&job.id, job.run_id, first.next_offset)
         .unwrap();
     assert_eq!(second.bytes.len(), 256 * 1024);
+    let last = database
+        .audio_source_chunk(&job.id, job.run_id, second.next_offset)
+        .unwrap();
+    let transferred = [first.bytes, second.bytes, last.bytes].concat();
+    assert_eq!(transferred, bytes);
+    assert_eq!(last.next_offset, last.total_size);
+    assert_eq!(last.sha256, hash_file(&source).unwrap().1);
     fs::write(&source, vec![b'b'; 600_000]).unwrap();
-    assert!(database
-        .audio_source_chunk(&job.id, job.run_id, 0, true)
-        .is_err());
+    let error = database
+        .audio_source_chunk(&job.id, job.run_id, second.next_offset)
+        .expect_err("同大小修改必须在传输完成前拒绝");
+    assert!(error.contains("SHA-256"), "{error}");
+    assert!(database.audio_source_chunk(&job.id, job.run_id, 0).is_err());
 }
 
 #[test]
