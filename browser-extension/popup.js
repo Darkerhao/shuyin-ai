@@ -18,6 +18,9 @@
 
   async function run(check) {
     refresh.disabled = true
+    refresh.textContent = '检查中…'
+    connection.textContent = '检查中'
+    message.textContent = '正在检查本机桥接连接，请稍候。'
     try {
       const status = await chrome.runtime.sendMessage({ type: check ? 'RUN_NOW' : 'GET_STATUS' })
       render(status)
@@ -25,6 +28,7 @@
       render({ connected: false, message: error?.message || '无法连接书引 AI。' })
     } finally {
       refresh.disabled = false
+      refresh.textContent = '立即检查'
     }
   }
 

@@ -10,6 +10,8 @@ mod douyin;
 mod douyin_webview;
 mod media;
 mod note_import;
+#[cfg(target_os = "windows")]
+mod paths;
 mod publish_commands;
 mod updates;
 

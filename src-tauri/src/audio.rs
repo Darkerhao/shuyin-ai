@@ -697,18 +697,23 @@ fn write_registry(host_name: &str, manifest: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
+fn host_manifest(helper: &Path, host_name: &str) -> serde_json::Value {
+    let helper = std::fs::canonicalize(helper).unwrap_or_else(|_| helper.to_path_buf());
+    serde_json::json!({
+        "name": host_name,
+        "description": "Book Voice AI audio automation bridge",
+        "path": crate::paths::shell_path(&helper),
+        "type": "stdio",
+        "allowed_origins": [format!("chrome-extension://{EXTENSION_ID}/")]
+    })
+}
+
+#[cfg(target_os = "windows")]
 fn register_host(manifest: &Path, helper: &Path, host_name: &str) -> Result<(), String> {
     if let Some(parent) = manifest.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let helper = std::fs::canonicalize(helper).unwrap_or_else(|_| helper.to_path_buf());
-    let body = serde_json::json!({
-        "name": host_name,
-        "description": "Book Voice AI audio automation bridge",
-        "path": helper,
-        "type": "stdio",
-        "allowed_origins": [format!("chrome-extension://{EXTENSION_ID}/")]
-    });
+    let body = host_manifest(helper, host_name);
     let bytes = serde_json::to_vec_pretty(&body).map_err(|error| error.to_string())?;
     let temporary = manifest.with_extension("json.tmp");
     std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
@@ -761,6 +766,22 @@ fn open_folder(_path: &Path) -> Result<(), String> {
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_manifest_uses_a_shell_compatible_executable_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let helper = directory.path().join("书引 AI bridge.exe");
+        std::fs::write(&helper, b"fixture").unwrap();
+        let manifest = host_manifest(&helper, "com.shuyin.desktop.audio");
+        let registered = manifest["path"].as_str().unwrap();
+        assert!(!registered.starts_with(r"\\?\"), "{registered}");
+        assert!(Path::new(registered).is_absolute());
+        assert_eq!(std::fs::read(registered).unwrap(), b"fixture");
+        assert_eq!(
+            manifest["allowed_origins"][0],
+            format!("chrome-extension://{EXTENSION_ID}/")
+        );
+    }
 
     #[test]
     fn source_chunk_response_is_flat_for_the_extension() {
