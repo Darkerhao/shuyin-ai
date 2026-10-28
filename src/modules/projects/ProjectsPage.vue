@@ -2,6 +2,7 @@
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { useQueryState } from '../../composables/useQueryState'
 import { isDesktop, listProjects } from '../../services/projects'
 import { projectStatuses, type Project } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
@@ -14,19 +15,10 @@ const desktop = isDesktop()
 const projects = ref<Project[]>([])
 const route = useRoute()
 const router = useRouter()
-function queryOption(key: string, fallback: string, options?: string[]) {
-  return computed({
-    get: () => {
-      const value = route.query[key]
-      return typeof value === 'string' && (!options || options.includes(value)) ? value : fallback
-    },
-    set: (value: string) => { void router.replace({ query: { ...route.query, [key]: value === fallback ? undefined : value } }) },
-  })
-}
-const search = queryOption('q', '')
-const filter = queryOption('status', 'all', ['all', 'active', 'published'])
-const sort = queryOption('sort', 'updated', ['updated', 'title'])
-const view = queryOption('view', 'grid', ['grid', 'list'])
+const search = useQueryState('q', '')
+const filter = useQueryState('status', 'all', ['all', 'active', 'published'])
+const sort = useQueryState('sort', 'updated', ['updated', 'title'])
+const view = useQueryState('view', 'grid', ['grid', 'list'])
 const loaded = ref(false)
 const { busy, error, run } = useOperation()
 const load = () => run(async () => { projects.value = await listProjects(); loaded.value = true })
@@ -41,7 +33,7 @@ const filters = computed(() => [
   { value: 'all', label: '全部书籍', count: projects.value.length },
   { value: 'active', label: '创作中', count: projects.value.filter(p => p.status !== 'published' && p.status !== 'archived').length },
   { value: 'published', label: '已发布', count: projects.value.filter(p => p.status === 'published').length },
-])
+] as const)
 const recent = computed(() => projects.value.filter(p => p.status !== 'published' && p.status !== 'archived').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0])
 function clearFilters() { void router.replace({ query: { ...route.query, q: undefined, status: undefined } }) }
 function coverTone(id: string) { return [...id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4 }

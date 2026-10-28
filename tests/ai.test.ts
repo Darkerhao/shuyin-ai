@@ -69,6 +69,15 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
+  it('opens audio directly, keeps its tab on return and validates unsupported tab values', async () => {
+    const { wrapper, router } = await render('/projects/p1/writing?tab=audio')
+    expect(wrapper.get('[role="tab"][data-state="active"]').text()).toBe('音频制作')
+    expect(button(wrapper, '下一步：关联成片与发布')).toBeDefined()
+    await router.push('/projects'); router.back(); await flushPromises()
+    expect(wrapper.get('[role="tab"][data-state="active"]').text()).toBe('音频制作')
+    await router.replace({ query: { tab: 'invalid' } }); await flushPromises()
+    expect(wrapper.get('[role="tab"][data-state="active"]').text()).toBe('发布文案')
+  })
   it('recommends duration automatically once for an unconfigured book and retains the current content', async () => {
     vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), audioDurationSource: null, id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
     vi.mocked(api.executeGeneration).mockResolvedValue({ minutes: 25, reason: '长篇小说需展开人物关系，资料不足时仅作估计。' })
@@ -596,6 +605,35 @@ describe('audio automation', () => {
 })
 
 describe('model configuration', () => {
+  it('separates save and connection feedback, cancels deletion with Escape and returns focus', async () => {
+    const { wrapper } = await render('/settings/models')
+    let finishSave!: (result: Awaited<ReturnType<typeof api.saveProvider>>) => void
+    vi.mocked(api.saveProvider).mockReturnValueOnce(new Promise(resolve => { finishSave = resolve }))
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(wrapper.get('.loading-state').text()).toBe('正在保存模型配置…')
+    expect(wrapper.text()).not.toContain('最多等待 120 秒')
+    finishSave({ provider, warning: null }); await flushPromises()
+    let finishTest!: (message: string) => void
+    vi.mocked(api.testConnection).mockReturnValueOnce(new Promise(resolve => { finishTest = resolve }))
+    await button(wrapper, '测试连接').trigger('click'); await flushPromises()
+    expect(wrapper.get('.loading-state').text()).toContain('最多等待 120 秒')
+    finishTest('连接成功'); await flushPromises()
+    const opener = button(wrapper, '删除模型'); opener.element.focus()
+    await opener.trigger('click'); await flushPromises()
+    expect(document.activeElement).toBe(button(wrapper, '取消').element)
+    await button(wrapper, '取消').trigger('keydown', { key: 'Escape' }); await flushPromises()
+    expect(api.deleteProvider).not.toHaveBeenCalled()
+    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(opener.element)
+  })
+  it('restores the chosen model instead of replacing it with the default on return', async () => {
+    vi.mocked(api.listProviders).mockResolvedValue([provider, { ...provider, id: 'm2', name: '第二个模型', isDefault: false }])
+    const { wrapper, router } = await render('/settings/models')
+    await wrapper.get('[aria-label="编辑模型 第二个模型"]').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.query.model).toBe('m2')
+    await router.push('/projects'); router.back(); await flushPromises()
+    expect(wrapper.get('#provider-name').element).toHaveProperty('value', '第二个模型')
+  })
   it('clears the default setting when disabling a model through the checkbox', async () => {
     const { wrapper } = await render('/settings/models')
     const [enabled, defaultModel] = wrapper.findAll('[role=checkbox]')

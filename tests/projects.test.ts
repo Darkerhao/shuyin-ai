@@ -6,6 +6,8 @@ import ProjectsPage from '../src/modules/projects/ProjectsPage.vue'
 import ProjectPage from '../src/modules/projects/ProjectPage.vue'
 import ProjectAssets from '../src/modules/projects/ProjectAssets.vue'
 import SettingsPage from '../src/modules/settings/SettingsPage.vue'
+import { workspaceOperation } from '../src/modules/settings/workspaceOperation'
+import { chooseSelect } from './ui'
 import * as api from '../src/services/projects'
 import * as notes from '../src/services/notes'
 import * as fullBackup from '../src/services/backup'
@@ -35,6 +37,7 @@ async function render(path: string) {
 function button(wrapper: ReturnType<typeof mount>, text: string) { return wrapper.findAll('button').find(b => b.text() === text)! }
 beforeEach(() => {
   vi.resetAllMocks()
+  workspaceOperation.error.value = ''; workspaceOperation.message.value = ''
   vi.mocked(api.isDesktop).mockReturnValue(true)
   vi.mocked(api.listProjects).mockResolvedValue([saved])
   vi.mocked(api.getProject).mockResolvedValue(saved)
@@ -44,6 +47,47 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M1 projects and materials', () => {
+  it('protects unsaved book details from browser unload and removes protection after navigation', async () => {
+    const { wrapper, router } = await render('/projects/new')
+    await wrapper.get('#title').setValue('尚未保存的书')
+    const event = new Event('beforeunload', { cancelable: true }); globalThis.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    await router.push('/projects')
+    expect(router.currentRoute.value.path).toBe('/projects/new')
+    vi.mocked(globalThis.confirm).mockReturnValue(true)
+    await router.push('/projects'); await flushPromises()
+    const clean = new Event('beforeunload', { cancelable: true }); globalThis.dispatchEvent(clean)
+    expect(clean.defaultPrevented).toBe(false)
+  })
+  it('blocks leaving during a backup and retains the completed result after returning', async () => {
+    let finish!: (result: Awaited<ReturnType<typeof fullBackup.createFullBackup>>) => void
+    vi.mocked(api.chooseDirectory).mockResolvedValue('D:/备份')
+    vi.mocked(fullBackup.createFullBackup).mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const { wrapper, router } = await render('/settings')
+    await button(wrapper, '创建完整备份').trigger('click'); await flushPromises()
+    expect(wrapper.get('[aria-label="最近一次数据操作"]').text()).toContain('正在创建完整备份')
+    await router.push('/projects')
+    expect(router.currentRoute.value.path).toBe('/settings')
+    const event = new Event('beforeunload', { cancelable: true }); globalThis.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    finish({ manifestPath: 'D:/备份/manifest.json', fileCount: 3, totalBytes: 1, omittedVideos: 0 }); await flushPromises()
+    await router.push('/projects'); await router.push('/settings'); await flushPromises()
+    expect(wrapper.get('[aria-label="最近一次数据操作"]').text()).toContain('D:/备份/manifest.json')
+    expect(fullBackup.createFullBackup).toHaveBeenCalledOnce()
+  })
+  it('combines material search, type and file availability without changing stored references', async () => {
+    vi.mocked(api.listAssets).mockResolvedValue([asset, { ...asset, id: 'image', originalName: '书影.png', assetType: 'image', existsStatus: 'available' }])
+    const { wrapper } = await render('/assets')
+    await chooseSelect(wrapper, '#asset-availability', '需要处理')
+    expect(wrapper.findAll('.asset-row')).toHaveLength(1)
+    await chooseSelect(wrapper, '#asset-type', '图片')
+    expect(wrapper.text()).toContain('没有符合条件的素材')
+    await button(wrapper, '清空素材筛选').trigger('click')
+    await wrapper.get('input[type="search"]').setValue('书影')
+    expect(wrapper.findAll('.asset-row')).toHaveLength(1)
+    expect(wrapper.get('.asset-row').text()).toContain('书影.png')
+    expect(api.unlinkAsset).not.toHaveBeenCalled()
+  })
   it('provides a skip link and identifies the active top-level destination', async () => {
     const { wrapper, router } = await render('/settings/models')
     expect(wrapper.get('.skip-link').attributes('href')).toBe('#main-content')

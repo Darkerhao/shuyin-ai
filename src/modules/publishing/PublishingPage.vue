@@ -51,6 +51,7 @@ const audio = computed(() => audios.value.find(a => a.id === draft.value.audioAs
 const selectedLandscape = computed(() => landscape.value.find(c => c.id === draft.value.landscapeCoverId))
 const selectedPortrait = computed(() => portrait.value.find(c => c.id === draft.value.portraitCoverId))
 const recordOpen = ref(false)
+const assetsOpen = ref(false)
 const record = ref({ publishedAt: '', postUrl: '', notes: '' })
 const { busy: operationBusy, error, message, run } = useOperation()
 const douyinBusy = ref(false)
@@ -82,7 +83,8 @@ function update(task: PublishTask) {
 function canDiscard() { return (!dirty.value && !recordOpen.value) || globalThis.confirm('发布准备尚未保存，确定放弃修改？') }
 const canLeave = () => !busy.value && canDiscard()
 onBeforeRouteLeave(canLeave)
-onBeforeRouteUpdate(canLeave)
+let syncingTask = false
+onBeforeRouteUpdate((to, from) => syncingTask || (to.params.id === from.params.id && to.query.task === from.query.task) || canLeave())
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value || recordOpen.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => globalThis.removeEventListener('beforeunload', beforeUnload))
@@ -90,8 +92,8 @@ onBeforeUnmount(() => globalThis.removeEventListener('beforeunload', beforeUnloa
 const load = () => run(async () => {
   loaded.value = false
   const [project, saved, files, exported, versions] = await Promise.all([getProject(props.id), api.listPublishTasks(props.id), listAssets(props.id), listCovers(props.id), listVersions(props.id, 'publishing')])
-  const target = props.taskId ? saved.find(task => task.id === props.taskId) : saved[0] ?? null
-  if (props.taskId && !target) throw new Error('此任务不属于当前书籍或已不存在，请返回发布任务列表。')
+  const target = props.taskId === 'new' ? null : props.taskId ? saved.find(task => task.id === props.taskId) : saved[0] ?? null
+  if (props.taskId && props.taskId !== 'new' && !target) throw new Error('此任务不属于当前书籍或已不存在，请返回发布任务列表。')
   title.value = project.title; tasks.value = saved; assets.value = files; covers.value = exported; writing.value = versions
   accept(target ?? null); loaded.value = true
 })
@@ -106,7 +108,10 @@ async function loadTask() {
     await assistant.value?.start()
   }
 }
-watch(() => props.taskId, () => { if (desktop) void loadTask() })
+watch(() => props.taskId, () => {
+  if (!desktop || syncingTask || (loaded.value && (props.taskId === selected.value?.id || (props.taskId === 'new' && !selected.value)))) return
+  void loadTask()
+})
 const refresh = () => run(async () => {
   const [files, exported, saved] = await Promise.all([listAssets(props.id), listCovers(props.id), api.listPublishTasks(props.id)])
   assets.value = files; covers.value = exported; tasks.value = saved
@@ -118,13 +123,32 @@ const refresh = () => run(async () => {
   }
   message.value = '素材与任务状态已刷新。'
 })
-function newTask() { if (canDiscard()) { accept(null); recordOpen.value = false; error.value = ''; message.value = '' } }
-function switchTask(id: string | null) {
-  if (canDiscard()) { accept(tasks.value.find(t => t.id === id) ?? null); recordOpen.value = false }
+async function syncTaskUrl(id: string | null) {
+  if (route.query.task === (id ?? 'new')) return
+  syncingTask = true
+  try { await router.replace({ query: { ...route.query, task: id ?? 'new' } }) }
+  finally { syncingTask = false }
+}
+function newTask() { void switchTask(null) }
+async function switchTask(id: string | null) {
+  if (busy.value || !canDiscard()) return
+  accept(tasks.value.find(t => t.id === id) ?? null); recordOpen.value = false; error.value = ''; message.value = ''
+  await syncTaskUrl(id)
 }
 async function persist() {
   if (!selected.value || dirty.value) update(await api.savePublishTask(selected.value?.id ?? null, { ...draft.value }))
+  await syncTaskUrl(selected.value!.id)
   return selected.value!.id
+}
+function locateMissing(key: string) {
+  const fields: Record<string, string> = { title: 'publish-title', description: 'publish-description', audio: 'publish-audio', video: 'publish-video', landscape: 'publish-landscape', portrait: 'publish-portrait', covers: 'covers-confirmed', package: 'prepare-package' }
+  globalThis.document.getElementById(fields[key] ?? 'publish-title')?.focus()
+}
+async function showAssets() {
+  assetsOpen.value = true
+  await nextTick()
+  globalThis.document.getElementById('publish-assets')?.scrollIntoView({ block: 'start' })
+  globalThis.document.querySelector<globalThis.HTMLButtonElement>('#publish-assets button')?.focus({ preventScroll: true })
 }
 async function prepareDouyinTask() {
   const id = await persist()
@@ -292,6 +316,8 @@ onMounted(() => { if (desktop) void loadTask() })
     </section>
     <Collapsible
       v-if="!published"
+      id="publish-assets"
+      v-model:open="assetsOpen"
       class="history-panel"
       :unmount-on-hide="false"
     >
@@ -412,7 +438,7 @@ onMounted(() => { if (desktop) void loadTask() })
             v-if="!audios.length"
             class="muted"
           >
-            先在 <RouterLink :to="`/projects/${id}/writing`">
+            先在 <RouterLink :to="{ path: `/projects/${id}/writing`, query: { tab: 'audio' } }">
               音频制作
             </RouterLink> 导入音频成品；音频仅用于制作记录，不会上传抖音。
           </p>
@@ -458,6 +484,13 @@ onMounted(() => { if (desktop) void loadTask() })
           >
             先展开上方“关联素材”，关联剪映导出的最终成片。发布检查会验证 MP4/MOV 文件、可读取画面和音轨。
           </p>
+          <Button
+            type="button"
+            variant="outline"
+            @click="showAssets"
+          >
+            关联或重新定位素材
+          </Button>
           <div class="form-grid">
             <div>
               <label for="publish-landscape">横版封面 · 4:3</label><Select
@@ -522,7 +555,9 @@ onMounted(() => { if (desktop) void loadTask() })
             v-if="!landscape.length || !portrait.length"
             class="muted"
           >
-            请先在封面工坊一次导出横版和竖版两张封面。
+            请先在 <RouterLink :to="`/projects/${id}/covers`">
+              封面工坊
+            </RouterLink> 一次导出横版和竖版两张封面。
           </p>
           <label class="check-label"><Checkbox
             id="covers-confirmed"
@@ -543,6 +578,7 @@ onMounted(() => { if (desktop) void loadTask() })
             保存发布草稿
           </Button>
           <Button
+            id="prepare-package"
             type="button"
             variant="outline"
             @click="prepare"
@@ -605,6 +641,15 @@ onMounted(() => { if (desktop) void loadTask() })
           :class="{ 'check-pending': !item.passed }"
         >
           {{ item.passed ? '✓' : '○' }} {{ item.label }}
+          <Button
+            v-if="!item.passed && !published"
+            variant="ghost"
+            size="sm"
+            :disabled="busy || recordOpen"
+            @click="locateMissing(item.key)"
+          >
+            {{ item.key === 'package' ? '准备任务包' : '去补齐' }}
+          </Button>
         </li>
       </ul>
       <p

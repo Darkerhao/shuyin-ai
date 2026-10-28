@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import OperationFeedback from '../../components/OperationFeedback.vue'
+import ConfirmAction from '../../components/ConfirmAction.vue'
+import { useWindowCloseGuard } from '../../composables/useWindowCloseGuard'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { computed, onMounted, ref } from 'vue'
@@ -24,29 +26,30 @@ const ready = ref(!props.id)
 const deleting = ref(false)
 const imported = ref<ImportedNote | null>(null)
 let leaving = false
-const { busy, error, message, run } = useOperation()
+const { busy, error, message, operation, run } = useOperation()
 function accept(saved: Project) { project.value = saved; form.value = projectInput(saved); original.value = JSON.stringify(form.value); ready.value = true }
-const load = () => run(async () => { if (props.id) accept(await api.getProject(props.id)) })
-const chooseImport = () => run(async () => { const path = await chooseNote(); if (path) imported.value = await importNote(path) })
+const load = () => run(async () => { if (props.id) accept(await api.getProject(props.id)) }, '正在读取书籍资料…')
+const chooseImport = () => run(async () => { const path = await chooseNote(); if (path) imported.value = await importNote(path) }, '正在读取导入资料…')
 const applyImport = () => run(async () => {
   if (!imported.value) return
   form.value.sourceNotes = appendNote(form.value.sourceNotes, imported.value)
   imported.value = null; message.value = '资料已追加，保留来源说明。点击保存并继续写入书籍资料。'
-})
+}, '正在追加资料…')
 const save = () => run(async () => {
   const saved = await api.saveProject(props.id ?? null, { ...form.value })
   accept(saved)
   message.value = '项目已保存。'
   leaving = true; await router.replace(`/projects/${saved.id}/writing`)
-})
+}, '正在保存书籍资料…')
 const remove = () => run(async () => {
   if (!project.value) return
   await api.deleteProject(project.value.id)
   original.value = JSON.stringify(form.value)
   leaving = true
   await router.push('/projects')
-})
+}, '正在删除项目…')
 const canLeave = () => leaving || (!busy.value && (!dirty.value || globalThis.confirm('项目资料尚未保存，确定离开并放弃修改？')))
+const closeGuard = useWindowCloseGuard(() => dirty.value || busy.value, canLeave)
 onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate(canLeave)
 onMounted(() => { if (desktop && props.id) void load() })
@@ -78,6 +81,7 @@ onMounted(() => { if (desktop && props.id) void load() })
   >
     请在桌面应用中编辑书籍。
   </p>
+  <OperationFeedback :error="closeGuard.error.value" />
   <OperationFeedback
     :error="error"
     :message="message"
@@ -173,7 +177,7 @@ onMounted(() => { if (desktop && props.id) void load() })
         </section>
         <div class="actions wrap">
           <Button type="submit">
-            <AppIcon name="check" />{{ busy ? '保存中…' : '保存并继续' }}
+            <AppIcon name="check" />{{ busy ? operation : '保存并继续' }}
           </Button><RouterLink
             :to="project ? `/projects/${project.id}/writing` : '/projects'"
             :class="buttonVariants({ variant: 'outline' })"
@@ -209,29 +213,13 @@ onMounted(() => { if (desktop && props.id) void load() })
       </Button>
     </CollapsibleContent>
   </Collapsible>
-  <section
+  <ConfirmAction
     v-if="deleting"
-    class="panel confirmation"
-    role="alertdialog"
-    aria-labelledby="delete-title"
+    :title="`确认删除「${project?.title}」？`"
+    :busy="busy"
+    @confirm="remove"
+    @cancel="deleting = false"
   >
-    <h2 id="delete-title">
-      确认删除这本书？
-    </h2><p>此项目及生成历史将被删除。原始视频、素材文件和工作目录都会保留。</p>
-    <div class="actions">
-      <Button
-        variant="destructive"
-        :disabled="busy"
-        @click="remove"
-      >
-        确认删除
-      </Button><Button
-        variant="outline"
-        :disabled="busy"
-        @click="deleting = false"
-      >
-        取消
-      </Button>
-    </div>
-  </section>
+    <p>此项目及生成历史将被删除。原始视频、素材文件和工作目录都会保留。</p>
+  </ConfirmAction>
 </template>

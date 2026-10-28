@@ -6,7 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/ai'
 import * as audioApi from '../../services/audio'
@@ -17,6 +17,7 @@ import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
 import type { Asset } from '../../types/project'
 import type { AudioFormat, AudioJob, AudioJobAction, AudioJobStatus, AudioJobView } from '../../types/audio'
 import { useOperation } from '../../composables/useOperation'
+import { useQueryState } from '../../composables/useQueryState'
 import { useEditorDraft } from '../../composables/useEditorDraft'
 import { readDraft } from '../../services/drafts'
 import AppIcon from '../../components/AppIcon.vue'
@@ -59,7 +60,9 @@ const revisionInstruction = ref('')
 const revising = ref(false)
 const preview = ref<GenerationPreview | null>(null)
 const revisionLocked = computed(() => revising.value || !!preview.value)
-const activeTab = ref('publishing')
+const activeTab = useQueryState('tab', 'publishing', ['publishing', 'audio', 'cover'])
+const durationOpen = ref(activeTab.value === 'audio')
+watch(activeTab, tab => { if (tab === 'audio') durationOpen.value = true })
 const copiedField = ref('')
 let copyTimer: ReturnType<typeof globalThis.setTimeout> | undefined
 const tabs = [
@@ -113,7 +116,7 @@ const canLeave = async () => {
   try { if (ready.value) await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
-onBeforeRouteUpdate(canLeave)
+onBeforeRouteUpdate((to, from) => to.params.id === from.params.id || canLeave())
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || durationDirty.value || busy.value || preview.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(copyTimer) })
@@ -472,74 +475,80 @@ onMounted(async () => {
         </Button>
       </div>
     </section>
-    <section
+    <Collapsible
+      v-model:open="durationOpen"
       class="panel mb-6 space-y-3"
-      aria-labelledby="audio-duration-heading"
+      :unmount-on-hide="false"
     >
-      <div class="flex flex-wrap items-end gap-3">
-        <div>
-          <label
-            id="audio-duration-heading"
-            for="audio-duration"
-          >音频目标时长（分钟）</label>
-          <Input
-            id="audio-duration"
-            v-model="durationMinutes"
-            type="number"
-            min="1"
-            max="1440"
-            step="1"
-            class="w-36"
-            :aria-invalid="!durationValid"
-            aria-describedby="audio-duration-help"
-            :disabled="busy || !!preview"
-          />
-        </div>
-        <Button
-          variant="outline"
-          :disabled="busy || !providerId || !!preview"
-          @click="recommendDuration"
-        >
-          <AppIcon name="sparkle" />{{ recommending ? '推荐中…' : 'AI 推荐时长' }}
-        </Button>
-        <Button
-          v-if="durationDirty"
-          variant="outline"
-          :disabled="busy || !!preview || !durationValid"
-          @click="saveDuration"
-        >
-          保存时长
-        </Button>
-        <div
-          class="flex flex-wrap gap-2"
-          aria-label="常用音频时长"
-        >
+      <CollapsibleTrigger class="disclosure-trigger">
+        生成时长：{{ durationMinutes }} 分钟 · 调整音频时长
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div class="flex flex-wrap items-end gap-3">
+          <div>
+            <label
+              id="audio-duration-heading"
+              for="audio-duration"
+            >音频目标时长（分钟）</label>
+            <Input
+              id="audio-duration"
+              v-model="durationMinutes"
+              type="number"
+              min="1"
+              max="1440"
+              step="1"
+              class="w-36"
+              :aria-invalid="!durationValid"
+              aria-describedby="audio-duration-help"
+              :disabled="busy || !!preview"
+            />
+          </div>
           <Button
-            v-for="minutes in [5, 10, 15, 20, 30, 60]"
-            :key="minutes"
-            size="sm"
-            :variant="Number(durationMinutes) === minutes ? 'secondary' : 'ghost'"
-            :disabled="busy || !!preview"
-            @click="durationMinutes = minutes"
+            variant="outline"
+            :disabled="busy || !providerId || !!preview"
+            @click="recommendDuration"
           >
-            {{ minutes }} 分钟
+            <AppIcon name="sparkle" />{{ recommending ? '推荐中…' : 'AI 推荐时长' }}
           </Button>
+          <Button
+            v-if="durationDirty"
+            variant="outline"
+            :disabled="busy || !!preview || !durationValid"
+            @click="saveDuration"
+          >
+            保存时长
+          </Button>
+          <div
+            class="flex flex-wrap gap-2"
+            aria-label="常用音频时长"
+          >
+            <Button
+              v-for="minutes in [5, 10, 15, 20, 30, 60]"
+              :key="minutes"
+              size="sm"
+              :variant="Number(durationMinutes) === minutes ? 'secondary' : 'ghost'"
+              :disabled="busy || !!preview"
+              @click="durationMinutes = minutes"
+            >
+              {{ minutes }} 分钟
+            </Button>
+          </div>
         </div>
-      </div>
-      <p
-        id="audio-duration-help"
-        class="muted text-sm"
-      >
-        {{ durationValid ? '生成前可自由修改时长，生成时自动保存。开场、分段安排、结尾及相关文案按此时长生成；已有内容需重新生成或按项调整。' : '请输入 1—1440 分钟的整数。' }}
-      </p>
-      <p
-        v-if="durationReason"
-        class="muted text-sm"
-        role="status"
-      >
-        AI 推荐依据：{{ durationReason }}
-      </p>
-    </section>
+        <p
+          id="audio-duration-help"
+          class="muted text-sm"
+        >
+          {{ durationValid ? '生成前可自由修改时长，生成时自动保存。开场、分段安排、结尾及相关文案按此时长生成；已有内容需重新生成或按项调整。' : '请输入 1—1440 分钟的整数。' }}
+        </p>
+        <p
+          v-if="durationReason"
+          class="muted text-sm"
+          role="status"
+        >
+          AI 推荐依据：{{ durationReason }}
+        </p>
+      </CollapsibleContent>
+    </Collapsible>
     <p
       v-if="!providers.length"
       class="notice"
@@ -1086,6 +1095,15 @@ onMounted(async () => {
             <AppIcon name="save" />保存修改
           </Button>
           <Button
+            v-if="activeTab === 'audio'"
+            type="button"
+            :disabled="busy || revisionLocked"
+            @click="router.push(`/projects/${id}/publishing`)"
+          >
+            下一步：关联成片与发布<AppIcon name="arrow" />
+          </Button>
+          <Button
+            v-else
             type="button"
             :disabled="busy || revisionLocked || !canSave || !draft.coverTitle.trim() || !draft.coverSubtitle.trim()"
             @click="makeCover"

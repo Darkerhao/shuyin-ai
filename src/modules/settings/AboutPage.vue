@@ -4,6 +4,7 @@ import { onBeforeRouteLeave } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import AppIcon from '../../components/AppIcon.vue'
+import ConfirmAction from '../../components/ConfirmAction.vue'
 import appLogo from '../../../assets/app-icon.svg'
 import { useAppUpdates } from '../../composables/useAppUpdates'
 import { currentReleaseNotes, isDesktop } from '../../services/updates'
@@ -27,14 +28,16 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
 </script>
 
 <template>
-  <header>
-    <p class="eyebrow">
-      应用与版本
-    </p>
-    <h1>关于书引 AI</h1>
-    <p class="muted">
-      让阅读，成为创作。为每一本书准备值得分享的内容。
-    </p>
+  <header class="page-heading">
+    <div>
+      <p class="eyebrow">
+        应用与版本
+      </p>
+      <h1>关于书引 AI</h1>
+      <p class="muted">
+        让阅读，成为创作。为每一本书准备值得分享的内容。
+      </p>
+    </div>
   </header>
   <p
     v-if="!desktop"
@@ -148,33 +151,17 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
       </Button>
     </div>
   </section>
-  <section
+  <ConfirmAction
     v-if="confirmInstall"
-    class="panel confirmation"
-    role="alertdialog"
-    aria-modal="false"
-    aria-labelledby="install-update-title"
+    title="确认安装并重启？"
+    confirm-label="确认并重启"
+    cancel-label="稍后再说"
+    :destructive="false"
+    @confirm="confirmAndInstall"
+    @cancel="confirmInstall = false"
   >
-    <h2 id="install-update-title">
-      确认安装并重启？
-    </h2>
     <p>应用将关闭并更新到 v{{ update?.version }}。请确认当前工作已保存。</p>
-    <div class="actions">
-      <Button
-        type="button"
-        @click="confirmAndInstall"
-      >
-        确认并重启
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        @click="confirmInstall = false"
-      >
-        稍后再说
-      </Button>
-    </div>
-  </section>
+  </ConfirmAction>
   <section
     class="panel"
     aria-labelledby="release-notes-title"

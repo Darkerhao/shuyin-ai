@@ -70,14 +70,16 @@ onMounted(() => { if (desktop) void load() })
 </script>
 
 <template>
-  <header>
-    <p class="eyebrow">
-      M0 / 工程初始化与技术验证
-    </p>
-    <h1>先让基础能力可靠运行</h1>
-    <p class="muted">
-      验证桌面容器、本地数据库和文件选择。此页面不包含创作业务。
-    </p>
+  <header class="page-heading">
+    <div>
+      <p class="eyebrow">
+        M0 / 工程初始化与技术验证
+      </p>
+      <h1>先让基础能力可靠运行</h1>
+      <p class="muted">
+        验证桌面容器、本地数据库和文件选择。此页面不包含创作业务。
+      </p>
+    </div>
     <Badge variant="secondary">
       {{ desktop ? 'Tauri 桌面环境' : '浏览器预览' }}
     </Badge>
