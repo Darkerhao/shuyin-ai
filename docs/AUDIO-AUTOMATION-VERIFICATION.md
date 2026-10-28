@@ -31,6 +31,18 @@ Windows + Chrome 自动音频的代码与本地自动化验证已完成。真实
 
 P0 真实验收须先由用户指定试验书籍资料，并确认使用一次音频生成额度。当前浏览器检查连接未能初始化，本轮没有打开网站，也没有创建笔记本、登录、上传资料、生成或下载。
 
+## 非 Windows 测试构建修复（2026-10-28）
+
+CI 在 macOS/Linux 的严格 Clippy 测试构建中报告 `audio_download_started` 未使用：方法采用 `cfg(any(target_os = "windows", test))`，生产调用仅存在于 Windows 桥接，原数据库测试遗漏了该方法。补充跨平台数据库测试，验证未进入下载阶段、运行编号不匹配和取消后的回调被拒绝，以及合法下载开始保留 downloading 状态、更新检查时间且不提前登记素材。保留原条件编译和 `-D warnings`，不修改生产逻辑、依赖或数据库 schema。
+
+本轮 Windows 实际验证（先执行 `. ./.tools/env.ps1`）：
+
+- `npm run check:rust`：fmt 和 `clippy --locked --all-targets -- -D warnings` 通过。首次受限运行无法访问已有 `.cargo-build-lock`，获得执行权限后重跑通过。
+- `npm run test:rust`：110 项通过、1 项既有系统凭据测试忽略；进程 `TEMP`、`TMP`、`SQLITE_TMPDIR` 指向仓库 `output/audio-ci-test-temp`。
+- `git diff --check`：通过。
+
+本机仅安装 Windows Rust 目标，没有本地复现非 Windows 编译错误；根因依据用户提供的 CI 错误与当前条件编译/调用链核对。新增测试无 Windows 限制，供各平台 CI 编译及执行。macOS ARM64/x64、Linux x64 的严格检查与完整安装包仍需重新运行发布流水线确认；本轮未提交、推送或发布。
+
 ## 本地验证
 
 | 命令 | 结果 |
