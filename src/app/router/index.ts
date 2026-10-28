@@ -12,6 +12,10 @@ import AboutPage from '../../modules/settings/AboutPage.vue'
 
 export const router = createRouter({
   history: createWebHashHistory(),
+  scrollBehavior(to, from, savedPosition) {
+    if (savedPosition) return savedPosition
+    if (to.path !== from.path) return { top: 0 }
+  },
   routes: [
     { path: '/', redirect: '/projects' },
     { path: '/projects', component: ProjectsPage },
