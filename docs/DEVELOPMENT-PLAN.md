@@ -1,5 +1,9 @@
 # 书引 AI 开发计划与验收标准
 
+## 自动音频评审修复（2026-10-28）
+
+修复 `HEAD~5..HEAD` 评审中的三项问题：Windows 桥接协议及专属数据库接口按平台编译（数据库测试跨平台保留）；Native Messaging 注册清理移到 NSIS 卸载完成钩子；上传首尾校验来源且在扩展侧校验完整传输摘要，删除“已校验”缓存。无数据库迁移或新增依赖，属于 fix/patch，不手动升版本、不提交或发布。回归覆盖上传期间同大小修改、改写后恢复、指纹漂移及失败提示。实际检查和打包证据、macOS/Linux CI 与真实 Google P0 的待验收边界见 `AUDIO-AUTOMATION-VERIFICATION.md` 的评审修复记录。
+
 ## Gemini Notebook 自动音频（2026-10-28，功能已完成，真实账号待验收）
 
 按 [实施计划](NOTEBOOKLM-AUDIO-PLAN.md) 完成 Windows + Chrome + MV3 扩展 + Native Messaging helper + Rust/SQLite `audio_jobs` 闭环。数据库升至 v13；前端提供来源/格式/任务控制，Rust 冻结输入并唯一写状态，扩展执行受限页面动作，下载经精确 ID、容器与 SHA-256 校验后登记为 `assets.audio`。旧“只打开网站”命令已移除，手动导入、历史提示词、发布任务选择及最终抖音人工发布保持不变。

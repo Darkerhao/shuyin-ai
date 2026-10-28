@@ -1,15 +1,21 @@
+#[cfg(any(target_os = "windows", test))]
+use super::{assets, projects::safe_book_name};
 use super::{
-    assets,
-    projects::{get, new_id, safe_book_name, NOW},
+    projects::{get, new_id, NOW},
     Database,
 };
 use crate::{ai::WritingContent, database::ai};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(any(target_os = "windows", test))]
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    fs::OpenOptions,
+    io::{BufWriter, Seek, SeekFrom, Write},
+};
+use std::{
+    fs::{self, File},
+    io::{BufReader, Read},
     path::{Path, PathBuf},
 };
 
@@ -65,6 +71,7 @@ pub struct AudioJobData {
     pub active_job: Option<AudioJob>,
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BridgeObservation {
@@ -89,6 +96,7 @@ pub enum BridgeObservation {
     },
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeJobData {
@@ -104,6 +112,7 @@ pub struct BridgeJobData {
     pub source: BridgeSourceData,
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BridgeSourceData {
@@ -117,6 +126,7 @@ pub enum BridgeSourceData {
     },
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug)]
 pub struct SourceChunkData {
     pub bytes: Vec<u8>,
@@ -230,6 +240,7 @@ fn require_run(job: &AudioJob, run_id: i64) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn validate_notebook_url(value: &str) -> bool {
     value.starts_with("https://notebook.google.com/")
         || value.starts_with("https://notebooklm.google.com/")
@@ -270,6 +281,7 @@ fn hash_file(path: &Path) -> Result<(i64, String), String> {
     Ok((total as i64, hex_digest(&hasher.finalize())))
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn audio_format(path: &Path) -> Result<&'static str, String> {
     let metadata = fs::metadata(path).map_err(|error| format!("下载的音频不可用：{error}"))?;
     if !metadata.is_file() || metadata.len() < 256 {
@@ -326,6 +338,7 @@ fn hex_digest(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn checked_directory(path: &Path) -> Result<(), String> {
     if !path.is_dir() {
         return Err("项目工作目录已丢失，请重新指定目录。".into());
@@ -333,6 +346,7 @@ fn checked_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn copy_verified(source: &Path, destination: &Path) -> Result<(i64, String), String> {
     let (source_size, source_hash) = hash_file(source)?;
     if destination.exists() {
@@ -548,6 +562,7 @@ impl Database {
         })
     }
 
+    #[cfg(any(target_os = "windows", test))]
     pub fn audio_bridge_job(&self) -> Result<Option<BridgeJobData>, String> {
         self.with_connection(|connection| {
             let Some(current) = active_job(connection)? else {
@@ -582,12 +597,12 @@ impl Database {
         })
     }
 
+    #[cfg(any(target_os = "windows", test))]
     pub fn audio_source_chunk(
         &self,
         job_id: &str,
         run_id: i64,
         offset: i64,
-        verify_hash: bool,
     ) -> Result<SourceChunkData, String> {
         const CHUNK: i64 = 256 * 1024;
         self.with_connection(|connection| {
@@ -605,11 +620,12 @@ impl Database {
             let path = fs::canonicalize(path).map_err(|error| format!("原书文件不可用：{error}"))?;
             let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
             if !metadata.is_file() || metadata.len() as i64 != size { return Err("原书文件在任务创建后发生变化，请停止任务后重新选择。".into()); }
-            if verify_hash {
+            let length = (size - offset).min(CHUNK) as usize;
+            // Recheck the source at both ends; the extension verifies the assembled bytes too.
+            if offset == 0 || offset + length as i64 == size {
                 let (_, actual) = hash_file(&path)?;
                 if actual != sha256 { return Err("原书文件 SHA-256 与任务快照不一致，请重新选择。".into()); }
             }
-            let length = (size - offset).min(CHUNK) as usize;
             let mut bytes = vec![0u8; length];
             let mut file = File::open(&path).map_err(|error| error.to_string())?;
             file.seek(SeekFrom::Start(offset as u64)).map_err(|error| error.to_string())?;
@@ -634,6 +650,7 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(any(target_os = "windows", test))]
     fn touch_job(&self, connection: &Connection, id: &str) -> Result<(), String> {
         connection
             .execute(
@@ -646,6 +663,7 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(any(target_os = "windows", test))]
     pub fn observe_audio_job(
         &self,
         job_id: &str,
@@ -743,6 +761,7 @@ impl Database {
         })
     }
 
+    #[cfg(any(target_os = "windows", test))]
     pub fn audio_download_started(&self, job_id: &str, run_id: i64) -> Result<AudioJob, String> {
         self.with_connection(|connection| {
             let current = job(connection, job_id)?;
@@ -790,6 +809,7 @@ impl Database {
         })
     }
 
+    #[cfg(any(target_os = "windows", test))]
     pub fn complete_audio_download(
         &self,
         job_id: &str,
