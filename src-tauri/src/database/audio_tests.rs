@@ -110,6 +110,37 @@ fn advance_to_download(database: &Database, job: &AudioJob) {
     );
 }
 
+#[test]
+fn download_started_requires_current_run_and_download_phase() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("data.sqlite3"));
+    let project = sample_project(&database, "下载任务", "资料");
+    let writing = sample_writing(&database, &project, "完整指导");
+    let job = start_text_job(&database, &project, &writing);
+
+    assert!(database
+        .audio_download_started(&job.id, job.run_id)
+        .unwrap_err()
+        .contains("还没有进入下载阶段"));
+    advance_to_download(&database, &job);
+    assert!(database
+        .audio_download_started(&job.id, job.run_id + 1)
+        .is_err());
+
+    let started = database
+        .audio_download_started(&job.id, job.run_id)
+        .unwrap();
+    assert_eq!(started.status, "downloading");
+    assert_eq!(started.stage, "downloading");
+    assert!(started.last_checked_at.is_some());
+    assert!(started.asset_id.is_none());
+
+    database.control_audio_job(&job.id, "cancel").unwrap();
+    assert!(database
+        .audio_download_started(&job.id, job.run_id)
+        .is_err());
+}
+
 fn wav_bytes() -> Vec<u8> {
     let mut bytes = Vec::new();
     let data = vec![0u8; 1_600];
