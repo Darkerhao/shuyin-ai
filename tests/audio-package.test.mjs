@@ -34,6 +34,15 @@ test('desktop commands prepare the helper before Vite and Tauri builds', () => {
   assert.match(packageJson.scripts['test:release'], /tests\/audio-extension\.test\.mjs/)
 })
 
+test('Windows helper is prepared before application Rust checks', () => {
+  const workflow = readFileSync(join(project, '.github/workflows/release.yml'), 'utf8')
+  const helperStep = workflow.indexOf('- name: Test and prepare Windows Native Messaging helper')
+  const rustChecksStep = workflow.indexOf('- name: Rust checks and database tests on each platform')
+  assert.notEqual(helperStep, -1)
+  assert.notEqual(rustChecksStep, -1)
+  assert.ok(helperStep < rustChecksStep)
+})
+
 test('Native Messaging sidecar and extension resources are Windows-only', () => {
   const base = readJson('src-tauri/tauri.conf.json')
   const windows = readJson('src-tauri/tauri.windows.conf.json')

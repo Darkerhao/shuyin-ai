@@ -119,13 +119,6 @@ jobs:
           npm ci
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy --target "$BUILD_TARGET"
           rustup override set 1.99.1
-      - name: Rust checks and database tests on each platform
-        run: |
-          npm run check:rust
-          npm run test:rust
-          node --test tests/release-assets.test.mjs
-          node --test tests/audio-package.test.mjs
-          node --test tests/audio-extension.test.mjs
       - name: Test and prepare Windows Native Messaging helper
         if: runner.os == 'Windows'
         run: |
@@ -133,6 +126,13 @@ jobs:
           cargo clippy --manifest-path src-tauri/browser-bridge/Cargo.toml --locked --all-targets -- -D warnings
           cargo test --manifest-path src-tauri/browser-bridge/Cargo.toml --locked
           node scripts/build-audio-bridge.mjs --release --target "$BUILD_TARGET"
+      - name: Rust checks and database tests on each platform
+        run: |
+          npm run check:rust
+          npm run test:rust
+          node --test tests/release-assets.test.mjs
+          node --test tests/audio-package.test.mjs
+          node --test tests/audio-extension.test.mjs
       - name: Build platform packages
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
