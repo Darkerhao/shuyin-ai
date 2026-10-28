@@ -116,7 +116,7 @@ describe('publishing workflow', () => {
     const { wrapper } = await render()
     await wrapper.get('#result-title').setValue('我的标题')
     await button(wrapper, 'AI 推荐时长').trigger('click'); await flushPromises()
-    expect(wrapper.get('[role="alert"]').text()).toContain('模型请求超时')
+    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('模型请求超时')
     expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '10')
     expect(wrapper.get('#result-title').element).toHaveProperty('value', '我的标题')
     await wrapper.get('#audio-duration').setValue('18')
@@ -143,7 +143,7 @@ describe('publishing workflow', () => {
     await wrapper.get('#audio-duration').setValue('18')
     await button(wrapper, '一键生成').trigger('click'); await flushPromises()
     expect(api.startGeneration).not.toHaveBeenCalled()
-    expect(wrapper.get('[role="alert"]').text()).toContain('时长保存失败')
+    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('时长保存失败')
     await router.push('/projects')
     expect(router.currentRoute.value.path).toContain('/writing')
     expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '18')
@@ -205,7 +205,7 @@ describe('publishing workflow', () => {
     await button(wrapper, '保存并生成预览').trigger('click'); await flushPromises()
     expect(api.startGeneration).toHaveBeenLastCalledWith(expect.objectContaining({ revision: expect.objectContaining({ basedOn: 'edited' }) }))
     expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe(edited.content.description)
-    expect(wrapper.get('[role="alert"]').text()).toContain('模型请求超时')
+    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('模型请求超时')
     expect(api.applyGeneration).not.toHaveBeenCalled()
   })
   it('selects multiple fields and can discard a preview without changing saved content', async () => {
@@ -297,7 +297,7 @@ describe('publishing workflow', () => {
     await wrapper.get('#result-coverPromptPortrait').setValue('竖版 3:4，未保存的画面创意')
     vi.mocked(api.executeGeneration).mockRejectedValue({ code: 'timeout', message: '模型请求超时' })
     await button(wrapper, '一键生成').trigger('click'); await flushPromises()
-    expect(wrapper.get('[role="alert"]').text()).toContain('模型请求超时')
+    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('模型请求超时')
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('未保存标题')
     expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('未保存内容')
     expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('未保存提示词')
@@ -403,7 +403,7 @@ describe('publishing workflow', () => {
     expect(writeText).toHaveBeenLastCalledWith('编辑后的多行内容\n中文保持换行')
     writeText.mockRejectedValueOnce(new Error('denied'))
     await button(wrapper, '复制音频生成提示词').trigger('click'); await flushPromises()
-    expect(wrapper.get('[role="alert"]').text()).toContain('复制失败')
+    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('复制失败')
     expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('原有提示词')
   })
   it('copies each cover field with edits and line breaks intact', async () => {
@@ -476,7 +476,7 @@ describe('audio automation', () => {
     await wrapper.get('#audio-duration').setValue('15')
     await button(wrapper, '开始生成音频').trigger('click'); await flushPromises()
     expect(audio.startAudioJob).not.toHaveBeenCalled()
-    expect(wrapper.get('[role="alert"]').text()).toContain('时长保存失败')
+    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('时长保存失败')
   })
 
   it('saves a dirty prompt and starts with the new version id', async () => {

@@ -120,6 +120,7 @@ function applyWritingDesign() {
   message.value = '已应用 AI 推荐字号、主副标题配色、点缀色和蒙层。可继续调整，确认预览后保存或导出。'
 }
 async function copyPrompt() {
+  error.value = ''; message.value = ''
   try { await globalThis.navigator.clipboard.writeText(suggestedPrompt.value); message.value = '已复制封面提示词。'; error.value = '' }
   catch { error.value = '复制失败，请选中文本后手动复制。' }
 }
@@ -300,13 +301,11 @@ onMounted(async () => {
     :message="message"
     @dismiss="message = ''"
   />
-  <p
-    v-if="autosave.error.value"
-    class="error"
-    role="alert"
-  >
-    {{ autosave.error.value }}
-  </p>
+  <OperationFeedback :error="autosave.error.value" />
+  <OperationFeedback
+    :message="writingError"
+    variant="warning"
+  />
   <Button
     v-if="!ready && desktop"
     :disabled="busy"
@@ -906,13 +905,7 @@ onMounted(async () => {
           role="status"
         >
           正在读取背景图…
-        </p><p
-          v-if="backgroundError || previewError"
-          class="error"
-          role="alert"
-        >
-          {{ backgroundError || previewError }}
-        </p>
+        </p><OperationFeedback :error="backgroundError || previewError" />
         <div class="canvas-stage">
           <canvas
             ref="canvas"

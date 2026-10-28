@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import OperationFeedback from '../../components/OperationFeedback.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { onMounted, ref } from 'vue'
@@ -58,18 +59,10 @@ onMounted(() => { void run(refresh) })
         刷新文件状态
       </Button>
     </div>
-    <p
-      v-if="error"
-      role="alert"
-      class="error"
-    >
-      {{ error }}
-    </p><p
-      v-if="message"
-      role="status"
-    >
-      {{ message }}
-    </p>
+    <OperationFeedback
+      :error="error"
+      :message="message"
+    />
     <p
       v-if="busy"
       role="status"

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import OperationFeedback from '../../components/OperationFeedback.vue'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { isDesktop, listProjects } from '../../services/projects'
@@ -170,13 +171,7 @@ onMounted(() => { if (desktop) void load() })
       </Button>
     </form>
   </div>
-  <p
-    v-if="error"
-    class="error"
-    role="alert"
-  >
-    {{ error }} · 点击刷新书架重试，已有内容保留。
-  </p>
+  <OperationFeedback :error="error ? `${error} · 点击刷新书架重试，已有内容保留。` : ''" />
   <p
     v-if="busy && !loaded"
     class="loading-state"

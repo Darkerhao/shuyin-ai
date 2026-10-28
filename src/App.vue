@@ -2,12 +2,16 @@
 import { computed, onMounted } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import AppIcon from './components/AppIcon.vue'
+import AppNotifications from './components/AppNotifications.vue'
+import OperationFeedback from './components/OperationFeedback.vue'
 import appLogo from '../assets/app-icon.svg'
 import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useAppUpdates } from './composables/useAppUpdates'
 
-const { initialize, status: updateStatus, update } = useAppUpdates()
+const { initialize, status: updateStatus, update, error: updateError, settingsError } = useAppUpdates()
+const updateMessage = computed(() => updateStatus.value === 'current' ? '当前已是最新版本。' : update.value
+  ? `书引 AI v${update.value.version} ${updateStatus.value === 'ready' ? '已下载，请在关于与更新中确认安装。' : updateStatus.value === 'restart' ? '已安装，请重启应用。' : updateStatus.value === 'available' ? '可用，可在关于与更新中查看。' : ''}` : '')
 onMounted(() => { void initialize() })
 
 const route = useRoute()
@@ -20,6 +24,12 @@ const workspaceTitle = computed(() => route.path === '/publishing' ? '发布任�
 </script>
 
 <template>
+  <AppNotifications />
+  <OperationFeedback
+    :error="updateError || settingsError"
+    :message="['current', 'available', 'ready', 'restart'].includes(updateStatus) ? updateMessage : ''"
+    variant="info"
+  />
   <div class="grid min-h-screen grid-cols-[64px_minmax(0,1fr)] md:grid-cols-[208px_minmax(0,1fr)] xl:grid-cols-[224px_minmax(0,1fr)]">
     <aside class="sticky top-0 flex h-screen flex-col border-r border-sidebar-border bg-sidebar px-2 py-6 md:px-4">
       <RouterLink

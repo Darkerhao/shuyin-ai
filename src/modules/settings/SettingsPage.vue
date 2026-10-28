@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import OperationFeedback from '../../components/OperationFeedback.vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { onMounted, ref } from 'vue'
@@ -59,19 +60,10 @@ onMounted(() => { if (desktop) void load() })
   >
     请在桌面应用中管理目录和备份。
   </p>
-  <p
-    v-if="error"
-    class="error"
-    role="alert"
-  >
-    {{ error }}
-  </p><p
-    v-if="message"
-    class="file-path"
-    role="status"
-  >
-    {{ message }}
-  </p>
+  <OperationFeedback
+    :error="error"
+    :message="message"
+  />
   <section class="panel">
     <h2>默认工作目录</h2><p class="muted">
       新项目会在此目录下创建独立文件夹。修改默认目录不会移动已有项目。

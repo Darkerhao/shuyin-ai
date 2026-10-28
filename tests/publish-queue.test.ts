@@ -1,3 +1,5 @@
+import { defineComponent, h } from 'vue'
+import AppNotifications from '../src/components/AppNotifications.vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -14,7 +16,7 @@ const wrappers: ReturnType<typeof mount>[] = []
 async function render() {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/publishing', component: PublishQueuePage }, { path: '/projects', component: { template: '<p>书籍</p>' } }, { path: '/projects/:id/publishing', component: { template: '<p>处理任务</p>' } }] })
   await router.push('/publishing'); await router.isReady()
-  const wrapper = mount(PublishQueuePage, { global: { plugins: [router] } }); wrappers.push(wrapper)
+  const wrapper = mount(defineComponent({ setup: () => () => [h(AppNotifications), h(PublishQueuePage)] }), { global: { plugins: [router] } }); wrappers.push(wrapper)
   await flushPromises()
   return { wrapper, router }
 }

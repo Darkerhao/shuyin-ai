@@ -24,6 +24,7 @@ const visible = computed(() => {
 })
 const load = () => run(async () => { tasks.value = await listPublishQueue(); loaded.value = true })
 async function copyLink(link: string) {
+  error.value = ''; message.value = ''
   try { await globalThis.navigator.clipboard.writeText(link); error.value = ''; message.value = '作品链接已复制。' }
   catch { error.value = '复制失败，请选中作品链接后手动复制。' }
 }
