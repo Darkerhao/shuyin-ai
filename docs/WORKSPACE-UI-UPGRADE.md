@@ -2,6 +2,8 @@
 
 日期：2026-10-28。
 
+本文前半部分保留上轮书架与导航升级验收，其他页面的后续实现见文末“续轮页面升级”。
+
 ## 设计与实现
 
 使用当前项目已安装的 ui-ux-pro-max、frontend-design，并读取 Vercel 官方最新 Web Interface Guidelines 审查本次改动。设计检索的营销页结构不适用桌面工作台，因此采用现有品牌、原生系统字体和工作流程作为页面依据。
@@ -59,4 +61,36 @@
 
 ## 剩余与下一步
 
+本报告记录书架、发布任务及共享导航/样式这一轮的验收，不代表所有页面已逐页完成升级。完整剩余项见 [全页面升级缺口审查](UI-UPGRADE-AUDIT.md)。
+
 本轮页面与导航验收已满足。队列脚本失败未修改，需要独立定位。未运行 Rust 检查、数据库迁移测试、Windows WebView2 人工桌面验收、安装包构建、真实模型调用或账号发布。建议下一步在 Windows 桌面版核对文件选择、离页保存和发布窗口切换；构建主包体积可作为独立性能任务评估。
+
+## 续轮页面升级（2026-10-28）
+
+沿用现有墨绿、灰白面板、系统字体与统一控件，以保护操作、返回恢复和主次层级为本轮验收目标；没有新增依赖或重复实现已有自动草稿、生成取消、裁切和发布步骤。
+
+| 验收标准 | 实现 / 结果 |
+| --- | --- |
+| 取消不删除，键盘可进入和返回 | 新增共享 `ConfirmAction.vue`，个人样式及书籍/模型/素材删除、恢复、更新安装统一焦点与 Escape；样式取消时删除命令调用为 0 |
+| 资料正常关闭有保护 | `useWindowCloseGuard.ts` 监听浏览器卸载与 Tauri 关闭；未保存确认取消及忙碌时阻止关闭。单测覆盖异步决定、监听清理与晚注册；真实关窗待验 |
+| 刷新 / 返回定位当前任务 | 任务切换、新建和保存同步 `task`；刷新任务二仍显示任务二。`useQueryState.ts` 提取书架已有模式，复用于页签和队列筛选；单测覆盖返回及非法参数 |
+| 音频入口及后续操作正确 | 发布页链接直达音频页签；时长摘要可展开，音频页进入时展开；音频页下一步进入发布准备 |
+| 预览与编辑易达且无遮挡 | 大窗口吸顶避开顶栏并限制可用高度；窄窗口就地切换编辑 / 预览，预览标题避开切换栏；保留当前页签与编辑内容，底部操作保持吸底 |
+| 缺失项可以补齐 | 已保存检查项提供字段焦点，封面/音频可直达制作页，素材可一键展开管理 |
+| 备份及模型反馈明确 | 模型按读取 / 保存 / 连接测试 / 删除显示状态并记住所选模型；备份中保护离页与关闭，当前会话保留最近结果，完整备份主入口与高级数据库维护分层 |
+| 素材查找与统一排版 | 名称 / 路径搜索、类型及文件状态筛选、清空空态；数据备份、关于与技术验证统一页头；封面字号和颜色提示改用共享语义色与可读字号 |
+
+修改文件：
+
+- 共享：`src/components/ConfirmAction.vue`、`src/composables/useQueryState.ts`、`src/composables/useWindowCloseGuard.ts`、`src/composables/useOperation.ts`、`src/style.css`。
+- 书籍与创作：`ProjectsPage.vue`、`ProjectPage.vue`、`ProjectAssets.vue`、`WritingPage.vue`、`CoversPage.vue`。
+- 发布：`PublishingPage.vue`、`PublishQueuePage.vue`。
+- 设置：`ModelsPage.vue`、`SettingsPage.vue`、`workspaceOperation.ts`、`AboutPage.vue`；技术验证：`VerificationPage.vue`。
+- 回归：`tests/projects.test.ts`、`ai.test.ts`、`covers.test.ts`、`publishing.test.ts`、`publish-queue.test.ts`、新增 `window-close.test.ts`。
+- 文档：本报告、`UI-UPGRADE-AUDIT.md`、`TECHNICAL-DESIGN.md`。
+
+实际验证：`npm run lint` 0 警告；`npm run typecheck` 通过；页面及窗口专项 153 项通过，完整 Vitest 199 项通过；`npm run build` 通过（保留主包超过 500 kB 提示）；`npm test` 首次整体因既有队列 1 项失败而退出，发布/音频脚本 65 项通过、1 项按平台跳过。具体复现与隔离浏览器证据见审查报告顶部。
+
+获准执行权限后再次运行完整 `npm test`，仍为相同队列用例失败（18 通过 / 1 失败），前端与发布/音频脚本结果不变。最终 `npm run build` 通过，JS 主包 511.82 kB；`git diff --check` 通过。
+
+无数据库变更、迁移脚本、Rust 修改、依赖或版本号调整，未提交。剩余是实际 Windows 关闭及原生文件/备份恢复验收、独立队列问题和可选素材页内预览；备份结果只保留于当前应用会话，不承诺重启恢复操作记录。

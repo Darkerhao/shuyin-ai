@@ -7,14 +7,15 @@ import { Input } from '@/components/ui/input'
 import AppIcon from '../../components/AppIcon.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import { useOperation } from '../../composables/useOperation'
+import { useQueryState } from '../../composables/useQueryState'
 import { isDesktop } from '../../services/projects'
 import { listPublishQueue } from '../../services/publishing'
-import { publishStatuses, type PublishQueueItem, type PublishTask } from '../../types/publishing'
+import { publishStatuses, type PublishQueueItem } from '../../types/publishing'
 
 const desktop = isDesktop()
 const tasks = ref<PublishQueueItem[]>([])
-const status = ref<PublishTask['status']>('ready')
-const search = ref('')
+const status = useQueryState('status', 'ready', ['ready', 'draft', 'published'])
+const search = useQueryState('q', '')
 const loaded = ref(false)
 const { busy, error, message, run } = useOperation()
 const filters = ['ready', 'draft', 'published'] as const

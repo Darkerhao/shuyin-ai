@@ -6,7 +6,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import ConfirmAction from '../../components/ConfirmAction.vue'
 import * as api from '../../services/ai'
 import { isDesktop } from '../../services/projects'
 import { emptyProvider, type ModelProvider, type ProviderInput } from '../../types/ai'
@@ -14,6 +15,8 @@ import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 const desktop = isDesktop()
+const route = useRoute()
+const router = useRouter()
 const providers = ref<ModelProvider[]>([])
 const id = ref<string | null>(null)
 const form = ref(emptyProvider())
@@ -21,8 +24,9 @@ const apiKey = ref('')
 const original = ref(JSON.stringify(form.value))
 const dirty = computed(() => JSON.stringify(form.value) !== original.value || !!apiKey.value)
 const deleting = ref(false)
+const loaded = ref(false)
 let initialized = false
-const { busy, error, message, run } = useOperation()
+const { busy, error, message, operation, run } = useOperation()
 const canLeave = () => !busy.value && (!dirty.value || globalThis.confirm('模型配置尚未保存，确定放弃修改？'))
 onBeforeRouteLeave(canLeave)
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value) event.preventDefault() }
@@ -31,6 +35,7 @@ onBeforeUnmount(() => { apiKey.value = ''; globalThis.removeEventListener('befor
 function edit(provider?: ModelProvider) {
   if (!canLeave()) return
   selectProvider(provider)
+  void router.replace({ query: { ...route.query, model: provider?.id ?? 'new' } })
 }
 function selectProvider(provider?: ModelProvider) {
   id.value = provider?.id ?? null
@@ -39,9 +44,10 @@ function selectProvider(provider?: ModelProvider) {
 }
 const load = () => run(async () => {
   providers.value = await api.listProviders()
-  if (!initialized && !dirty.value) selectProvider(providers.value.find(p => p.modelKind === 'text' && p.isDefault) ?? providers.value[0])
+  if (!initialized && !dirty.value) selectProvider(route.query.model === 'new' ? undefined : providers.value.find(p => p.id === route.query.model) ?? providers.value.find(p => p.modelKind === 'text' && p.isDefault) ?? providers.value[0])
   initialized = true
-})
+  loaded.value = true
+}, '正在读取模型列表…')
 const save = () => run(async () => {
   const input: ProviderInput = { ...form.value }
   const result = await api.saveProvider(id.value, input, apiKey.value || null)
@@ -49,14 +55,16 @@ const save = () => run(async () => {
   form.value = { ...input, baseUrl: result.provider.baseUrl }; original.value = JSON.stringify(form.value)
   message.value = result.warning ?? '模型配置已保存。密钥仅保存在系统凭据库中。'
   providers.value = await api.listProviders()
-})
-const test = () => run(async () => { if (id.value) message.value = await api.testConnection(id.value) })
+  await router.replace({ query: { ...route.query, model: id.value } })
+}, '正在保存模型配置…')
+const test = () => run(async () => { if (id.value) message.value = await api.testConnection(id.value) }, '正在测试连接，最多等待 120 秒…')
 const remove = () => run(async () => {
   if (!id.value) return
   await api.deleteProvider(id.value)
   id.value = null; form.value = emptyProvider(); original.value = JSON.stringify(form.value); apiKey.value = ''; deleting.value = false
   message.value = '模型配置与对应系统凭据已删除。'; providers.value = await api.listProviders()
-})
+  await router.replace({ query: { ...route.query, model: 'new' } })
+}, '正在删除模型及密钥…')
 onMounted(() => { if (desktop) void load() })
 </script>
 <template>
@@ -83,7 +91,23 @@ onMounted(() => { if (desktop) void load() })
     :message="message"
     @dismiss="message = ''"
   />
-  <div class="model-layout">
+  <p
+    v-if="busy"
+    class="loading-state"
+    role="status"
+  >
+    {{ operation }}
+  </p>
+  <p
+    v-else-if="!loaded && desktop"
+    class="notice"
+  >
+    模型列表未读取成功，请刷新后重试。
+  </p>
+  <div
+    class="model-layout"
+    :aria-busy="busy"
+  >
     <section
       class="panel model-list"
       aria-label="已配置服务"
@@ -168,7 +192,7 @@ onMounted(() => { if (desktop) void load() })
         <p class="muted">
           {{ id ? '调整连接信息，或测试当前服务是否可用。' : '填好服务信息，开始你的第一次 AI 创作。' }}
         </p>
-        <fieldset :disabled="!desktop || busy">
+        <fieldset :disabled="!desktop || busy || !loaded">
           <div class="form-grid">
             <div>
               <label for="provider-name">服务名称 *</label><Input
@@ -285,42 +309,17 @@ onMounted(() => { if (desktop) void load() })
               删除模型
             </Button>
           </div>
-          <p
-            v-if="busy"
-            class="muted"
-            role="status"
-          >
-            正在处理，请稍候。连接测试最多等待 120 秒。
-          </p>
         </fieldset>
       </form>
-      <section
+      <ConfirmAction
         v-if="deleting"
-        class="panel confirmation"
-        role="alertdialog"
-        aria-labelledby="delete-model-title"
+        :title="`删除模型「${form.name}」及密钥？`"
+        :busy="busy"
+        @confirm="remove"
+        @cancel="deleting = false"
       >
-        <h2 id="delete-model-title">
-          确认删除此模型及密钥？
-        </h2><p>历史创作版本保留。使用此模型的运行任务需要先结束。</p>
-        <div class="actions">
-          <Button
-            :disabled="busy"
-            variant="destructive"
-            type="button"
-            @click="remove"
-          >
-            确认删除
-          </Button><Button
-            :disabled="busy"
-            variant="outline"
-            type="button"
-            @click="deleting = false"
-          >
-            取消
-          </Button>
-        </div>
-      </section>
+        <p>历史创作版本保留。使用此模型的运行任务需要先结束。</p>
+      </ConfirmAction>
       <p class="settings-footer muted">
         <AppIcon name="folder" /><a href="#/settings">数据备份与应用目录</a>
       </p>
@@ -328,6 +327,6 @@ onMounted(() => { if (desktop) void load() })
   </div>
 </template>
 <style scoped>
-.connection-help { margin-top: 12px; color: #8a9780; font-size: 11px; }
+.connection-help { margin-top: 12px; color: var(--muted-foreground); font-size: 13px; }
 .delete-model { margin-left: auto; }
 </style>

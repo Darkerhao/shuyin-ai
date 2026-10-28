@@ -22,6 +22,8 @@ import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OperationFeedback from '../../components/OperationFeedback.vue'
+import ConfirmAction from '../../components/ConfirmAction.vue'
+import { useQueryState } from '../../composables/useQueryState'
 import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
 
 const props = defineProps<{ id: string }>()
@@ -41,14 +43,17 @@ const previewCanvases: (globalThis.HTMLCanvasElement | null)[] = []
 const presets = ref<CoverPreset[]>([])
 const presetId = ref<string | null>(null)
 const presetName = ref('')
+const deletingPreset = ref(false)
+const selectedPreset = computed(() => presets.value.find(p => p.id === presetId.value))
 const background = shallowRef<globalThis.HTMLImageElement | null>(null)
 const backgroundLoading = ref(false)
 const backgroundError = ref('')
 const previewError = ref('')
 const actualSizes = ref({ titleSize: 112, subtitleSize: 44 })
-const { busy, error, message, run } = useOperation()
+const { busy, error, message, operation, run } = useOperation()
 const useAi = ref(false)
-const activeTab = ref('text')
+const activeTab = useQueryState('tab', 'text', ['text', 'style', 'background'])
+const coverView = ref('edit')
 const tabs = [{ value: 'text', label: '文字内容' }, { value: 'style', label: '排版样式' }, { value: 'background', label: '背景图片' }]
 const imageModels = ref<ModelProvider[]>([])
 const providerId = ref('')
@@ -70,7 +75,7 @@ const canLeave = async () => {
   try { if (ready.value) await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
-onBeforeRouteUpdate(canLeave)
+onBeforeRouteUpdate((to, from) => to.params.id === from.params.id || canLeave())
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { disposed = true; backgroundRequest++; globalThis.removeEventListener('beforeunload', beforeUnload) })
@@ -184,7 +189,7 @@ const savePreset = () => run(async () => {
 const deletePreset = () => run(async () => {
   if (!presetId.value) return
   await api.deletePreset(presetId.value)
-  presets.value = presets.value.filter(p => p.id !== presetId.value); presetId.value = null; message.value = '已删除个人样式，当前封面保持原样。'
+  presets.value = presets.value.filter(p => p.id !== presetId.value); presetId.value = null; deletingPreset.value = false; message.value = '已删除个人样式，当前封面保持原样。'
 })
 watch(() => draft.value.backgroundAssetId, id => { if (!id || id !== loadedBackgroundId) void loadBackground(id) })
 watch(draft, paint, { deep: true, flush: 'post' })
@@ -244,13 +249,16 @@ async function cancelImage() {
   finally { cancelling.value = false }
 }
 const save = (exportPng = false) => run(async () => {
+  operation.value = '正在暂存编辑…'
   await autosave.flush()
   const source = { ...draft.value }
   const configs = exportPng ? coverSizes.map(size => ({ ...source, width: size.width, height: size.height })) : [source]
   // Render all ratios before writing any file so layout failures keep the whole draft.
+  operation.value = exportPng ? '正在渲染三种比例…' : '正在检查排版…'
   const outputs = await Promise.all(configs.map(async config => ({ config, png: exportPng ? await coverPng(config, background.value) : null })))
   const saved: CoverVersion[] = []
   for (const { config, png } of outputs) {
+    operation.value = exportPng ? `正在导出 ${saved.length + 1}/${outputs.length} 张封面…` : '正在保存编辑配置…'
     const version = await api.saveCover(props.id, config, png)
     versions.value = [version, ...versions.value]; saved.push(version)
     if (exportPng) message.value = `已导出 ${saved.length}/${outputs.length} 张封面：${saved.map(v => v.exportedPath).join('；')}`
@@ -259,6 +267,24 @@ const save = (exportPng = false) => run(async () => {
   await autosave.flush()
   message.value = exportPng ? `已导出 ${saved.length} 张封面：${saved.map((v, i) => `${coverSizes[i]!.label}：${v.exportedPath}`).join('；')}` : `编辑配置已保存为 v${saved[0]!.versionNo}。`
 })
+async function showPreview() {
+  coverView.value = 'preview'; await nextTick()
+  const preview = globalThis.document.getElementById('cover-preview')
+  preview?.scrollIntoView({ block: 'start' }); preview?.focus({ preventScroll: true })
+}
+async function showEditor() {
+  coverView.value = 'edit'; await nextTick()
+  globalThis.document.querySelector('.cover-controls')?.scrollIntoView({ block: 'start' })
+  globalThis.document.querySelector<globalThis.HTMLButtonElement>('[aria-label="封面编辑"] [data-state="active"]')?.focus({ preventScroll: true })
+}
+function saveShortcut(event: globalThis.KeyboardEvent) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    if (ready.value && !busy.value && !deletingPreset.value) void save(false)
+  }
+}
+globalThis.addEventListener('keydown', saveShortcut)
+onBeforeUnmount(() => globalThis.removeEventListener('keydown', saveShortcut))
 onMounted(async () => {
   await globalThis.document.fonts.ready
   fontsReady = true
@@ -317,7 +343,32 @@ onMounted(async () => {
       :class="{ spin: busy }"
     />{{ busy ? '读取中…' : '重新读取' }}
   </Button>
+  <ConfirmAction
+    v-if="deletingPreset && selectedPreset"
+    :title="`删除个人样式「${selectedPreset.name}」？`"
+    :busy="busy"
+    @confirm="deletePreset"
+    @cancel="deletingPreset = false"
+  >
+    <p>删除后无法恢复此个人样式，当前封面和已保存的封面历史保持原样。</p>
+  </ConfirmAction>
   <template v-if="ready">
+    <div class="cover-jump actions">
+      <Button
+        variant="outline"
+        :aria-pressed="coverView === 'preview'"
+        @click="showPreview"
+      >
+        查看实时预览
+      </Button>
+      <Button
+        variant="ghost"
+        :aria-pressed="coverView === 'edit'"
+        @click="showEditor"
+      >
+        返回编辑
+      </Button>
+    </div>
     <p
       v-if="writingError"
       class="notice"
@@ -331,7 +382,10 @@ onMounted(async () => {
         重新读取
       </Button>
     </p>
-    <div class="cover-workbench">
+    <div
+      class="cover-workbench"
+      :data-view="coverView"
+    >
       <div class="cover-controls panel">
         <div class="section-heading">
           <h2><AppIcon name="settings" /> 编辑封面</h2><Badge
@@ -485,7 +539,7 @@ onMounted(async () => {
                     type="button"
                     variant="outline"
                     :disabled="busy"
-                    @click="deletePreset"
+                    @click="deletingPreset = true"
                   >
                     删除样式
                   </Button>
@@ -869,6 +923,8 @@ onMounted(async () => {
         </Tabs>
       </div>
       <section
+        id="cover-preview"
+        tabindex="-1"
         class="cover-preview panel"
         aria-label="封面预览"
       >
@@ -1026,7 +1082,7 @@ onMounted(async () => {
       <span
         class="save-status"
         :class="{ 'is-dirty': dirty }"
-      ><i class="status-dot" />{{ dirty ? autosave.status.value || '有未保存修改' : '编辑配置已保存' }}</span>
+      ><i class="status-dot" />{{ operation || (dirty ? autosave.status.value || '有未保存修改' : '编辑配置已保存') }}</span>
       <div class="actions wrap">
         <Button
           type="submit"
@@ -1098,14 +1154,15 @@ onMounted(async () => {
 .style-card:hover, .style-card[aria-pressed="true"] { border-color: var(--primary); }
 .style-card[aria-pressed="true"] { box-shadow: 0 0 0 1px var(--primary); }
 .style-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
-.cover-preview { position: sticky; top: 20px; }
+.cover-preview { position: sticky; top: var(--workspace-sticky-top); max-height: calc(100dvh - var(--workspace-sticky-top) - 108px); overflow: auto; scroll-margin-top: var(--workspace-sticky-top); }
+.cover-jump { display: none; }
 .cover-preview h2 { font-size: 13px; }
-.preview-dimensions { font-size: 10px; color: #8b9980; }
+.preview-dimensions { font-size: 12px; color: var(--muted-foreground); }
 .canvas-stage { display: flex; align-items: center; justify-content: center; height: clamp(280px, 43vh, 470px); padding: 24px; background-color: #eef0e9; background-image: radial-gradient(#cbd4c0 0.8px, transparent 0.8px); background-size: 12px 12px; border: 1px solid #e4e8db; border-radius: 9px; overflow: hidden; }
 canvas { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; box-shadow: 0 6px 18px #22352224; }
 .preview-caption { text-align: center; color: var(--muted-foreground); font-size: 12px; margin: 17px 0 11px; }
 .export-formats { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 17px; }
-.export-formats > span { display: inline-flex; align-items: center; gap: 6px; color: #829274; font-size: 10px; }
+.export-formats > span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); font-size: 12px; }
 .ratio-icon { width: 17px; height: 13px; border: 1px solid #99ae8a; border-radius: 2px; }
 .ratio-icon.portrait { width: 12px; height: 16px; }
 .ratio-icon.widescreen { width: 21px; height: 12px; }
@@ -1114,7 +1171,8 @@ canvas { display: block; max-width: 100%; max-height: 100%; width: auto; height:
 .ai-toggle, .choose-image { width: 100%; margin-top: 11px; }
 .refresh-models { margin-top: 8px; }
 @media (max-width: 1180px) { .cover-workbench { gap: 18px; } .cover-controls, .cover-preview { padding: 18px; } }
-@media (max-width: 980px) { .cover-workbench { grid-template-columns: 1fr; gap: 14px; } .cover-preview { position: static; } }
+@media (max-width: 980px) { .cover-workbench { grid-template-columns: minmax(0, 1fr); gap: 14px; } .cover-preview { position: static; max-height: none; } .cover-jump { display: flex; margin: 0 0 16px; position: sticky; top: var(--workspace-sticky-top); z-index: 6; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); } .cover-jump .back-link { margin: 0; } }
 @media (max-width: 850px) { .cover-controls, .cover-preview { padding: 15px; } .canvas-stage { padding: 15px; height: 300px; } .export-formats { gap: 9px; } }
+@media (max-width: 980px) { .cover-workbench[data-view="edit"] .cover-preview, .cover-workbench[data-view="preview"] .cover-controls { display: none; } .cover-jump [aria-pressed="true"] { background: var(--accent); color: var(--primary); } .cover-preview, .cover-controls { scroll-margin-top: calc(var(--workspace-sticky-top) + 64px); } }
 @media (max-width: 720px) { .cover-workbench { grid-template-columns: 1fr; } .cover-preview { position: static; } .canvas-stage { height: 320px; } }
 </style>

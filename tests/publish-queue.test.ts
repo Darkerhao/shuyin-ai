@@ -2,7 +2,7 @@ import { defineComponent, h } from 'vue'
 import AppNotifications from '../src/components/AppNotifications.vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { createMemoryHistory, createRouter } from 'vue-router'
+import { RouterView, createMemoryHistory, createRouter } from 'vue-router'
 import PublishQueuePage from '../src/modules/publishing/PublishQueuePage.vue'
 import { listPublishQueue } from '../src/services/publishing'
 import { isDesktop } from '../src/services/projects'
@@ -16,7 +16,7 @@ const wrappers: ReturnType<typeof mount>[] = []
 async function render() {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/publishing', component: PublishQueuePage }, { path: '/projects', component: { template: '<p>书籍</p>' } }, { path: '/projects/:id/publishing', component: { template: '<p>处理任务</p>' } }] })
   await router.push('/publishing'); await router.isReady()
-  const wrapper = mount(defineComponent({ setup: () => () => [h(AppNotifications), h(PublishQueuePage)] }), { global: { plugins: [router] } }); wrappers.push(wrapper)
+  const wrapper = mount(defineComponent({ setup: () => () => [h(AppNotifications), h(RouterView)] }), { global: { plugins: [router] } }); wrappers.push(wrapper)
   await flushPromises()
   return { wrapper, router }
 }
@@ -40,15 +40,15 @@ describe('daily publication queue', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     const { wrapper } = await render()
-    await button(wrapper, '草稿').trigger('click')
+    await button(wrapper, '草稿').trigger('click'); await flushPromises()
     expect(wrapper.text()).toContain('待完成：视频已关联且文件可用')
-    await button(wrapper, '已发布').trigger('click')
+    await button(wrapper, '已发布').trigger('click'); await flushPromises()
     expect(wrapper.findAll('article')).toHaveLength(1)
     expect(wrapper.text()).toContain('人工确认的记录')
     await button(wrapper, '复制作品链接').trigger('click'); await flushPromises()
     expect(writeText).toHaveBeenCalledWith('https://www.douyin.com/video/123')
     expect(wrapper.text()).toContain('作品链接已复制')
-    await wrapper.get('#publish-search').setValue('不存在')
+    await wrapper.get('#publish-search').setValue('不存在'); await flushPromises()
     expect(wrapper.text()).toContain('没有匹配的任务')
   })
   it('retains the current list after refresh failure and accepts a successful retry', async () => {
@@ -61,19 +61,19 @@ describe('daily publication queue', () => {
     await button(wrapper, '刷新任务').trigger('click'); await flushPromises()
     expect(wrapper.text()).toContain('作品就绪后，在这里开始发布')
     expect(wrapper.findAll('article')).toHaveLength(0)
-    await button(wrapper, '查看发布草稿').trigger('click')
+    await button(wrapper, '查看发布草稿').trigger('click'); await flushPromises()
     expect(wrapper.text()).toContain('还没有发布草稿')
     expect(wrapper.get('.empty-state a').attributes('href')).toBe('/projects')
   })
   it('clears a failed search with the clear control or Escape without reloading tasks', async () => {
     const { wrapper } = await render()
-    await wrapper.get('#publish-search').setValue('不存在')
+    await wrapper.get('#publish-search').setValue('不存在'); await flushPromises()
     expect(wrapper.findAll('article')).toHaveLength(0)
-    await wrapper.get('[aria-label="清空任务搜索"]').trigger('click')
+    await wrapper.get('[aria-label="清空任务搜索"]').trigger('click'); await flushPromises()
     expect(wrapper.findAll('article')).toHaveLength(2)
-    await wrapper.get('#publish-search').setValue('第二本')
+    await wrapper.get('#publish-search').setValue('第二本'); await flushPromises()
     expect(wrapper.findAll('article')).toHaveLength(1)
-    await wrapper.get('#publish-search').trigger('keydown', { key: 'Escape' })
+    await wrapper.get('#publish-search').trigger('keydown', { key: 'Escape' }); await flushPromises()
     expect(wrapper.findAll('article')).toHaveLength(2)
     expect(listPublishQueue).toHaveBeenCalledOnce()
   })
@@ -83,5 +83,17 @@ describe('daily publication queue', () => {
     expect(listPublishQueue).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('请在桌面应用中查看发布任务')
     expect(button(wrapper, '刷新任务').attributes()).toHaveProperty('disabled')
+  })
+  it('restores search and status after opening a task and returning', async () => {
+    const { wrapper, router } = await render()
+    await button(wrapper, '草稿').trigger('click'); await flushPromises()
+    await wrapper.get('#publish-search').setValue('待完善'); await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ status: 'draft', q: '待完善' })
+    await wrapper.get('article a').trigger('click'); await flushPromises()
+    expect(wrapper.find('#publish-search').exists()).toBe(false)
+    router.back(); await flushPromises()
+    expect((wrapper.get('#publish-search').element as HTMLInputElement).value).toBe('待完善')
+    expect(wrapper.findAll('article')).toHaveLength(1)
+    expect(wrapper.get('article h2').text()).toBe('待完善')
   })
 })
