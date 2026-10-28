@@ -113,11 +113,6 @@ header { margin-bottom: 25px; }
 .notice { color: #8f7952; background: #faf5e8; border: 1px solid #eee5cd; }
 .error { color: #a34a42; background: #fff1ee; border: 1px solid #f1dcd6; }
 .error .app-icon { margin-right: 8px; }
-.operation-feedback { position: fixed; z-index: 20; bottom: 88px; right: 26px; display: flex; align-items: flex-start; gap: 10px; max-width: min(560px, calc(100vw - 50px)); max-height: 200px; overflow: auto; padding: 12px 13px 12px 16px; border: 1px solid #d8e4d7; border-radius: 12px; background: #fbfff9; color: #486c4b; box-shadow: 0 8px 30px #1f39271c; font-size: 12px; }
-.operation-feedback > .app-icon { margin-top: 6px; }
-.operation-feedback > span { padding: 4px 0; overflow-wrap: anywhere; }
-.feedback-enter-active, .feedback-leave-active { transition: opacity 180ms, transform 180ms; }
-.feedback-enter-from, .feedback-leave-to { opacity: 0; transform: translateY(6px); }
 .project-navigation { display: flex; align-items: center; padding: 5px; margin: 0 0 24px; border: 1px solid var(--line); border-radius: 12px; background: #f0f3ed; }
 .project-navigation a { display: flex; flex: 1; gap: 9px; align-items: center; padding: 11px 15px; border-radius: 8px; color: #899281; font-size: 12px; text-decoration: none; min-width: 0; }
 .project-navigation a.router-link-active { background: #fff; color: #456745; box-shadow: 0 2px 5px #25392607; font-weight: 600; }

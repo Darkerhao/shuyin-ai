@@ -1,3 +1,4 @@
+import AppNotifications from '../src/components/AppNotifications.vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import DouyinVerification from '../src/modules/publishing/DouyinVerification.vue'
@@ -14,6 +15,7 @@ const state = (changes: Partial<DouyinSession> = {}): DouyinSession => ({
 const wrappers: ReturnType<typeof mount>[] = []
 let progress: (session: DouyinSession) => void
 function render(extra = {}) {
+  const notifications = mount(AppNotifications, { attachTo: document.body }); wrappers.push(notifications)
   const wrapper = mount(DouyinVerification, { props: { desktop: true, task, ...extra } })
   wrappers.push(wrapper)
   return wrapper
@@ -46,7 +48,7 @@ describe('single host-owned Douyin workflow', () => {
     const w = render({ prepareTask: vi.fn().mockRejectedValue('缺少最终成片') })
     await flushPromises()
     await button(w, '开始抖音辅助发布').trigger('click'); await flushPromises()
-    expect(w.text()).toContain('缺少最终成片')
+    expect(document.body.textContent).toContain('缺少最终成片')
     expect(api.startDouyinTask).not.toHaveBeenCalled()
     expect(w.emitted('working')?.at(-1)).toEqual([false])
   })
@@ -83,7 +85,7 @@ describe('single host-owned Douyin workflow', () => {
     vi.mocked(api.stopDouyinTask).mockRejectedValue('停止失败')
     const w = render(); await flushPromises()
     await button(w, '停止并人工接管').trigger('click'); await flushPromises()
-    expect(w.text()).toContain('停止失败')
+    expect(document.body.textContent).toContain('停止失败')
     expect(w.emitted('working')?.at(-1)).toEqual([true])
   })
   it('persists an explicit no-collection decision and labels manual confirmation', async () => {

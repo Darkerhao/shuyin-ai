@@ -314,6 +314,7 @@ async function makeCover() {
   if (!dirty.value && selected.value) await router.push({ path: `/projects/${props.id}/covers`, query: { writingVersion: selected.value.id } })
 }
 async function copy(field: PublishingTextField, label: string) {
+  error.value = ''; message.value = ''
   try {
     await globalThis.navigator.clipboard.writeText(draft.value[field]); message.value = `已复制${label}。`; error.value = ''
     copiedField.value = field
@@ -396,13 +397,8 @@ onMounted(async () => {
     :message="message"
     @dismiss="message = ''"
   />
-  <p
-    v-if="autosave.error.value"
-    class="error"
-    role="alert"
-  >
-    {{ autosave.error.value }}
-  </p>
+  <OperationFeedback :error="autosave.error.value" />
+  <OperationFeedback :error="shownAudioJob?.errorMessage || ''" />
   <Button
     v-if="!ready"
     :disabled="!desktop || busy"

@@ -80,13 +80,7 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
       <p class="muted !mb-0">
         启动时检查新版本并在后台下载，安装前由你确认。关闭后仍可手动检查和更新。
       </p>
-      <p
-        v-if="settingsError"
-        class="error"
-        role="alert"
-      >
-        {{ settingsError }}
-      </p>
+
       <Button
         v-if="!initialized && settingsError"
         type="button"
@@ -119,13 +113,7 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
     >
       上次检查：{{ checkedAt }}
     </p>
-    <p
-      v-if="error"
-      class="error"
-      role="alert"
-    >
-      {{ error }}
-    </p>
+
     <div
       v-if="status === 'downloading'"
       class="my-4"

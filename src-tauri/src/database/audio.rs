@@ -32,7 +32,11 @@ pub struct StartAudioJobInput {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum AudioSourceInput {
     Asset { asset_id: String },
     Text,

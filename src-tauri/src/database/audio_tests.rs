@@ -7,6 +7,29 @@ use crate::database::{
 use rusqlite::Connection;
 use std::{fs, path::Path};
 
+#[test]
+fn start_audio_job_accepts_frontend_source_json() {
+    for source in [
+        serde_json::json!({ "kind": "asset", "assetId": "document-1" }),
+        serde_json::json!({ "kind": "text" }),
+    ] {
+        let payload = serde_json::json!({
+            "projectId": "project-1",
+            "writingVersionId": "version-1",
+            "source": source,
+            "format": "deep_dive"
+        });
+        let input: StartAudioJobInput = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(serde_json::to_value(input).unwrap(), payload);
+    }
+    assert!(
+        serde_json::from_value::<AudioSourceInput>(serde_json::json!({
+            "kind": "asset"
+        }))
+        .is_err()
+    );
+}
+
 fn sample_project(database: &Database, title: &str, notes: &str) -> Project {
     database
         .save_project(
@@ -273,14 +296,14 @@ fn source_chunk_verifies_size_and_hash_and_rejects_cross_book_assets() {
         })
         .is_err());
 
-    let job = database
-        .start_audio_job(StartAudioJobInput {
-            project_id: project.id.clone(),
-            writing_version_id: writing.id.clone(),
-            source: AudioSourceInput::Asset { asset_id },
-            format: "brief".into(),
-        })
-        .unwrap();
+    let input = serde_json::from_value(serde_json::json!({
+        "projectId": project.id,
+        "writingVersionId": writing.id,
+        "source": { "kind": "asset", "assetId": asset_id },
+        "format": "brief"
+    }))
+    .unwrap();
+    let job = database.start_audio_job(input).unwrap();
     let first = database.audio_source_chunk(&job.id, job.run_id, 0).unwrap();
     assert_eq!(first.bytes.len(), 256 * 1024);
     assert_eq!(first.name, "原书.docx");

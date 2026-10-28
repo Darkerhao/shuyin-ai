@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import OperationFeedback from '../../components/OperationFeedback.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -128,19 +129,8 @@ onMounted(() => { if (desktop) void load() })
         </Button>
       </div>
     </form>
-    <p
-      v-if="databaseError"
-      class="error"
-      role="alert"
-    >
-      {{ databaseError }}
-    </p>
-    <p
-      v-if="databaseStatus"
-      role="status"
-    >
-      {{ databaseStatus }}
-    </p>
+    <OperationFeedback :error="databaseError" />
+    <OperationFeedback :message="databaseStatus" />
     <dl v-if="snapshot">
       <dt>数据库文件</dt><dd>{{ snapshot.databasePath }}</dd>
       <dt>已保存内容</dt><dd>{{ snapshot.record?.note ?? '尚未保存' }}</dd>
@@ -178,18 +168,7 @@ onMounted(() => { if (desktop) void load() })
     >
       尚未选择视频
     </p>
-    <p
-      v-if="fileError"
-      class="error"
-      role="alert"
-    >
-      {{ fileError }}
-    </p>
-    <p
-      v-if="fileStatus"
-      role="status"
-    >
-      {{ fileStatus }}
-    </p>
+    <OperationFeedback :error="fileError" />
+    <OperationFeedback :message="fileStatus" />
   </section>
 </template>

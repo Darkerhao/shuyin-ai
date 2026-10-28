@@ -1,5 +1,21 @@
 # 书引 AI 开发计划与验收标准
 
+## 全站浮层提示统一（2026-10-28）
+
+新增固定版本 `vue-sonner@2.0.9`，应用根部只挂载一个 `AppNotifications`。现有 `OperationFeedback` 统一转发操作错误、成功、信息和警告，移除旧成功反馈 CSS；书架、书籍、素材、创作、封面、模型、备份、发布、更新和技术验证页接入。自动暂存、封面预览和任务失败可即时弹出，持久业务状态与确认对话框保留。复制操作先清理上次反馈，保证重复操作仍有提示。无数据库或权限变化，按 fix/patch 处理，保留前序音频参数修复。
+
+验收：`npm run lint` 通过；`npx vitest run --reporter=json --outputFile=output/notification-tests.json` 181 项通过，业务断言改为检查真实 Sonner 节点，另补充提示生命周期回归；`npm run build`（含 TypeScript）通过。独立 Playwright 浏览器中，1280×720 页面滚动 772px 后错误提示仍位于 y=24–136；390×844 窗口提示位于 x=16–374，无水平溢出。截图在 `output/notifications-desktop.png`、`output/notifications-mobile.png`。浏览器验收使用真实组件和隔离展示页，未替代安装后的 Windows WebView2 验收；展示页唯一控制台错误为未提供 favicon 的 404。
+
+`npm run desktop:build -- --bundles nsis --config output/audio-source-fix/local-bundle.json` 成功；复制校验通过，交付包为 `output/notifications-fix/书引AI-统一提示与音频修复-0.20.0-setup.exe`。本地包仅用于手动安装，未发布或替换正在运行的应用；包含本轮提示统一及前序音频修复，无数据库迁移。`git diff --check` 通过。
+
+## 音频文件来源 IPC 参数修复（2026-10-28）
+
+真实页面通过 `start_audio_job` 发送 `source: { kind: "asset", assetId }`，Rust `AudioSourceInput` 的枚举重命名原先只作用于变体名，内部字段仍要求 `asset_id`，导致任务创建前报 missing field。补充 `rename_all_fields = "camelCase"`，不增加双命名兼容或默认素材 ID；数据库冻结快照仍使用既有 `FrozenSource` 格式，无迁移、权限或依赖变更，属于 fix/patch。
+
+新增真实 JSON 契约回归，修复前复现相同的 `missing field asset_id`；原有文件分块集成测试改从前端 JSON 创建任务，覆盖解析、素材关联和分块读取。`cargo test --manifest-path src-tauri/Cargo.toml --locked database::audio::audio_tests` 10 项通过，`npm run check:rust` 通过。Rust 命令先加载 `. ./.tools/env.ps1`，TEMP/TMP/SQLITE_TMPDIR 指向仓库 `output/native-diagnostic`。不以本地回归替代真实 Google 生成下载验收；已安装的旧二进制需要更新才能生效。
+
+本地交付：`npm run desktop:build -- --bundles nsis --config output/audio-source-fix/local-bundle.json` 成功，包含 TypeScript/Vite 生产构建、release helper、release 桌面程序及 Windows x64 NSIS 包；临时配置仅关闭自动更新签名产物，本包用于手动安装，不修改正式发布配置或版本号。安装包复制到 `output/audio-source-fix/书引AI-音频修复-0.20.0-setup.exe`，与原产物 SHA-256 一致，并保存 `.sha256` 文件。包同时包含上一轮桥接路径修复。尚未运行安装器、替换用户运行中的应用或验证真实 Google 完整流程。`git diff --check` 通过。
+
 ## Chrome 扩展连接诊断修复（2026-10-28）
 
 实际连接根因：宿主清单把 `canonicalize` 的 `\\?\D:\书引 AI\browser-bridge.exe` 交给 Chrome，经过命令解释器启动失败；改为普通盘符形式后，同一轮询成功。当前用户清单已备份并修正，用户确认扩展显示“已连接”。源码将既有素材路径转换提取为共享 `paths::shell_path`，注册清单复用它，不新增依赖或重复转换逻辑。当前安装的旧版桌面程序未替换，重启旧版仍会重写旧路径；永久生效需要包含源码修复的新构建。音频生成和下载全流程不在本次连接验收范围。

@@ -291,7 +291,11 @@ defineExpose({ start })
     </div>
     <OperationFeedback
       :error="error"
-      message=""
+    />
+    <OperationFeedback
+      :error="session?.status === 'failed' ? session.message : ''"
+      :message="session?.status === 'waiting' || session?.status === 'review' ? session.message : ''"
+      variant="warning"
     />
   </section>
 </template>

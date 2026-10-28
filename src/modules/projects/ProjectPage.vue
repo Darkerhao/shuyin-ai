@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import OperationFeedback from '../../components/OperationFeedback.vue'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { computed, onMounted, ref } from 'vue'
@@ -77,18 +78,10 @@ onMounted(() => { if (desktop && props.id) void load() })
   >
     请在桌面应用中编辑书籍。
   </p>
-  <p
-    v-if="error"
-    class="error"
-    role="alert"
-  >
-    {{ error }}
-  </p><p
-    v-if="message"
-    role="status"
-  >
-    {{ message }}
-  </p>
+  <OperationFeedback
+    :error="error"
+    :message="message"
+  />
   <Button
     v-if="!ready && !busy"
     :disabled="!desktop"

@@ -141,6 +141,7 @@ const open = (item: Parameters<typeof api.openPublishItem>[1]) => run(async () =
   if (selected.value) await api.openPublishItem(selected.value.id, item)
 })
 async function copy(field: 'title' | 'description' | 'tags' | 'all') {
+  error.value = ''; message.value = ''
   const text = field === 'all' ? [draft.value.title, draft.value.description, draft.value.tags].filter(Boolean).join('\n\n') : draft.value[field]
   try { await globalThis.navigator.clipboard.writeText(text); error.value = ''; message.value = '已复制发布文字。' }
   catch { error.value = '复制失败，请选中文字后手动复制。' }

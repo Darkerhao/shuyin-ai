@@ -1,3 +1,5 @@
+import { defineComponent, h } from 'vue'
+import AppNotifications from '../src/components/AppNotifications.vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import VerificationPage from '../src/modules/verification/VerificationPage.vue'
@@ -11,7 +13,7 @@ vi.mock('../src/services/verification', async (importOriginal) => ({
 const saved = { databasePath: 'D:\\test\\shuyin.sqlite3', record: { note: '已保存内容', updatedAt: '2026-10-23T00:00:00Z' } }
 const wrappers: ReturnType<typeof mount>[] = []
 function render() {
-  const wrapper = mount(VerificationPage)
+  const wrapper = mount(defineComponent({ setup: () => () => [h(AppNotifications), h(VerificationPage)] }))
   wrappers.push(wrapper)
   return wrapper
 }
@@ -42,7 +44,7 @@ describe('M0 verification behavior', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(wrapper.get('textarea').element.value).toBe('用户尚未保存的修改')
-    expect(wrapper.get('[role="alert"]').text()).toContain('database is locked')
+    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('database is locked')
     expect(wrapper.get('dl').text()).toContain('已保存内容')
     expect(wrapper.text()).not.toContain('写入并回读成功')
   })
@@ -75,18 +77,18 @@ describe('M0 verification behavior', () => {
     await button.trigger('click')
     await flushPromises()
     expect(wrapper.get('.file-path').text()).toBe('D:\\视频\\验证.mp4')
-    expect(wrapper.get('[role="alert"]').text()).toContain('对话框不可用')
+    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('对话框不可用')
   })
 
   it('shows initialization failure and allows an explicit read retry', async () => {
     vi.mocked(service.readProbe).mockRejectedValueOnce('数据库无法打开')
     const wrapper = render()
     await flushPromises()
-    expect(wrapper.get('[role="alert"]').text()).toContain('数据库无法打开')
+    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('数据库无法打开')
     const retry = wrapper.findAll('button').find(button => button.text() === '重新读取')!
     await retry.trigger('click')
     await flushPromises()
-    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    await vi.waitFor(() => expect(wrapper.find('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').exists()).toBe(false))
     expect(wrapper.get('textarea').element.value).toBe('已保存内容')
   })
 })
