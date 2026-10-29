@@ -717,7 +717,7 @@ impl Database {
         )?))
     }
 
-    #[cfg(any(target_os = "windows", test))]
+    #[cfg(target_os = "windows")]
     pub fn audio_checked(&self, id: &str, run_id: i64) -> Result<(), String> {
         self.with_connection(|connection| {
             require_run(&job(connection, id)?, run_id)?;
@@ -725,7 +725,7 @@ impl Database {
         })
     }
 
-    #[cfg(any(target_os = "windows", test))]
+    #[cfg(target_os = "windows")]
     pub fn audio_step_failed(&self, id: &str, run_id: i64, message: &str) -> Result<(), String> {
         self.with_connection(|connection| {
             let current = job(connection, id)?;

@@ -98,6 +98,19 @@ main 与 dev 的版本一致，但提交 SHA 不同，dev 未发布的业务改�
 - sync 若在原子推送成功后因 runner 中断被判定失败，重跑会验证相同标签与 dev cherry-pick 记录并跳过重复推送。
 - 同步成功后选择 **Re-run all jobs**：prepare 发现标签已覆盖推送提交，跳过后续阶段。恢复发布失败时应选择 **Re-run failed jobs**；需要在 90 天 artifact 保留期内操作。
 
+## 非 Windows 音频死代码检查修复（2026-10-29）
+
+`audio_checked` 和 `audio_step_failed` 仅由 Windows 音频调度器调用。原来的 `cfg(any(target_os = "windows", test))` 使 macOS/Linux 测试构建也包含这两个没有测试调用的方法，因 `cargo clippy --all-targets -- -D warnings` 的死代码检查而失败，尚未进入安装包构建。两处条件改为 `cfg(target_os = "windows")`，与实际调用方一致；保留严格检查和其他跨平台数据库测试。
+
+本次为 `fix`（patch），无依赖、数据库结构或迁移变更，不手动修改版本。Windows / Rust 1.99.1 本地验证：
+
+- `npm run check:rust`：fmt 与 Clippy 通过。
+- `npm run test:rust`：117 项通过，1 项既有原生凭据测试忽略；临时目录使用仓库 `output/audio-build-fix-test-temp`。
+- `node --test tests/audio-page.test.mjs tests/audio-package.test.mjs tests/release-assets.test.mjs`：38 项通过，1 项 macOS 专属归档测试跳过。
+- 最小 Rust 编译夹具提取实际方法的条件编译标记，并用自定义条件模拟 Windows 调用方的存在与缺席；修复前只有非 Windows 测试配置出现相同的两方法死代码错误，修复后两种配置均通过。此项不等于 macOS/Linux 原生构建。
+
+本轮未生成安装包或执行 macOS/Linux 原生构建，四平台结果仍需新一轮 CI 确认。修复合入 main 并推送后触发新运行；重跑旧运行不会使用这次源码修改。
+
 ## 本地验证
 
 ```powershell
