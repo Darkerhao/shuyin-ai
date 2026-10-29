@@ -17,7 +17,7 @@ import { emptyProject, type Asset, type Project } from '../src/types/project'
 vi.mock('../src/services/projects', async (original) => ({
   ...await original<typeof api>(),
   isDesktop: vi.fn(), listProjects: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), deleteProject: vi.fn(),
-  listAssets: vi.fn(), linkAsset: vi.fn(), unlinkAsset: vi.fn(), chooseAsset: vi.fn(),
+  listAssets: vi.fn(), linkAsset: vi.fn(), unlinkAsset: vi.fn(), chooseAsset: vi.fn(), chooseSourceDocument: vi.fn(),
   workspaceSettings: vi.fn(), chooseDirectory: vi.fn(), setWorkspaceRoot: vi.fn(), chooseBackup: vi.fn(), createBackup: vi.fn(), restoreBackup: vi.fn(),
 }))
 const saved: Project = { ...emptyProject(), id: 'p1', title: '活着', author: '余华', workspacePath: 'D:/books/p1', createdAt: '2026-10-23T00:00:00Z', updatedAt: '2026-10-23T00:00:00Z', archivedAt: null }
@@ -47,6 +47,54 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M1 projects and materials', () => {
+  it('stages local book files until save, ignores duplicate selection and keeps them on save failure', async () => {
+    const { wrapper, router } = await render('/projects/new')
+    await wrapper.get('#title').setValue('活着')
+    vi.mocked(api.chooseSourceDocument).mockResolvedValue('D:/书籍/活着.pdf')
+    await button(wrapper, '选择本地文件').trigger('click'); await flushPromises()
+    await button(wrapper, '选择本地文件').trigger('click'); await flushPromises()
+    expect(wrapper.get('[aria-label="本地书籍文件"]').findAll('li')).toHaveLength(1)
+    expect(api.saveProject).not.toHaveBeenCalled()
+    expect(api.linkAsset).not.toHaveBeenCalled()
+    vi.mocked(api.saveProject).mockRejectedValueOnce('素材文件不可用')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/projects/new')
+    expect(wrapper.get('[aria-label="本地书籍文件"]').text()).toContain('D:/书籍/活着.pdf')
+    expect(wrapper.get('#title').element).toHaveProperty('value', '活着')
+    vi.mocked(api.saveProject).mockResolvedValueOnce(saved)
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveProject).toHaveBeenLastCalledWith(null, expect.objectContaining({ title: '活着' }), ['D:/书籍/活着.pdf'])
+    expect(router.currentRoute.value.path).toBe('/projects/p1/writing')
+  })
+  it('cancels a file selection without saving and guards pending file changes on existing books', async () => {
+    const { wrapper, router } = await render('/projects/p1')
+    vi.mocked(api.chooseSourceDocument).mockResolvedValueOnce(null)
+    await button(wrapper, '选择本地文件').trigger('click'); await flushPromises()
+    expect(wrapper.find('[aria-label="本地书籍文件"]').exists()).toBe(false)
+    vi.mocked(api.chooseSourceDocument).mockResolvedValueOnce('D:\\书籍\\原书.epub')
+    await button(wrapper, '选择本地文件').trigger('click'); await flushPromises()
+    expect(wrapper.find('[aria-label="取消绑定 原书.epub"]').exists()).toBe(true)
+    await router.push('/projects')
+    expect(router.currentRoute.value.path).toBe('/projects/p1')
+    await wrapper.get('[aria-label="取消绑定 原书.epub"]').trigger('click')
+    await router.push('/projects'); await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/projects')
+    expect(api.saveProject).not.toHaveBeenCalled()
+    expect(api.linkAsset).not.toHaveBeenCalled()
+  })
+  it('shows previously bound documents including missing files and adds files without resubmitting old paths', async () => {
+    vi.mocked(api.listAssets).mockResolvedValue([asset, { ...asset, id: 'doc', assetType: 'document', originalName: '原书.pdf', filePath: 'D:/原书.pdf' }])
+    const { wrapper } = await render('/projects/p1')
+    const files = wrapper.get('[aria-label="本地书籍文件"]')
+    expect(files.text()).toContain('原书.pdf')
+    expect(files.text()).toContain('重新定位')
+    expect(files.text()).not.toContain('视频.mp4')
+    vi.mocked(api.chooseSourceDocument).mockResolvedValue('D:/补充.md')
+    await button(wrapper, '选择本地文件').trigger('click'); await flushPromises()
+    vi.mocked(api.saveProject).mockResolvedValueOnce(saved)
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveProject).toHaveBeenLastCalledWith('p1', expect.objectContaining({ title: '活着' }), ['D:/补充.md'])
+  })
   it('protects unsaved book details from browser unload and removes protection after navigation', async () => {
     const { wrapper, router } = await render('/projects/new')
     await wrapper.get('#title').setValue('尚未保存的书')
@@ -241,7 +289,7 @@ describe('M1 projects and materials', () => {
     await wrapper.get('#title').setValue('活着')
     vi.mocked(api.saveProject).mockResolvedValue(saved)
     await wrapper.get('form').trigger('submit'); await flushPromises()
-    expect(api.saveProject).toHaveBeenCalledWith(null, expect.objectContaining({ title: '活着' }))
+    expect(api.saveProject).toHaveBeenCalledWith(null, expect.objectContaining({ title: '活着' }), [])
     expect(router.currentRoute.value.path).toBe('/projects/p1/writing')
     expect(wrapper.text()).toContain('发布文案与音频提示词')
   })
@@ -263,7 +311,7 @@ describe('M1 projects and materials', () => {
     await wrapper.get('#notes').setValue('这期聚焦人物关系')
     vi.mocked(api.saveProject).mockResolvedValue(saved)
     await wrapper.get('form').trigger('submit'); await flushPromises()
-    expect(api.saveProject).toHaveBeenCalledWith('p1', expect.objectContaining({ status: saved.status, description: saved.description, sourceNotes: '这期聚焦人物关系' }))
+    expect(api.saveProject).toHaveBeenCalledWith('p1', expect.objectContaining({ status: saved.status, description: saved.description, sourceNotes: '这期聚焦人物关系' }), [])
   })
   it('requires deletion confirmation, cancellation is harmless, success returns to list', async () => {
     const { wrapper, router } = await render('/projects/p1')

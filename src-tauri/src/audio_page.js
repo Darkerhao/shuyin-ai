@@ -2,6 +2,11 @@
 (() => {
   'use strict'
 
+  let activeRun = null
+  function assertRunning() {
+    if (activeRun && globalThis.__shuyinAudioRun !== activeRun) throw new UiError('stale_run', '任务已暂停或变化，已停止网页操作。')
+  }
+
   const UI = {
     createNotebook: ['Create new notebook', 'Create notebook', 'New notebook', '新建笔记本', '创建笔记本', '新建'],
     createSubmit: ['Create notebook', 'Create', '创建笔记本', '创建'],
@@ -31,7 +36,6 @@
 
   const INTERACTIVE = 'button, a, [role="button"], [role="menuitem"], [role="option"], [role="tab"], [role="radio"], [role="checkbox"], input[type="button"], input[type="submit"]'
   const TEXT_ELEMENTS = 'span, p, label, div, h1, h2, h3, h4, li, strong'
-  const MAX_SOURCE_BYTES = 256 * 1024 * 1024
 
   class UiError extends Error {
     constructor(code, message) {
@@ -158,11 +162,14 @@
         const label = scope.querySelector?.(`label[for="${globalThis.CSS?.escape ? globalThis.CSS.escape(id) : id}"]`)
         if (label) score = Math.max(score, matchScore(label, labels))
       }
+      if (labels.length && score === 0) return null
       if (element.tagName === 'TEXTAREA') score += 5
       const rows = Number(element.getAttribute('rows') ?? 0)
       if (rows >= 4) score += 3
       return { element, score }
-    }).sort((a, b) => b.score - a.score)
+    }).filter(Boolean).sort((a, b) => b.score - a.score)
+
+    if (!scored.length) return null
 
     const top = scored.filter(item => item.score === scored[0].score)
     if (top.length === 1) return top[0].element
@@ -202,6 +209,7 @@
   }
 
   function writeAndVerify(element, value) {
+    assertRunning()
     setEditable(element, value)
     const actual = readEditable(element)
     if (actual !== canonicalText(value)) {
@@ -216,6 +224,7 @@
   async function waitFor(action, timeout = 5000, interval = 150) {
     const deadline = Date.now() + timeout
     while (Date.now() < deadline) {
+      assertRunning()
       const result = action()
       if (result) return result
       await sleep(interval)
@@ -224,6 +233,7 @@
   }
 
   function click(element, label) {
+    assertRunning()
     if (!element) throw new UiError('control_missing', `网页未找到“${label}”控件，已停止自动操作。`)
     element.click()
   }
@@ -233,7 +243,7 @@
   }
 
   function isNotebookPath(path = currentPath()) {
-    return /^\/notebook\/[A-Za-z0-9_-]+/.test(path)
+    return /^\/notebook\/[A-Za-z0-9_-]+$/.test(path)
   }
 
   function sameRecordedNotebook(recorded, current = location.href) {
@@ -242,7 +252,7 @@
       const a = new URL(recorded)
       const b = new URL(current)
       const allowed = new Set(['notebook.google.com', 'notebooklm.google.com'])
-      return allowed.has(a.hostname) && allowed.has(b.hostname) && a.pathname.replace(/\/$/, '') === b.pathname.replace(/\/$/, '')
+      return [a, b].every(url => url.protocol === 'https:' && !url.username && !url.password && (!url.port || url.port === '443') && allowed.has(url.hostname) && isNotebookPath(url.pathname.replace(/\/$/, ''))) && a.pathname.replace(/\/$/, '') === b.pathname.replace(/\/$/, '')
     } catch {
       return false
     }
@@ -290,6 +300,7 @@
     if (!title) return { kind: 'page_changed', message: '进入笔记本后未找到唯一的标题控件，已停止自动命名；请人工核对。' }
     const expected = `${job.projectTitle || '书引 AI 音频'} · 音频 ${String(job.id).slice(0, 8)}`
     try {
+      assertRunning()
       title.click?.()
       writeAndVerify(title, expected)
       title.blur?.()
@@ -300,7 +311,7 @@
   }
 
   function creationMarker(job) {
-    return `${job.id}:${job.runId}`
+    return String(job.id)
   }
 
   function hasCreationMarker(job) {
@@ -353,76 +364,20 @@
     return '书籍资料文本'
   }
 
-  function mimeForName(name) {
-    const extension = String(name).split('.').at(-1)?.toLowerCase()
-    return {
-      pdf: 'application/pdf', epub: 'application/epub+zip', txt: 'text/plain', md: 'text/markdown', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    }[extension] ?? 'application/octet-stream'
-  }
-
-  function decodeBase64(value) {
-    const binary = globalThis.atob(value)
-    const bytes = new Uint8Array(binary.length)
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
-    return bytes
-  }
-
-  async function readSourceFile(job, context) {
-    if (!context?.sourceChunk) throw new UiError('source_transfer_missing', '本机音频桥接没有提供文件分块接口。')
-    const chunks = []
-    let offset = 0
-    let totalSize = null
-    let name = sourceName(job)
-    const expectedHash = job.source?.sha256 ?? ''
-    for (let count = 0; count < 4096; count += 1) {
-      const response = await context.sourceChunk({ jobId: job.id, runId: job.runId, offset })
-      if (!response?.ok) throw new UiError('source_transfer_failed', response?.error?.message ?? response?.error ?? '原书文件分块读取失败。')
-      if (!Number.isInteger(response.totalSize) || response.totalSize <= 0) throw new UiError('source_invalid', '原书文件大小无效。')
-      if (response.totalSize > MAX_SOURCE_BYTES) throw new UiError('source_too_large', '原书文件超过 256 MB，当前自动上传不支持。')
-      if (response.totalSize !== job.source.size || response.sha256 !== expectedHash) throw new UiError('source_changed', '原书文件与任务快照不一致，已停止上传，请重新选择。')
-      totalSize = response.totalSize
-      name = response.name || name
-      const bytes = decodeBase64(response.data)
-      if (!bytes.length && response.nextOffset < totalSize) throw new UiError('source_transfer_failed', '原书文件返回了空分块。')
-      chunks.push(bytes)
-      offset = response.nextOffset
-      if (offset >= totalSize) break
-      if (!Number.isInteger(offset) || offset <= 0) throw new UiError('source_transfer_failed', '原书文件分块游标无效。')
-    }
-    if (totalSize === null || offset !== totalSize) throw new UiError('source_transfer_failed', '原书文件未完整传输。')
-    const combined = new Uint8Array(totalSize)
-    let written = 0
-    for (const chunk of chunks) {
-      combined.set(chunk, written)
-      written += chunk.length
-    }
-    if (written !== totalSize) throw new UiError('source_transfer_failed', '原书文件分块长度不一致，已停止上传。')
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', combined)
-    const actualHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
-    if (actualHash !== expectedHash) throw new UiError('source_changed', '原书文件在传输过程中发生变化，已停止上传，请重新选择。')
-    return { file: new globalThis.File([combined], name, { type: mimeForName(name) }), name, totalSize, sha256: expectedHash }
-  }
-
   function findSourceInput() {
-    return [...document.querySelectorAll('input[type="file"]')].find(input => !input.disabled) ?? null
+    const inputs = [...document.querySelectorAll('input[type="file"]')].filter(input => !input.disabled)
+    if (!inputs.length) return null
+    if (inputs.length !== 1) throw new UiError('file_input_missing', '来源上传控件不唯一，已停止自动操作。')
+    return inputs[0]
   }
-
-  async function uploadAsset(job, scope, context) {
+  async function uploadAsset(job, scope) {
     const upload = await waitFor(() => findInteractive(UI.uploadFiles, scope), 3000)
     if (upload) click(upload, '上传文件')
-    const input = await waitFor(findSourceInput, 5000)
-    if (!input) throw new UiError('file_input_missing', '来源弹窗未提供文件上传控件。')
-    const source = await readSourceFile(job, context)
-    if (!globalThis.DataTransfer || !globalThis.File) throw new UiError('file_api_missing', '浏览器不支持安全文件注入。')
-    const transfer = new globalThis.DataTransfer()
-    transfer.items.add(source.file)
-    input.files = transfer.files
-    if (input.files.length !== 1 || input.files[0].size !== source.totalSize) {
-      throw new UiError('file_injection_failed', '浏览器没有接收完整原书文件，已停止上传。')
-    }
-    input.dispatchEvent(new globalThis.Event('input', { bubbles: true }))
-    input.dispatchEvent(new globalThis.Event('change', { bubbles: true }))
-    return source
+    const input = await waitFor(findSourceInput, 3000)
+    if (!input) throw new UiError('file_input_missing', '未找到来源上传控件。')
+    assertRunning()
+    input.setAttribute('data-shuyin-audio-source', `${job.id}:${job.runId}`)
+    return { kind: 'file_input_ready' }
   }
 
   async function addTextSource(job, scope) {
@@ -437,7 +392,7 @@
     click(insert, '插入资料')
   }
 
-  async function addSource(job, context) {
+  async function addSource(job) {
     ensureTaskNotebook(job)
     let scope = dialogScope()
     if (scope === document) {
@@ -448,7 +403,7 @@
       scope = await waitFor(() => (dialogScope() === document ? null : dialogScope()), 3000) ?? document
     }
     if (job.source.kind === 'text') await addTextSource(job, scope)
-    else await uploadAsset(job, scope, context)
+    else return uploadAsset(job, scope)
     await sleep(350)
     return { kind: 'source_submitted' }
   }
@@ -563,7 +518,8 @@
   }
 
   function audioArtifactScope() {
-    for (const match of findTextElements(UI.audioOverview)) {
+    const scopes = new Set()
+    for (const match of findTextElements(UI.audioOverview, document, true)) {
       let current = match.element
       for (let depth = 0; current && depth < 9; depth += 1, current = current.parentElement) {
         if (!current || ['BODY', 'HTML', 'MAIN'].includes(current.tagName)) break
@@ -572,15 +528,15 @@
         const text = normalize(current.textContent)
         if (!text || text.length > 12000) continue
         const evidence = current.querySelector('audio, [role="progressbar"], progress') || findElements([...UI.download, ...UI.play], current).length > 0 || hasAnyText(UI.generating, current) || hasAnyText(UI.failed, current)
-        if (evidence) return current
+        if (evidence) { scopes.add(current); break }
       }
     }
-    return null
+    return scopes.size === 1 ? [...scopes][0] : null
   }
 
   function detectGenerationState() {
     const scope = audioArtifactScope()
-    if (!scope) return hasAnyText(UI.generating) ? 'generating' : 'unknown'
+    if (!scope) return 'unknown'
     if (hasAnyText(UI.failed, scope)) return 'failed'
     if (hasAnyText(UI.generating, scope)) return 'generating'
     if (scope.querySelector('audio')) return 'complete'
@@ -598,9 +554,10 @@
   }
 
   function directDownloadAnchor(scope) {
-    return [...scope.querySelectorAll('a[download][href]')]
-      .filter(visible)
-      .find(anchor => /^(https?:|blob:)/.test(anchor.href)) ?? null
+    const anchors = [...scope.querySelectorAll('a[download][href]')].filter(visible)
+      .filter(anchor => /^(https:|blob:)/.test(anchor.href))
+    if (anchors.length > 1) throw new UiError('ambiguous_download', '音频区域有多个下载地址，请人工核对。')
+    return anchors[0] ?? null
   }
 
   function visibleMenu() {
@@ -611,6 +568,7 @@
   async function captureDownloadTarget() {
     const scope = audioArtifactScope()
     if (!scope) throw new UiError('audio_artifact_missing', '未唯一识别到 Audio Overview 成品区域，已停止下载。')
+    assertRunning()
     const existing = directDownloadAnchor(scope)
     if (existing) {
       return { kind: 'download_target', downloadUrl: existing.href, suggestedFilename: existing.download || '' }
@@ -623,6 +581,8 @@
       const anchor = target?.closest?.('a[href]') ?? target?.parentElement?.closest?.('a[href]')
       if (!anchor || !/^(https?:|blob:)/.test(anchor.href)) return
       if (scope.contains(anchor) || Date.now() - audioActivatedAt < 3000) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
         captured = { downloadUrl: anchor.href, suggestedFilename: anchor.download || '' }
       }
     }
@@ -663,24 +623,43 @@
   async function runStep(job, context = {}) {
     if (!job?.id || !Number.isInteger(Number(job.runId))) throw new UiError('invalid_job', '音频任务数据无效。')
     if (/accounts\.google\.com/i.test(location.href)) return { kind: 'login_required' }
+    activeRun = `${job.id}:${job.runId}`
+    if (globalThis.__shuyinAudioRun === undefined) globalThis.__shuyinAudioRun = activeRun
+    assertRunning()
+    if (job.status === 'waiting_login') return runLogin(job)
+    if (job.notebookUrl) ensureTaskNotebook(job)
     switch (job.stage) {
+      case 'opening_site':
       case 'awaiting_extension':
       case 'login':
         return runLogin(job)
       case 'creating_notebook':
         return createNotebook(job)
       case 'adding_source':
-        return addSource(job, context)
+        return addSource(job)
       case 'source_processing':
         return waitForSource(job)
       case 'configuring_audio':
         return configureAudio(job)
       case 'submitting':
+        ensureTaskNotebook(job)
         return submitGeneration()
       case 'generating':
         return waitForGeneration()
       case 'verify_remote':
         return verifyRemote(job)
+      case 'begin_download': {
+        ensureTaskNotebook(job)
+        const url = new URL(context.downloadUrl)
+        if (!['https:', 'blob:'].includes(url.protocol)) throw new UiError('download_invalid', '音频下载地址无效。')
+        const anchor = document.createElement('a')
+        anchor.href = url.href
+        anchor.download = ''
+        document.body.append(anchor)
+        click(anchor, '下载本任务音频')
+        anchor.remove()
+        return { kind: 'download_started' }
+      }
       case 'downloading':
         ensureTaskNotebook(job)
         return captureDownloadTarget()
@@ -689,7 +668,7 @@
     }
   }
 
-  globalThis.ShuyinAudioContentCore = Object.freeze({
+  globalThis.ShuyinAudioPage = Object.freeze({
     UiError,
     audioArtifactScope,
     captureDownloadTarget,
@@ -698,7 +677,6 @@
     findEditable,
     findInteractive,
     readEditable,
-    readSourceFile,
     runStep,
     setNotebookTitle,
     setEditable,

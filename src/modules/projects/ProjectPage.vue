@@ -8,7 +8,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/projects'
 import { appendNote, chooseNote, importNote, type ImportedNote } from '../../services/notes'
-import { emptyProject, projectInput, type Project } from '../../types/project'
+import { emptyProject, projectInput, type Asset, type Project } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
@@ -21,14 +21,32 @@ const desktop = api.isDesktop()
 const project = ref<Project | null>(null)
 const form = ref(emptyProject())
 const original = ref(JSON.stringify(form.value))
-const dirty = computed(() => JSON.stringify(form.value) !== original.value)
+const sourcePaths = ref<string[]>([])
+const documents = ref<Asset[]>([])
+const dirty = computed(() => JSON.stringify(form.value) !== original.value || sourcePaths.value.length > 0)
 const ready = ref(!props.id)
 const deleting = ref(false)
 const imported = ref<ImportedNote | null>(null)
 let leaving = false
 const { busy, error, message, operation, run } = useOperation()
 function accept(saved: Project) { project.value = saved; form.value = projectInput(saved); original.value = JSON.stringify(form.value); ready.value = true }
-const load = () => run(async () => { if (props.id) accept(await api.getProject(props.id)) }, '正在读取书籍资料…')
+const load = () => run(async () => {
+  if (!props.id) return
+  const [saved, assets] = await Promise.all([api.getProject(props.id), api.listAssets(props.id)])
+  documents.value = assets.filter(asset => asset.assetType === 'document')
+  accept(saved)
+}, '正在读取书籍资料…')
+const sourceName = (path: string) => path.split(/[\\/]/).pop() ?? path
+const chooseSource = () => run(async () => {
+  const path = await api.chooseSourceDocument()
+  if (!path) return
+  if (sourcePaths.value.includes(path) || documents.value.some(asset => asset.filePath === path)) {
+    message.value = '这份文件已在本书资料中。'
+    return
+  }
+  sourcePaths.value.push(path)
+  message.value = '已选择本地文件，保存并继续后可在音频制作中直接使用。'
+}, '正在选择书籍文件…')
 const chooseImport = () => run(async () => { const path = await chooseNote(); if (path) imported.value = await importNote(path) }, '正在读取导入资料…')
 const applyImport = () => run(async () => {
   if (!imported.value) return
@@ -36,7 +54,8 @@ const applyImport = () => run(async () => {
   imported.value = null; message.value = '资料已追加，保留来源说明。点击保存并继续写入书籍资料。'
 }, '正在追加资料…')
 const save = () => run(async () => {
-  const saved = await api.saveProject(props.id ?? null, { ...form.value })
+  const saved = await api.saveProject(props.id ?? null, { ...form.value }, [...sourcePaths.value])
+  sourcePaths.value = []
   accept(saved)
   message.value = '项目已保存。'
   leaving = true; await router.replace(`/projects/${saved.id}/writing`)
@@ -127,6 +146,82 @@ onMounted(() => { if (desktop && props.id) void load() })
             />
           </div>
         </div>
+        <section
+          class="my-5 space-y-3 rounded-lg border p-4"
+          aria-labelledby="source-documents-title"
+          aria-describedby="source-documents-help"
+        >
+          <h2
+            id="source-documents-title"
+            class="text-base"
+          >
+            本地书籍文件 <span class="optional">· 选填</span>
+          </h2>
+          <p
+            id="source-documents-help"
+            class="muted"
+          >
+            绑定 PDF、EPUB、DOCX、TXT 或 Markdown，生成音频时可直接使用。仅关联本地路径，保存后生效。
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            @click="chooseSource"
+          >
+            <AppIcon name="folder" />选择本地文件
+          </Button>
+          <ul
+            v-if="documents.length || sourcePaths.length"
+            class="space-y-3"
+            aria-label="本地书籍文件"
+          >
+            <li
+              v-for="document in documents"
+              :key="document.id"
+              class="space-y-1"
+            >
+              <p class="file-path">
+                {{ document.originalName }}
+              </p>
+              <p class="file-path muted">
+                {{ document.filePath }}
+              </p>
+              <p :class="document.existsStatus === 'available' ? 'muted' : 'error'">
+                {{ document.existsStatus === 'available' ? '已绑定 · 音频制作可直接使用' : '文件不可用，请到发布准备的素材管理中重新定位' }}
+              </p>
+            </li>
+            <li
+              v-for="(path, index) in sourcePaths"
+              :key="path"
+              class="space-y-1"
+            >
+              <p class="file-path">
+                {{ sourceName(path) }}
+              </p>
+              <p class="file-path muted">
+                {{ path }}
+              </p>
+              <div class="actions wrap">
+                <span class="muted">待保存</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  :aria-label="`取消绑定 ${sourceName(path)}`"
+                  @click="sourcePaths.splice(index, 1)"
+                >
+                  取消绑定
+                </Button>
+              </div>
+            </li>
+          </ul>
+          <RouterLink
+            v-if="documents.length && project"
+            :to="`/projects/${project.id}/publishing`"
+            class="back-link"
+          >
+            管理已绑定文件
+          </RouterLink>
+        </section>
         <label for="notes">这本书，你想聊什么？ <span class="optional">· 选填</span></label>
         <Textarea
           id="notes"

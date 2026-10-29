@@ -1,5 +1,32 @@
 # 书引 AI 开发计划与验收标准
 
+## 应用内自动音频替换（2026-10-29）
+
+用户在设计后明确要求实施。已以专用 Tauri 窗口、Rust 单一调度、语义脚本、不可变来源快照及精确原生下载替换扩展/helper，复用 v13 audio_jobs 和素材事务。删除安装/连接门槛及旧打包依赖，保留旧任务、手动音频、书籍来源绑定及用户其他工作。
+
+设计见 NOTEBOOKLM-IN-APP-AUDIO-DESIGN.md，实际命令和桌面证据见 IN-APP-AUDIO-VERIFICATION.md。真实 Google 登录/控件/生成/下载及正式安装升级仍待验收，模拟不能证明服务可用。不绕过限制，不提交、发布或替换正式运行应用。无数据库迁移或版本手动递增。
+
+本地验证：前端 204、Rust 117（1 忽略）、页面/打包/发布资源聚焦 38（1 平台跳过）通过，lint、类型检查、生产构建、fmt/Clippy 通过；最终隔离 NSIS 包生成并核对清理 hook，未打包扩展/helper。真实 Tauri/WebView2/SQLite 中，资料文本及中文文件来源均完成 blob 和真实本机 HTTPS 下载、字节一致校验和唯一音频素材登记；每任务只生成一次。上述均为明确标注的本地模拟证据。
+
+
+## 新增书籍绑定本地文件（2026-10-28）
+
+已实现新增/编辑书籍选择本地 PDF、EPUB、DOCX、TXT、Markdown，展示文件名/路径/待保存或缺失状态，保存前可取消；保存失败保留编辑与选择。复用既有 document 素材和音频来源默认选择，书籍及新增文档同事务保存；权限拒绝、文件缺失、格式错误、重复关联均回滚，新建失败清理本次空目录。只记录路径，源文件不复制、不改写、不删除，已有绑定通过原素材管理重新定位/移除。
+
+修改文件：`src/modules/projects/ProjectPage.vue`、`src/services/projects.ts`、`src-tauri/src/commands.rs`、`src-tauri/src/database/projects.rs`；回归位于 `tests/projects.test.ts`、`tests/ai.test.ts`、`src-tauri/src/database/m1_tests.rs`、`src-tauri/src/database/audio_tests.rs`；同步 `PRD.md`、`TECHNICAL-DESIGN.md`、`DATABASE.md`、`USER-GUIDE.md` 和本计划。数据库保持 v13，无迁移或新增依赖，属于兼容 feat/minor，不手动升版本。
+
+实际验证：
+
+- `npx vitest run tests/projects.test.ts tests/ai.test.ts`：78 项通过。
+- `npm run test:rust`：116 项通过，1 项原生凭据测试按既有配置忽略；覆盖文件绑定持久化、重定位、重复/缺失/类型/访问拒绝回滚和音频任务读取绑定文件。
+- `npm run check:rust`：fmt 与 Clippy 通过。Rust 先加载 `. ./.tools/env.ps1`，TEMP/TMP/SQLITE_TMPDIR 指向仓库 `output/source-binding-test-temp`。
+- `npm run lint`、`npm run build`（含 TypeScript）：通过，构建保留大于500 kB的分块提示。受限环境最初拒绝源码格式化、Cargo 锁及 Vite 清理 dist，经授权在受限环境外重跑成功。
+- `npm test`：Vitest 204 项通过；发布/扩展测试65项通过、1项平台相关跳过；队列测试18项通过、1项失败，因此整条命令退出1。失败为未修改的 `tests/codex-queue.test.mjs:118`「缺少前序 Markdown 报告应重跑后续任务」，实际没有重跑，本轮未扩展修改队列脚本。
+- 独立 Playwright CLI + 模拟 Tauri IPC：选择本地文件、保存参数和跳转验证通过；1440/1024/720px 均无横向溢出，长中文路径可换行。命令为 `node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=source-binding run-code --filename output/source-binding-visual.js`。脚本与截图位于本地 `output/source-binding-visual.js`、`output/source-binding-desktop.png`、`output/source-binding-narrow.png`，不作为原生文件选择器或真实 Google 验收。
+- `git diff --check`：通过。
+
+验收对应：新书绑定、旧书补充、取消选择、重复选择、失败保留、事务回滚、源文件保留、重启读取、缺失重定位及音频来源复用均有本地验证。未执行安装包构建、真实桌面文件选择器及 Google 生成下载；未提交、推送或发布。下一步用新版桌面添加一本书并绑定本地原书，进入音频制作核对默认来源后执行真实生成。
+
 ## 工作台样式与整体导航升级（2026-10-28）
 
 - [x] 统一墨绿品牌、浅灰白工作区、面板、页签与可见焦点；不增加依赖。

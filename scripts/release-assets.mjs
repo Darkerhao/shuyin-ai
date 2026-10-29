@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { log } from 'node:console'
-import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import process from 'node:process'
@@ -70,32 +70,20 @@ export function collectAssets(cwd, platform, target, destination) {
   }
   if (platform === 'windows-x64') {
     copySigned('nsis', '.exe')
-    const helper = join(root, 'browser-bridge.exe')
-    const extension = join(cwd, 'browser-extension')
-    nonEmpty(helper)
-    try {
-      if (!statSync(extension).isDirectory()) throw new Error(`缺少 Chrome 扩展目录：${extension}`)
-    } catch (error) {
-      if (error.code === 'ENOENT') throw new Error(`缺少 Chrome 扩展目录：${extension}`, { cause: error })
-      throw error
-    }
-    nonEmpty(join(extension, 'manifest.json'))
-    nonEmpty(join(extension, 'background.js'))
+    nonEmpty(join(root, 'shuyin-ai.exe'))
     const staging = mkdtempSync(join(tmpdir(), 'shuyin-zip-'))
     try {
       copyFileSync(join(root, 'shuyin-ai.exe'), join(staging, 'shuyin-ai.exe'))
-      copyFileSync(helper, join(staging, 'browser-bridge.exe'))
-      cpSync(extension, join(staging, 'browser-extension'), { recursive: true })
       writeFileSync(join(staging, 'README.txt'), [
         '书引 AI：解压后运行 shuyin-ai.exe。',
         '需要 Microsoft Edge WebView2 Runtime。',
-        '自动音频需要 Chrome：打开书引 AI 的音频制作页，按提示加载 browser-extension 目录并在 chrome://extensions 启用扩展。',
+        '自动音频在应用内打开 Notebook 网站，无需安装 Chrome 扩展；登录和网站可用性以官方页面为准。',
         '数据保存在系统用户数据目录，不是随目录移动的数据便携版。',
         '',
       ].join('\n'))
       // Git Bash may put GNU tar first; Windows' bundled bsdtar supports ZIP creation.
       execFileSync(join(process.env.SystemRoot, 'System32/tar.exe'),
-        ['-a', '-cf', join(output, `${prefix}.zip`), '-C', staging, 'shuyin-ai.exe', 'browser-bridge.exe', 'browser-extension', 'README.txt'])
+        ['-a', '-cf', join(output, `${prefix}.zip`), '-C', staging, 'shuyin-ai.exe', 'README.txt'])
     } finally {
       rmSync(staging, { recursive: true, force: true })
     }

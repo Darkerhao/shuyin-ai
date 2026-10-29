@@ -1,823 +1,604 @@
-#[cfg(target_os = "windows")]
-use crate::database::audio::BridgeObservation;
-use crate::database::{audio::AudioJob, Database};
-#[cfg(target_os = "windows")]
-use base64::{engine::general_purpose::STANDARD, Engine};
-#[cfg(target_os = "windows")]
-use serde::Deserialize;
-use serde::Serialize;
-#[cfg(target_os = "windows")]
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{
-    path::{Path, PathBuf},
-    sync::Mutex,
-    time::{Duration, Instant},
+use crate::database::audio::AudioJob;
+#[cfg(windows)]
+use crate::database::{
+    audio::{AudioExecutionJob, AudioObservation},
+    Database,
 };
+use serde::Serialize;
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
+    time::Duration,
+};
+#[cfg(windows)]
+use tauri::WebviewWindow;
 use tauri::{AppHandle, Manager};
-#[cfg(target_os = "windows")]
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-#[cfg(target_os = "windows")]
-const EXTENSION_ID: &str = "nplahghodghepogenmdekjafojiljohf";
-const NOTEBOOK_HOME: &str = "https://notebook.google.com/";
-const CONNECTED_FOR: Duration = Duration::from_secs(5 * 60);
-#[cfg(target_os = "windows")]
-const MAX_BRIDGE_MESSAGE: usize = 4 * 1024 * 1024;
+#[cfg(windows)]
+#[path = "audio_download.rs"]
+mod download;
+const LABEL: &str = "audio-notebook";
+const HOME: &str = "https://notebook.google.com/";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AudioBridgeStatus {
+pub struct AudioBrowserStatus {
     pub supported: bool,
-    pub connected: bool,
-    pub last_seen_seconds_ago: Option<u64>,
-    pub host_name: String,
+    pub open: bool,
+    pub url: Option<String>,
     pub message: Option<String>,
 }
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioJobView {
     pub job: Option<AudioJob>,
     pub active_job: Option<AudioJob>,
-    pub bridge: AudioBridgeStatus,
+    pub browser: AudioBrowserStatus,
 }
-
+#[cfg(windows)]
+#[derive(Clone)]
+struct DownloadIntent {
+    job_id: String,
+    run_id: i64,
+    url: String,
+    path: std::path::PathBuf,
+    started: bool,
+    epoch: u64,
+    armed_at: std::time::Instant,
+}
 pub struct AudioAutomation {
-    supported: bool,
-    host_name: String,
-    pipe_name: String,
-    last_seen: Mutex<Option<Instant>>,
-    message: Mutex<Option<String>>,
-    chrome_path: Option<PathBuf>,
-    extension_dir: Option<PathBuf>,
+    operation: tokio::sync::Mutex<()>,
+    wake: tokio::sync::Notify,
+    epoch: AtomicU64,
+    window_task: Mutex<Option<String>>,
+    #[cfg(windows)]
+    waiting: Mutex<Option<(String, i64, String, std::time::Instant)>>,
+    #[cfg(windows)]
+    download: Mutex<Option<DownloadIntent>>,
     instance: Option<InstanceGuard>,
+    message: Option<String>,
 }
-
 impl AudioAutomation {
-    pub fn initialize(app: &AppHandle) -> Self {
-        #[cfg(target_os = "windows")]
-        {
-            Self::initialize_windows(app)
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = app;
-            Self {
-                supported: false,
-                host_name: host_name(),
-                pipe_name: String::new(),
-                last_seen: Mutex::new(None),
-                message: Mutex::new(Some("自动音频目前仅支持 Windows + Chrome。".into())),
-                chrome_path: None,
-                extension_dir: None,
-                instance: None,
+    pub fn initialize(_app: &AppHandle) -> Self {
+        let (instance, message) = if !cfg!(windows) {
+            (
+                None,
+                Some("应用内自动音频目前仅在 Windows 支持，请使用手动音频导入。".into()),
+            )
+        } else {
+            match acquire_instance() {
+                Ok(Some(instance)) => (Some(instance), None),
+                Ok(None) => (None, Some("另一应用实例正在管理音频任务。".into())),
+                Err(message) => (None, Some(message)),
             }
+        };
+        Self {
+            operation: tokio::sync::Mutex::new(()),
+            wake: tokio::sync::Notify::new(),
+            epoch: AtomicU64::new(0),
+            window_task: Mutex::new(None),
+            #[cfg(windows)]
+            download: Mutex::new(None),
+            #[cfg(windows)]
+            waiting: Mutex::new(None),
+            instance,
+            message,
         }
     }
-
-    pub fn start(&self, app: AppHandle) {
-        if !self.supported || self.instance.is_none() {
-            return;
-        }
-        let app_for_errors = app.clone();
-        let pipe = self.pipe_name.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(error) = run_pipe_server(app, pipe).await {
-                if let Some(state) = app_for_errors.try_state::<AudioAutomation>() {
-                    state.set_message(format!("Chrome 扩展桥接不可用：{error}"));
-                }
-            }
-        });
-    }
-
-    fn set_message(&self, value: impl Into<String>) {
-        if let Ok(mut message) = self.message.lock() {
-            *message = Some(value.into());
+    pub fn status(&self, app: &AppHandle) -> AudioBrowserStatus {
+        let window = app.get_webview_window(LABEL);
+        AudioBrowserStatus {
+            supported: cfg!(windows) && self.instance.is_some(),
+            open: window.is_some(),
+            url: window
+                .and_then(|window| window.url().ok())
+                .map(|url| url.to_string()),
+            message: self.message.clone(),
         }
     }
-
-    #[cfg(target_os = "windows")]
-    fn touch(&self) {
-        if let Ok(mut last_seen) = self.last_seen.lock() {
-            *last_seen = Some(Instant::now());
-        }
-    }
-
-    fn message_text(&self) -> Option<String> {
-        self.message.lock().ok().and_then(|value| value.clone())
-    }
-
-    pub fn status(&self) -> AudioBridgeStatus {
-        let last_seen = self.last_seen.lock().ok().and_then(|value| *value);
-        AudioBridgeStatus {
-            supported: self.supported,
-            connected: last_seen.is_some_and(|value| value.elapsed() < CONNECTED_FOR),
-            last_seen_seconds_ago: last_seen.map(|value| value.elapsed().as_secs()),
-            host_name: self.host_name.clone(),
-            message: self.message_text(),
-        }
-    }
-
-    pub fn require_connected(&self) -> Result<(), String> {
-        if !self.supported {
-            return Err(self
-                .message_text()
-                .unwrap_or_else(|| "自动音频目前仅支持 Windows + Chrome。".into()));
+    pub fn require_available(&self) -> Result<(), String> {
+        if !cfg!(windows) {
+            return Err("应用内自动音频目前仅在 Windows 支持，请使用手动音频导入。".into());
         }
         if self.instance.is_none() {
             return Err(self
-                .message_text()
-                .unwrap_or_else(|| "另一实例正在管理音频任务。".into()));
-        }
-        if self.chrome_path.is_none() {
-            return Err("未检测到 Google Chrome，请先安装 Chrome。".into());
-        }
-        if let Some(message) = self.message_text().filter(|value| value.contains("注册")) {
-            return Err(message);
-        }
-        if !self.status().connected {
-            return Err("Chrome 扩展尚未连接。请先安装并启用书引 AI Chrome 扩展。".into());
+                .message
+                .clone()
+                .unwrap_or_else(|| "音频任务不可用。".into()));
         }
         Ok(())
     }
-
-    pub fn open_notebook(&self, job_id: Option<&str>, database: &Database) -> Result<(), String> {
-        let url = match job_id {
-            Some(id) => database
-                .control_audio_job(id, "open_browser")?
-                .notebook_url
-                .unwrap_or_else(|| NOTEBOOK_HOME.into()),
-            None => NOTEBOOK_HOME.into(),
-        };
-        open_chrome(&url, &self.chrome_path)
+    pub fn notify(&self) {
+        self.wake.notify_one();
     }
-
-    pub fn open_extension_setup(&self) -> Result<(), String> {
-        if !self.supported {
-            return Err("自动音频目前仅支持 Windows + Chrome。".into());
+    pub fn start(&self, app: AppHandle) {
+        if self.require_available().is_err() {
+            return;
         }
-        let extension = self
-            .extension_dir
-            .as_ref()
-            .ok_or("应用未找到 Chrome 扩展目录。")?;
-        if !extension.is_dir() {
-            return Err(format!("Chrome 扩展目录不存在：{}", extension.display()));
-        }
-        open_folder(extension)?;
-        open_chrome("chrome://extensions/", &self.chrome_path)
-    }
-
-    #[cfg(target_os = "windows")]
-    fn initialize_windows(app: &AppHandle) -> Self {
-        let host_name = host_name();
-        let chrome_path = find_chrome();
-        let extension_dir = find_extension_dir(app);
-        let instance = match acquire_instance() {
-            Ok(Some(guard)) => guard,
-            Ok(None) => {
-                return Self {
-                    supported: true,
-                    host_name,
-                    pipe_name: String::new(),
-                    last_seen: Mutex::new(None),
-                    message: Mutex::new(Some("另一实例正在管理音频任务。".into())),
-                    chrome_path,
-                    extension_dir,
-                    instance: None,
-                };
+        tauri::async_runtime::spawn(async move {
+            loop {
+                let automation = app.state::<AudioAutomation>();
+                let delay = automation.tick(&app).await;
+                tokio::select! { _ = automation.wake.notified() => {}, _ = tokio::time::sleep(delay) => {} }
             }
-            Err(error) => {
-                return Self {
-                    supported: true,
-                    host_name,
-                    pipe_name: String::new(),
-                    last_seen: Mutex::new(None),
-                    message: Mutex::new(Some(format!("音频桥接初始化失败：{error}"))),
-                    chrome_path,
-                    extension_dir,
-                    instance: None,
-                };
-            }
-        };
-        let pipe = pipe_name();
-        let host_manifest = app.path().app_local_data_dir().ok().map(|directory| {
-            directory
-                .join("audio-bridge")
-                .join("hosts")
-                .join(format!("{host_name}.json"))
         });
-        let helper_path = find_helper_path();
-        let mut message = None;
-        if let (Some(manifest), Some(helper)) = (&host_manifest, &helper_path) {
-            if !helper.is_file() {
-                message = Some("未找到浏览器桥接程序，请重新安装应用。".into());
-            } else if let Err(error) = register_host(manifest, helper, &host_name) {
-                message = Some(format!("Chrome 集成注册失败：{error}"));
+    }
+    pub async fn open_notebook(&self, app: &AppHandle, job: &AudioJob) -> Result<(), String> {
+        self.require_available()?;
+        let _operation = self.operation.lock().await;
+        let same = self
+            .window_task
+            .lock()
+            .map_err(|e| e.to_string())?
+            .as_deref()
+            == Some(&job.id);
+        let url = job
+            .notebook_url
+            .as_deref()
+            .unwrap_or(HOME)
+            .parse::<tauri::Url>()
+            .map_err(|e| e.to_string())?;
+        if !notebook_url(&url) {
+            return Err("音频任务的网站地址无效。".into());
+        }
+        if let Some(window) = app.get_webview_window(LABEL) {
+            if !same {
+                self.interrupt(app);
+                window
+                    .set_title(&format!("音频制作 · {} · 书引 AI", job.project_title))
+                    .map_err(|e| e.to_string())?;
+                window.navigate(url).map_err(|e| e.to_string())?;
+                *self.window_task.lock().map_err(|e| e.to_string())? = Some(job.id.clone());
+            } else if job.notebook_url.is_some()
+                && window.url().is_ok_and(|current| {
+                    current != url && current.host_str() != Some("accounts.google.com")
+                })
+            {
+                window.navigate(url).map_err(|e| e.to_string())?;
             }
-        } else {
-            message = Some("Chrome 集成路径初始化失败。".into());
+            window.show().map_err(|e| e.to_string())?;
+            window.unminimize().map_err(|e| e.to_string())?;
+            return window.set_focus().map_err(|e| e.to_string());
         }
-        if let Ok(directory) = app.path().app_local_data_dir() {
-            let bridge_dir = directory.join("audio-bridge");
-            let _ = std::fs::create_dir_all(&bridge_dir);
-            let pipe_file = bridge_dir.join(if cfg!(debug_assertions) {
-                "pipe-dev.txt"
-            } else {
-                "pipe.txt"
-            });
-            if let Err(error) = std::fs::write(&pipe_file, &pipe) {
-                message = Some(format!("无法写入浏览器管道信息：{error}"));
+        let directory = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("audio-webview");
+        std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+        let handle = app.clone();
+        let created =
+            tauri::WebviewWindowBuilder::new(app, LABEL, tauri::WebviewUrl::External(url))
+                .title(format!("音频制作 · {} · 书引 AI", job.project_title))
+                .inner_size(1200.0, 850.0)
+                .min_inner_size(900.0, 650.0)
+                .data_directory(directory)
+                .disable_drag_drop_handler()
+                .on_navigation(move |url| {
+                    let state = handle.state::<AudioAutomation>();
+                    // A download also raises NavigationStarting without replacing the document.
+                    // Allow only its already-bound URL, including a signed CDN URL.
+                    #[cfg(windows)]
+                    if state.download.lock().ok().is_some_and(|pending| {
+                        pending.as_ref().is_some_and(|intent| {
+                            intent.url == url.as_str()
+                                && intent.armed_at.elapsed() < Duration::from_secs(15)
+                        })
+                    }) {
+                        return true;
+                    }
+                    state.epoch.fetch_add(1, Ordering::SeqCst);
+                    state.notify();
+                    allowed_url(url)
+                })
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+                .build()
+                .map_err(|e| format!("无法打开应用内音频网站：{e}"))?;
+        #[cfg(windows)]
+        if let Err(error) = download::attach(&created, app.clone()).await {
+            let _ = created.destroy();
+            return Err(error);
+        }
+        let handle = app.clone();
+        created.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                if let Some(window) = handle.get_webview_window(LABEL) {
+                    let _ = window.hide();
+                }
+            }
+        });
+        *self.window_task.lock().map_err(|e| e.to_string())? = Some(job.id.clone());
+        self.notify();
+        Ok(())
+    }
+    pub fn interrupt(&self, app: &AppHandle) {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+        if let Some(window) = app.get_webview_window(LABEL) {
+            let _ = window.eval("globalThis.__shuyinAudioRun = null");
+            #[cfg(windows)]
+            download::cancel(&window);
+        }
+        #[cfg(windows)]
+        if let Ok(mut intent) = self.download.lock() {
+            *intent = None;
+        }
+    }
+    #[cfg(not(windows))]
+    async fn tick(&self, _app: &AppHandle) -> Duration {
+        Duration::from_secs(60)
+    }
+    #[cfg(windows)]
+    async fn tick(&self, app: &AppHandle) -> Duration {
+        let _operation = self.operation.lock().await;
+        let database = app.state::<Database>();
+        let Ok(Some(job)) = database.audio_execution_job() else {
+            return Duration::from_secs(60);
+        };
+        if matches!(
+            job.status.as_str(),
+            "paused" | "waiting_user" | "failed" | "succeeded" | "cancelled"
+        ) {
+            return Duration::from_secs(60);
+        }
+        match self.step(app, &database, &job).await {
+            Ok(delay) => Duration::from_secs(delay),
+            Err(message) => {
+                if database
+                    .audio_step_failed(&job.id, job.run_id, &message)
+                    .is_ok()
+                {
+                    self.interrupt(app);
+                }
+                Duration::from_secs(60)
             }
         }
-        Self {
-            supported: true,
-            host_name,
-            pipe_name: pipe,
-            last_seen: Mutex::new(None),
-            message: Mutex::new(message),
-            chrome_path,
-            extension_dir,
-            instance: Some(instance),
+    }
+    #[cfg(windows)]
+    async fn step(
+        &self,
+        app: &AppHandle,
+        database: &Database,
+        job: &AudioExecutionJob,
+    ) -> Result<u64, String> {
+        {
+            let mut waiting = self.waiting.lock().map_err(|e| e.to_string())?;
+            if !waiting.as_ref().is_some_and(|(id, run, stage, _)| {
+                *id == job.id && *run == job.run_id && *stage == job.stage
+            }) {
+                *waiting = Some((
+                    job.id.clone(),
+                    job.run_id,
+                    job.stage.clone(),
+                    std::time::Instant::now(),
+                ));
+            }
+            let limit = match job.stage.as_str() {
+                "generating" => 6 * 60 * 60,
+                "source_processing" => 15 * 60,
+                "downloading" | "importing" => 30 * 60,
+                _ => 120,
+            };
+            if job.status != "waiting_login"
+                && waiting
+                    .as_ref()
+                    .is_some_and(|(_, _, _, start)| start.elapsed() > Duration::from_secs(limit))
+            {
+                return Err("当前阶段等待超时，请查看网站核对后继续；不会重新提交生成。".into());
+            }
+            if job.status == "waiting_login" {
+                *waiting = None;
+            }
         }
-    }
-}
-
-fn host_name() -> String {
-    if cfg!(debug_assertions) {
-        "com.shuyin.desktop.audio.dev".into()
-    } else {
-        "com.shuyin.desktop.audio".into()
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn pipe_name() -> String {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!(r"\\.\pipe\shuyin-audio-{}-{stamp}", std::process::id())
-}
-#[cfg(target_os = "windows")]
-#[derive(Debug, Deserialize)]
-#[serde(
-    tag = "action",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-enum BridgeRequest {
-    Poll {
-        request_id: Option<String>,
-    },
-    SourceChunk {
-        request_id: Option<String>,
-        job_id: String,
-        run_id: i64,
-        offset: i64,
-    },
-    Observe {
-        request_id: Option<String>,
-        job_id: String,
-        run_id: i64,
-        observation: BridgeObservation,
-    },
-    DownloadStarted {
-        request_id: Option<String>,
-        job_id: String,
-        run_id: i64,
-        download_id: i64,
-    },
-    DownloadComplete {
-        request_id: Option<String>,
-        job_id: String,
-        run_id: i64,
-        path: String,
-    },
-    ReportError {
-        request_id: Option<String>,
-        job_id: String,
-        run_id: i64,
-        code: String,
-        message: String,
-    },
-}
-
-#[cfg(target_os = "windows")]
-impl BridgeRequest {
-    fn request_id(&self) -> Option<String> {
-        match self {
-            Self::Poll { request_id }
-            | Self::SourceChunk { request_id, .. }
-            | Self::Observe { request_id, .. }
-            | Self::DownloadStarted { request_id, .. }
-            | Self::DownloadComplete { request_id, .. }
-            | Self::ReportError { request_id, .. } => request_id.clone(),
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BridgeFailure {
-    code: String,
-    message: String,
-}
-
-#[cfg(target_os = "windows")]
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SourceChunkPayload {
-    data: String,
-    next_offset: i64,
-    total_size: i64,
-    name: String,
-    sha256: String,
-}
-
-#[cfg(target_os = "windows")]
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BridgeResponse {
-    ok: bool,
-    request_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    job: Option<serde_json::Value>,
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    source_chunk: Option<SourceChunkPayload>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<BridgeFailure>,
-}
-
-#[cfg(target_os = "windows")]
-impl BridgeResponse {
-    fn failure(request_id: Option<String>, code: &str, message: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            request_id,
-            job: None,
-            source_chunk: None,
-            error: Some(BridgeFailure {
-                code: code.into(),
-                message: message.into(),
-            }),
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-async fn read_frame<R: tokio::io::AsyncRead + Unpin>(
-    reader: &mut R,
-) -> Result<Option<Vec<u8>>, String> {
-    let mut length = [0u8; 4];
-    match reader.read_exact(&mut length).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-    }
-    let length = u32::from_le_bytes(length) as usize;
-    if length == 0 || length > MAX_BRIDGE_MESSAGE {
-        return Err("浏览器桥接消息大小无效。".into());
-    }
-    let mut payload = vec![0u8; length];
-    reader
-        .read_exact(&mut payload)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(Some(payload))
-}
-
-#[cfg(target_os = "windows")]
-async fn write_frame<W: tokio::io::AsyncWrite + Unpin>(
-    writer: &mut W,
-    payload: &[u8],
-) -> Result<(), String> {
-    if payload.len() > MAX_BRIDGE_MESSAGE {
-        return Err("浏览器桥接响应过大。".into());
-    }
-    writer
-        .write_all(&(payload.len() as u32).to_le_bytes())
-        .await
-        .map_err(|error| error.to_string())?;
-    writer
-        .write_all(payload)
-        .await
-        .map_err(|error| error.to_string())?;
-    writer.flush().await.map_err(|error| error.to_string())
-}
-
-#[cfg(target_os = "windows")]
-async fn process_request(app: &AppHandle, request: BridgeRequest) -> BridgeResponse {
-    let request_id = request.request_id();
-    let Some(state) = app.try_state::<AudioAutomation>() else {
-        return BridgeResponse::failure(request_id, "bridge_unavailable", "音频桥接状态不可用。");
-    };
-    state.touch();
-    let database = app.state::<Database>();
-    match request {
-        BridgeRequest::Poll { .. } => match database.audio_bridge_job() {
-            Ok(job) => BridgeResponse {
-                ok: true,
-                request_id,
-                job: job.and_then(|value| serde_json::to_value(value).ok()),
-                source_chunk: None,
-                error: None,
-            },
-            Err(message) => BridgeResponse::failure(request_id, "request_failed", message),
-        },
-        BridgeRequest::SourceChunk {
-            job_id,
-            run_id,
-            offset,
-            ..
-        } => match database.audio_source_chunk(&job_id, run_id, offset) {
-            Ok(chunk) => BridgeResponse {
-                ok: true,
-                request_id,
-                job: None,
-                source_chunk: Some(SourceChunkPayload {
-                    data: STANDARD.encode(chunk.bytes),
-                    next_offset: chunk.next_offset,
-                    total_size: chunk.total_size,
-                    name: chunk.name,
-                    sha256: chunk.sha256,
-                }),
-                error: None,
-            },
-            Err(error) => BridgeResponse::failure(request_id, "source_chunk", error),
-        },
-        BridgeRequest::Observe {
-            job_id,
-            run_id,
-            observation,
-            ..
-        } => match database.observe_audio_job(&job_id, run_id, &observation) {
-            Ok(job) => BridgeResponse {
-                ok: true,
-                request_id,
-                job: serde_json::to_value(job).ok(),
-                source_chunk: None,
-                error: None,
-            },
-            Err(message) => BridgeResponse::failure(request_id, "observe", message),
-        },
-        BridgeRequest::DownloadStarted {
-            job_id,
-            run_id,
-            download_id,
-            ..
-        } => {
-            if download_id <= 0 {
-                BridgeResponse::failure(request_id, "download", "浏览器下载编号无效。")
-            } else {
-                match database.audio_download_started(&job_id, run_id) {
-                    Ok(job) => BridgeResponse {
-                        ok: true,
-                        request_id,
-                        job: serde_json::to_value(job).ok(),
-                        source_chunk: None,
-                        error: None,
-                    },
-                    Err(message) => BridgeResponse::failure(request_id, "download", message),
+        if matches!(job.stage.as_str(), "downloading" | "importing") {
+            if let Some(intent) = self.download.lock().map_err(|e| e.to_string())?.clone() {
+                if intent.job_id == job.id && intent.run_id == job.run_id {
+                    if !intent.started && intent.armed_at.elapsed() > Duration::from_secs(15) {
+                        return Err("网站未启动本任务的精确下载，请核对后重试下载。".into());
+                    }
+                    return Ok(5);
                 }
             }
         }
-        BridgeRequest::DownloadComplete {
-            job_id,
-            run_id,
-            path,
-            ..
-        } => match database.complete_audio_download(&job_id, run_id, &path) {
-            Ok(job) => BridgeResponse {
-                ok: true,
-                request_id,
-                job: serde_json::to_value(job).ok(),
-                source_chunk: None,
-                error: None,
+        if matches!(job.stage.as_str(), "importing" | "verify_remote")
+            && database.retry_audio_import(&job.id, job.run_id)?.is_some()
+        {
+            return Ok(60);
+        }
+        let window = app
+            .get_webview_window(LABEL)
+            .ok_or("任务网站已关闭，请点击继续跟进重新打开。")?;
+        let url = window.url().map_err(|e| e.to_string())?;
+        if !allowed_url(&url) {
+            return Err("当前页面不属于音频任务的官方网站。".into());
+        }
+        if url.host_str() == Some("accounts.google.com") {
+            database.observe_audio_job(&job.id, job.run_id, &AudioObservation::LoginRequired)?;
+            return Ok(10);
+        }
+        if self
+            .window_task
+            .lock()
+            .map_err(|e| e.to_string())?
+            .as_deref()
+            != Some(job.id.as_str())
+        {
+            return Err("当前网站不属于正在执行的音频任务。".into());
+        }
+        if job.stage == "verify_remote" && job.notebook_url.is_none() {
+            return Err("原任务的笔记本身份无法确认，请核对网站；不会重新创建或提交生成。".into());
+        }
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        let intercept = job.stage == "adding_source"
+            && matches!(
+                job.source,
+                crate::database::audio::AudioSourceData::Asset { .. }
+            );
+        if intercept {
+            crate::webview_host::call(
+                &window,
+                "Page.setInterceptFileChooserDialog",
+                serde_json::json!({"enabled":true}),
+            )
+            .await?;
+        }
+        let result = evaluate(&window, job, serde_json::json!({})).await;
+        if intercept {
+            let _ = crate::webview_host::call(
+                &window,
+                "Page.setInterceptFileChooserDialog",
+                serde_json::json!({"enabled":false}),
+            )
+            .await;
+        }
+        // Creating a notebook may navigate before Runtime.evaluate can return.
+        // The page-side creation marker must still match before its URL is adopted.
+        if job.stage == "creating_notebook" && self.epoch.load(Ordering::SeqCst) != epoch {
+            self.require_current(database, job, self.epoch.load(Ordering::SeqCst))?;
+            if window
+                .url()
+                .is_ok_and(|url| notebook_url(&url) && url.path().starts_with("/notebook/"))
+            {
+                return Ok(2);
+            }
+        }
+        let result = result?;
+        self.require_current(database, job, epoch)?;
+        let kind = result["kind"]
+            .as_str()
+            .ok_or("网页没有返回有效的任务观察。")?
+            .to_owned();
+        match kind.as_str() {
+            "file_input_ready" => {
+                let path = database.audio_source_snapshot(&job.id, job.run_id)?;
+                self.require_current(database, job, epoch)?;
+                database.observe_audio_job(
+                    &job.id,
+                    job.run_id,
+                    &AudioObservation::SourceSubmitted,
+                )?;
+                set_source_file(&window, job, &path).await?;
+            }
+            "download_target" => {
+                let url = result["downloadUrl"]
+                    .as_str()
+                    .ok_or("没有找到可精确关联的音频下载地址。")?
+                    .to_owned();
+                if !download_url(&url) {
+                    return Err("网站提供的音频下载地址不受支持。".into());
+                }
+                let path = database.audio_download_path(&job.id, job.run_id)?;
+                if path.exists() {
+                    return Err("本次下载缓存已存在，请核对后继续重试下载。".into());
+                }
+                *self.download.lock().map_err(|e| e.to_string())? = Some(DownloadIntent {
+                    job_id: job.id.clone(),
+                    run_id: job.run_id,
+                    url: url.clone(),
+                    path,
+                    started: false,
+                    epoch,
+                    armed_at: std::time::Instant::now(),
+                });
+                let mut request = job.clone();
+                request.stage = "begin_download".into();
+                evaluate(&window, &request, serde_json::json!({"downloadUrl":url})).await?;
+            }
+            "waiting" | "navigating" | "source_processing" => {
+                database.audio_checked(&job.id, job.run_id)?;
+            }
+            _ => {
+                let observation: AudioObservation =
+                    serde_json::from_value(result).map_err(|e| format!("网页任务观察无效：{e}"))?;
+                database.observe_audio_job(&job.id, job.run_id, &observation)?;
+            }
+        }
+        Ok(
+            if kind == "generating" || (job.stage == "generating" && kind == "waiting") {
+                60
+            } else if matches!(kind.as_str(), "source_processing" | "waiting")
+                && job.stage == "source_processing"
+            {
+                15
+            } else {
+                2
             },
-            Err(message) => BridgeResponse::failure(request_id, "import", message),
-        },
-        BridgeRequest::ReportError {
-            job_id,
-            run_id,
-            code,
-            message,
-            ..
-        } => match database.audio_report_error(&job_id, run_id, &code, &message) {
-            Ok(job) => BridgeResponse {
-                ok: true,
-                request_id,
-                job: serde_json::to_value(job).ok(),
-                source_chunk: None,
-                error: None,
-            },
-            Err(error) => BridgeResponse::failure(request_id, "report_error", error),
-        },
+        )
+    }
+    #[cfg(windows)]
+    fn require_current(
+        &self,
+        database: &Database,
+        job: &AudioExecutionJob,
+        epoch: u64,
+    ) -> Result<(), String> {
+        let current = database.audio_execution_job()?.ok_or("音频任务已结束。")?;
+        if self.epoch.load(Ordering::SeqCst) != epoch
+            || current.id != job.id
+            || current.run_id != job.run_id
+            || matches!(
+                current.status.as_str(),
+                "paused" | "waiting_user" | "failed" | "cancelled" | "succeeded"
+            )
+        {
+            return Err("网页或任务已变化，本次操作结果已失效，请核对后继续。".into());
+        }
+        Ok(())
     }
 }
-
-#[cfg(target_os = "windows")]
-async fn run_pipe_server(app: AppHandle, pipe_name: String) -> Result<(), String> {
-    use tokio::net::windows::named_pipe::ServerOptions;
-    loop {
-        let server = ServerOptions::new()
-            .create(&pipe_name)
-            .map_err(|error| error.to_string())?;
-        server.connect().await.map_err(|error| error.to_string())?;
-        let request_app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let _ = handle_pipe_connection(request_app, server).await;
-        });
+fn notebook_url(url: &tauri::Url) -> bool {
+    url.scheme() == "https"
+        && matches!(
+            url.host_str(),
+            Some("notebook.google.com" | "notebooklm.google.com")
+        )
+        && url.port_or_known_default() == Some(443)
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+fn allowed_url(url: &tauri::Url) -> bool {
+    notebook_url(url)
+        || (url.scheme() == "https"
+            && url.host_str() == Some("accounts.google.com")
+            && url.port_or_known_default() == Some(443)
+            && url.username().is_empty()
+            && url.password().is_none())
+}
+#[cfg(windows)]
+fn download_url(url: &str) -> bool {
+    tauri::Url::parse(url).is_ok_and(|url| {
+        matches!(url.scheme(), "https" | "blob")
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
+}
+#[cfg(windows)]
+async fn evaluate(
+    window: &WebviewWindow,
+    job: &AudioExecutionJob,
+    context: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if !notebook_url(&window.url().map_err(|e| e.to_string())?) {
+        return Err("当前不是 Notebook 页面。".into());
     }
+    let token =
+        serde_json::to_string(&format!("{}:{}", job.id, job.run_id)).map_err(|e| e.to_string())?;
+    let script = format!("(async () => {{ globalThis.__shuyinAudioRun = {token}; {}; return await globalThis.ShuyinAudioPage.runStep({}, {}); }})()", include_str!("audio_page.js"), serde_json::to_string(job).map_err(|e| e.to_string())?, context);
+    let result = crate::webview_host::call(
+        window,
+        "Runtime.evaluate",
+        serde_json::json!({"expression":script,"awaitPromise":true,"returnByValue":true}),
+    )
+    .await?;
+    if result.get("exceptionDetails").is_some() {
+        return Err(result["exceptionDetails"]["exception"]["description"]
+            .as_str()
+            .unwrap_or("网页任务执行失败，请核对网站后继续。")
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned());
+    }
+    result["result"]
+        .get("value")
+        .cloned()
+        .ok_or("网页没有返回可解析的任务结果。".into())
 }
-
-#[cfg(not(target_os = "windows"))]
-async fn run_pipe_server(_app: AppHandle, _pipe_name: String) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-async fn handle_pipe_connection(
-    app: AppHandle,
-    mut server: tokio::net::windows::named_pipe::NamedPipeServer,
+#[cfg(windows)]
+async fn set_source_file(
+    window: &WebviewWindow,
+    job: &AudioExecutionJob,
+    path: &std::path::Path,
 ) -> Result<(), String> {
-    while let Some(payload) = read_frame(&mut server).await? {
-        let response = match serde_json::from_slice::<BridgeRequest>(&payload) {
-            Ok(request) => process_request(&app, request).await,
-            Err(error) => BridgeResponse::failure(
-                None,
-                "invalid_request",
-                format!("浏览器桥接请求无效：{error}"),
-            ),
-        };
-        let bytes = serde_json::to_vec(&response).map_err(|error| error.to_string())?;
-        write_frame(&mut server, &bytes).await?;
-    }
-    Ok(())
+    let marker =
+        serde_json::to_string(&format!("{}:{}", job.id, job.run_id)).map_err(|e| e.to_string())?;
+    let expression = format!("(() => {{ const inputs = [...document.querySelectorAll('input[type=file]')].filter(i => i.getAttribute('data-shuyin-audio-source') === {marker}); if (inputs.length !== 1) throw Error('原书上传控件已变化'); return inputs[0]; }})()");
+    let result = crate::webview_host::call(
+        window,
+        "Runtime.evaluate",
+        serde_json::json!({"expression":expression}),
+    )
+    .await?;
+    let id = result["result"]["objectId"]
+        .as_str()
+        .filter(|_| result["result"]["subtype"] == "node")
+        .ok_or("未找到当前任务唯一的文件上传控件。")?;
+    let selected = crate::webview_host::call(
+        window,
+        "DOM.setFileInputFiles",
+        serde_json::json!({"objectId":id,"files":[crate::paths::shell_path(path)]}),
+    )
+    .await;
+    let _ = crate::webview_host::call(
+        window,
+        "Runtime.releaseObject",
+        serde_json::json!({"objectId":id}),
+    )
+    .await;
+    selected.map(|_| ())
 }
-
-#[cfg(target_os = "windows")]
-struct InstanceGuard(usize);
-
-#[cfg(not(target_os = "windows"))]
-type InstanceGuard = ();
-
-#[cfg(target_os = "windows")]
+struct InstanceGuard(#[cfg(windows)] usize);
+#[cfg(windows)]
 impl Drop for InstanceGuard {
     fn drop(&mut self) {
-        use windows_sys::Win32::Foundation::CloseHandle;
         unsafe {
-            CloseHandle(self.0 as *mut std::ffi::c_void);
+            windows_sys::Win32::Foundation::CloseHandle(self.0 as _);
         }
     }
 }
-
-#[cfg(target_os = "windows")]
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-#[cfg(target_os = "windows")]
+#[cfg(windows)]
 fn acquire_instance() -> Result<Option<InstanceGuard>, String> {
     use windows_sys::Win32::{
         Foundation::{GetLastError, ERROR_ALREADY_EXISTS},
         System::Threading::CreateMutexW,
     };
-    let name = wide(if cfg!(debug_assertions) {
-        r"Local\ShuyinAI-AudioBridge-Dev"
+    let name: Vec<u16> = (if cfg!(debug_assertions) {
+        "Local\\ShuyinAI-AudioBridge-Dev"
     } else {
-        r"Local\ShuyinAI-AudioBridge"
-    });
+        "Local\\ShuyinAI-AudioBridge"
+    })
+    .encode_utf16()
+    .chain(Some(0))
+    .collect();
     let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
     if handle.is_null() {
-        return Err(format!("无法创建音频实例互斥量：{}", unsafe {
-            GetLastError()
-        }));
+        return Err("无法取得音频任务实例锁。".into());
     }
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        use windows_sys::Win32::Foundation::CloseHandle;
         unsafe {
-            CloseHandle(handle);
+            windows_sys::Win32::Foundation::CloseHandle(handle);
         }
         return Ok(None);
     }
     Ok(Some(InstanceGuard(handle as usize)))
 }
-
-#[cfg(target_os = "windows")]
-fn find_chrome() -> Option<PathBuf> {
-    let mut paths = Vec::new();
-    if let Ok(root) = std::env::var("ProgramFiles") {
-        paths.push(PathBuf::from(root).join(r"Google\Chrome\Application\chrome.exe"));
-    }
-    if let Ok(root) = std::env::var("ProgramFiles(x86)") {
-        paths.push(PathBuf::from(root).join(r"Google\Chrome\Application\chrome.exe"));
-    }
-    if let Ok(root) = std::env::var("LOCALAPPDATA") {
-        paths.push(PathBuf::from(root).join(r"Google\Chrome\Application\chrome.exe"));
-    }
-    paths.into_iter().find(|path| path.is_file())
+#[cfg(not(windows))]
+fn acquire_instance() -> Result<Option<InstanceGuard>, String> {
+    Ok(None)
 }
 
-#[cfg(target_os = "windows")]
-fn find_extension_dir(app: &AppHandle) -> Option<PathBuf> {
-    let resource = app
-        .path()
-        .resource_dir()
-        .ok()
-        .map(|path| path.join("browser-extension"));
-    if resource.as_ref().is_some_and(|path| path.is_dir()) {
-        return resource;
-    }
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()?
-        .join("browser-extension");
-    source.is_dir().then_some(source)
-}
-
-#[cfg(target_os = "windows")]
-fn find_helper_path() -> Option<PathBuf> {
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(path) = executable
-            .parent()
-            .map(|directory| directory.join("browser-bridge.exe"))
-        {
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-    }
-    let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("binaries/browser-bridge-x86_64-pc-windows-msvc.exe");
-    dev.is_file().then_some(dev)
-}
-
-#[cfg(target_os = "windows")]
-fn write_registry(host_name: &str, manifest: &Path) -> Result<(), String> {
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{
-            RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_WRITE,
-            REG_OPTION_NON_VOLATILE, REG_SZ,
-        },
-    };
-    let subkey = wide(&format!(
-        r"Software\Google\Chrome\NativeMessagingHosts\{host_name}"
-    ));
-    let value = wide(&manifest.to_string_lossy());
-    let value_name = wide("");
-    let mut key = std::ptr::null_mut();
-    let mut disposition = 0u32;
-    let status = unsafe {
-        RegCreateKeyExW(
-            HKEY_CURRENT_USER,
-            subkey.as_ptr(),
-            0,
-            std::ptr::null(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_WRITE,
-            std::ptr::null(),
-            &mut key,
-            &mut disposition,
-        )
-    };
-    if status != ERROR_SUCCESS {
-        return Err(format!("无法创建 Chrome 注册表项：{status}"));
-    }
-    let bytes = value.as_ptr() as *const u8;
-    let length = (value.len() * std::mem::size_of::<u16>()) as u32;
-    let status = unsafe { RegSetValueExW(key, value_name.as_ptr(), 0, REG_SZ, bytes, length) };
-    unsafe {
-        RegCloseKey(key);
-    }
-    if status != ERROR_SUCCESS {
-        return Err(format!("无法写入 Chrome 注册表值：{status}"));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn host_manifest(helper: &Path, host_name: &str) -> serde_json::Value {
-    let helper = std::fs::canonicalize(helper).unwrap_or_else(|_| helper.to_path_buf());
-    serde_json::json!({
-        "name": host_name,
-        "description": "Book Voice AI audio automation bridge",
-        "path": crate::paths::shell_path(&helper),
-        "type": "stdio",
-        "allowed_origins": [format!("chrome-extension://{EXTENSION_ID}/")]
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn register_host(manifest: &Path, helper: &Path, host_name: &str) -> Result<(), String> {
-    if let Some(parent) = manifest.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let body = host_manifest(helper, host_name);
-    let bytes = serde_json::to_vec_pretty(&body).map_err(|error| error.to_string())?;
-    let temporary = manifest.with_extension("json.tmp");
-    std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-    if manifest.exists() {
-        std::fs::remove_file(manifest).map_err(|error| error.to_string())?;
-    }
-    std::fs::rename(&temporary, manifest).map_err(|error| error.to_string())?;
-    write_registry(host_name, manifest)
-}
-
-#[cfg(target_os = "windows")]
-fn open_chrome(url: &str, chrome: &Option<PathBuf>) -> Result<(), String> {
-    if !(url.starts_with("https://") || url == "chrome://extensions/") {
-        return Err("只允许打开固定 HTTPS 页面或扩展管理页。".into());
-    }
-    use std::os::windows::process::CommandExt;
-    let chrome = chrome
-        .as_ref()
-        .ok_or("未检测到 Google Chrome，请先安装 Chrome。")?;
-    std::process::Command::new(chrome)
-        .arg("--new-window")
-        .arg(url)
-        .creation_flags(0x08000000)
-        .spawn()
-        .map_err(|error| format!("无法打开 Chrome：{error}"))?;
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn open_folder(path: &Path) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    std::process::Command::new("explorer.exe")
-        .arg(path)
-        .creation_flags(0x08000000)
-        .spawn()
-        .map_err(|error| format!("无法打开扩展目录：{error}"))?;
-    Ok(())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn open_chrome(_url: &str, _chrome: &Option<PathBuf>) -> Result<(), String> {
-    Err("自动音频目前仅支持 Windows + Chrome。".into())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn open_folder(_path: &Path) -> Result<(), String> {
-    Err("自动音频目前仅支持 Windows + Chrome。".into())
-}
-
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn host_manifest_uses_a_shell_compatible_executable_path() {
-        let directory = tempfile::tempdir().unwrap();
-        let helper = directory.path().join("书引 AI bridge.exe");
-        std::fs::write(&helper, b"fixture").unwrap();
-        let manifest = host_manifest(&helper, "com.shuyin.desktop.audio");
-        let registered = manifest["path"].as_str().unwrap();
-        assert!(!registered.starts_with(r"\\?\"), "{registered}");
-        assert!(Path::new(registered).is_absolute());
-        assert_eq!(std::fs::read(registered).unwrap(), b"fixture");
-        assert_eq!(
-            manifest["allowed_origins"][0],
-            format!("chrome-extension://{EXTENSION_ID}/")
-        );
-    }
-
-    #[test]
-    fn source_chunk_response_is_flat_for_the_extension() {
-        let response = BridgeResponse {
-            ok: true,
-            request_id: Some("r1".into()),
-            job: None,
-            source_chunk: Some(SourceChunkPayload {
-                data: "AA==".into(),
-                next_offset: 1,
-                total_size: 2,
-                name: "书.pdf".into(),
-                sha256: "a".repeat(64),
-            }),
-            error: None,
-        };
-        let value = serde_json::to_value(response).unwrap();
-        assert_eq!(value["data"], "AA==");
-        assert_eq!(value["nextOffset"], 1);
-        assert_eq!(value["totalSize"], 2);
-        assert_eq!(value["name"], "书.pdf");
-        assert!(value.get("sourceChunk").is_none());
-    }
-
-    #[test]
-    fn generation_complete_does_not_require_a_download_url() {
-        let observation: BridgeObservation = serde_json::from_value(serde_json::json!({
-            "kind": "generation_complete"
-        }))
-        .unwrap();
-        assert!(matches!(
-            observation,
-            BridgeObservation::GenerationComplete {
-                download_url: None,
-                ..
-            }
-        ));
+    fn only_exact_official_navigation_is_allowed() {
+        for url in [
+            HOME,
+            "https://notebooklm.google.com/notebook/a",
+            "https://accounts.google.com/signin",
+        ] {
+            assert!(allowed_url(&url.parse().unwrap()));
+        }
+        for url in [
+            "http://notebook.google.com",
+            "https://notebook.google.com.evil.test",
+            "https://evil.test/?notebook.google.com",
+            "https://notebook.google.com:444",
+            "https://user@notebook.google.com",
+        ] {
+            assert!(!allowed_url(&url.parse().unwrap()));
+        }
     }
 }

@@ -5,9 +5,16 @@ use crate::{
         Database,
     },
 };
-use tauri::State;
+use tauri::{AppHandle, State, WebviewWindow};
 
+fn local_main(window: &WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("仅主工作台可以控制音频任务。".into());
+    }
+    Ok(())
+}
 fn view(
+    app: &AppHandle,
     database: &Database,
     automation: &AudioAutomation,
     project_id: &str,
@@ -16,57 +23,64 @@ fn view(
     Ok(AudioJobView {
         job: data.job,
         active_job: data.active_job,
-        bridge: automation.status(),
+        browser: automation.status(app),
     })
 }
-
 fn view_for_job(
+    app: &AppHandle,
     database: &Database,
     automation: &AudioAutomation,
     job: &AudioJob,
 ) -> Result<AudioJobView, String> {
-    view(database, automation, &job.project_id)
+    view(app, database, automation, &job.project_id)
 }
-
 #[tauri::command]
 pub fn audio_job_snapshot(
+    app: AppHandle,
     database: State<'_, Database>,
     automation: State<'_, AudioAutomation>,
     project_id: String,
 ) -> Result<AudioJobView, String> {
-    view(database.inner(), automation.inner(), &project_id)
+    view(&app, &database, &automation, &project_id)
 }
-
 #[tauri::command]
-pub fn start_audio_job(
+pub async fn start_audio_job(
+    app: AppHandle,
+    window: WebviewWindow,
     database: State<'_, Database>,
     automation: State<'_, AudioAutomation>,
     input: StartAudioJobInput,
 ) -> Result<AudioJobView, String> {
-    automation.require_connected()?;
+    local_main(&window)?;
+    automation.require_available()?;
     let job = database.start_audio_job(input)?;
-    if let Err(error) = automation.open_notebook(Some(&job.id), database.inner()) {
-        let _ = database.audio_report_error(&job.id, job.run_id, "browser_launch_failed", &error);
+    if let Err(error) = automation.open_notebook(&app, &job).await {
+        let _ = database.audio_report_error(&job.id, job.run_id, "browser_open_failed", &error);
         return Err(error);
     }
-    view_for_job(database.inner(), automation.inner(), &job)
+    automation.notify();
+    view_for_job(&app, &database, &automation, &job)
 }
-
 #[tauri::command]
-pub fn control_audio_job(
+pub async fn control_audio_job(
+    app: AppHandle,
+    window: WebviewWindow,
     database: State<'_, Database>,
     automation: State<'_, AudioAutomation>,
     id: String,
     action: String,
 ) -> Result<AudioJobView, String> {
+    local_main(&window)?;
     let job = database.control_audio_job(&id, &action)?;
-    if action == "open_browser" {
-        automation.open_notebook(Some(&id), database.inner())?;
+    if matches!(action.as_str(), "pause" | "cancel" | "resume") {
+        automation.interrupt(&app);
     }
-    view_for_job(database.inner(), automation.inner(), &job)
-}
-
-#[tauri::command]
-pub fn open_audio_extension_setup(automation: State<'_, AudioAutomation>) -> Result<(), String> {
-    automation.open_extension_setup()
+    if matches!(action.as_str(), "open_browser" | "resume") {
+        if let Err(error) = automation.open_notebook(&app, &job).await {
+            let _ = database.audio_report_error(&job.id, job.run_id, "browser_open_failed", &error);
+            return Err(error);
+        }
+    }
+    automation.notify();
+    view_for_job(&app, &database, &automation, &job)
 }

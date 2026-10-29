@@ -7,13 +7,13 @@ mod cover_commands;
 mod credentials;
 mod database;
 mod douyin;
-mod douyin_webview;
 mod media;
 mod note_import;
 #[cfg(target_os = "windows")]
 mod paths;
 mod publish_commands;
 mod updates;
+mod webview_host;
 
 use database::{Database, ProbeSnapshot};
 use tauri::Manager;
@@ -56,6 +56,9 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(audio) = window.app_handle().get_webview_window("audio-notebook") {
+                    let _ = audio.destroy();
+                }
                 if let Some(publishing) = window.app_handle().get_webview_window("douyin-publish") {
                     let _ = publishing.destroy();
                 }
@@ -120,8 +123,7 @@ pub fn run() {
             ai_commands::set_audio_duration,
             audio_commands::audio_job_snapshot,
             audio_commands::start_audio_job,
-            audio_commands::control_audio_job,
-            audio_commands::open_audio_extension_setup
+            audio_commands::control_audio_job
         ])
         .run(tauri::generate_context!())
         .expect("书引 AI 桌面容器启动失败");

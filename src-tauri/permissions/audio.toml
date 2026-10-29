@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "allow-audio-automation"
-description = "Notebook 音频任务、受限 Chrome 扩展桥接和成品归档；不读取 Cookie、密码或提供任意页面/命令执行。"
-commands.allow = ["audio_job_snapshot", "start_audio_job", "control_audio_job", "open_audio_extension_setup"]
+description = "Notebook 音频任务、应用内网站操作和成品归档；不读取 Cookie、密码或提供任意页面/命令执行。"
+commands.allow = ["audio_job_snapshot", "start_audio_job", "control_audio_job"]

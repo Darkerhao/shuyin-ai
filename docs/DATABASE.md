@@ -1,14 +1,18 @@
 # 书引 AI 数据库设计文档
 
+## 新建书籍与来源文件原子保存（2026-10-28）
+
+本地书籍绑定复用 `assets.asset_type=document` 与现有项目外键，不新增表或列，版本保持 v13。书籍和本次新增文档关联在同一事务内写入，路径重复、不可读、缺失或不支持的文件均使整次保存回滚；重开应用及备份恢复继续使用现有素材记录。
+
 ## 自动音频任务 v13（2026-10-28）
 
 新增 `0013_audio_jobs.sql`，`user_version=13`。`audio_jobs` 保存项目与发布文案版本、冻结 `input_json`、唯一持久状态/阶段、递增运行编号、错误、远端 Notebook 身份、下载结果、素材引用及创建/提交/检查时间。`input_json` 只保存本次指导、目标秒数、格式和唯一来源快照；文档来源包含素材 ID、名称、大小和 SHA-256，文本来源保存资料文本。密钥、Cookie、临时签名下载 URL、浏览器 profile、标签页和 downloadId 不进入数据库。
 
 部分唯一索引保证全局至多一个 `status NOT IN ('succeeded','cancelled')` 的任务；失败任务仍占位，只有用户明确停止跟进后才可开始新任务。状态为 created/waiting_login/preparing/generating/downloading/importing/succeeded/waiting_user/paused/failed/cancelled。页面观察只由 Rust 根据当前状态和阶段接受；提交结果不明时进入人工核对，不自动重新点击生成。
 
-下载完成后 Rust 校验真实音频容器并复制到项目 `audio/`，再在同一事务中登记 `assets.asset_type=audio` 和任务 succeeded；重复恢复返回同一素材。完整备份通过既有 assets 规则自动包含最终音频，不包含未完成浏览器下载。应用启动与数据库恢复把未完成任务置为 `waiting_user/verify_remote` 并递增运行编号；旧浏览器消息不能写入。有未结束音频任务时拒绝恢复数据库，需先停止跟进。
+下载完成后 Rust 校验真实音频容器并复制到项目 `audio/`，再在同一事务中登记 `assets.asset_type=audio` 和任务 succeeded；重复恢复返回同一素材。完整备份通过既有 assets 规则自动包含最终音频，不包含未完成浏览器下载。应用启动与恢复把已开始任务置为 waiting_user/verify_remote 并递增运行编号；尚未开始、无 URL/提交记录的 opening/旧等待扩展任务可从 opening_site 继续。迟到结果不能写入。有未结束音频任务时拒绝恢复数据库，需先停止跟进。
 
-当前数据库支持 v2–v13 备份恢复，旧备份在内存顺序升级且源文件不改写。v12→v13、单活动任务、冻结快照、跨书来源拒绝、文件指纹、真实音频归档、事务失败重试、备份恢复和发布素材关联均有 Rust 回归。真实 Chrome/Google 流程证据另见 `AUDIO-AUTOMATION-VERIFICATION.md`。
+当前数据库支持 v2–v13 备份恢复，旧备份在内存顺序升级且源文件不改写。v12→v13、单活动任务、冻结快照、跨书来源拒绝、文件指纹、真实音频归档、事务失败重试、备份恢复和发布素材关联均有 Rust 回归。2026-10-29 内置窗口替换无新迁移；缓存路径按任务/运行推导，摘要沿用 output_size/output_sha256。当前证据见 IN-APP-AUDIO-VERIFICATION.md；旧 Chrome 历史证据另见 `AUDIO-AUTOMATION-VERIFICATION.md`。
 
 ## 音频目标时长 v12（2026-10-27）
 

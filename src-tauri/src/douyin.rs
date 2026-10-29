@@ -209,7 +209,7 @@ async fn page_element(
     action: &str,
     ratio: Option<&str>,
 ) -> Result<String, String> {
-    use crate::douyin_webview::call;
+    use crate::webview_host::call;
     use serde_json::json;
     let action_json = serde_json::to_string(action).map_err(|e| e.to_string())?;
     let payload = ratio.map_or_else(
@@ -241,7 +241,7 @@ async fn set_local_file(
     publisher: &DouyinPublisher,
     snapshot: &PublishSnapshot,
 ) -> Result<(), String> {
-    use crate::douyin_webview::call;
+    use crate::webview_host::call;
     use serde_json::json;
     let object_id = page_element(window, action, ratio).await?;
     if action == "videoInput" && !publisher.stopped.load(Ordering::SeqCst) {
