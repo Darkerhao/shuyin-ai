@@ -304,6 +304,7 @@
       title.click?.()
       writeAndVerify(title, expected)
       title.blur?.()
+      setCreationMarker(job, false)
       return { kind: 'notebook_created', notebookUrl: location.href }
     } catch (error) {
       return { kind: 'page_changed', message: error?.message ?? '笔记本标题未能完整回读，已停止自动操作。' }
@@ -338,8 +339,8 @@
     }
     if (isNotebookPath()) {
       if (!hasCreationMarker(job)) return { kind: 'page_changed', message: '当前笔记本没有本任务的新建意图记录，已停止自动命名。' }
-      setCreationMarker(job, false)
-      return setNotebookTitle(job)
+      if (!sameRecordedNotebook(location.href)) throw new UiError('wrong_notebook', '当前不是受支持的官方笔记本地址。')
+      return { kind: 'notebook_identified', notebookUrl: location.href }
     }
     const create = await waitFor(() => findInteractive(UI.createNotebook), 3000)
     if (!create) throw new UiError('create_notebook_missing', '未找到新建笔记本入口；登录或页面版本可能已变化。')
@@ -620,6 +621,17 @@
     return { kind: 'page_changed', message: '已定位原笔记本，但未确认来源或音频状态，请人工核对；不会重新添加来源或生成。' }
   }
 
+  function canRecoverEmptyNotebook() {
+    return sameRecordedNotebook(location.href)
+      && !websiteIssue()
+      && findElements(UI.addSource).length === 1
+      && findTextElements(['0 sources', '0 source', '0 个来源', '0个来源'], document, true).length > 0
+      && detectGenerationState() === 'unknown'
+      && !hasAnyText([...UI.generating, ...UI.failed])
+      && findElements([...UI.play, ...UI.download]).length === 0
+      && !document.querySelector('audio')
+  }
+
   function websiteIssue() {
     if (new URL(location.href).searchParams.get('location') === 'unsupported') {
       return 'Notebook 提示当前网络所在地区不受支持。请检查网络和服务可用地区后点击“重新打开”，恢复后继续跟进。'
@@ -692,6 +704,7 @@
 
   globalThis.ShuyinAudioPage = Object.freeze({
     UiError,
+    canRecoverEmptyNotebook,
     audioArtifactScope,
     captureDownloadTarget,
     configureAudio,

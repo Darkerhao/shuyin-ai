@@ -231,6 +231,51 @@ impl AudioAutomation {
             *intent = None;
         }
     }
+    #[cfg(windows)]
+    pub async fn confirm_notebook(
+        &self,
+        app: &AppHandle,
+        database: &Database,
+        job: &AudioJob,
+        confirmed_url: &str,
+    ) -> Result<AudioJob, String> {
+        self.require_available()?;
+        let _operation = self.operation.lock().await;
+        let window = app
+            .get_webview_window(LABEL)
+            .ok_or("请先打开原任务的空白笔记本。")?;
+        if self
+            .window_task
+            .lock()
+            .map_err(|e| e.to_string())?
+            .as_deref()
+            != Some(&job.id)
+        {
+            return Err("当前网站不属于此音频任务。".into());
+        }
+        let url = window.url().map_err(|e| e.to_string())?;
+        if !notebook_url(&url) || url.as_str() != confirmed_url {
+            return Err("网站地址已变化，请查看当前网站后重新确认。".into());
+        }
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        let result = crate::webview_host::call(
+            &window,
+            "Runtime.evaluate",
+            serde_json::json!({"expression": format!("(() => {{ {}; return {{ url: location.href, empty: globalThis.ShuyinAudioPage.canRecoverEmptyNotebook() }}; }})()", include_str!("audio_page.js")), "returnByValue": true}),
+        ).await?;
+        let value = &result["result"]["value"];
+        if self.epoch.load(Ordering::SeqCst) != epoch
+            || value["url"].as_str() != Some(confirmed_url)
+        {
+            return Err("网站已变化，请核对后重新确认。".into());
+        }
+        if value["empty"].as_bool() != Some(true) {
+            return Err("未确认当前笔记本为空。必须明确显示 0 个来源且没有音频生成结果，才能恢复添加来源；已有内容请在网站核对或手动导入音频。".into());
+        }
+        let saved = database.confirm_audio_notebook(&job.id, job.run_id, confirmed_url)?;
+        self.interrupt(app);
+        Ok(saved)
+    }
     #[cfg(not(windows))]
     async fn tick(&self, _app: &AppHandle) -> Duration {
         Duration::from_secs(60)
@@ -346,7 +391,7 @@ impl AudioAutomation {
             return Err("当前网站不属于正在执行的音频任务。".into());
         }
         if job.stage == "verify_remote" && job.notebook_url.is_none() {
-            return Err("原任务的笔记本身份无法确认，请核对网站；不会重新创建或提交生成。".into());
+            return Err("原任务未保存笔记本地址。请查看原任务的空白笔记本，再点“继续跟进”确认关联；不会自动重新创建或提交生成。".into());
         }
         let epoch = self.epoch.load(Ordering::SeqCst);
         let intercept = job.stage == "adding_source"

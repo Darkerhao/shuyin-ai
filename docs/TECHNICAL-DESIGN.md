@@ -19,6 +19,8 @@
 
 ## Gemini Notebook 应用内自动音频（2026-10-29）
 
+笔记本身份恢复：创建意图与官方笔记本路径核对成功后先返回 `notebook_identified`，在既有 `notebook_url` 保存地址，阶段仍为 `creating_notebook`；下一步才命名并回读，成功后清除新建标记并进入添加来源。命名失败或重启保留地址及命名阶段，不重新创建。旧任务已丢失地址时，「继续跟进」刷新窗口快照，展示当前 URL 并通过既有 `ConfirmAction` 等待明确确认；宿主串行核对窗口归属、当前 URL、文档代次、0 来源和无音频结果后才关联，在同一任务中恢复命名。已有 URL、提交记录、成品或另一活动任务时拒绝关联。停止和关联均复用页面内确认，取消或 Escape 不修改任务；不依赖 Tauri 覆写的异步 `window.confirm`，不增加原生消息框权限。
+
 网站故障恢复：`control_audio_job` 新增 `refresh_browser` / `reopen_browser`，沿用 v13 状态与 run_id 使旧动作失效；非终态先 paused，手动 resume 再执行。failed/cancelled 可继续原任务，先验证全局活动任务不冲突。添加来源或提交状态不明时继续转 verify_remote，只读核对。宿主复用原窗口、profile、任务 URL，调用 Tauri 2.12.5 的 reload/navigate；刷新保留登录页，同一笔记本跨官方域名不反复跳回。页面脚本在执行动作前识别明确错误标题、网络错误码、地区限制和人工验证，返回既有 page_changed 观察，不增加重试循环、依赖或浏览器权限。
 
 audio.rs 管理专用窗口与单一串行调度；audio_page.js 按角色、标签、中英文文本执行当前动作，运行令牌阻止暂停后的异步写入。抖音/音频共用 webview_host.rs，以 CDP Runtime.evaluate(awaitPromise) 获取结构化结果，30秒上限；不开放调试端口或给远程窗口业务 capability。

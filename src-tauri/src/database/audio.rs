@@ -85,6 +85,9 @@ pub struct AudioJobData {
 pub enum AudioObservation {
     LoginRequired,
     LoginReady,
+    NotebookIdentified {
+        notebook_url: String,
+    },
     NotebookCreated {
         notebook_url: String,
     },
@@ -585,10 +588,39 @@ impl Database {
     pub fn recover_audio_jobs(&self) -> Result<(), String> {
         self.with_connection(|connection| {
             connection.execute(
-                &format!("UPDATE audio_jobs SET status='waiting_user',stage=CASE WHEN stage IN ('opening_site','awaiting_extension','login') AND notebook_url IS NULL AND submitted_at IS NULL THEN 'opening_site' ELSE 'verify_remote' END,run_id=run_id+1,error_code='verify_remote',error_message='应用重启后请查看网站并继续跟进；已开始的远端任务会先核对。',updated_at={NOW} WHERE status IN ('created','waiting_login','preparing','generating','downloading','importing')"),
+                &format!("UPDATE audio_jobs SET status='waiting_user',stage=CASE WHEN stage IN ('opening_site','awaiting_extension','login') AND notebook_url IS NULL AND submitted_at IS NULL THEN 'opening_site' WHEN stage='creating_notebook' AND notebook_url IS NOT NULL THEN 'creating_notebook' ELSE 'verify_remote' END,run_id=run_id+1,error_code='verify_remote',error_message='应用重启后请查看网站并继续跟进；已开始的远端任务会先核对。',updated_at={NOW} WHERE status IN ('created','waiting_login','preparing','generating','downloading','importing')"),
                 [],
             ).map_err(|error| error.to_string())?;
             Ok(())
+        })
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub fn confirm_audio_notebook(
+        &self,
+        id: &str,
+        run_id: i64,
+        url: &str,
+    ) -> Result<AudioJob, String> {
+        self.with_connection(|connection| {
+            let current = job(connection, id)?;
+            require_run(&current, run_id)?;
+            if active_job(connection)?.is_some_and(|active| active.id != id) {
+                return Err("已有另一个音频任务，请先完成或停止跟进。".into());
+            }
+            if !validate_notebook_url(url)
+                || !matches!(current.status.as_str(), "paused" | "waiting_user" | "failed" | "cancelled")
+                || !matches!(current.stage.as_str(), "creating_notebook" | "verify_remote")
+                || current.notebook_url.is_some() || current.submitted_at.is_some()
+                || current.remote_audio_ref.is_some() || current.output_sha256.is_some() || current.asset_id.is_some()
+            {
+                return Err("当前任务不能关联空白笔记本，请核对原任务。".into());
+            }
+            connection.execute(
+                &format!("UPDATE audio_jobs SET notebook_url=?2,status='preparing',stage='creating_notebook',run_id=run_id+1,error_code=NULL,error_message=NULL,last_checked_at={NOW},updated_at={NOW} WHERE id=?1"),
+                params![id, url],
+            ).map_err(|error| error.to_string())?;
+            job(connection, id)
         })
     }
 
@@ -736,7 +768,7 @@ impl Database {
         })
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", test))]
     pub fn audio_step_failed(&self, id: &str, run_id: i64, message: &str) -> Result<(), String> {
         self.with_connection(|connection| {
             let current = job(connection, id)?;
@@ -747,10 +779,9 @@ impl Database {
             ) {
                 return Ok(());
             }
-            let stage = if matches!(
-                current.stage.as_str(),
-                "creating_notebook" | "adding_source" | "submitting"
-            ) {
+            let stage = if matches!(current.stage.as_str(), "adding_source" | "submitting")
+                || (current.stage == "creating_notebook" && current.notebook_url.is_none())
+            {
                 "verify_remote"
             } else {
                 &current.stage
@@ -848,13 +879,15 @@ impl Database {
                     let stage = if stage == "opening_site" { "creating_notebook" } else { stage };
                     self.set_job(connection, job_id, status, stage, None, None)?;
                 }
-                AudioObservation::NotebookCreated { notebook_url } => {
+                AudioObservation::NotebookIdentified { notebook_url } | AudioObservation::NotebookCreated { notebook_url } => {
                     if !validate_notebook_url(notebook_url) { return Err("Notebook 地址不是受支持的 HTTPS 站点。".into()); }
+                    if current.notebook_url.as_deref().is_some_and(|recorded| tauri::Url::parse(recorded).map(|url| url.path().to_owned()).ok() != tauri::Url::parse(notebook_url).map(|url| url.path().to_owned()).ok()) { return Err("不能替换本任务已记录的笔记本。".into()); }
                     if current.stage == "adding_source" && current.notebook_url.as_deref() == Some(notebook_url) { self.touch_job(connection, job_id)?; return job(connection, job_id); }
                     if current.status != "preparing" || current.stage != "creating_notebook" { return Err("当前阶段不能登记新笔记本。".into()); }
+                    let stage = if matches!(observation, AudioObservation::NotebookIdentified { .. }) { "creating_notebook" } else { "adding_source" };
                     connection.execute(
-                        &format!("UPDATE audio_jobs SET stage='adding_source',notebook_url=?2,error_code=NULL,error_message=NULL,last_checked_at={NOW},updated_at={NOW} WHERE id=?1"),
-                        params![job_id, notebook_url],
+                        &format!("UPDATE audio_jobs SET stage=?3,notebook_url=?2,error_code=NULL,error_message=NULL,last_checked_at={NOW},updated_at={NOW} WHERE id=?1"),
+                        params![job_id, notebook_url, stage],
                     ).map_err(|error| error.to_string())?;
                 }
                 AudioObservation::SourceSubmitted => {

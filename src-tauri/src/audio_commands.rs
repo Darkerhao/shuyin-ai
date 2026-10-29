@@ -69,9 +69,32 @@ pub async fn control_audio_job(
     automation: State<'_, AudioAutomation>,
     id: String,
     action: String,
+    notebook_url: Option<String>,
 ) -> Result<AudioJobView, String> {
     local_main(&window)?;
-    let job = database.control_audio_job(&id, &action)?;
+    let job = if action == "confirm_notebook" {
+        #[cfg(windows)]
+        {
+            let current = database.control_audio_job(&id, "open_browser")?;
+            automation
+                .confirm_notebook(
+                    &app,
+                    &database,
+                    &current,
+                    notebook_url
+                        .as_deref()
+                        .ok_or("请明确确认当前笔记本地址。")?,
+                )
+                .await?
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = notebook_url;
+            return Err("当前平台不支持应用内自动音频。".into());
+        }
+    } else {
+        database.control_audio_job(&id, &action)?
+    };
     if matches!(
         action.as_str(),
         "pause" | "cancel" | "resume" | "refresh_browser" | "reopen_browser"

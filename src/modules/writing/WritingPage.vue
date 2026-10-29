@@ -24,6 +24,7 @@ import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OperationFeedback from '../../components/OperationFeedback.vue'
+import ConfirmAction from '../../components/ConfirmAction.vue'
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const desktop = isDesktop()
@@ -43,6 +44,7 @@ const audioAssets = ref<Asset[]>([])
 const documents = ref<Asset[]>([])
 const sourceNotes = ref('')
 const audioView = ref<AudioJobView | null>(null)
+const audioConfirmation = ref<{ job: AudioJob; action: 'cancel' | 'confirm_notebook'; url?: string } | null>(null)
 const audioSourceKey = ref('')
 const audioFormat = ref<AudioFormat>('deep_dive')
 const clock = ref(Date.now())
@@ -229,8 +231,16 @@ const startAudio = () => run(async () => {
   message.value = '自动音频任务已启动。请按提示完成 Google 登录，后续生成和下载会持续跟进。'
 })
 const controlAudio = (job: AudioJob, action: AudioJobAction) => {
-  if (action === 'cancel' && !globalThis.confirm('停止后可点击“继续跟进”恢复原任务。停止跟进不等于取消 Google 生成，确定停止跟进？')) return
+  if (action === 'cancel') { audioConfirmation.value = { job, action }; return }
   return run(async () => {
+    if (action === 'resume' && !job.notebookUrl && ['creating_notebook', 'verify_remote'].includes(job.stage)) {
+      const view = await audioApi.getAudioJobView(props.id)
+      applyAudioView(view)
+      const url = view.browser.url
+      if (!view.browser.open || !url) throw new Error('请先点击“查看网站”，打开原任务的空白笔记本，再继续跟进。')
+      audioConfirmation.value = { job, action: 'confirm_notebook', url }
+      return
+    }
     applyAudioView(await audioApi.controlAudioJob(job.id, action))
     message.value = action === 'open_browser' ? '已显示应用内任务网站。'
       : action === 'refresh_browser' || action === 'reopen_browser' ? job.status === 'succeeded' ? '已重新加载任务网站。' : '已重新加载任务网站。请核对页面，准备好后点击“继续跟进”。'
@@ -239,6 +249,15 @@ const controlAudio = (job: AudioJob, action: AudioJobAction) => {
           : '已停止本地跟进。Google 中已提交的生成可能仍在继续。'
   }, action === 'resume' ? 'resumeAudio' : '')
 }
+const confirmAudio = () => run(async () => {
+  const pending = audioConfirmation.value
+  if (!pending) return
+  applyAudioView(await (pending.url
+    ? audioApi.controlAudioJob(pending.job.id, pending.action, pending.url)
+    : audioApi.controlAudioJob(pending.job.id, pending.action)))
+  audioConfirmation.value = null
+  message.value = pending.action === 'cancel' ? '已停止本地跟进。Google 中已提交的生成可能仍在继续。' : '已关联当前笔记本并继续原任务。'
+})
 const importAudio = () => run(async () => {
   const path = await chooseAudio()
   if (!path) return
@@ -963,7 +982,30 @@ onMounted(async () => {
               >
                 页面空白或报错时可刷新网站；仍无法加载可重新打开原笔记本（尚未创建时打开首页）。刷新会暂停正在执行的任务，核对页面后继续跟进。登录、验证码及地区限制请按网站提示处理。
               </p>
-              <div class="actions wrap">
+              <ConfirmAction
+                v-if="audioConfirmation && audioConfirmation.job.id === shownAudioJob.id"
+                :title="audioConfirmation.action === 'cancel' ? '确认停止跟进？' : '确认关联当前笔记本？'"
+                :confirm-label="audioConfirmation.action === 'cancel' ? '确认停止跟进' : '确认关联并继续'"
+                :destructive="false"
+                :busy="busy"
+                @confirm="confirmAudio"
+                @cancel="audioConfirmation = null"
+              >
+                <p v-if="audioConfirmation.action === 'cancel'">
+                  停止后可点击“继续跟进”恢复原任务。停止跟进不等于取消 Google 生成。
+                </p>
+                <template v-else>
+                  <p>原任务未保存笔记本地址。请确认此网站是要用于《{{ audioConfirmation.job.projectTitle }}》的空白笔记本。</p>
+                  <p class="muted break-all">
+                    {{ audioConfirmation.url }}
+                  </p>
+                  <p>确认后继续命名、添加来源和生成。网站必须明确显示 0 个来源且没有音频生成结果。</p>
+                </template>
+              </ConfirmAction>
+              <div
+                v-else
+                class="actions wrap"
+              >
                 <Button
                   v-if="canResumeAudio(shownAudioJob)"
                   type="button"
