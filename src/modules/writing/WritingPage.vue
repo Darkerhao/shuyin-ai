@@ -70,7 +70,7 @@ const tabs = [
   { value: 'audio', label: '音频制作' },
   { value: 'cover', label: '封面素材' },
 ]
-const { busy, error, message, run } = useOperation()
+const { busy, error, message, operation, run } = useOperation()
 const autosave = useEditorDraft(() => props.id, 'writing', draft, () => selected.value?.id ?? null, dirty, ready, prepareLeave)
 const audioBrowser = computed(() => audioView.value?.browser ?? null)
 const audioJob = computed(() => audioView.value?.job ?? null)
@@ -229,7 +229,7 @@ const startAudio = () => run(async () => {
   message.value = '自动音频任务已启动。请按提示完成 Google 登录，后续生成和下载会持续跟进。'
 })
 const controlAudio = (job: AudioJob, action: AudioJobAction) => {
-  if (action === 'cancel' && !globalThis.confirm('停止后将不再自动跟进。停止跟进不等于取消 Google 生成，确定继续？')) return
+  if (action === 'cancel' && !globalThis.confirm('停止后可点击“继续跟进”恢复原任务。停止跟进不等于取消 Google 生成，确定停止跟进？')) return
   return run(async () => {
     applyAudioView(await audioApi.controlAudioJob(job.id, action))
     message.value = action === 'open_browser' ? '已显示应用内任务网站。'
@@ -237,7 +237,7 @@ const controlAudio = (job: AudioJob, action: AudioJobAction) => {
       : action === 'pause' ? '已暂停本地跟进，Google 中的生成状态不受影响。'
         : action === 'resume' ? '已继续跟进当前任务。'
           : '已停止本地跟进。Google 中已提交的生成可能仍在继续。'
-  })
+  }, action === 'resume' ? 'resumeAudio' : '')
 }
 const importAudio = () => run(async () => {
   const path = await chooseAudio()
@@ -953,9 +953,9 @@ onMounted(async () => {
               </p>
               <p
                 v-if="shownAudioJob.status === 'cancelled'"
-                class="muted"
+                class="notice"
               >
-                已停止本地跟进。停止跟进不等于取消 Gemini Notebook 中已经提交的生成。
+                已停止本地跟进，可点击“继续跟进”恢复原任务。Gemini Notebook 中已经提交的生成可能仍在继续。
               </p>
               <p
                 v-if="shownAudioJob.status !== 'succeeded'"
@@ -964,6 +964,15 @@ onMounted(async () => {
                 页面空白或报错时可刷新网站；仍无法加载可重新打开原笔记本（尚未创建时打开首页）。刷新会暂停正在执行的任务，核对页面后继续跟进。登录、验证码及地区限制请按网站提示处理。
               </p>
               <div class="actions wrap">
+                <Button
+                  v-if="canResumeAudio(shownAudioJob)"
+                  type="button"
+                  :disabled="busy"
+                  :aria-busy="busy && operation === 'resumeAudio'"
+                  @click="controlAudio(shownAudioJob, 'resume')"
+                >
+                  {{ busy && operation === 'resumeAudio' ? '正在继续…' : needsDownloadRetry(shownAudioJob) ? '重试下载并归档' : '继续跟进' }}
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
@@ -996,14 +1005,6 @@ onMounted(async () => {
                   @click="controlAudio(shownAudioJob, 'pause')"
                 >
                   暂停跟进
-                </Button>
-                <Button
-                  v-if="canResumeAudio(shownAudioJob)"
-                  type="button"
-                  :disabled="busy"
-                  @click="controlAudio(shownAudioJob, 'resume')"
-                >
-                  {{ needsDownloadRetry(shownAudioJob) ? '重试下载并归档' : '继续跟进' }}
                 </Button>
                 <Button
                   v-if="shownAudioJob.status === 'failed'"
