@@ -244,7 +244,12 @@ fn validate_notebook_url(value: &str) -> bool {
         url.scheme() == "https"
             && matches!(
                 url.host_str(),
-                Some("notebook.google.com" | "notebooklm.google.com")
+                Some(
+                    "notebook.google.com"
+                        | "notebooklm.google.com"
+                        | "notebook.google"
+                        | "notebooklm.google"
+                )
             )
             && url.username().is_empty()
             && url.password().is_none()

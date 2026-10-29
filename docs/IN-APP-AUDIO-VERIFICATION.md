@@ -2,6 +2,30 @@
 
 日期：2026-10-29。平台：Windows x64 / WebView2。源码版本字段：0.21.0；SQLite：v13。
 
+## 查看网站黑屏修复补充（2026-10-29，源码 0.22.1）
+
+实际入口请求返回 `302 notebook.google.com → notebooklm.google/?location=unsupported → 301 notebook.google/?location=unsupported`，最终 200 页面标题为 Gemini Notebook。旧宿主只放行 .google.com 域名，取消重定向后停在初始 about:blank；同一任务还没有 notebook_url 时，查看网站/继续只显示旧窗口，无法恢复。调度也会把首次导航尚未提交的空白页误报为非官方网站。
+
+最小修复：宿主、网页身份和数据库地址验证补齐 notebook.google、notebooklm.google 两个精确 HTTPS 域名；保留端口、凭据、笔记本 ID 和相似域名拒绝校验。同任务空白窗口重新导航，初始空白页在既有阶段超时内等待；Google 登录页保留。location=unsupported 显示地区不支持并保留任务，不提交生成。SQLite v13 无迁移，无新增依赖，发布类型 fix/patch，未手工递增版本。
+
+本轮实际验证命令：
+
+| 命令 | 结果 |
+| --- | --- |
+| `node --test tests/audio-page.test.mjs tests/audio-package.test.mjs` | 27 通过；新增官方域名间笔记本身份回归及相似域名/其他笔记本拒绝 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked audio:: -- --nocapture` | 17 通过；覆盖新旧四域名的保存、重开数据库及非笔记本地址拒绝 |
+| `npm run lint` | 通过 |
+| `npm run check:rust` | fmt / 全目标 Clippy 通过 |
+| `npm run tauri -- build --debug --no-bundle --config output/playwright/in-app-audio/tauri.json` | 独立标识桌面程序构建通过，beforeBuildCommand 完成 TypeScript 和前端构建；保留既有 513.42 kB 分块提示 |
+| `node output/audio-blank-fix/run-native.cjs` | 真实 WebView2 / Tauri IPC 的本地夹具回归通过；输出 initial native URL: about:blank、errors: []、loginPreserved: true、jobPaused: true |
+| `git diff --check` | 通过 |
+
+Rust 命令先加载 `. ./.tools/env.ps1`，临时目录指向 D 盘 output/audio-blank-fix。首次普通沙箱 Rust 命令因 Cargo 缓存权限失败，前端构建也因 dist 清理 EPERM 失败；获准的本机命令重跑通过。
+
+修复前 `node output/audio-blank-fix/navigation.cjs` 已实际失败并记录查看网站仍为 about:blank。首版 HTTP 跳转夹具发现 Playwright 不拦截重定向的后续地址，不能隔离外网；最终原生回归使用本地 HTML 跳转逐个驱动真实 NavigationStarting，仅对测试进程使用临时阻塞代理固定初始空白状态。补充断言地区限制进入 waiting_user、submittedAt 仍为 null，查看同任务不覆盖登录页。截图 `output/audio-blank-fix/redirect-restored.png` 为明确标注的本地夹具。
+
+实际网络重定向通过 Python urllib 的 RedirectHandler 只读跟踪，使用本机已有代理，未改变系统代理。回归脚本只连接 `com.shuyin.audio-in-app-verification-20261029` 的独立数据库，退出后关闭测试进程；正式安装和数据未替换，未上传原书或执行真实生成。真实 Google 账号、地区可用性和音频全流程仍需验收。
+
 ## 1. 交付结论
 
 已按用户要求，以应用管理的专用网站窗口替换 Chrome 扩展和 Native Messaging helper。点击「开始生成音频」后，由 Rust 跟进网页阶段，自动添加来源、填写完整指导、提交生成、接收具体下载对象并登记音频素材。保留「查看网站」、暂停、继续、停止及手动导入。

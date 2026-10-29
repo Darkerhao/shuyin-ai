@@ -8,6 +8,48 @@ use rusqlite::Connection;
 use std::{fs, path::Path};
 
 #[test]
+fn official_notebook_domains_can_be_saved_and_reopened() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("data.sqlite3");
+    let database = Database::open(path.clone());
+    let project = sample_project(&database, "网站跳转", "本地资料");
+    let writing = sample_writing(&database, &project, "完整指导");
+    for host in [
+        "notebook.google.com",
+        "notebooklm.google.com",
+        "notebook.google",
+        "notebooklm.google",
+    ] {
+        let job = start_text_job(&database, &project, &writing);
+        database
+            .observe_audio_job(&job.id, job.run_id, &AudioObservation::LoginReady)
+            .unwrap();
+        let url = format!("https://{host}/notebook/task");
+        database
+            .observe_audio_job(
+                &job.id,
+                job.run_id,
+                &AudioObservation::NotebookCreated {
+                    notebook_url: url.clone(),
+                },
+            )
+            .unwrap();
+        let reopened = Database::open(path.clone());
+        let saved = reopened.audio_job_data(&project.id).unwrap().job.unwrap();
+        assert_eq!(saved.notebook_url.as_deref(), Some(url.as_str()));
+        database.control_audio_job(&job.id, "cancel").unwrap();
+    }
+    for url in [
+        "https://notebook.google.evil.test/notebook/task",
+        "https://notebooklm.google:444/notebook/task",
+        "https://user@notebook.google/notebook/task",
+        "https://notebook.google/?location=unsupported",
+    ] {
+        assert!(!validate_notebook_url(url));
+    }
+}
+
+#[test]
 fn bound_book_document_is_available_to_audio_without_linking_again() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("data.sqlite3");
