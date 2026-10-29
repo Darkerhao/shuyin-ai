@@ -2,6 +2,31 @@
 
 日期：2026-10-29。平台：Windows x64 / WebView2。源码版本字段：0.21.0；SQLite：v13。
 
+## 笔记本身份登记与恢复修复（2026-10-29，源码 0.22.3）
+
+已复现：旧页面脚本在命名前清除创建标记，命名失败时既没有保存 URL，也失去重试依据；继续/重启会转 `verify_remote`，宿主因 URL 为空停止。新增页面回归先失败（期望 `notebook_identified`，实际为 `page_changed`）；新增 Rust 回归在旧实现因未接受 `notebook_identified` 失败。修复将地址登记放在命名前，保留命名阶段和创建标记至回读成功；地址已登记时命名失败或重启可继续命名。
+
+旧任务无地址时，「继续跟进」刷新窗口快照，通过现有 `ConfirmAction` 显示当前 URL，用户确认后宿主只读检查精确窗口/URL、文档代次、0 来源和无音频结果，再在原行保存地址并恢复命名。已有 URL、提交记录、成品、过期运行或另一活动任务均不能被重新关联。停止也改用同一页面内确认组件，取消/Escape 不调用任务控制。无新依赖、权限、表、列或迁移，SQLite 保持 v13，按 fix/patch 处理，不手动升版本。
+
+| 实际命令 | 结果 |
+| --- | --- |
+| `node --test tests/audio-page.test.mjs tests/audio-package.test.mjs` | 33 项通过；包括命名前登记、命名失败保留标记、空白/非空笔记本判断及既有不重复生成回归 |
+| `npx vitest run tests/ai.test.ts` | 最终 65 项通过；关联确认、取消/Escape、原任务停止再继续及既有业务回归 |
+| `npx vitest run` | 最终 219 项通过，14 个测试文件 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked audio:: -- --nocapture` | 24 项通过；命名失败/重启、旧任务原行恢复、旧运行拒绝、地址替换拒绝、已提交任务拒绝及原迁移/归档回归 |
+| `npm run lint` | 最终通过 |
+| `npm run typecheck` | 通过；最终桌面构建再次包含该检查 |
+| `npm run check:rust` | fmt / 全目标 Clippy 通过 |
+| `npm run tauri -- build --debug --no-bundle --config output/playwright/in-app-audio/tauri.json` | 最终独立标识桌面程序构建通过；包含 `npm run build`，保留约516 kB分块提示 |
+| `node output/playwright/audio-identity/run-native.cjs` | 最终通过：真实 Tauri IPC / WebView2 / SQLite，提前保存身份、命名失败后原页恢复、新建仅1次、真实页面内取消/确认按钮、拒绝非空笔记本及变化网址、同一任务恢复，`submittedAt=null` |
+| `git diff --check` | 通过 |
+
+Rust 命令先加载 `. ./.tools/env.ps1`，TEMP/TMP/SQLITE_TMPDIR 指向 `output/audio-identity-test-temp`。Cargo 构建锁在普通沙箱中不可写，经工具审批运行相同回归与构建；没有更改权限配置。
+
+桌面使用 `com.shuyin.audio-in-app-verification-20261029` 隔离标识及本地网站夹具，未改正式安装或用户数据库。首次夹具更新旧任务时发生 SQLite 写锁竞争，为测试连接设置 busy_timeout 后继续。桌面还证实 Tauri Dialog 2.8.3 的 `src/init-iife.js` 将 `window.confirm` 覆写为异步函数，而主窗口未授予 message 权限；最终复用页面内确认，不增加原生消息框权限，也没有模拟最终确认按钮。结果与截图在 `output/playwright/audio-identity/{result.json,confirm-notebook.png,recovered-card.png}`。
+
+验收对应：原笔记本身份不再依赖命名成功、命名失败及重启可恢复、旧无地址任务有明确人工恢复路径、取消不改任务、来源/生成状态不明不重复提交均已本地覆盖。真实 Google 控件、上传/生成/下载、原生外部账号、正式安装升级及 macOS/Linux 未在本轮验收；未提交、推送或发布。下一步将修复打包进正式版本后，在当前旧任务中核对网址并继续。
+
 ## 网站刷新与故障恢复补充（2026-10-29，源码 0.22.2）
 
 截图中的 `Error: Not Found` 已通过实际页面脚本复现：修复前 `node --test --test-name-pattern='website 404' tests/audio-page.test.mjs` 失败，返回 waiting 而非 page_changed。原实现没有错误页检测，查看网站只显示原窗口，已停止任务没有继续入口，停止状态还展示持续等待时间。

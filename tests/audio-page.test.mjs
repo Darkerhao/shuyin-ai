@@ -90,6 +90,8 @@ test('notebook naming requires the creation intent persisted across navigation',
   assert.equal(result.kind, 'navigating')
   window.history.pushState({}, '', '/notebook/new-notebook')
   result = await core.runStep(job, {})
+  assert.equal(result.kind, 'notebook_identified')
+  result = await core.runStep({ ...job, notebookUrl: result.notebookUrl }, {})
   assert.equal(result.kind, 'notebook_created')
   assert.equal(document.querySelector('#title').textContent, '测试书 · 音频 job-1')
   assert.equal(window.sessionStorage.getItem('shuyin-create-intent'), null)
@@ -104,6 +106,39 @@ test('an untracked existing notebook is never renamed or treated as the new task
   assert.equal(result.kind, 'page_changed')
   assert.match(result.message, /新建意图记录/)
   assert.equal(document.querySelector('#title').textContent, "Somebody else's notebook")
+})
+
+test('created notebook identity is saved before naming and survives a title failure', async () => {
+  const { core, window, document } = page('<main>未命名的笔记本</main>')
+  const job = textJob({ stage: 'creating_notebook', projectTitle: '测试书' })
+  window.sessionStorage.setItem('shuyin-create-intent', job.id)
+  const identified = await core.runStep(job)
+  assert.deepEqual(JSON.parse(JSON.stringify(identified)), { kind: 'notebook_identified', notebookUrl: window.location.href })
+  job.notebookUrl = identified.notebookUrl
+  assert.equal((await core.runStep(job)).kind, 'page_changed')
+  assert.equal(window.sessionStorage.getItem('shuyin-create-intent'), job.id)
+  document.body.innerHTML = '<header><input aria-label="Notebook title"></header>'
+  assert.equal((await core.runStep(job)).kind, 'notebook_created')
+  assert.equal(window.sessionStorage.getItem('shuyin-create-intent'), null)
+})
+
+test('empty notebook recovery requires an explicit zero source count and no audio result', () => {
+  for (const label of ['0 个来源', '0 sources']) {
+    const { core } = page(`<button>Add source</button><span>${label}</span>`)
+    assert.equal(core.canRecoverEmptyNotebook(), true)
+  }
+  for (const html of [
+    '<button>Add source</button>',
+    '<button>Add source</button><span>1 source</span>',
+    '<button>Add source</button><span>10 sources</span>',
+    '<button>Add source</button><span>0 sources</span><section><h2>Audio Overview</h2><button>Play</button></section>',
+    '<button>Add source</button><span>0 sources</span><section><h2>Audio Overview</h2><p>Generating</p></section>',
+    '<button>Add source</button><span>0 sources</span><section><h2>Audio Overview</h2><button>Play</button></section><section><h2>Audio Overview</h2><button>Play</button></section>',
+  ]) {
+    assert.equal(page(html).core.canRecoverEmptyNotebook(), false)
+  }
+  const outside = page('<button>Add source</button><span>0 sources</span>', 'https://notebook.google.evil.test/notebook/one')
+  assert.equal(outside.core.canRecoverEmptyNotebook(), false)
 })
 
 test('creating a notebook stops when no unique explicit title control exists', async () => {
@@ -285,7 +320,7 @@ test('a recovered creation marker still identifies the same notebook after a run
   const { core, window } = page('<header><input aria-label="Notebook title"></header>')
   window.sessionStorage.setItem('shuyin-create-intent', 'job-1')
   const result = await core.runStep(textJob({ stage: 'creating_notebook', runId: 3 }))
-  assert.equal(result.kind, 'notebook_created')
+  assert.equal(result.kind, 'notebook_identified')
 })
 
 test('download discovery blocks the anchor default until the host arms its exact target', async () => {

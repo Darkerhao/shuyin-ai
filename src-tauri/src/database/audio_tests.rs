@@ -8,6 +8,135 @@ use rusqlite::Connection;
 use std::{fs, path::Path};
 
 #[test]
+fn notebook_identity_survives_naming_failure_and_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("data.sqlite3"));
+    let project = sample_project(&database, "命名恢复", "原书资料");
+    let writing = sample_writing(&database, &project, "完整指导");
+    let original = start_text_job(&database, &project, &writing);
+    database
+        .observe_audio_job(&original.id, original.run_id, &AudioObservation::LoginReady)
+        .unwrap();
+    let identified: AudioObservation = serde_json::from_value(serde_json::json!({
+        "kind": "notebook_identified", "notebookUrl": "https://notebook.google.com/notebook/original"
+    })).unwrap();
+    let saved = database
+        .observe_audio_job(&original.id, original.run_id, &identified)
+        .unwrap();
+    assert_eq!(saved.stage, "creating_notebook");
+    assert!(saved.notebook_url.is_some());
+    database
+        .audio_step_failed(&original.id, original.run_id, "标题尚未加载")
+        .unwrap();
+    let resumed = database.control_audio_job(&original.id, "resume").unwrap();
+    assert_eq!(resumed.stage, "creating_notebook");
+    assert_eq!(resumed.notebook_url, saved.notebook_url);
+    database.recover_audio_jobs().unwrap();
+    let restarted = database.control_audio_job(&original.id, "resume").unwrap();
+    assert_eq!(restarted.stage, "creating_notebook");
+    assert_eq!(restarted.notebook_url, saved.notebook_url);
+    assert!(database
+        .observe_audio_job(
+            &original.id,
+            restarted.run_id,
+            &AudioObservation::GenerationSubmitted
+        )
+        .is_err());
+    let named = database
+        .observe_audio_job(
+            &original.id,
+            restarted.run_id,
+            &AudioObservation::NotebookCreated {
+                notebook_url: saved.notebook_url.unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(named.stage, "adding_source");
+    assert!(named.submitted_at.is_none());
+}
+
+#[test]
+fn manual_empty_notebook_confirmation_recovers_only_the_original_unsubmitted_job() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("data.sqlite3"));
+    let project = sample_project(&database, "旧任务恢复", "原书资料");
+    let writing = sample_writing(&database, &project, "完整指导");
+    let original = start_text_job(&database, &project, &writing);
+    database
+        .observe_audio_job(&original.id, original.run_id, &AudioObservation::LoginReady)
+        .unwrap();
+    database
+        .audio_step_failed(&original.id, original.run_id, "命名失败")
+        .unwrap();
+    let url = "https://notebook.google.com/notebook/confirmed";
+    assert!(database
+        .confirm_audio_notebook(&original.id, original.run_id + 1, url)
+        .is_err());
+    assert!(database
+        .confirm_audio_notebook(
+            &original.id,
+            original.run_id,
+            "https://example.com/notebook/other"
+        )
+        .is_err());
+    let recovered = database
+        .confirm_audio_notebook(&original.id, original.run_id, url)
+        .unwrap();
+    assert_eq!(recovered.id, original.id);
+    assert_eq!(recovered.writing_version_id, original.writing_version_id);
+    assert_eq!(recovered.created_at, original.created_at);
+    assert_eq!(recovered.stage, "creating_notebook");
+    assert_eq!(recovered.status, "preparing");
+    assert_eq!(recovered.notebook_url.as_deref(), Some(url));
+    assert!(recovered.submitted_at.is_none());
+    assert!(database
+        .observe_audio_job(
+            &original.id,
+            original.run_id,
+            &AudioObservation::NotebookCreated {
+                notebook_url: url.into()
+            }
+        )
+        .is_err());
+    database.control_audio_job(&original.id, "pause").unwrap();
+    assert!(database
+        .confirm_audio_notebook(&original.id, recovered.run_id + 1, url)
+        .is_err());
+    let resumed = database.control_audio_job(&original.id, "resume").unwrap();
+    assert!(database
+        .observe_audio_job(
+            &original.id,
+            resumed.run_id,
+            &AudioObservation::NotebookCreated {
+                notebook_url: "https://notebook.google.com/notebook/other".into()
+            }
+        )
+        .is_err());
+    database.control_audio_job(&original.id, "cancel").unwrap();
+    let next = start_text_job(&database, &project, &writing);
+    database
+        .observe_audio_job(&next.id, next.run_id, &AudioObservation::LoginReady)
+        .unwrap();
+    database
+        .audio_step_failed(&next.id, next.run_id, "命名失败")
+        .unwrap();
+    database
+        .with_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE audio_jobs SET submitted_at=created_at WHERE id=?1",
+                    [&next.id],
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(database
+        .confirm_audio_notebook(&next.id, next.run_id, url)
+        .is_err());
+}
+
+#[test]
 fn browser_recovery_invalidates_old_actions_and_retains_the_original_job() {
     for action in ["refresh_browser", "reopen_browser"] {
         let directory = tempfile::tempdir().unwrap();

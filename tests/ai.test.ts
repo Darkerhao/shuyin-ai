@@ -566,6 +566,40 @@ describe('audio automation', () => {
     expect(audio.controlAudioJob).toHaveBeenCalledWith('job-1', 'resume')
   })
 
+  it('requires confirmation of the displayed notebook to recover a missing identity', async () => {
+    const job = makeAudioJob('waiting_user', { stage: 'verify_remote', notebookUrl: null })
+    const url = 'https://notebook.google.com/notebook/empty-original'
+    vi.mocked(audio.getAudioJobView).mockResolvedValue({ ...audioView(job), browser: { ...browser, open: true, url } })
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    await button(wrapper, '继续跟进').trigger('click'); await flushPromises()
+    expect(audio.controlAudioJob).not.toHaveBeenCalled()
+    expect(wrapper.get('[role="alertdialog"]').text()).toContain(url)
+    await button(wrapper, '确认关联并继续').trigger('click'); await flushPromises()
+    expect(audio.controlAudioJob).toHaveBeenCalledExactlyOnceWith('job-1', 'confirm_notebook', url)
+  })
+
+  it('keeps the old task when its notebook is not open for identity recovery', async () => {
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(makeAudioJob('waiting_user', { stage: 'verify_remote', notebookUrl: null })))
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    await button(wrapper, '继续跟进').trigger('click'); await flushPromises()
+    expect(audio.controlAudioJob).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('请先点击“查看网站”')
+  })
+
+  it.each(['resume', 'cancel'] as const)('cancels the inline confirmation before %s without changing the task', async action => {
+    const job = makeAudioJob('waiting_user', { stage: 'verify_remote', notebookUrl: null })
+    const url = 'https://notebook.google.com/notebook/empty-original'
+    vi.mocked(audio.getAudioJobView).mockResolvedValue({ ...audioView(job), browser: { ...browser, open: true, url } })
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    await button(wrapper, action === 'resume' ? '继续跟进' : '停止跟进').trigger('click'); await flushPromises()
+    expect(audio.controlAudioJob).not.toHaveBeenCalled()
+    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(true)
+    await wrapper.get('[role="alertdialog"]').trigger('keydown', { key: 'Escape' }); await flushPromises()
+    expect(audio.controlAudioJob).not.toHaveBeenCalled()
+    expect(globalThis.confirm).not.toHaveBeenCalled()
+    expect(button(wrapper, '继续跟进').element.matches(':disabled')).toBe(false)
+  })
+
   it.each(['refresh_browser', 'reopen_browser'] as const)('offers %s and pauses before continuing the same task', async action => {
     vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(makeAudioJob('generating')))
     let finish!: (value: AudioJobView) => void
@@ -599,6 +633,7 @@ describe('audio automation', () => {
     vi.stubGlobal('confirm', vi.fn(() => true))
     const { wrapper } = await render('/projects/p1/writing?tab=audio')
     await button(wrapper, '停止跟进').trigger('click'); await flushPromises()
+    await button(wrapper, '确认停止跟进').trigger('click'); await flushPromises()
     expect(wrapper.text()).toContain('可点击“继续跟进”恢复原任务')
     expect(wrapper.text()).not.toContain('已等待')
     await button(wrapper, '继续跟进').trigger('click'); await flushPromises()
@@ -662,6 +697,7 @@ describe('audio automation', () => {
     await tab(wrapper, '音频制作').trigger('click')
     expect(wrapper.text()).toContain('Gemini Notebook 明确返回生成失败')
     await button(wrapper, '停止跟进以允许新任务').trigger('click'); await flushPromises()
+    await button(wrapper, '确认停止跟进').trigger('click'); await flushPromises()
     expect(audio.controlAudioJob).toHaveBeenCalledWith('job-1', 'cancel')
   })
 
