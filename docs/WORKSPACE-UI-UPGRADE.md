@@ -1,5 +1,22 @@
 # 工作台页面与交互升级验收
 
+## 首次打开焦点边框修复（2026-10-29）
+
+根因是路由监听立即执行，并在首次路由解析后再次把焦点移入整个 `main`，触发已有的 2px 深绿色焦点轮廓。`App.vue` 现在通过 Vue Router 的 `START_LOCATION` 区分初始导航，仅在已有页面之间发生路径变化时转移焦点；页面标题仍在首次加载更新，查询参数变化保留原控件焦点，跳到主要内容及键盘焦点提示继续有效。
+
+修改文件为 `src/App.vue`、`tests/projects.test.ts` 和本报告。无样式、数据库、迁移、依赖或版本号变更，按 fix/patch 处理。
+
+实际验证：
+
+- `npx vitest run tests/projects.test.ts -t 'initial focus|search focus|skip link|exact workflow step'`：修改前 3 项首次焦点回归失败、3 项通过、22 项跳过，确认覆盖本次问题。
+- `npx vitest run tests/projects.test.ts`：修复后 28 项通过，覆盖待解析的初始重定向、直接打开其他页面、挂载前已解析路由、查询更新、跳过导航和后续切页。
+- `npm run lint`：通过，0 警告。
+- `npm run build`：含 TypeScript 检查；初次因沙箱拒绝清理 `dist/assets` 失败，获准在受限环境外重跑后通过。保留已有主包超过 500 kB 的提示。
+- `npm run dev -- --port 1420` + Playwright MCP：分别在独立新页面打开 `/`、`/#/projects`、`/#/settings/models`，主内容区均未获得焦点，计算样式 `outline-style: none`；Tab/Enter 跳过导航与键盘切页保留可见焦点，鼠标切页不显示外框。新页面用于区分真正启动与同文档 hash 导航，浏览器预览未连接真实数据库。
+- `git diff --check`：通过。
+
+首次打开不出现整页焦点框、后续键盘操作可用及搜索不丢焦点的验收均已通过。未构建或更新桌面安装包，未执行 Windows WebView2 人工验收；已安装版本需后续打包更新后生效。
+
 日期：2026-10-28。
 
 本文前半部分保留上轮书架与导航升级验收，其他页面的后续实现见文末“续轮页面升级”。
