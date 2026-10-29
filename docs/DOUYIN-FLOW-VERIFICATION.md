@@ -1,5 +1,31 @@
 # 智能辅助流程改版实施与本地验证
 
+## 合集确认前恢复视频预览（2026-10-29）
+
+用户截图在「确认本次合集」时报“网页视频身份无法与当前会话核对”。调用链为 `DouyinVerification.vue` → `continue_douyin_task` 的 Collection 决定 → `verify_video`，报错发生在保存、选择合集之前。
+
+当前代码原先直接拼接页面内所有 video 的 currentSrc/src 作为标识；播放器卸载会读到空字符串，封面弹窗播放器也会被计入。本地 DOM 夹具模拟切到封面预览后卸载播放器：原代码读到空标识，恢复预览的断言失败；追加弹窗视频时也因标识多拼一个地址而失败。初次 `npx vitest run tests/douyin-editor.test.ts` 为 14 项通过、2 项失败。用户暂不便确认真实页面所处页签，因此这些证据证明代码缺陷，不能单凭截图断定这次实际发生了哪种页面变化。
+
+修复统一在既有视频、处理完成、文案、封面、合集决定和最终核对时恢复视频页签，有限等待播放器挂载及就绪，再做原有严格身份比较；已激活页签不重点击，弹窗视频不参与标识，有可见弹窗时禁止切换。未就绪与身份不一致分别提示，不缓存旧视频标识替代当前读取，不重传视频、改写原素材或自动点击最终发布。
+
+修改 `src-tauri/src/douyin_editor.js`、`src-tauri/src/douyin_flow.rs`、`tests/douyin-editor.test.ts` 及技术设计、本记录。无依赖、数据库迁移或版本号变化，SQLite 保持 v13，属于 fix/patch。回归覆盖恢复同一视频、不同视频保持可区分、弹窗播放器排除、弹窗禁止操作、延迟挂载和已激活页签不重复点击。
+
+Rust 先加载 `. ./.tools/env.ps1`，TEMP/TMP/SQLITE_TMPDIR 指向仓库 `output/douyin-video-test-temp`。实际验证：
+
+| 命令 | 最终结果 |
+| --- | --- |
+| `npx vitest run tests/douyin-editor.test.ts tests/douyin.test.ts tests/publishing.test.ts` | 3 个文件、45 项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked douyin:: -- --nocapture` | 10 项通过 |
+| `npm run lint` | 通过 |
+| `npm run build` | 类型检查及生产构建通过；保留约 516 kB 分块提示 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `git diff --check` | 通过 |
+
+首次 Rust 测试因沙箱拒绝 Cargo 构建锁而未执行，首次前端构建在类型检查通过后因沙箱拒绝清理 dist/assets 失败；经工具审批在沙箱外运行原命令通过。本轮未替换运行中的应用、操作正式数据库、执行桌面安装包构建或真实抖音账号验收；下一步在包含修复的桌面构建中复验选择合集与最终检查。
+
+## 2026-10-27 实施记录
+
 日期：2026-10-27。
 
 本轮按 `DOUYIN-PUBLISHING-PLAN.md` 的智能辅助流程设计完成代码实施。用户明确选择「先完成代码与本地验证，真实账号验收稍后进行」。本记录中的自动化测试、DOM 夹具和浏览器内存 IPC 结果均不能代替本轮真实登录、原生上传、合集及安装版验收。未上传真实素材、操作真实草稿或代替用户发布；未提交、发布或修改正式版本号。

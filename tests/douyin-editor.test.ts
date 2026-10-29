@@ -146,4 +146,42 @@ describe('official editor adapter safeguards (local DOM fixtures)', () => {
     document.querySelector('video')!.src = 'blob:current-video'
     expect(act('read')).toMatchObject({ videoKey: 'blob:current-video', covers: [{ preview: 'url("https://example.test/cover.png?identity=1")' }, { preview: '' }] })
   })
+  it('restores video preview before checking the confirmed video at the collection step', () => {
+    const video = document.querySelector('video')!
+    video.src = 'blob:current-video'
+    const confirmed = act('read')
+    video.remove()
+    document.body.insertAdjacentHTML('beforeend', '<div class="tabItem-a">预览视频<div><svg></svg></div></div><div class="tabItem-b active-a">预览封面/标题</div>')
+    document.querySelector('.tabItem-a')!.addEventListener('click', () => document.body.append(video))
+    const publish = vi.fn(); document.getElementById('publish')!.addEventListener('click', publish)
+
+    expect(act('read')).toMatchObject({ videoPreview: false, videoKey: '' })
+    expect(act('read', { video: true })).toMatchObject({ ok: true, videoPreview: true, videoKey: confirmed.videoKey })
+    video.src = 'blob:another-video'
+    expect(act('read', { video: true }).videoKey).not.toBe(confirmed.videoKey)
+    expect(publish).not.toHaveBeenCalled()
+  })
+  it('does not use a cover-dialog video as proof of the publishing video or switch tabs through a dialog', () => {
+    document.querySelector('video')!.src = 'blob:current-video'
+    document.body.insertAdjacentHTML('beforeend', '<div class="tabItem-a">预览视频</div><div role="dialog"><video src="blob:cover-preview"></video></div>')
+    const click = vi.fn(); document.querySelector('.tabItem-a')!.addEventListener('click', click)
+
+    expect(act('read')).toMatchObject({ videoKey: 'blob:current-video', coverDialog: true })
+    expect(act('read', { video: true })).toMatchObject({ ok: false })
+    expect(click).not.toHaveBeenCalled()
+  })
+  it('reads a player mounted after the preview tab becomes active without clicking the tab again', () => {
+    const video = document.querySelector('video')!
+    video.src = 'blob:current-video'
+    video.remove()
+    document.body.insertAdjacentHTML('beforeend', '<div class="tabItem-a">预览视频</div>')
+    const tab = document.querySelector('.tabItem-a')!
+    const click = vi.fn(() => tab.classList.add('active-a'))
+    tab.addEventListener('click', click)
+
+    expect(act('read', { video: true })).toMatchObject({ ok: true, videoPreview: false, videoKey: '' })
+    document.body.append(video)
+    expect(act('read', { video: true })).toMatchObject({ ok: true, videoPreview: true, videoKey: 'blob:current-video' })
+    expect(click).toHaveBeenCalledOnce()
+  })
 })

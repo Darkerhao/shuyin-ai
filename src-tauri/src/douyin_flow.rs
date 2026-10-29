@@ -306,29 +306,26 @@ pub async fn continue_douyin_task(
             *publisher.confirmed.lock().map_err(|e| e.to_string())? = Some(confirmed);
         }
         Decision::ExistingVideo if reason == "video" => {
-            let editor = read_editor(&publish_window).await?;
-            if !editor.video_preview || editor.video_key.is_empty() {
-                return Err("请先在官方页打开当前视频预览并核对视频。".into());
-            }
+            let editor = read_video_editor(&publish_window, &publisher, &snapshot).await?;
             session.sent_video = true;
             session.video_key = editor.video_key;
         }
         Decision::Processing if reason == "processing" => {
-            let editor = read_editor(&publish_window).await?;
-            if !editor.video_preview || page.uploading || page.processing {
+            let editor = read_video_editor(&publish_window, &publisher, &snapshot).await?;
+            if page.uploading || page.processing {
                 return Err("平台仍在上传或处理中，请稍后核对。".into());
             }
             verify_video(&session, &editor)?;
             session.done("video", true);
         }
         Decision::Text if reason == "text" => {
-            let editor = read_editor(&publish_window).await?;
+            let editor = read_video_editor(&publish_window, &publisher, &snapshot).await?;
             verify_video(&session, &editor)?;
             session.verified_text = Some((editor.title, editor.description));
             session.done("text", true);
         }
         Decision::Covers if reason == "covers" => {
-            let editor = read_editor(&publish_window).await?;
+            let editor = read_video_editor(&publish_window, &publisher, &snapshot).await?;
             verify_video(&session, &editor)?;
             if editor.cover_dialog
                 || editor.covers.len() != 2
@@ -346,7 +343,7 @@ pub async fn continue_douyin_task(
             remember,
             manual,
         } if reason == "collection" => {
-            let editor = read_editor(&publish_window).await?;
+            let editor = read_video_editor(&publish_window, &publisher, &snapshot).await?;
             verify_video(&session, &editor)?;
             if !manual {
                 let options = read_collections(&publish_window).await?;
@@ -411,6 +408,27 @@ fn verify_video(session: &Session, editor: &EditorSnapshot) -> Result<(), String
         return Err("网页视频身份无法与当前会话核对，请停止后重新确认视频。".into());
     }
     Ok(())
+}
+
+async fn read_video_editor(
+    window: &WebviewWindow,
+    publisher: &DouyinPublisher,
+    snapshot: &PublishSnapshot,
+) -> Result<EditorSnapshot, String> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        running(publisher, snapshot)?;
+        let editor: EditorSnapshot =
+            serde_json::from_value(page_action(window, "read", json!({"video":true})).await?)
+                .map_err(|_| "无法回读视频预览，请人工检查。")?;
+        if editor.video_preview && !editor.video_key.is_empty() {
+            return Ok(editor);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("视频预览尚未就绪，请在官方页打开“预览视频”后重试。".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
 }
 
 async fn read_collections(window: &WebviewWindow) -> Result<Collections, String> {
@@ -872,7 +890,7 @@ async fn drive(
     }
     running(publisher, snapshot)?;
     ensure_account(app, main, session).await?;
-    let final_editor = read_editor(&window).await?;
+    let final_editor = read_video_editor(&window, publisher, snapshot).await?;
     verify_video(session, &final_editor)?;
     if session.verified_text.as_ref()
         != Some(&(final_editor.title.clone(), final_editor.description.clone()))
