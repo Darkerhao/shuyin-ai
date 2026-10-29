@@ -2,6 +2,34 @@
 
 日期：2026-10-29。平台：Windows x64 / WebView2。源码版本字段：0.21.0；SQLite：v13。
 
+## 网站刷新与故障恢复补充（2026-10-29，源码 0.22.2）
+
+截图中的 `Error: Not Found` 已通过实际页面脚本复现：修复前 `node --test --test-name-pattern='website 404' tests/audio-page.test.mjs` 失败，返回 waiting 而非 page_changed。原实现没有错误页检测，查看网站只显示原窗口，已停止任务没有继续入口，停止状态还展示持续等待时间。
+
+最小修复新增任务卡“刷新网站”和“重新打开”，复用原窗口及登录 profile；已记录原笔记本则使用原 URL，尚未创建则使用首页。刷新正常页调用 Tauri 2.12.5 reload；空白、浏览器错误、地区限制和显式重开调用 navigate。依据本机锁定版本 `tauri-2.12.5/src/webview/{webview_window.rs,mod.rs}` 的源码/API 核对，未增加依赖或权限。活动任务刷新先暂停、递增 run_id 并中断旧动作，准备好后手动继续；failed/cancelled 可恢复原行，不能抢占另一活动任务。adding_source/submitting 不明时只读核对，原始输入、来源、笔记本和成品保留。SQLite 仍为 v13，无迁移。
+
+页面动作前检测明确的 404、403、429、500/502/503/504 标题、常见浏览器网络错误码、地区限制及可识别的人机验证，保留任务并显示恢复方法；普通未知页面仍使用既有有限等待。停止/暂停/失败不再显示持续等待。地区和账号限制仍需用户按网站实际提示处理，不承诺刷新解除限制或覆盖全部外部网站错误。
+
+| 实际命令 | 结果 |
+| --- | --- |
+| `npm run lint` | 通过 |
+| `npm run build` | TypeScript 与 Vite 通过；普通沙箱首次因 dist 清理 EPERM 失败，本机权限重跑通过；保留约 515 kB 分块提示 |
+| `npx vitest run tests/ai.test.ts` | 59 通过 |
+| `node --test tests/audio-page.test.mjs tests/audio-package.test.mjs` | 31 通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked audio:: -- --nocapture` | 21 通过 |
+| `npm test` | Vitest 213 通过；发布/资源/页面 64 通过、1 平台跳过；队列 18 通过、1 失败，整条命令退出 1 |
+| `node --test tests/codex-queue.test.mjs` | 本机权限复跑同样 18 通过、1 失败：missing predecessor report；没有改动队列文件 |
+| `node --test --test-name-pattern='missing predecessor report' output/playwright/audio-recovery/baseline/tests/codex-queue.test.mjs` | 对 git HEAD 的队列脚本和测试副本复现同一失败，确认是基线问题 |
+| `npm run test:rust` | 122 通过，1 既有凭据测试忽略 |
+| `npm run check:rust` | 最终 fmt / 全目标 Clippy 通过；初次检查发现新增测试格式差异，格式修正后重跑通过 |
+| `npm run tauri -- build --debug --no-bundle --config output/playwright/in-app-audio/tauri.json` | 独立标识桌面程序构建通过，包含最终 TypeScript/Vite 构建 |
+| `node output/playwright/audio-recovery/run-native.cjs` | 真实 Tauri IPC / WebView2 / SQLite 回归通过：404 后提示、UI 真实刷新、暂停与继续、记录原笔记本、登录页刷新保留、重开原页、停止后恢复且 submittedAt 仍为 null，800px 无横向溢出 |
+| `git diff --check` | 通过 |
+
+Rust 命令先执行 `. ./.tools/env.ps1`。桌面回归仅启动独立标识 `com.shuyin.audio-in-app-verification-20261029`，使用本地夹具拦截网站请求；运行完关闭测试进程，未替换 `D:/书引 AI` 正式安装与用户数据库。第一版夹具的文档跳转中断评估，改为实际 Notebook 使用的单页路由；刷新断言等待异步 DOM 导航完成。最终原生结果 `realReload/errorDetected/stoppedTaskRecovered/loginPreserved=true`、`submittedAt=null`、`overflow=false`。截图在 `output/playwright/audio-recovery/{error-card,recovery-card,recovery-narrow}.png`。
+
+本轮修复归类 fix/patch，不手工升版本。Google 真实账号、真实来源上传/生成下载、正式安装升级、macOS/Linux 仍未验收；未提交、推送或发布。
+
 ## 查看网站黑屏修复补充（2026-10-29，源码 0.22.1）
 
 实际入口请求返回 `302 notebook.google.com → notebooklm.google/?location=unsupported → 301 notebook.google/?location=unsupported`，最终 200 页面标题为 Gemini Notebook。旧宿主只放行 .google.com 域名，取消重定向后停在初始 about:blank；同一任务还没有 notebook_url 时，查看网站/继续只显示旧窗口，无法恢复。调度也会把首次导航尚未提交的空白页误报为非官方网站。

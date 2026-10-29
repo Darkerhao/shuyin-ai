@@ -6,6 +6,8 @@
 
 ## 自动音频任务 v13（2026-10-28）
 
+2026-10-29 网站恢复补充：刷新/重新打开使用既有 paused 状态及递增 run_id；已完成与停止记录仅查看网页，不自动恢复。用户明确继续 failed/cancelled 时原行恢复，检查活动任务唯一性；adding_source/submitting 阶段恢复先只读 verify_remote。冻结输入、原笔记本、下载摘要及成品引用保持，无新迁移。
+
 新增 `0013_audio_jobs.sql`，`user_version=13`。`audio_jobs` 保存项目与发布文案版本、冻结 `input_json`、唯一持久状态/阶段、递增运行编号、错误、远端 Notebook 身份、下载结果、素材引用及创建/提交/检查时间。`input_json` 只保存本次指导、目标秒数、格式和唯一来源快照；文档来源包含素材 ID、名称、大小和 SHA-256，文本来源保存资料文本。密钥、Cookie、临时签名下载 URL、浏览器 profile、标签页和 downloadId 不进入数据库。
 
 部分唯一索引保证全局至多一个 `status NOT IN ('succeeded','cancelled')` 的任务；失败任务仍占位，只有用户明确停止跟进后才可开始新任务。状态为 created/waiting_login/preparing/generating/downloading/importing/succeeded/waiting_user/paused/failed/cancelled。页面观察只由 Rust 根据当前状态和阶段接受；提交结果不明时进入人工核对，不自动重新点击生成。

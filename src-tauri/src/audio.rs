@@ -125,7 +125,12 @@ impl AudioAutomation {
             }
         });
     }
-    pub async fn open_notebook(&self, app: &AppHandle, job: &AudioJob) -> Result<(), String> {
+    pub async fn open_notebook(
+        &self,
+        app: &AppHandle,
+        job: &AudioJob,
+        action: &str,
+    ) -> Result<(), String> {
         self.require_available()?;
         let _operation = self.operation.lock().await;
         let same = self
@@ -152,12 +157,11 @@ impl AudioAutomation {
                 window.navigate(url).map_err(|e| e.to_string())?;
                 *self.window_task.lock().map_err(|e| e.to_string())? = Some(job.id.clone());
             } else if window.url().is_ok_and(|current| {
-                current.as_str() == "about:blank"
-                    || (job.notebook_url.is_some()
-                        && current != url
-                        && current.host_str() != Some("accounts.google.com"))
+                needs_navigation(&current, &url, job.notebook_url.is_some(), action)
             }) {
                 window.navigate(url).map_err(|e| e.to_string())?;
+            } else if action == "refresh_browser" {
+                window.reload().map_err(|e| e.to_string())?;
             }
             window.show().map_err(|e| e.to_string())?;
             window.unminimize().map_err(|e| e.to_string())?;
@@ -287,7 +291,7 @@ impl AudioAutomation {
                     .as_ref()
                     .is_some_and(|(_, _, _, start)| start.elapsed() > Duration::from_secs(limit))
             {
-                return Err("当前阶段等待超时，请查看网站核对后继续；不会重新提交生成。".into());
+                return Err("当前阶段等待超时。请查看网站；页面空白或报错时点击“刷新网站”或“重新打开”，核对后继续跟进；不会重新提交生成。".into());
             }
             if job.status == "waiting_login" {
                 *waiting = None;
@@ -318,7 +322,9 @@ impl AudioAutomation {
             return Ok(2);
         }
         if !allowed_url(&url) {
-            return Err("当前页面不属于音频任务的官方网站。".into());
+            return Err(
+                "网站加载失败或离开了官方网站。请检查网络后点击“重新打开”，恢复后继续跟进。".into(),
+            );
         }
         if url.host_str() == Some("accounts.google.com") {
             database.observe_audio_job(&job.id, job.run_id, &AudioObservation::LoginRequired)?;
@@ -328,7 +334,7 @@ impl AudioAutomation {
             .query_pairs()
             .any(|(key, value)| key == "location" && value == "unsupported")
         {
-            return Err("Notebook 网站提示当前网络所在地区不受支持，请查看网站核对后继续。".into());
+            return Err("Notebook 网站提示当前网络所在地区不受支持。请检查网络和服务可用地区后点击“重新打开”，恢复后继续跟进。".into());
         }
         if self
             .window_task
@@ -459,6 +465,24 @@ impl AudioAutomation {
         }
         Ok(())
     }
+}
+fn needs_navigation(
+    current: &tauri::Url,
+    target: &tauri::Url,
+    recorded: bool,
+    action: &str,
+) -> bool {
+    action == "reopen_browser"
+        || current.as_str() == "about:blank"
+        || (action == "refresh_browser"
+            && (!allowed_url(current)
+                || current
+                    .query_pairs()
+                    .any(|(key, value)| key == "location" && value == "unsupported")))
+        || (recorded
+            && current.host_str() != Some("accounts.google.com")
+            && !(notebook_url(current)
+                && current.path().trim_end_matches('/') == target.path().trim_end_matches('/')))
 }
 fn notebook_url(url: &tauri::Url) -> bool {
     url.scheme() == "https"
@@ -599,6 +623,52 @@ fn acquire_instance() -> Result<Option<InstanceGuard>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovery_navigation_preserves_login_and_official_notebook_redirects() {
+        let target = "https://notebook.google.com/notebook/task".parse().unwrap();
+        for action in ["open_browser", "resume", "refresh_browser"] {
+            for current in [
+                "https://accounts.google.com/signin",
+                "https://notebook.google/notebook/task",
+            ] {
+                assert!(!needs_navigation(
+                    &current.parse().unwrap(),
+                    &target,
+                    true,
+                    action
+                ));
+            }
+        }
+        assert!(needs_navigation(
+            &"about:blank".parse().unwrap(),
+            &target,
+            true,
+            "refresh_browser"
+        ));
+        assert!(needs_navigation(
+            &"https://notebook.google/notebook/other".parse().unwrap(),
+            &target,
+            true,
+            "refresh_browser"
+        ));
+        for current in [
+            "chrome-error://chromewebdata/",
+            "https://notebook.google/?location=unsupported",
+        ] {
+            assert!(needs_navigation(
+                &current.parse().unwrap(),
+                &target,
+                false,
+                "refresh_browser"
+            ));
+        }
+        assert!(needs_navigation(
+            &"https://accounts.google.com/signin".parse().unwrap(),
+            &target,
+            true,
+            "reopen_browser"
+        ));
+    }
     #[test]
     fn only_exact_official_navigation_is_allowed() {
         for url in [

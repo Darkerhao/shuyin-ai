@@ -620,12 +620,34 @@
     return { kind: 'page_changed', message: '已定位原笔记本，但未确认来源或音频状态，请人工核对；不会重新添加来源或生成。' }
   }
 
+  function websiteIssue() {
+    if (new URL(location.href).searchParams.get('location') === 'unsupported') {
+      return 'Notebook 提示当前网络所在地区不受支持。请检查网络和服务可用地区后点击“重新打开”，恢复后继续跟进。'
+    }
+    const headings = [document.title, ...[...document.querySelectorAll('h1')].filter(visible).map(element => element.textContent)].map(normalize)
+    if (headings.some(text => /^(?:error[:：]?\s*)?(?:404\b|not found\b|page not found\b)|^(?:找不到网页|网页无法打开|无法访问此网站|无法连接到此页面|this site can[’']t be reached|hmm.{0,5} can[’']t reach this page)/i.test(text))) {
+      return '网站加载失败或页面不存在。请点击“刷新网站”；仍然报错时检查网络并点击“重新打开”，恢复后继续跟进。'
+    }
+    if (headings.some(text => /^(?:error[:：]?\s*)?(?:403\b|429\b|500\b|502\b|503\b|504\b|forbidden\b|access denied\b|too many requests\b|internal server error\b|bad gateway\b|service unavailable\b|gateway timeout\b)/i.test(text))) {
+      return '网站暂时不可用或访问受限。请核对网站提示，稍后点击“刷新网站”，恢复后继续跟进。'
+    }
+    if (hasAnyText(['ERR_INTERNET_DISCONNECTED', 'ERR_NAME_NOT_RESOLVED', 'ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_TIMED_OUT', 'ERR_PROXY_CONNECTION_FAILED', 'ERR_TUNNEL_CONNECTION_FAILED'])) {
+      return '网站连接失败。请检查网络或代理后点击“刷新网站”，恢复后继续跟进。'
+    }
+    if (document.querySelector('iframe[src*="recaptcha"][title]') && hasAnyText(['Verify you are human', '验证您是人类', '确认您是真人'])) {
+      return '网站需要人工验证。请点击“查看网站”完成验证，再继续跟进。'
+    }
+    return null
+  }
+
   async function runStep(job, context = {}) {
     if (!job?.id || !Number.isInteger(Number(job.runId))) throw new UiError('invalid_job', '音频任务数据无效。')
-    if (/accounts\.google\.com/i.test(location.href)) return { kind: 'login_required' }
+    if (location.hostname === 'accounts.google.com') return { kind: 'login_required' }
     activeRun = `${job.id}:${job.runId}`
     if (globalThis.__shuyinAudioRun === undefined) globalThis.__shuyinAudioRun = activeRun
     assertRunning()
+    const issue = websiteIssue()
+    if (issue) return { kind: 'page_changed', message: issue }
     if (job.status === 'waiting_login') return runLogin(job)
     if (job.notebookUrl) ensureTaskNotebook(job)
     switch (job.stage) {

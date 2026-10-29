@@ -54,7 +54,7 @@ pub async fn start_audio_job(
     local_main(&window)?;
     automation.require_available()?;
     let job = database.start_audio_job(input)?;
-    if let Err(error) = automation.open_notebook(&app, &job).await {
+    if let Err(error) = automation.open_notebook(&app, &job, "open_browser").await {
         let _ = database.audio_report_error(&job.id, job.run_id, "browser_open_failed", &error);
         return Err(error);
     }
@@ -72,11 +72,17 @@ pub async fn control_audio_job(
 ) -> Result<AudioJobView, String> {
     local_main(&window)?;
     let job = database.control_audio_job(&id, &action)?;
-    if matches!(action.as_str(), "pause" | "cancel" | "resume") {
+    if matches!(
+        action.as_str(),
+        "pause" | "cancel" | "resume" | "refresh_browser" | "reopen_browser"
+    ) {
         automation.interrupt(&app);
     }
-    if matches!(action.as_str(), "open_browser" | "resume") {
-        if let Err(error) = automation.open_notebook(&app, &job).await {
+    if matches!(
+        action.as_str(),
+        "open_browser" | "resume" | "refresh_browser" | "reopen_browser"
+    ) {
+        if let Err(error) = automation.open_notebook(&app, &job, &action).await {
             let _ = database.audio_report_error(&job.id, job.run_id, "browser_open_failed", &error);
             return Err(error);
         }

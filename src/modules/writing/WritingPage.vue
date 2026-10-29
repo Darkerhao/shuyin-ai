@@ -200,6 +200,10 @@ function audioElapsed(job: AudioJob) {
 }
 function audioCheckedAt(job: AudioJob) { return job.lastCheckedAt ? new Date(job.lastCheckedAt).toLocaleString() : '尚未检查' }
 function isLiveAudio(job: AudioJob) { return liveAudioStatuses.has(job.status) }
+function canResumeAudio(job: AudioJob) {
+  return ['paused', 'waiting_user', 'failed', 'cancelled'].includes(job.status)
+    && (!activeAudioJob.value || activeAudioJob.value.id === job.id)
+}
 function needsDownloadRetry(job: AudioJob) { return job.status === 'waiting_user' && !!job.errorCode?.includes('download') }
 const addSourceDocument = () => run(async () => {
   const path = await chooseSourceDocument()
@@ -229,6 +233,7 @@ const controlAudio = (job: AudioJob, action: AudioJobAction) => {
   return run(async () => {
     applyAudioView(await audioApi.controlAudioJob(job.id, action))
     message.value = action === 'open_browser' ? '已显示应用内任务网站。'
+      : action === 'refresh_browser' || action === 'reopen_browser' ? job.status === 'succeeded' ? '已重新加载任务网站。' : '已重新加载任务网站。请核对页面，准备好后点击“继续跟进”。'
       : action === 'pause' ? '已暂停本地跟进，Google 中的生成状态不受影响。'
         : action === 'resume' ? '已继续跟进当前任务。'
           : '已停止本地跟进。Google 中已提交的生成可能仍在继续。'
@@ -910,9 +915,9 @@ onMounted(async () => {
                   {{ audioStatusLabel(shownAudioJob) }}
                 </Badge>
               </div>
-              <p>{{ audioStageLabel(shownAudioJob) }}</p>
+              <p>{{ isLiveAudio(shownAudioJob) ? audioStageLabel(shownAudioJob) : `停留阶段：${audioStageLabel(shownAudioJob)}` }}</p>
               <p class="muted">
-                已等待 {{ audioElapsed(shownAudioJob) }} · 上次检查 {{ audioCheckedAt(shownAudioJob) }}
+                任务创建于 {{ new Date(shownAudioJob.createdAt).toLocaleString() }}<span v-if="isLiveAudio(shownAudioJob)"> · 已等待 {{ audioElapsed(shownAudioJob) }}</span> · 上次检查 {{ audioCheckedAt(shownAudioJob) }}
               </p>
               <p
                 v-if="audioBrowser?.url"
@@ -952,6 +957,12 @@ onMounted(async () => {
               >
                 已停止本地跟进。停止跟进不等于取消 Gemini Notebook 中已经提交的生成。
               </p>
+              <p
+                v-if="shownAudioJob.status !== 'succeeded'"
+                class="muted"
+              >
+                页面空白或报错时可刷新网站；仍无法加载可重新打开原笔记本（尚未创建时打开首页）。刷新会暂停正在执行的任务，核对页面后继续跟进。登录、验证码及地区限制请按网站提示处理。
+              </p>
               <div class="actions wrap">
                 <Button
                   type="button"
@@ -960,6 +971,22 @@ onMounted(async () => {
                   @click="controlAudio(shownAudioJob, 'open_browser')"
                 >
                   <AppIcon name="headphones" />查看网站
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  :disabled="busy || !audioBrowser?.supported"
+                  @click="controlAudio(shownAudioJob, 'refresh_browser')"
+                >
+                  <AppIcon name="refresh" />刷新网站
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  :disabled="busy || !audioBrowser?.supported"
+                  @click="controlAudio(shownAudioJob, 'reopen_browser')"
+                >
+                  重新打开
                 </Button>
                 <Button
                   v-if="isLiveAudio(shownAudioJob)"
@@ -971,7 +998,7 @@ onMounted(async () => {
                   暂停跟进
                 </Button>
                 <Button
-                  v-if="shownAudioJob.status === 'paused' || shownAudioJob.status === 'waiting_user'"
+                  v-if="canResumeAudio(shownAudioJob)"
                   type="button"
                   :disabled="busy"
                   @click="controlAudio(shownAudioJob, 'resume')"

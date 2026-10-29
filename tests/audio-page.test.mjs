@@ -17,6 +17,42 @@ function textJob(overrides = {}) {
   }
 }
 
+test('a website 404 stops opening immediately with an actionable recovery message', async () => {
+  const { core } = page('<h1>Error: Not Found</h1><h2>The requested URL / was not found on this server.</h2>', 'https://notebook.google/')
+  const result = await core.runStep(textJob({ stage: 'opening_site' }))
+  assert.equal(result.kind, 'page_changed')
+  assert.match(result.message, /刷新网站/)
+})
+
+test('website failures are detected before any generation or source action', async () => {
+  for (const html of ['<h1>503 Service Unavailable</h1>', '<h1>This site can’t be reached</h1><p>ERR_CONNECTION_TIMED_OUT</p>', '<h1>403 Forbidden</h1>', '<h1>429 Too Many Requests</h1>']) {
+    const { core, document } = page(`${html}<button id="generate">Generate</button>`)
+    let clicks = 0
+    document.querySelector('#generate').addEventListener('click', () => { clicks += 1 })
+    const result = await core.runStep(textJob({ stage: 'submitting' }))
+    assert.equal(result.kind, 'page_changed')
+    assert.match(result.message, /刷新网站/)
+    assert.equal(clicks, 0)
+  }
+})
+
+test('unsupported regions provide network guidance even when the server returns a 404', async () => {
+  const { core } = page('<h1>Error: Not Found</h1>', 'https://notebook.google/?location=unsupported')
+  const result = await core.runStep(textJob({ stage: 'opening_site' }))
+  assert.equal(result.kind, 'page_changed')
+  assert.match(result.message, /地区不受支持/)
+  assert.match(result.message, /重新打开/)
+})
+
+test('a human challenge stops safely while normal login still waits for the user', async () => {
+  const { core } = page('<h1>Verify you are human</h1><iframe src="https://google.com/recaptcha/api2/anchor" title="reCAPTCHA"></iframe>')
+  const result = await core.runStep(textJob({ stage: 'opening_site' }))
+  assert.equal(result.kind, 'page_changed')
+  assert.match(result.message, /人工验证/)
+  const login = page('', 'https://accounts.google.com/signin')
+  assert.equal((await login.core.runStep(textJob())).kind, 'login_required')
+})
+
 test('recorded notebook identity survives official domain redirects', async () => {
   for (const host of ['notebook.google', 'notebooklm.google', 'notebooklm.google.com']) {
     const { core } = page('', `https://${host}/notebook/notebook-1`)
