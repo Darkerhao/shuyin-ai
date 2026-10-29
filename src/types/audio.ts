@@ -59,4 +59,4 @@ export interface StartAudioJobInput {
   format: AudioFormat
 }
 
-export type AudioJobAction = 'pause' | 'resume' | 'cancel' | 'open_browser'
+export type AudioJobAction = 'pause' | 'resume' | 'cancel' | 'open_browser' | 'refresh_browser' | 'reopen_browser'

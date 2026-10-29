@@ -566,6 +566,40 @@ describe('audio automation', () => {
     expect(audio.controlAudioJob).toHaveBeenCalledWith('job-1', 'resume')
   })
 
+  it.each(['refresh_browser', 'reopen_browser'] as const)('offers %s and pauses before continuing the same task', async action => {
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(makeAudioJob('generating')))
+    let finish!: (value: AudioJobView) => void
+    vi.mocked(audio.controlAudioJob).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    await button(wrapper, action === 'refresh_browser' ? '刷新网站' : '重新打开').trigger('click')
+    expect(audio.controlAudioJob).toHaveBeenCalledExactlyOnceWith('job-1', action)
+    expect(button(wrapper, '刷新网站').element.matches(':disabled')).toBe(true)
+    expect(button(wrapper, '重新打开').element.matches(':disabled')).toBe(true)
+    finish(audioView(makeAudioJob('paused'))); await flushPromises()
+    expect(button(wrapper, '继续跟进')).toBeDefined()
+    expect(wrapper.text()).toContain('停留阶段：')
+    expect(wrapper.text()).not.toContain('已等待')
+    expect(audio.startAudioJob).not.toHaveBeenCalled()
+  })
+
+  it.each(['cancelled', 'failed'] as const)('allows recovering a %s task without starting a second generation', async status => {
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(makeAudioJob(status)))
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    await button(wrapper, '继续跟进').trigger('click'); await flushPromises()
+    expect(audio.controlAudioJob).toHaveBeenCalledExactlyOnceWith('job-1', 'resume')
+    expect(audio.startAudioJob).not.toHaveBeenCalled()
+  })
+
+  it('keeps recovery actions available and shows the cause when refreshing fails', async () => {
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(makeAudioJob('waiting_user', { stage: 'opening_site', notebookUrl: null })))
+    vi.mocked(audio.controlAudioJob).mockRejectedValueOnce('网站窗口无法重新加载')
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    await button(wrapper, '刷新网站').trigger('click'); await flushPromises()
+    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('网站窗口无法重新加载')
+    expect(button(wrapper, '重新打开').element.matches(':disabled')).toBe(false)
+    expect(button(wrapper, '继续跟进')).toBeDefined()
+  })
+
   it('offers download-only retry for a generated but unarchived audio', async () => {
     const waiting = makeAudioJob('waiting_user', { stage: 'downloading', errorCode: 'download_import_failed', errorMessage: '下载文件未能归档。' })
     vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(waiting))

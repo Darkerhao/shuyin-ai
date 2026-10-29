@@ -540,18 +540,19 @@ impl Database {
     pub fn control_audio_job(&self, id: &str, action: &str) -> Result<AudioJob, String> {
         self.with_connection(|connection| {
             let current = job(connection, id)?;
+            if active_job(connection)?.is_some_and(|active| active.id != current.id) { return Err("已有另一个音频任务，请先完成或停止跟进。".into()); }
             match action {
                 "pause" => {
                     if matches!(current.status.as_str(), "succeeded" | "cancelled") { return Err("已完成或已停止的任务不能暂停。".into()); }
                     connection.execute(&format!("UPDATE audio_jobs SET status='paused',run_id=run_id+1,error_code=NULL,error_message=NULL,updated_at={NOW} WHERE id=?1"), [id]).map_err(|error| error.to_string())?;
                 }
                 "resume" => {
-                    if !matches!(current.status.as_str(), "paused" | "waiting_user") { return Err("只有已暂停或等待人工核对的任务可以继续。".into()); }
+                    if !matches!(current.status.as_str(), "paused" | "waiting_user" | "failed" | "cancelled") { return Err("只有已暂停、等待核对、失败或停止的任务可以继续。".into()); }
                     let stage = match current.stage.as_str() {
                         "awaiting_extension" | "opening_site" => "opening_site",
                         "download_pending" => "downloading",
                         "creating_notebook" if current.notebook_url.is_none() => "verify_remote",
-                        "submitting" => "verify_remote",
+                        "adding_source" | "submitting" => "verify_remote",
                         other => other,
                     };
                     let status = match stage {
@@ -570,6 +571,11 @@ impl Database {
                     }
                 }
                 "open_browser" => {}
+                "refresh_browser" | "reopen_browser" => {
+                    if !matches!(current.status.as_str(), "succeeded" | "cancelled") {
+                        connection.execute(&format!("UPDATE audio_jobs SET status='paused',run_id=run_id+1,error_code=NULL,error_message=NULL,updated_at={NOW} WHERE id=?1"), [id]).map_err(|error| error.to_string())?;
+                    }
+                }
                 _ => return Err("不支持的音频任务操作。".into()),
             }
             job(connection, id)

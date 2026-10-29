@@ -8,6 +8,98 @@ use rusqlite::Connection;
 use std::{fs, path::Path};
 
 #[test]
+fn browser_recovery_invalidates_old_actions_and_retains_the_original_job() {
+    for action in ["refresh_browser", "reopen_browser"] {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("data.sqlite3"));
+        let project = sample_project(&database, "恢复测试", "原书资料");
+        let writing = sample_writing(&database, &project, "完整指导");
+        let original = start_text_job(&database, &project, &writing);
+        let paused = database.control_audio_job(&original.id, action).unwrap();
+        assert_eq!(paused.status, "paused");
+        assert_eq!(paused.stage, "opening_site");
+        assert_eq!(paused.run_id, original.run_id + 1);
+        assert_eq!(paused.writing_version_id, original.writing_version_id);
+        assert_eq!(paused.created_at, original.created_at);
+        assert!(database
+            .observe_audio_job(&original.id, original.run_id, &AudioObservation::LoginReady)
+            .is_err());
+        let resumed = database.control_audio_job(&original.id, "resume").unwrap();
+        assert_eq!(resumed.stage, "opening_site");
+        assert_eq!(resumed.id, original.id);
+        assert!(resumed.submitted_at.is_none());
+    }
+}
+
+#[test]
+fn recovery_never_resubmits_an_uncertain_generation_or_source_upload() {
+    for stage in ["adding_source", "submitting"] {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("data.sqlite3"));
+        let project = sample_project(&database, "提交恢复", "原书资料");
+        let writing = sample_writing(&database, &project, "完整指导");
+        let original = start_text_job(&database, &project, &writing);
+        database.with_connection(|connection| {
+            connection.execute("UPDATE audio_jobs SET status='preparing',stage=?2,notebook_url='https://notebook.google/notebook/task' WHERE id=?1", params![original.id, stage]).map_err(|e| e.to_string())?;
+            Ok(())
+        }).unwrap();
+        database
+            .control_audio_job(&original.id, "refresh_browser")
+            .unwrap();
+        let resumed = database.control_audio_job(&original.id, "resume").unwrap();
+        assert_eq!(resumed.stage, "verify_remote");
+        assert_eq!(
+            resumed.notebook_url.as_deref(),
+            Some("https://notebook.google/notebook/task")
+        );
+        assert!(database
+            .observe_audio_job(
+                &original.id,
+                resumed.run_id,
+                &AudioObservation::GenerationSubmitted
+            )
+            .is_err());
+    }
+}
+
+#[test]
+fn stopped_jobs_can_resume_but_cannot_take_over_another_active_job() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("data.sqlite3"));
+    let project = sample_project(&database, "停止恢复", "原书资料");
+    let writing = sample_writing(&database, &project, "完整指导");
+    let original = start_text_job(&database, &project, &writing);
+    database.control_audio_job(&original.id, "cancel").unwrap();
+    assert_eq!(
+        database
+            .control_audio_job(&original.id, "refresh_browser")
+            .unwrap()
+            .status,
+        "cancelled"
+    );
+    let resumed = database.control_audio_job(&original.id, "resume").unwrap();
+    assert_eq!(resumed.id, original.id);
+    database.control_audio_job(&original.id, "cancel").unwrap();
+    let other = start_text_job(&database, &project, &writing);
+    for action in [
+        "resume",
+        "open_browser",
+        "refresh_browser",
+        "reopen_browser",
+        "cancel",
+    ] {
+        let error = database
+            .control_audio_job(&original.id, action)
+            .unwrap_err();
+        assert!(error.contains("另一个音频任务"));
+    }
+    assert_eq!(
+        database.audio_execution_job().unwrap().unwrap().id,
+        other.id
+    );
+}
+
+#[test]
 fn official_notebook_domains_can_be_saved_and_reopened() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("data.sqlite3");
