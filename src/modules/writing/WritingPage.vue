@@ -72,7 +72,7 @@ const tabs = [
 ]
 const { busy, error, message, run } = useOperation()
 const autosave = useEditorDraft(() => props.id, 'writing', draft, () => selected.value?.id ?? null, dirty, ready, prepareLeave)
-const audioBridge = computed(() => audioView.value?.bridge ?? null)
+const audioBrowser = computed(() => audioView.value?.browser ?? null)
 const audioJob = computed(() => audioView.value?.job ?? null)
 const activeAudioJob = computed(() => {
   const job = audioView.value?.activeJob
@@ -85,8 +85,8 @@ const audioSourceReady = computed(() => audioSourceKey.value === 'text'
   ? !!sourceNotes.value.trim()
   : !!selectedDocument.value && selectedDocument.value.existsStatus === 'available')
 const audioFieldsReady = computed(() => [draft.value.title, draft.value.description, draft.value.audioPrompt].every(value => value.trim()))
-const canStartAudio = computed(() => desktop && ready.value && !busy.value && !!audioBridge.value?.supported
-  && !!audioBridge.value.connected && !activeAudioJob.value && durationValid.value && audioFieldsReady.value
+const canStartAudio = computed(() => desktop && ready.value && !busy.value && !!audioBrowser.value?.supported
+  && !activeAudioJob.value && durationValid.value && audioFieldsReady.value
   && audioSourceReady.value)
 const liveAudioStatuses = new Set<AudioJobStatus>(['created', 'waiting_login', 'preparing', 'generating', 'downloading', 'importing'])
 const audioStatusLabels: Record<AudioJobStatus, string> = {
@@ -95,7 +95,7 @@ const audioStatusLabels: Record<AudioJobStatus, string> = {
   paused: '已暂停跟进', failed: '任务失败', cancelled: '已停止跟进',
 }
 const audioStageLabels: Record<string, string> = {
-  awaiting_extension: '等待 Chrome 扩展', login: '等待 Google 登录', creating_notebook: '创建笔记本文库',
+  opening_site: '正在打开网站', awaiting_extension: '等待在应用内继续', login: '等待 Google 登录', creating_notebook: '正在创建笔记本',
   adding_source: '添加原书来源', source_processing: '等待来源处理', configuring_audio: '填写音频指导',
   submitting: '提交音频生成', generating: 'Gemini Notebook 正在生成音频', downloading: '获取音频下载',
   importing: '复制并登记音频', verify_remote: '等待人工核对远端任务', completed: '归档完成', error: '任务已停止',
@@ -201,10 +201,6 @@ function audioElapsed(job: AudioJob) {
 function audioCheckedAt(job: AudioJob) { return job.lastCheckedAt ? new Date(job.lastCheckedAt).toLocaleString() : '尚未检查' }
 function isLiveAudio(job: AudioJob) { return liveAudioStatuses.has(job.status) }
 function needsDownloadRetry(job: AudioJob) { return job.status === 'waiting_user' && !!job.errorCode?.includes('download') }
-const installAudioExtension = () => run(async () => {
-  await audioApi.openAudioExtensionSetup()
-  message.value = '已打开 Chrome 扩展页和扩展目录。启用扩展后回到这里，状态会自动刷新。'
-})
 const addSourceDocument = () => run(async () => {
   const path = await chooseSourceDocument()
   if (!path) return
@@ -216,7 +212,7 @@ const addSourceDocument = () => run(async () => {
   message.value = '原书文件已加入本书来源，启动自动任务时会核验文件指纹。'
 })
 const startAudio = () => run(async () => {
-  if (!audioBridge.value?.connected) throw new Error('请先安装并启用 Chrome 扩展。')
+  if (!audioBrowser.value?.supported) throw new Error(audioBrowser.value?.message || '当前平台暂不支持应用内自动音频。')
   if (!audioSourceReady.value) throw new Error('请选择可用的原书文件或书籍资料文本。')
   if (!durationValid.value) throw new Error('音频目标时长须为 1—1440 分钟的整数。')
   await persistDuration()
@@ -232,7 +228,7 @@ const controlAudio = (job: AudioJob, action: AudioJobAction) => {
   if (action === 'cancel' && !globalThis.confirm('停止后将不再自动跟进。停止跟进不等于取消 Google 生成，确定继续？')) return
   return run(async () => {
     applyAudioView(await audioApi.controlAudioJob(job.id, action))
-    message.value = action === 'open_browser' ? '已在 Chrome 中显示任务浏览器。'
+    message.value = action === 'open_browser' ? '已显示应用内任务网站。'
       : action === 'pause' ? '已暂停本地跟进，Google 中的生成状态不受影响。'
         : action === 'resume' ? '已继续跟进当前任务。'
           : '已停止本地跟进。Google 中已提交的生成可能仍在继续。'
@@ -789,31 +785,15 @@ onMounted(async () => {
               </Badge>
             </div>
             <p class="muted">
-              在独立 Chrome 窗口完成 Google 登录后，书引 AI 会创建本次专属笔记本文库、添加所选来源、填写已保存指导、生成并下载音频。请保持应用和 Chrome 运行。
+              书引 AI 将在应用内打开网站，自动添加所选来源、填写指导、生成并下载音频。首次使用需完成 Google 登录，请保持应用运行。
             </p>
             <div
-              v-if="audioBridge && !audioBridge.supported"
+              v-if="audioBrowser && !audioBrowser.supported"
               class="error"
               role="alert"
             >
-              <AppIcon name="info" />{{ audioBridge.message || '当前平台暂不支持自动音频，请使用手动导入。' }}
+              <AppIcon name="info" />{{ audioBrowser.message || '当前平台暂不支持自动音频，请使用手动导入。' }}
             </div>
-            <template v-else-if="!audioBridge?.connected">
-              <div class="notice">
-                <strong>Chrome 扩展尚未连接。</strong>
-                {{ audioBridge?.message || '请安装并启用书引 AI 音频扩展，再打开 Gemini Notebook。' }}
-                <span v-if="audioBridge?.lastSeenSecondsAgo != null"> 上次连接：{{ audioBridge.lastSeenSecondsAgo }} 秒前。</span>
-              </div>
-              <div class="actions wrap">
-                <Button
-                  type="button"
-                  :disabled="!desktop || busy"
-                  @click="installAudioExtension"
-                >
-                  <AppIcon name="folder" />安装 / 检查 Chrome 扩展
-                </Button>
-              </div>
-            </template>
             <template v-else>
               <div class="grid gap-4 md:grid-cols-2">
                 <div>
@@ -935,10 +915,16 @@ onMounted(async () => {
                 已等待 {{ audioElapsed(shownAudioJob) }} · 上次检查 {{ audioCheckedAt(shownAudioJob) }}
               </p>
               <p
+                v-if="audioBrowser?.url"
+                class="muted break-all"
+              >
+                当前网站：{{ audioBrowser.url }}
+              </p>
+              <p
                 v-if="shownAudioJob.status === 'waiting_login'"
                 class="notice"
               >
-                请在独立 Chrome 窗口完成 Google 登录。完成后无需在网站手动点击生成，书引 AI 会继续跟进。
+                请在应用内网站窗口完成 Google 登录。完成后无需在网站手动点击生成，书引 AI 会继续跟进。
               </p>
               <p
                 v-if="shownAudioJob.errorMessage"
@@ -973,7 +959,7 @@ onMounted(async () => {
                   :disabled="busy"
                   @click="controlAudio(shownAudioJob, 'open_browser')"
                 >
-                  <AppIcon name="headphones" />显示浏览器
+                  <AppIcon name="headphones" />查看网站
                 </Button>
                 <Button
                   v-if="isLiveAudio(shownAudioJob)"

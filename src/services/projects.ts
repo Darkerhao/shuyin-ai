@@ -4,7 +4,7 @@ import type { Asset, Project, ProjectInput, WorkspaceSettings } from '../types/p
 export { isDesktop, errorMessage } from './verification'
 export const listProjects = (search = '', status = '') => invoke<Project[]>('list_projects', { search, status })
 export const getProject = (id: string) => invoke<Project>('get_project', { id })
-export const saveProject = (id: string | null, input: ProjectInput) => invoke<Project>('save_project', { id, input })
+export const saveProject = (id: string | null, input: ProjectInput, sourcePaths: string[] = []) => invoke<Project>('save_project', { id, input, sourcePaths })
 export const deleteProject = (id: string) => invoke<void>('delete_project', { id })
 export const listAssets = (projectId: string) => invoke<Asset[]>('list_assets', { projectId })
 export const linkAsset = (projectId: string, path: string, assetId: string | null = null) => invoke<string>('link_asset', { projectId, path, assetId })

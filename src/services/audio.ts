@@ -4,4 +4,3 @@ import type { AudioJobAction, AudioJobView, StartAudioJobInput } from '../types/
 export const getAudioJobView = (projectId: string) => invoke<AudioJobView>('audio_job_snapshot', { projectId })
 export const startAudioJob = (input: StartAudioJobInput) => invoke<AudioJobView>('start_audio_job', { input })
 export const controlAudioJob = (id: string, action: AudioJobAction) => invoke<AudioJobView>('control_audio_job', { id, action })
-export const openAudioExtensionSetup = () => invoke<void>('open_audio_extension_setup')

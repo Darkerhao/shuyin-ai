@@ -4,9 +4,9 @@
   "version": "0.22.0",
   "identifier": "com.shuyin.desktop",
   "build": {
-    "beforeDevCommand": "npm run audio:bridge:dev && npm run dev",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build && npm run audio:bridge:release",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {

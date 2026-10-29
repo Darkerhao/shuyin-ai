@@ -77,8 +77,12 @@ pub struct AudioJobData {
 
 #[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum BridgeObservation {
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum AudioObservation {
     LoginRequired,
     LoginReady,
     NotebookCreated {
@@ -103,7 +107,7 @@ pub enum BridgeObservation {
 #[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BridgeJobData {
+pub struct AudioExecutionJob {
     pub id: String,
     pub run_id: i64,
     pub status: String,
@@ -113,13 +117,13 @@ pub struct BridgeJobData {
     pub target_duration_seconds: i64,
     pub format: String,
     pub notebook_url: Option<String>,
-    pub source: BridgeSourceData,
+    pub source: AudioSourceData,
 }
 
 #[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum BridgeSourceData {
+pub enum AudioSourceData {
     Text {
         text: String,
     },
@@ -128,16 +132,6 @@ pub enum BridgeSourceData {
         size: i64,
         sha256: String,
     },
-}
-
-#[cfg(any(target_os = "windows", test))]
-#[derive(Debug)]
-pub struct SourceChunkData {
-    pub bytes: Vec<u8>,
-    pub next_offset: i64,
-    pub total_size: i64,
-    pub name: String,
-    pub sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -246,8 +240,22 @@ fn require_run(job: &AudioJob, run_id: i64) -> Result<(), String> {
 
 #[cfg(any(target_os = "windows", test))]
 fn validate_notebook_url(value: &str) -> bool {
-    value.starts_with("https://notebook.google.com/")
-        || value.starts_with("https://notebooklm.google.com/")
+    tauri::Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "https"
+            && matches!(
+                url.host_str(),
+                Some("notebook.google.com" | "notebooklm.google.com")
+            )
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.port_or_known_default() == Some(443)
+            && url.path().strip_prefix("/notebook/").is_some_and(|id| {
+                !id.is_empty()
+                    && id
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+            })
+    })
 }
 
 fn valid_format(value: &str) -> bool {
@@ -514,7 +522,7 @@ impl Database {
             }
             let id = new_id(connection)?;
             connection.execute(
-                &format!("INSERT INTO audio_jobs(id,project_id,writing_version_id,input_json,status,stage,run_id,created_at,updated_at) VALUES(?1,?2,?3,?4,'created','awaiting_extension',1,{NOW},{NOW})"),
+                &format!("INSERT INTO audio_jobs(id,project_id,writing_version_id,input_json,status,stage,run_id,created_at,updated_at) VALUES(?1,?2,?3,?4,'created','opening_site',1,{NOW},{NOW})"),
                 params![id, input.project_id, input.writing_version_id, input_json],
             ).map_err(|error| match error {
                 rusqlite::Error::SqliteFailure(ref code, _) if code.code == rusqlite::ErrorCode::ConstraintViolation => "当前已有未完成的音频任务。请先完成或停止跟进。".to_owned(),
@@ -534,14 +542,21 @@ impl Database {
                 }
                 "resume" => {
                     if !matches!(current.status.as_str(), "paused" | "waiting_user") { return Err("只有已暂停或等待人工核对的任务可以继续。".into()); }
-                    let status = match current.stage.as_str() {
+                    let stage = match current.stage.as_str() {
+                        "awaiting_extension" | "opening_site" => "opening_site",
+                        "download_pending" => "downloading",
+                        "creating_notebook" if current.notebook_url.is_none() => "verify_remote",
+                        "submitting" => "verify_remote",
+                        other => other,
+                    };
+                    let status = match stage {
                         "generating" => "generating",
                         "download_pending" | "downloading" => "downloading",
                         "importing" => "importing",
                         "verify_remote" | "login" | "creating_notebook" | "adding_source" | "source_processing" | "configuring_audio" | "submitting" => "preparing",
                         _ => "created",
                     };
-                    connection.execute(&format!("UPDATE audio_jobs SET status=?2,run_id=run_id+1,error_code=NULL,error_message=NULL,updated_at={NOW} WHERE id=?1"), params![id, status]).map_err(|error| error.to_string())?;
+                    connection.execute(&format!("UPDATE audio_jobs SET status=?2,stage=?3,run_id=run_id+1,error_code=NULL,error_message=NULL,updated_at={NOW} WHERE id=?1"), params![id, status, stage]).map_err(|error| error.to_string())?;
                 }
                 "cancel" => {
                     if current.status == "succeeded" { return Err("音频已经保存，不能取消。".into()); }
@@ -559,7 +574,7 @@ impl Database {
     pub fn recover_audio_jobs(&self) -> Result<(), String> {
         self.with_connection(|connection| {
             connection.execute(
-                &format!("UPDATE audio_jobs SET status='waiting_user',stage='verify_remote',run_id=run_id+1,error_code='verify_remote',error_message='应用重启后请先核对原 Notebook 任务，再继续跟进。',updated_at={NOW} WHERE status IN ('created','waiting_login','preparing','generating','downloading','importing')"),
+                &format!("UPDATE audio_jobs SET status='waiting_user',stage=CASE WHEN stage IN ('opening_site','awaiting_extension','login') AND notebook_url IS NULL AND submitted_at IS NULL THEN 'opening_site' ELSE 'verify_remote' END,run_id=run_id+1,error_code='verify_remote',error_message='应用重启后请查看网站并继续跟进；已开始的远端任务会先核对。',updated_at={NOW} WHERE status IN ('created','waiting_login','preparing','generating','downloading','importing')"),
                 [],
             ).map_err(|error| error.to_string())?;
             Ok(())
@@ -567,7 +582,7 @@ impl Database {
     }
 
     #[cfg(any(target_os = "windows", test))]
-    pub fn audio_bridge_job(&self) -> Result<Option<BridgeJobData>, String> {
+    pub fn audio_execution_job(&self) -> Result<Option<AudioExecutionJob>, String> {
         self.with_connection(|connection| {
             let Some(current) = active_job(connection)? else {
                 return Ok(None);
@@ -581,12 +596,12 @@ impl Database {
                 .map_err(|error| error.to_string())?;
             let input = parse_input(&input_json)?;
             let source = match input.source {
-                FrozenSource::Text { text } => BridgeSourceData::Text { text },
+                FrozenSource::Text { text } => AudioSourceData::Text { text },
                 FrozenSource::Asset {
                     name, size, sha256, ..
-                } => BridgeSourceData::Asset { name, size, sha256 },
+                } => AudioSourceData::Asset { name, size, sha256 },
             };
-            Ok(Some(BridgeJobData {
+            Ok(Some(AudioExecutionJob {
                 id: current.id,
                 run_id: current.run_id,
                 status: current.status,
@@ -602,39 +617,141 @@ impl Database {
     }
 
     #[cfg(any(target_os = "windows", test))]
-    pub fn audio_source_chunk(
+    pub fn audio_cache_directory(&self, job_id: &str) -> Result<PathBuf, String> {
+        self.with_connection(|connection| {
+            let current = job(connection, job_id)?;
+            let project = get(connection, &current.project_id)?;
+            let workspace = PathBuf::from(project.workspace_path);
+            checked_directory(&workspace)?;
+            let cache = workspace.join(".audio-jobs").join(job_id);
+            fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+            let cache = cache.canonicalize().map_err(|e| e.to_string())?;
+            if !cache.starts_with(workspace.canonicalize().map_err(|e| e.to_string())?) {
+                return Err("音频任务缓存必须位于本书目录。".into());
+            }
+            Ok(cache)
+        })
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub fn audio_download_path(&self, job_id: &str, run_id: i64) -> Result<PathBuf, String> {
+        self.with_connection(|connection| {
+            let current = job(connection, job_id)?;
+            require_run(&current, run_id)
+        })?;
+        let directory = self.audio_cache_directory(job_id)?.join(run_id.to_string());
+        fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+        Ok(directory.join("download.partial"))
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub fn audio_source_snapshot(&self, job_id: &str, run_id: i64) -> Result<PathBuf, String> {
+        let (path, name, size, sha256) = self.with_connection(|connection| {
+            let current = job(connection, job_id)?;
+            require_run(&current, run_id)?;
+            if current.status != "preparing" || current.stage != "adding_source" {
+                return Err("当前任务不能上传来源。".into());
+            }
+            let input_json: String = connection.query_row("SELECT input_json FROM audio_jobs WHERE id=?1", [job_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+            let FrozenSource::Asset { asset_id, name, size, sha256 } = parse_input(&input_json)?.source else {
+                return Err("资料文本不使用文件上传。".into());
+            };
+            let path: String = connection.query_row("SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='document'", params![asset_id, current.project_id], |row| row.get(0))
+                .optional().map_err(|e| e.to_string())?.ok_or("原书来源已从本书移除。")?;
+            Ok((PathBuf::from(path), name, size, sha256))
+        })?;
+        if hash_file(&path)? != (size, sha256.clone()) {
+            return Err("原书文件大小或 SHA-256 与任务快照不一致，请停止后重新选择。".into());
+        }
+        let directory = self
+            .audio_cache_directory(job_id)?
+            .join(run_id.to_string())
+            .join("source");
+        fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+        let name = Path::new(&name).file_name().ok_or("原书文件名无效。")?;
+        let destination = directory.join(name);
+        let copied = copy_verified(&path, &destination)?;
+        if copied != (size, sha256) {
+            let _ = fs::remove_file(&destination);
+            return Err("原书在制作上传快照时发生变化，已停止上传。".into());
+        }
+        self.with_connection(|connection| require_run(&job(connection, job_id)?, run_id))?;
+        Ok(destination)
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub fn retry_audio_import(
         &self,
         job_id: &str,
         run_id: i64,
-        offset: i64,
-    ) -> Result<SourceChunkData, String> {
-        const CHUNK: i64 = 256 * 1024;
+    ) -> Result<Option<AudioJob>, String> {
+        let current = self.with_connection(|connection| job(connection, job_id))?;
+        require_run(&current, run_id)?;
+        if current.output_sha256.is_none() || current.asset_id.is_some() {
+            return Ok(None);
+        }
+        let path = self.audio_cache_directory(job_id)?.join("complete.audio");
+        if !path.is_file() {
+            return Err("已确认的音频缓存缺失，请重新下载原音频。".into());
+        }
+        if hash_file(&path)?
+            != (
+                current.output_size.ok_or("音频缓存缺少大小记录。")?,
+                current.output_sha256.unwrap(),
+            )
+        {
+            return Err("已确认的音频缓存与 SHA-256 记录不一致。".into());
+        }
         self.with_connection(|connection| {
-            let current = job(connection, job_id)?;
-            require_run(&current, run_id)?;
-            if matches!(current.status.as_str(), "paused" | "failed" | "succeeded" | "cancelled") { return Err("音频任务当前不能上传来源。".into()); }
-            let input_json: String = connection.query_row("SELECT input_json FROM audio_jobs WHERE id=?1", [job_id], |row| row.get(0)).map_err(|error| error.to_string())?;
-            let input = parse_input(&input_json)?;
-            let FrozenSource::Asset { asset_id, name, size, sha256 } = input.source else { return Err("资料文本来源不使用文件分块。".into()); };
-            if offset < 0 || offset >= size { return Err("来源文件分块位置无效。".into()); }
-            let path: String = connection.query_row(
-                "SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='document'",
-                params![asset_id, current.project_id], |row| row.get(0),
-            ).optional().map_err(|error| error.to_string())?.ok_or("原书来源已从项目中移除，请重新选择。")?;
-            let path = fs::canonicalize(path).map_err(|error| format!("原书文件不可用：{error}"))?;
-            let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
-            if !metadata.is_file() || metadata.len() as i64 != size { return Err("原书文件在任务创建后发生变化，请停止任务后重新选择。".into()); }
-            let length = (size - offset).min(CHUNK) as usize;
-            // Recheck the source at both ends; the extension verifies the assembled bytes too.
-            if offset == 0 || offset + length as i64 == size {
-                let (_, actual) = hash_file(&path)?;
-                if actual != sha256 { return Err("原书文件 SHA-256 与任务快照不一致，请重新选择。".into()); }
+            let latest = job(connection, job_id)?;
+            require_run(&latest, run_id)?;
+            if !matches!(latest.status.as_str(), "preparing" | "importing") {
+                return Err("当前任务不能重试音频归档。".into());
             }
-            let mut bytes = vec![0u8; length];
-            let mut file = File::open(&path).map_err(|error| error.to_string())?;
-            file.seek(SeekFrom::Start(offset as u64)).map_err(|error| error.to_string())?;
-            file.read_exact(&mut bytes).map_err(|error| error.to_string())?;
-            Ok(SourceChunkData { bytes, next_offset: offset + length as i64, total_size: size, name, sha256 })
+            self.set_job(connection, job_id, "importing", "importing", None, None)
+        })?;
+        Ok(Some(self.complete_audio_download(
+            job_id,
+            run_id,
+            path.to_str().ok_or("音频缓存路径无效。")?,
+        )?))
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub fn audio_checked(&self, id: &str, run_id: i64) -> Result<(), String> {
+        self.with_connection(|connection| {
+            require_run(&job(connection, id)?, run_id)?;
+            self.touch_job(connection, id)
+        })
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub fn audio_step_failed(&self, id: &str, run_id: i64, message: &str) -> Result<(), String> {
+        self.with_connection(|connection| {
+            let current = job(connection, id)?;
+            require_run(&current, run_id)?;
+            if matches!(
+                current.status.as_str(),
+                "paused" | "cancelled" | "succeeded" | "failed"
+            ) {
+                return Ok(());
+            }
+            let stage = if matches!(
+                current.stage.as_str(),
+                "creating_notebook" | "adding_source" | "submitting"
+            ) {
+                "verify_remote"
+            } else {
+                &current.stage
+            };
+            self.set_job(
+                connection,
+                id,
+                "waiting_user",
+                stage,
+                Some("page_action_failed"),
+                Some(message),
+            )
         })
     }
 
@@ -672,14 +789,14 @@ impl Database {
         &self,
         job_id: &str,
         run_id: i64,
-        observation: &BridgeObservation,
+        observation: &AudioObservation,
     ) -> Result<AudioJob, String> {
         self.with_connection(|connection| {
             let current = job(connection, job_id)?;
             require_run(&current, run_id)?;
             if matches!(current.status.as_str(), "paused" | "failed" | "succeeded" | "cancelled") { return Err("音频任务当前不接受页面操作结果。".into()); }
             match observation {
-                BridgeObservation::LoginRequired => {
+                AudioObservation::LoginRequired => {
                     if current.status == "waiting_login" {
                         self.touch_job(connection, job_id)?;
                         return job(connection, job_id);
@@ -693,10 +810,10 @@ impl Database {
                         "waiting_login",
                         &current.stage,
                         Some("login_required"),
-                        Some("请在 Chrome 完成 Google 登录，登录完成后会自动继续。"),
+                        Some("请在应用内网站完成 Google 登录，登录完成后会自动继续。"),
                     )?;
                 }
-                BridgeObservation::LoginReady => {
+                AudioObservation::LoginReady => {
                     if current.status == "preparing" {
                         self.touch_job(connection, job_id)?;
                         return job(connection, job_id);
@@ -704,16 +821,23 @@ impl Database {
                     if !matches!(current.status.as_str(), "created" | "waiting_login") {
                         return Err("当前阶段不能恢复 Notebook 任务。".into());
                     }
-                    let status = match current.stage.as_str() {
+                    let stage = match current.stage.as_str() {
+                        "awaiting_extension" | "opening_site" => "opening_site",
+                        "download_pending" => "downloading",
+                        "creating_notebook" if current.notebook_url.is_none() => "verify_remote",
+                        "submitting" => "verify_remote",
+                        other => other,
+                    };
+                    let status = match stage {
                         "generating" => "generating",
                         "downloading" => "downloading",
                         "importing" => "importing",
                         _ => "preparing",
                     };
-                    let stage = if current.stage == "awaiting_extension" { "creating_notebook" } else { current.stage.as_str() };
+                    let stage = if stage == "opening_site" { "creating_notebook" } else { stage };
                     self.set_job(connection, job_id, status, stage, None, None)?;
                 }
-                BridgeObservation::NotebookCreated { notebook_url } => {
+                AudioObservation::NotebookCreated { notebook_url } => {
                     if !validate_notebook_url(notebook_url) { return Err("Notebook 地址不是受支持的 HTTPS 站点。".into()); }
                     if current.stage == "adding_source" && current.notebook_url.as_deref() == Some(notebook_url) { self.touch_job(connection, job_id)?; return job(connection, job_id); }
                     if current.status != "preparing" || current.stage != "creating_notebook" { return Err("当前阶段不能登记新笔记本。".into()); }
@@ -722,22 +846,22 @@ impl Database {
                         params![job_id, notebook_url],
                     ).map_err(|error| error.to_string())?;
                 }
-                BridgeObservation::SourceSubmitted => {
+                AudioObservation::SourceSubmitted => {
                     if current.stage == "source_processing" { self.touch_job(connection, job_id)?; return job(connection, job_id); }
                     if current.status != "preparing" || current.stage != "adding_source" { return Err("当前阶段不能提交来源。".into()); }
                     self.set_job(connection, job_id, "preparing", "source_processing", None, None)?;
                 }
-                BridgeObservation::SourceReady => {
+                AudioObservation::SourceReady => {
                     if current.stage == "configuring_audio" { self.touch_job(connection, job_id)?; return job(connection, job_id); }
                     if current.status != "preparing" || current.stage != "source_processing" { return Err("当前阶段不能确认来源就绪。".into()); }
                     self.set_job(connection, job_id, "preparing", "configuring_audio", None, None)?;
                 }
-                BridgeObservation::AudioConfigured => {
+                AudioObservation::AudioConfigured => {
                     if current.stage == "submitting" { self.touch_job(connection, job_id)?; return job(connection, job_id); }
                     if current.status != "preparing" || current.stage != "configuring_audio" { return Err("当前阶段不能确认音频设置。".into()); }
                     self.set_job(connection, job_id, "preparing", "submitting", None, None)?;
                 }
-                BridgeObservation::GenerationSubmitted => {
+                AudioObservation::GenerationSubmitted => {
                     if current.status == "generating" && current.stage == "generating" { self.touch_job(connection, job_id)?; return job(connection, job_id); }
                     if current.status != "preparing" || current.stage != "submitting" { return Err("当前阶段不能提交音频生成。".into()); }
                     connection.execute(
@@ -745,20 +869,20 @@ impl Database {
                         [job_id],
                     ).map_err(|error| error.to_string())?;
                 }
-                BridgeObservation::Generating => {
+                AudioObservation::Generating => {
                     if !matches!(current.status.as_str(), "preparing" | "generating") || !matches!(current.stage.as_str(), "verify_remote" | "submitting" | "generating") { return Err("当前阶段不能登记生成中状态。".into()); }
                     connection.execute(
                         &format!("UPDATE audio_jobs SET status='generating',stage='generating',submitted_at=coalesce(submitted_at,{NOW}),error_code=NULL,error_message=NULL,last_checked_at={NOW},updated_at={NOW} WHERE id=?1"),
                         [job_id],
                     ).map_err(|error| error.to_string())?;
                 }
-                BridgeObservation::GenerationComplete { .. } => {
+                AudioObservation::GenerationComplete { .. } => {
                     if current.status == "downloading" && current.stage == "downloading" { self.touch_job(connection, job_id)?; return job(connection, job_id); }
                     if current.status != "generating" && !(current.status == "preparing" && current.stage == "verify_remote") { return Err("当前阶段不能登记音频生成完成。".into()); }
                     self.set_job(connection, job_id, "downloading", "downloading", None, None)?;
                 }
-                BridgeObservation::PageChanged { message } => {
-                    self.set_job(connection, job_id, "waiting_user", &current.stage, Some("page_changed"), Some(if message.trim().is_empty() { "页面状态无法确认，请在 Chrome 核对后继续。" } else { message.trim() }))?;
+                AudioObservation::PageChanged { message } => {
+                    self.set_job(connection, job_id, "waiting_user", &current.stage, Some("page_changed"), Some(if message.trim().is_empty() { "页面状态无法确认，请在应用内网站核对后继续。" } else { message.trim() }))?;
                 }
             }
             job(connection, job_id)
@@ -834,13 +958,22 @@ impl Database {
                 let session_file = PathBuf::from(path)
                     .canonicalize()
                     .map_err(|error| format!("下载的音频路径不可用：{error}"))?;
-                let normalized = session_file
-                    .to_string_lossy()
-                    .replace('\\', "/")
-                    .to_ascii_lowercase();
-                let marker = format!("shuyinai/{}/", job_id.to_ascii_lowercase());
-                if !normalized.contains(&marker) {
-                    return Err("下载文件不属于当前音频任务。".into());
+                let cache = PathBuf::from(&project.workspace_path)
+                    .join(".audio-jobs")
+                    .join(job_id);
+                let expected = cache.join(run_id.to_string()).join("download.partial");
+                let completed = cache.join("complete.audio");
+                let exact_download = expected.canonicalize().ok().as_ref() == Some(&session_file);
+                let confirmed_cache = completed.canonicalize().ok().as_ref() == Some(&session_file)
+                    && current.output_size.is_some()
+                    && current.output_sha256.is_some()
+                    && hash_file(&session_file)?
+                        == (
+                            current.output_size.unwrap(),
+                            current.output_sha256.clone().unwrap(),
+                        );
+                if !exact_download && !confirmed_cache {
+                    return Err("下载文件不属于当前音频任务的精确缓存路径。".into());
                 }
                 if !session_file.is_file() {
                     return Err("下载内容不是文件。".into());
@@ -859,12 +992,21 @@ impl Database {
             let _ = self.audio_report_error(job_id, run_id, "import_failed", &error);
             return Err(error);
         }
+        let cache_file = self.audio_cache_directory(job_id)?.join("complete.audio");
+        let (verified_size, verified_hash) = copy_verified(&session_file, &cache_file)?;
+        let session_file = cache_file;
         self.with_connection(|connection| {
             let latest = job(connection, job_id)?;
             require_run(&latest, run_id)?;
             if !matches!(latest.status.as_str(), "downloading" | "importing") {
                 return Err("音频任务状态在归档期间发生变化。".into());
             }
+            connection
+                .execute(
+                    "UPDATE audio_jobs SET output_size=?2,output_sha256=?3 WHERE id=?1",
+                    params![job_id, verified_size, verified_hash],
+                )
+                .map_err(|e| e.to_string())?;
             self.set_job(connection, job_id, "importing", "importing", None, None)
         })?;
         let stored = (|| -> Result<(i64, String, PathBuf), String> {

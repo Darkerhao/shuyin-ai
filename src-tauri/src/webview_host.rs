@@ -1,4 +1,4 @@
-//! Windows host-side CDP. No debugging port or remote-page IPC is required.
+//! Shared Windows host-side CDP. No debugging port or remote-page IPC is required.
 use serde_json::Value;
 use tauri::WebviewWindow;
 
@@ -44,16 +44,16 @@ pub async fn call(window: &WebviewWindow, method: &str, params: Value) -> Result
                 }
             }
         })
-        .map_err(|e| format!("无法访问发布窗口：{e}"))?;
-    let json = tokio::time::timeout(std::time::Duration::from_secs(10), receiver)
+        .map_err(|e| format!("无法访问网站窗口：{e}"))?;
+    let json = tokio::time::timeout(std::time::Duration::from_secs(30), receiver)
         .await
-        .map_err(|_| "网页操作超时，请在官方窗口检查结果后再继续。")?
-        .map_err(|_| "发布窗口已关闭。")?
+        .map_err(|_| "网页操作超时，请在网站窗口检查结果后再继续。")?
+        .map_err(|_| "网站窗口已关闭。")?
         .map_err(|e| format!("浏览器操作失败：{e}"))?;
     serde_json::from_str(&json).map_err(|_| "浏览器返回了无效结果。".into())
 }
 
 #[cfg(not(windows))]
 pub async fn call(_window: &WebviewWindow, _method: &str, _params: Value) -> Result<Value, String> {
-    Err("原生抖音文件上传目前仅支持 Windows。".into())
+    Err("原生网站操作目前仅支持 Windows。".into())
 }

@@ -1,5 +1,9 @@
 # 书引 AI 技术设计文档
 
+## 书籍来源绑定（2026-10-28）
+
+`ProjectPage.vue` 暂存新增文档路径，选择不写库，已保存来源由 `list_assets` 读取。`save_project` 接收可选 `sourcePaths`，`Database::save_project_with_documents` 将书籍写入与既有 `assets::register_existing` 的 document 关联放在单个 SQLite 事务；只读打开校验可读性，任一失败回滚，创建失败仅清理本次空工作目录。未传文件仍走同一保存实现。音频页沿用 `setAssets` 的可用文档优先选择及 asset ID 来源契约，不新增来源表、权限、依赖或文件上传路径。数据库保持 v13。
+
 ## 工作台交互与视觉统一（2026-10-28）
 
 - 续轮将书架的查询状态提取为 `useQueryState`，复用于创作/封面 `tab` 和发布队列 `q/status`；任务定位使用实际 `task` ID，新任务使用 `task=new`，内部保存同步 URL 时跳过重复读取，避免覆盖刚保存的编辑。
@@ -13,19 +17,15 @@
 - 发布队列空态提供回到创作流程的操作，搜索使用显式清空按钮及 Escape，保留异步失败时的已有列表。
 - 数据库仍为 v13，Rust Command、Provider、文件安全和最终发布确认均不变。验证范围见 `WORKSPACE-UI-UPGRADE.md`。
 
-## Gemini Notebook 自动音频（2026-10-28）
+## Gemini Notebook 应用内自动音频（2026-10-29）
 
-宿主清单的可执行路径经过共享 `paths::shell_path` 转为普通 Windows 路径，与资源管理器打开素材共用转换。`canonicalize` 返回的 `\\?\` 前缀不能直接交给 Chrome 的 `cmd.exe` 启动链路：直接启动 helper 虽可成功，浏览器仍可能报通信错误。扩展保留正式版和开发版各自的失败原因，避免最后一次失败覆盖前一次。
+audio.rs 管理专用窗口与单一串行调度；audio_page.js 按角色、标签、中英文文本执行当前动作，运行令牌阻止暂停后的异步写入。抖音/音频共用 webview_host.rs，以 CDP Runtime.evaluate(awaitPromise) 获取结构化结果，30秒上限；不开放调试端口或给远程窗口业务 capability。
 
-Windows 自动闭环采用正常 Chrome、固定 ID 的 MV3 扩展和独立 Native Messaging helper，不使用嵌入式 Google 登录、Cookie 导出或私有 RPC。当前入口为 `https://notebook.google.com/`，同时兼容旧 `notebooklm.google.com` Notebook 链接。扩展只在 `notebook.google.com` / `notebooklm.google.com` 页面运行，通过语义角色、ARIA 与中英文可见文本定位控件；定位不唯一、指导回读不一致或账号/笔记本身份不明时停止写入。
+SQLite v13 仍是唯一持久状态。原书通过大小/SHA-256 冻结副本和 DOM.setFileInputFiles 上传，不再 base64 分块传输。audio_download.rs 将精确 URL、任务/运行/文档代次和不存在的目标路径绑定具体 WebView2 下载对象，完成后校验并归档。完整摘要缓存可跨运行重试素材事务；迟到结果、HTML 和未确认部分文件不能登记。
 
-Rust 是任务状态唯一写入者。`audio_jobs` 冻结发布文案版本、完整指导、目标时长、格式、唯一来源及文件 SHA-256；同一时间只允许一个未结束任务。扩展通过本机命名管道短连接轮询，携带 `jobId + runId` 执行创建笔记本、上传来源、配置音频、提交生成和获取精确下载目标。旧运行消息被拒绝；页面只能触发白名单动作，不能提交路径、URL、JavaScript 或命令。
+新任务从 opening_site 开始，旧等待扩展任务继续时归一；已开始任务重启先核对，提交不明不重复生成。网站关闭只隐藏，主工作台退出销毁网站窗口。每阶段有限等待，登录由用户操作，网站资料独立存于 audio-webview。
 
-应用启动时注册当前用户 Chrome Native Messaging host，开发与正式 host 名分离；helper 只转发小端长度帧，不访问数据库，不自动启动应用。Windows 包同时携带 helper 和扩展目录，macOS/Linux 仍可使用手动音频流程。生成完成后浏览器先下载到 `ShuyinAI/<jobId>/`，Rust 重新验证真实音频容器、复制到本书目录、比较大小与 SHA-256，再在单个 SQLite 事务中登记 `assets.audio` 并完成任务。数据库备份恢复将未完成自动任务置为人工核对，不自动重提生成。
-
-桥接协议、帧处理与管道请求仅编译于 Windows；专属数据库接口和文件归档辅助函数在 Windows 或测试构建中启用，保留各平台数据库回归。NSIS 在 `POSTUNINSTALL` 清理宿主注册，取消运行中应用的卸载检查不会提前删除注册，原地更新仍保留注册。来源文件取消跨请求的“已校验”缓存，Rust 在首块和末块核对冻结摘要；扩展以任务中的大小及 SHA-256 为准，在内存中组装全部分块并校验通过后，才创建上传文件和触发网页文件输入事件。中途同大小改写、改写后恢复或分块指纹漂移均停止上传并等待用户处理，不增加临时来源副本或数据库状态。
-
-真实 Google 登录、页面上传、长任务生成与 blob/HTTPS 下载目标尚未在当前环境完成实际账号验收；代码完成及本地测试不能替代 P0。扩展正式上架、页面 DOM 变化和 Google 站点限制仍需按实施计划核验，详见 `NOTEBOOKLM-AUDIO-PLAN.md` 与 `AUDIO-AUTOMATION-VERIFICATION.md`。
+扩展/helper/管道/启动注册及旧打包资源已移除；NSIS 按精确宿主路径清理旧注册和指定随包文件。windows-core 0.62.2 由既有间接依赖显式声明，没有新增库版本。真实 Google 和正式安装升级仍待验收；详见 NOTEBOOKLM-IN-APP-AUDIO-DESIGN.md、IN-APP-AUDIO-VERIFICATION.md。
 
 ## 音频时长贯通（2026-10-27）
 
@@ -411,7 +411,7 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 - `services/douyin.ts` 封装五个主窗口命令和定向进度事件；`DouyinVerification.vue` 提供打开、检查、账号确认、上传填写、重新核对后继续和停止。`PublishingPage.vue` 在操作期间锁定编辑、任务切换与路由，沿用现有人工发布记录。
 - `douyin.rs` 统一持有一个活动快照、操作锁和停止标志。`database/publishing.rs::publish_snapshot` 复用 checked/manifest/package_valid，仅接受当前 ready 任务，从有效包取横竖图、引用原视频。接收命令的主窗口不能提供任意路径或脚本。上传前、填写和设置封面期间重查任务/素材；文件目标已定位后、发送前预留任务，超时不自动重传。
 - 独立 `douyin-publish` WebView 仅允许 `https://creator.douyin.com`，拒绝新窗口，使用专用 `douyin-webview` 数据目录。capability 仍只绑定 main；命令检查调用窗口，事件只发 main。主窗口销毁时关闭发布窗口；浏览器会话不进入 SQLite、备份或日志。
-- Windows `douyin_webview.rs` 通过 WebView2 宿主 CallDevToolsProtocolMethod 调用 Runtime.evaluate / DOM.setFileInputFiles，释放临时节点引用。直接声明锁文件已有的 webview2-com 0.39.1；产品不开放远程调试端口。非 Windows 明确返回未支持。
+- Windows `webview_host.rs`（原 `douyin_webview.rs`）通过 WebView2 宿主 CallDevToolsProtocolMethod 调用 Runtime.evaluate / DOM.setFileInputFiles，释放临时节点引用，供抖音和音频共用。直接声明锁文件已有的 webview2-com 0.39.1；产品不开放远程调试端口。非 Windows 明确返回未支持。
 - `douyin_page.js` 只读来源、登录/联网和编辑器就绪情况；`douyin_editor.js` 集中维护真实页面的有限动作，包含带提示图标的视频预览页签、恢复后的 Slate 编辑器、同一弹窗上传两种封面及完成后回读。没有最终发布动作；页面缺项或已有不同内容即停止。
 - 视频等待上限30分钟，封面处理/保存上限120秒；停止只阻止后续操作，已送入网页的上传由官方页面控制。会话不持久化，重开先检查官方草稿并人工核对，不自动重传；schema v9 和既有备份格式不变。真实脚本、原生命令与安装证据分列于 `M6-VERIFICATION.md`。
 

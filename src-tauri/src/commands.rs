@@ -60,8 +60,14 @@ pub fn save_project(
     database: State<'_, Database>,
     id: Option<String>,
     input: ProjectInput,
+    source_paths: Option<Vec<String>>,
 ) -> Result<Project, String> {
-    database.save_project(id.as_deref(), input)
+    match source_paths {
+        Some(paths) if !paths.is_empty() => {
+            database.save_project_with_documents(id.as_deref(), input, &paths)
+        }
+        _ => database.save_project(id.as_deref(), input),
+    }
 }
 #[tauri::command]
 pub fn delete_project(database: State<'_, Database>, id: String) -> Result<(), String> {

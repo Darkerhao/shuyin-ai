@@ -37,18 +37,17 @@ export interface AudioJob {
   updatedAt: string
 }
 
-export interface AudioBridgeStatus {
+export interface AudioBrowserStatus {
   supported: boolean
-  connected: boolean
-  lastSeenSecondsAgo: number | null
-  hostName: string
+  open: boolean
+  url: string | null
   message: string | null
 }
 
 export interface AudioJobView {
   job: AudioJob | null
   activeJob: AudioJob | null
-  bridge: AudioBridgeStatus
+  browser: AudioBrowserStatus
 }
 
 export type AudioSourceInput = { kind: 'asset', assetId: string } | { kind: 'text' }

@@ -8,6 +8,52 @@ use rusqlite::Connection;
 use std::{fs, path::Path};
 
 #[test]
+fn bound_book_document_is_available_to_audio_without_linking_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("data.sqlite3");
+    let database = Database::open(path.clone());
+    let source = directory.path().join("绑定原书.txt");
+    fs::write(&source, b"book content").unwrap();
+    let project = sample_project(&database, "绑定来源", "");
+    let project = database
+        .save_project_with_documents(
+            Some(&project.id),
+            project.input,
+            &[source.to_str().unwrap().to_owned()],
+        )
+        .unwrap();
+    let writing = sample_writing(&database, &project, "完整指导");
+    drop(database);
+    let database = Database::open(path);
+    let assets = database.list_assets(&project.id).unwrap();
+    let job = database
+        .start_audio_job(StartAudioJobInput {
+            project_id: project.id,
+            writing_version_id: writing.id,
+            source: AudioSourceInput::Asset {
+                asset_id: assets[0].id.clone(),
+            },
+            format: "deep_dive".into(),
+        })
+        .unwrap();
+    assert_eq!(job.source_label, "绑定原书.txt");
+    let job = database
+        .observe_audio_job(&job.id, job.run_id, &AudioObservation::LoginReady)
+        .unwrap();
+    let job = database
+        .observe_audio_job(
+            &job.id,
+            job.run_id,
+            &AudioObservation::NotebookCreated {
+                notebook_url: "https://notebook.google.com/notebook/source".into(),
+            },
+        )
+        .unwrap();
+    let snapshot = database.audio_source_snapshot(&job.id, job.run_id).unwrap();
+    assert_eq!(fs::read(snapshot).unwrap(), b"book content");
+}
+
+#[test]
 fn start_audio_job_accepts_frontend_source_json() {
     for source in [
         serde_json::json!({ "kind": "asset", "assetId": "document-1" }),
@@ -27,6 +73,21 @@ fn start_audio_job_accepts_frontend_source_json() {
             "kind": "asset"
         }))
         .is_err()
+    );
+}
+
+#[test]
+fn native_page_observation_accepts_the_actual_javascript_contract() {
+    let observation: AudioObservation = serde_json::from_value(serde_json::json!({
+        "kind": "notebook_created",
+        "notebookUrl": "https://notebook.google.com/notebook/task"
+    }))
+    .unwrap();
+    assert_eq!(
+        observation,
+        AudioObservation::NotebookCreated {
+            notebook_url: "https://notebook.google.com/notebook/task".into()
+        }
     );
 }
 
@@ -86,37 +147,37 @@ fn advance_to_download(database: &Database, job: &AudioJob) {
     let id = &job.id;
     let run = job.run_id;
     database
-        .observe_audio_job(id, run, &BridgeObservation::LoginReady)
+        .observe_audio_job(id, run, &AudioObservation::LoginReady)
         .unwrap();
     database
         .observe_audio_job(
             id,
             run,
-            &BridgeObservation::NotebookCreated {
+            &AudioObservation::NotebookCreated {
                 notebook_url: "https://notebook.google.com/notebook/task".into(),
             },
         )
         .unwrap();
     database
-        .observe_audio_job(id, run, &BridgeObservation::SourceSubmitted)
+        .observe_audio_job(id, run, &AudioObservation::SourceSubmitted)
         .unwrap();
     database
-        .observe_audio_job(id, run, &BridgeObservation::SourceReady)
+        .observe_audio_job(id, run, &AudioObservation::SourceReady)
         .unwrap();
     database
-        .observe_audio_job(id, run, &BridgeObservation::AudioConfigured)
+        .observe_audio_job(id, run, &AudioObservation::AudioConfigured)
         .unwrap();
     database
-        .observe_audio_job(id, run, &BridgeObservation::GenerationSubmitted)
+        .observe_audio_job(id, run, &AudioObservation::GenerationSubmitted)
         .unwrap();
     database
-        .observe_audio_job(id, run, &BridgeObservation::Generating)
+        .observe_audio_job(id, run, &AudioObservation::Generating)
         .unwrap();
     database
         .observe_audio_job(
             id,
             run,
-            &BridgeObservation::GenerationComplete {
+            &AudioObservation::GenerationComplete {
                 download_url: None,
                 suggested_filename: None,
             },
@@ -228,10 +289,10 @@ fn freezes_prompt_source_and_duration_and_rejects_a_second_book() {
     let writing = sample_writing(&database, &project, "第一版完整指导");
     let job = start_text_job(&database, &project, &writing);
     assert_eq!(job.id, start_text_job(&database, &project, &writing).id);
-    let bridge = database.audio_bridge_job().unwrap().unwrap();
+    let bridge = database.audio_execution_job().unwrap().unwrap();
     assert_eq!(bridge.prompt, "第一版完整指导");
     assert_eq!(bridge.target_duration_seconds, 1_500);
-    assert!(matches!(bridge.source, BridgeSourceData::Text { ref text } if text == "第一版资料"));
+    assert!(matches!(bridge.source, AudioSourceData::Text { ref text } if text == "第一版资料"));
 
     let project_file = project.workspace_path.clone();
     let input: ProjectInput = serde_json::from_value(serde_json::json!({
@@ -242,7 +303,7 @@ fn freezes_prompt_source_and_duration_and_rejects_a_second_book() {
     .unwrap();
     database.save_project(Some(&project.id), input).unwrap();
     assert_eq!(
-        database.audio_bridge_job().unwrap().unwrap().prompt,
+        database.audio_execution_job().unwrap().unwrap().prompt,
         "第一版完整指导"
     );
     assert_eq!(
@@ -270,7 +331,7 @@ fn freezes_prompt_source_and_duration_and_rejects_a_second_book() {
 }
 
 #[test]
-fn source_chunk_verifies_size_and_hash_and_rejects_cross_book_assets() {
+fn source_snapshot_verifies_size_and_hash_and_rejects_cross_book_assets() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("data.sqlite3"));
     let project = sample_project(&database, "原书任务", "资料");
@@ -304,27 +365,32 @@ fn source_chunk_verifies_size_and_hash_and_rejects_cross_book_assets() {
     }))
     .unwrap();
     let job = database.start_audio_job(input).unwrap();
-    let first = database.audio_source_chunk(&job.id, job.run_id, 0).unwrap();
-    assert_eq!(first.bytes.len(), 256 * 1024);
-    assert_eq!(first.name, "原书.docx");
-    assert_eq!(first.total_size, 600_000);
-    let second = database
-        .audio_source_chunk(&job.id, job.run_id, first.next_offset)
+    database
+        .observe_audio_job(&job.id, job.run_id, &AudioObservation::LoginReady)
         .unwrap();
-    assert_eq!(second.bytes.len(), 256 * 1024);
-    let last = database
-        .audio_source_chunk(&job.id, job.run_id, second.next_offset)
+    database
+        .observe_audio_job(
+            &job.id,
+            job.run_id,
+            &AudioObservation::NotebookCreated {
+                notebook_url: "https://notebook.google.com/notebook/source".into(),
+            },
+        )
         .unwrap();
-    let transferred = [first.bytes, second.bytes, last.bytes].concat();
-    assert_eq!(transferred, bytes);
-    assert_eq!(last.next_offset, last.total_size);
-    assert_eq!(last.sha256, hash_file(&source).unwrap().1);
+    let snapshot = database.audio_source_snapshot(&job.id, job.run_id).unwrap();
+    assert_eq!(fs::read(&snapshot).unwrap(), bytes);
     fs::write(&source, vec![b'b'; 600_000]).unwrap();
     let error = database
-        .audio_source_chunk(&job.id, job.run_id, second.next_offset)
-        .expect_err("同大小修改必须在传输完成前拒绝");
+        .audio_source_snapshot(&job.id, job.run_id)
+        .unwrap_err();
     assert!(error.contains("SHA-256"), "{error}");
-    assert!(database.audio_source_chunk(&job.id, job.run_id, 0).is_err());
+    assert_eq!(
+        fs::read(&snapshot).unwrap(),
+        bytes,
+        "原上传快照不得随原书改动"
+    );
+    database.control_audio_job(&job.id, "pause").unwrap();
+    assert!(database.audio_source_snapshot(&job.id, job.run_id).is_err());
 }
 
 #[test]
@@ -335,11 +401,7 @@ fn archives_verified_audio_once_and_keeps_project_asset_in_sync() {
     let writing = sample_writing(&database, &project, "指导");
     let job = start_text_job(&database, &project, &writing);
     advance_to_download(&database, &job);
-    let download = directory
-        .path()
-        .join("ShuyinAI")
-        .join(&job.id)
-        .join("audio.download");
+    let download = database.audio_download_path(&job.id, job.run_id).unwrap();
     fs::create_dir_all(download.parent().unwrap()).unwrap();
     fs::write(&download, wav_bytes()).unwrap();
     let completed = database
@@ -385,11 +447,7 @@ fn rejects_html_and_outside_task_paths_without_archiving() {
     assert!(database
         .complete_audio_download(&job.id, job.run_id, outside.to_str().unwrap())
         .is_err());
-    let html = directory
-        .path()
-        .join("ShuyinAI")
-        .join(&job.id)
-        .join("audio.m4a");
+    let html = database.audio_download_path(&job.id, job.run_id).unwrap();
     fs::create_dir_all(html.parent().unwrap()).unwrap();
     fs::write(&html, b"<html>not audio</html>").unwrap();
     assert!(database
@@ -410,7 +468,7 @@ fn restart_and_backup_recovery_pause_remote_task_for_manual_verification() {
     let writing = sample_writing(&database, &project, "指导");
     let job = start_text_job(&database, &project, &writing);
     database
-        .observe_audio_job(&job.id, job.run_id, &BridgeObservation::LoginReady)
+        .observe_audio_job(&job.id, job.run_id, &AudioObservation::LoginReady)
         .unwrap();
     let backup = database
         .create_backup(directory.path().to_str().unwrap())
@@ -442,7 +500,7 @@ fn verify_remote_allows_only_read_only_generation_observations() {
     let writing = sample_writing(&database, &project, "指导");
     let job = start_text_job(&database, &project, &writing);
     database
-        .observe_audio_job(&job.id, job.run_id, &BridgeObservation::LoginReady)
+        .observe_audio_job(&job.id, job.run_id, &AudioObservation::LoginReady)
         .unwrap();
     database.recover_audio_jobs().unwrap();
     let recovered = database.audio_job_data(&project.id).unwrap().job.unwrap();
@@ -456,16 +514,16 @@ fn verify_remote_allows_only_read_only_generation_observations() {
         ("preparing", "verify_remote")
     );
     for observation in [
-        BridgeObservation::SourceSubmitted,
-        BridgeObservation::AudioConfigured,
-        BridgeObservation::GenerationSubmitted,
+        AudioObservation::SourceSubmitted,
+        AudioObservation::AudioConfigured,
+        AudioObservation::GenerationSubmitted,
     ] {
         assert!(database
             .observe_audio_job(&resumed.id, resumed.run_id, &observation)
             .is_err());
     }
     let generating = database
-        .observe_audio_job(&resumed.id, resumed.run_id, &BridgeObservation::Generating)
+        .observe_audio_job(&resumed.id, resumed.run_id, &AudioObservation::Generating)
         .unwrap();
     assert_eq!(
         (generating.status.as_str(), generating.stage.as_str()),
@@ -475,7 +533,7 @@ fn verify_remote_allows_only_read_only_generation_observations() {
         .observe_audio_job(
             &resumed.id,
             resumed.run_id,
-            &BridgeObservation::GenerationComplete {
+            &AudioObservation::GenerationComplete {
                 download_url: None,
                 suggested_filename: None,
             },
@@ -488,6 +546,18 @@ fn verify_remote_allows_only_read_only_generation_observations() {
 
     database.control_audio_job(&resumed.id, "cancel").unwrap();
     let second = start_text_job(&database, &project, &writing);
+    database
+        .observe_audio_job(&second.id, second.run_id, &AudioObservation::LoginReady)
+        .unwrap();
+    database
+        .observe_audio_job(
+            &second.id,
+            second.run_id,
+            &AudioObservation::NotebookCreated {
+                notebook_url: "https://notebook.google.com/notebook/recovered".into(),
+            },
+        )
+        .unwrap();
     database.recover_audio_jobs().unwrap();
     let waiting = database.audio_job_data(&project.id).unwrap().job.unwrap();
     assert_eq!(
@@ -499,7 +569,7 @@ fn verify_remote_allows_only_read_only_generation_observations() {
         .observe_audio_job(
             &verify_only.id,
             verify_only.run_id,
-            &BridgeObservation::GenerationComplete {
+            &AudioObservation::GenerationComplete {
                 download_url: None,
                 suggested_filename: None,
             },
@@ -512,56 +582,108 @@ fn verify_remote_allows_only_read_only_generation_observations() {
 }
 #[test]
 fn asset_transaction_failure_keeps_audio_for_retry_without_duplicate_registration() {
-    let directory = tempfile::tempdir().unwrap();
-    let database = Database::open(directory.path().join("data.sqlite3"));
-    let project = sample_project(&database, "事务重试", "资料");
-    let writing = sample_writing(&database, &project, "指导");
-    let job = start_text_job(&database, &project, &writing);
-    advance_to_download(&database, &job);
-    let download = directory
-        .path()
-        .join("ShuyinAI")
-        .join(&job.id)
-        .join("audio.wav");
-    fs::create_dir_all(download.parent().unwrap()).unwrap();
-    fs::write(&download, wav_bytes()).unwrap();
-    database
+    for restart in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("data.sqlite3"));
+        let project = sample_project(&database, "事务重试", "资料");
+        let writing = sample_writing(&database, &project, "指导");
+        let job = start_text_job(&database, &project, &writing);
+        advance_to_download(&database, &job);
+        let download = database.audio_download_path(&job.id, job.run_id).unwrap();
+        fs::create_dir_all(download.parent().unwrap()).unwrap();
+        fs::write(&download, wav_bytes()).unwrap();
+        database
         .with_connection(|connection| {
             connection.execute_batch("CREATE TRIGGER fail_audio_asset BEFORE INSERT ON assets WHEN NEW.asset_type='audio' BEGIN SELECT RAISE(ABORT, 'forced audio failure'); END;").map_err(|error| error.to_string())
         })
         .unwrap();
-    assert!(database
-        .complete_audio_download(&job.id, job.run_id, download.to_str().unwrap())
-        .is_err());
-    let file = Path::new(&project.workspace_path)
-        .join("audio")
-        .join(format!("事务重试-音频-{}.wav", job.id));
-    assert!(
-        file.is_file(),
-        "the verified project audio must survive the failed transaction"
-    );
-    let waiting = database.audio_job_data(&project.id).unwrap().job.unwrap();
-    assert_eq!(waiting.status, "waiting_user");
-    assert_eq!(waiting.stage, "importing");
-    database
-        .with_connection(|connection| {
-            connection
-                .execute("DROP TRIGGER fail_audio_asset", [])
-                .map_err(|error| error.to_string())
-        })
-        .unwrap();
-    let resumed = database.control_audio_job(&waiting.id, "resume").unwrap();
-    let completed = database
-        .complete_audio_download(&resumed.id, resumed.run_id, download.to_str().unwrap())
-        .unwrap();
-    assert_eq!(completed.status, "succeeded");
-    assert_eq!(
+        assert!(database
+            .complete_audio_download(&job.id, job.run_id, download.to_str().unwrap())
+            .is_err());
+        let file = Path::new(&project.workspace_path)
+            .join("audio")
+            .join(format!("事务重试-音频-{}.wav", job.id));
+        assert!(
+            file.is_file(),
+            "the verified project audio must survive the failed transaction"
+        );
+        let waiting = database.audio_job_data(&project.id).unwrap().job.unwrap();
+        assert_eq!(waiting.status, "waiting_user");
+        assert_eq!(waiting.stage, "importing");
         database
-            .list_assets(&project.id)
+            .with_connection(|connection| {
+                connection
+                    .execute("DROP TRIGGER fail_audio_asset", [])
+                    .map_err(|error| error.to_string())
+            })
+            .unwrap();
+        if restart {
+            database.recover_audio_jobs().unwrap();
+        }
+        let resumed = database.control_audio_job(&waiting.id, "resume").unwrap();
+        let completed = database
+            .retry_audio_import(&resumed.id, resumed.run_id)
             .unwrap()
-            .iter()
-            .filter(|asset| asset.asset_type == "audio")
-            .count(),
-        1
-    );
+            .unwrap();
+        assert_eq!(completed.status, "succeeded");
+        assert_eq!(
+            database
+                .list_assets(&project.id)
+                .unwrap()
+                .iter()
+                .filter(|asset| asset.asset_type == "audio")
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn initial_and_legacy_extension_jobs_resume_without_remote_side_effects() {
+    for initial_stage in ["opening_site", "awaiting_extension"] {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("data.sqlite3"));
+        let project = sample_project(&database, "尚未开始", "资料");
+        let writing = sample_writing(&database, &project, "指导");
+        let original = start_text_job(&database, &project, &writing);
+        database
+            .with_connection(|connection| {
+                connection
+                    .execute(
+                        "UPDATE audio_jobs SET stage=?2 WHERE id=?1",
+                        params![original.id, initial_stage],
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        database.recover_audio_jobs().unwrap();
+        let resumed = database.control_audio_job(&original.id, "resume").unwrap();
+        assert_eq!(
+            (resumed.status.as_str(), resumed.stage.as_str()),
+            ("created", "opening_site")
+        );
+        assert!(resumed.run_id > original.run_id);
+        let ready = database
+            .observe_audio_job(&resumed.id, resumed.run_id, &AudioObservation::LoginReady)
+            .unwrap();
+        assert_eq!(ready.stage, "creating_notebook");
+    }
+}
+
+#[test]
+fn notebook_identity_requires_an_exact_official_notebook_url() {
+    assert!(validate_notebook_url(
+        "https://notebook.google.com/notebook/task-1"
+    ));
+    for url in [
+        "https://notebook.google.com/",
+        "https://notebook.google.com/notebook/task/other",
+        "https://notebook.google.com:444/notebook/task",
+        "https://notebook.google.com.evil.test/notebook/task",
+        "https://user@notebook.google.com/notebook/task",
+        "https://notebook.google.com/notebook/",
+    ] {
+        assert!(!validate_notebook_url(url), "{url}");
+    }
 }

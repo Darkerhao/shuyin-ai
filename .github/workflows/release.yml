@@ -119,20 +119,13 @@ jobs:
           npm ci
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy --target "$BUILD_TARGET"
           rustup override set 1.99.1
-      - name: Test and prepare Windows Native Messaging helper
-        if: runner.os == 'Windows'
-        run: |
-          cargo fmt --manifest-path src-tauri/browser-bridge/Cargo.toml --check
-          cargo clippy --manifest-path src-tauri/browser-bridge/Cargo.toml --locked --all-targets -- -D warnings
-          cargo test --manifest-path src-tauri/browser-bridge/Cargo.toml --locked
-          node scripts/build-audio-bridge.mjs --release --target "$BUILD_TARGET"
       - name: Rust checks and database tests on each platform
         run: |
           npm run check:rust
           npm run test:rust
           node --test tests/release-assets.test.mjs
           node --test tests/audio-package.test.mjs
-          node --test tests/audio-extension.test.mjs
+          node --test tests/audio-page.test.mjs
       - name: Build platform packages
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -149,13 +142,11 @@ jobs:
         shell: pwsh
         run: |
           $release = "src-tauri/target/$env:BUILD_TARGET/release"
-          if (!(Test-Path -LiteralPath "$release/browser-bridge.exe" -PathType Leaf)) { throw "Missing Native Messaging helper in release output" }
+          if (!(Test-Path -LiteralPath "$release/shuyin-ai.exe" -PathType Leaf)) { throw "Missing application binary" }
           $installer = Get-ChildItem -Path "$release/nsis" -Filter installer.nsi -Recurse | Select-Object -First 1
           if (!$installer) { throw "NSIS installer script was not generated" }
           $script = Get-Content -LiteralPath $installer.FullName -Raw
-          foreach ($entry in @("browser-bridge.exe", "browser-extension", "installer-hooks.nsh")) {
-            if ($script -notmatch [regex]::Escape($entry)) { throw "NSIS bundle is missing $entry" }
-          }
+          if ($script -notmatch 'installer-hooks.nsh') { throw "Missing obsolete-resource cleanup hook" }
       - name: Collect installers and archives
         run: node scripts/release-assets.mjs collect "$BUILD_PLATFORM" "$BUILD_TARGET" output/release
       - uses: actions/upload-artifact@v7.0.2

@@ -58,7 +58,6 @@ fn main() {
             "audio_job_snapshot",
             "start_audio_job",
             "control_audio_job",
-            "open_audio_extension_setup",
         ]),
     ))
     .expect("Tauri build configuration failed");

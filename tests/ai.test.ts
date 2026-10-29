@@ -14,12 +14,12 @@ import { emptyProject, type Asset } from '../src/types/project'
 import { emptyProvider, emptyPublishing, type ModelProvider, type WritingVersion } from '../src/types/ai'
 import type { AudioJob, AudioJobStatus, AudioJobView } from '../src/types/audio'
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), setAudioDuration: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
-vi.mock('../src/services/audio', () => ({ getAudioJobView: vi.fn(), startAudioJob: vi.fn(), controlAudioJob: vi.fn(), openAudioExtensionSetup: vi.fn() }))
+vi.mock('../src/services/audio', () => ({ getAudioJobView: vi.fn(), startAudioJob: vi.fn(), controlAudioJob: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn() }))
 const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模型', modelName: 'model', isDefault: true, credentialStatus: 'available' }
 const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'publishing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
 const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
-const bridge = { supported: true, connected: true, lastSeenSecondsAgo: 3, hostName: 'com.shuyin.desktop.audio', message: null }
+const browser = { supported: true, open: false, url: null, message: null }
 function makeAudioJob(status: AudioJobStatus, overrides: Partial<AudioJob> = {}): AudioJob {
   return {
     id: 'job-1', projectId: 'p1', projectTitle: '测试书', writingVersionId: 'v1', status, stage: 'generating', runId: 1,
@@ -31,7 +31,7 @@ function makeAudioJob(status: AudioJobStatus, overrides: Partial<AudioJob> = {})
 }
 function audioView(job: AudioJob | null = null): AudioJobView {
   const activeJob = job && !['succeeded', 'cancelled'].includes(job.status) ? job : null
-  return { job, activeJob, bridge }
+  return { job, activeJob, browser }
 }
 const wrappers: ReturnType<typeof mount>[] = []
 async function render(path = '/projects/p1/writing') {
@@ -63,9 +63,8 @@ beforeEach(() => {
   vi.mocked(projects.listAssets).mockResolvedValue([])
   vi.mocked(projects.chooseSourceDocument).mockResolvedValue(null)
   vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView())
-  vi.mocked(audio.startAudioJob).mockResolvedValue(audioView(makeAudioJob('created', { stage: 'awaiting_extension' })))
+  vi.mocked(audio.startAudioJob).mockResolvedValue(audioView(makeAudioJob('created', { stage: 'opening_site' })))
   vi.mocked(audio.controlAudioJob).mockResolvedValue(audioView(makeAudioJob('paused')))
-  vi.mocked(audio.openAudioExtensionSetup).mockResolvedValue(undefined)
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
@@ -456,18 +455,17 @@ describe('audio automation', () => {
   const audioAsset: Asset = { id: 'audio-1', projectId: 'p1', assetType: 'audio', filePath: 'D:/本期音频.m4a', originalName: '本期音频.m4a', fileSize: 2048, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
   const documentAsset: Asset = { id: 'doc-1', projectId: 'p1', assetType: 'document', filePath: 'D:/原书.pdf', originalName: '原书.pdf', fileSize: 4096, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
 
-  it('shows extension setup instead of the start form when the bridge is disconnected', async () => {
+  it('allows starting with an unopened internal browser and offers no extension setup', async () => {
     vi.mocked(audio.getAudioJobView).mockResolvedValue({
       job: null,
       activeJob: null,
-      bridge: { ...bridge, connected: false, message: '未检测到音频扩展。' },
+      browser,
     })
     const { wrapper } = await render()
     await tab(wrapper, '音频制作').trigger('click')
-    expect(wrapper.text()).toContain('Chrome 扩展尚未连接')
-    expect(wrapper.find('#start-audio-job').exists()).toBe(false)
-    await button(wrapper, '安装 / 检查 Chrome 扩展').trigger('click'); await flushPromises()
-    expect(audio.openAudioExtensionSetup).toHaveBeenCalledOnce()
+    expect(wrapper.find('#start-audio-job').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Chrome 扩展')
+    expect(wrapper.text()).toContain('应用内')
   })
 
   it('disables start when no original source is selected', async () => {
@@ -511,6 +509,28 @@ describe('audio automation', () => {
     expect(audio.startAudioJob).toHaveBeenCalledWith({
       projectId: 'p1', writingVersionId: 'v1', source: { kind: 'asset', assetId: 'doc-1' }, format: 'brief',
     })
+  })
+
+  it('prefers an already bound book file over notes and never asks to link it again', async () => {
+    vi.mocked(projects.getProject).mockResolvedValue(projectNotes())
+    vi.mocked(projects.listAssets).mockResolvedValue([documentAsset])
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    expect(wrapper.get('#audio-source').text()).toContain('原书.pdf')
+    await button(wrapper, '开始生成音频').trigger('click'); await flushPromises()
+    expect(audio.startAudioJob).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'asset', assetId: 'doc-1' } }))
+    expect(projects.chooseSourceDocument).not.toHaveBeenCalled()
+    expect(projects.linkAsset).not.toHaveBeenCalled()
+  })
+
+  it('keeps unavailable bound documents visible and blocks audio when no other source exists', async () => {
+    vi.mocked(projects.listAssets).mockResolvedValue([{ ...documentAsset, existsStatus: 'missing' }])
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    expect(wrapper.get('#start-audio-job').attributes('disabled')).toBeDefined()
+    const options = await openSelect(wrapper, '#audio-source')
+    const missing = options.findAll('[role="option"]').find(option => option.text().includes('原书.pdf'))!
+    expect(missing.text()).toContain('文件已丢失')
+    expect(missing.attributes('aria-disabled')).toBe('true')
+    expect(audio.startAudioJob).not.toHaveBeenCalled()
   })
 
   it('adds a document through the existing asset registry and selects it', async () => {

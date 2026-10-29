@@ -17,6 +17,128 @@ fn input(title: &str) -> ProjectInput {
 }
 
 #[test]
+fn bound_documents_persist_with_book_and_keep_source_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("data.sqlite3");
+    let db = Database::open(path.clone());
+    let mut sources = Vec::new();
+    for extension in ["pdf", "epub", "docx", "txt", "md"] {
+        let source = dir.path().join(format!("中文原书.{extension}"));
+        fs::write(&source, b"original book").unwrap();
+        sources.push(source.to_str().unwrap().to_owned());
+    }
+    let saved = db
+        .save_project_with_documents(None, input("带文件的新书"), &sources)
+        .unwrap();
+    let assets = db.list_assets(&saved.id).unwrap();
+    assert_eq!(assets.len(), 5);
+    assert!(assets
+        .iter()
+        .all(|asset| asset.asset_type == "document" && asset.exists_status == "available"));
+    assert_eq!(fs::read_dir(&saved.workspace_path).unwrap().count(), 0);
+    drop(db);
+    let db = Database::open(path);
+    assert_eq!(db.list_assets(&saved.id).unwrap().len(), 5);
+    fs::remove_file(&sources[0]).unwrap();
+    assert!(db
+        .list_assets(&saved.id)
+        .unwrap()
+        .iter()
+        .any(|asset| asset.exists_status == "missing"));
+    let replacement = dir.path().join("重新定位.pdf");
+    fs::write(&replacement, b"relocated book").unwrap();
+    let missing_id = &assets
+        .iter()
+        .find(|asset| asset.original_name.ends_with(".pdf"))
+        .unwrap()
+        .id;
+    db.link_asset(&saved.id, replacement.to_str().unwrap(), Some(missing_id))
+        .unwrap();
+    assert!(db
+        .list_assets(&saved.id)
+        .unwrap()
+        .iter()
+        .all(|asset| asset.exists_status == "available"));
+    db.delete_project(&saved.id).unwrap();
+    assert_eq!(fs::read(replacement).unwrap(), b"relocated book");
+    for source in &sources[1..] {
+        assert_eq!(fs::read(source).unwrap(), b"original book");
+    }
+}
+
+#[test]
+fn bound_documents_roll_back_new_and_existing_books_on_invalid_or_duplicate_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("data.sqlite3"));
+    let source = dir.path().join("原书.pdf");
+    fs::write(&source, b"original").unwrap();
+    let source = source.to_str().unwrap().to_owned();
+    let video = dir.path().join("成片.mp4");
+    fs::write(&video, b"video").unwrap();
+    for invalid in [
+        dir.path().join("丢失.pdf").to_str().unwrap().to_owned(),
+        video.to_str().unwrap().to_owned(),
+        source.clone(),
+    ] {
+        assert!(db
+            .save_project_with_documents(None, input("保存失败"), &[source.clone(), invalid])
+            .is_err());
+        assert!(db.list_projects("", "").unwrap().is_empty());
+        let root = PathBuf::from(db.workspace_settings().unwrap().root).join("projects");
+        assert_eq!(fs::read_dir(root).unwrap().count(), 0);
+    }
+    let book = db
+        .save_project_with_documents(None, input("原书名"), std::slice::from_ref(&source))
+        .unwrap();
+    let extra = dir.path().join("补充.md");
+    fs::write(&extra, b"notes").unwrap();
+    assert!(db
+        .save_project_with_documents(
+            Some(&book.id),
+            input("不应写入"),
+            &[extra.to_str().unwrap().to_owned(), source.clone()]
+        )
+        .is_err());
+    assert_eq!(db.get_project(&book.id).unwrap().input.title, "原书名");
+    assert_eq!(db.list_assets(&book.id).unwrap().len(), 1);
+    let updated = db
+        .save_project_with_documents(
+            Some(&book.id),
+            input("更新成功"),
+            &[extra.to_str().unwrap().to_owned()],
+        )
+        .unwrap();
+    assert_eq!(updated.input.title, "更新成功");
+    assert_eq!(updated.workspace_path, book.workspace_path);
+    assert_eq!(db.list_assets(&book.id).unwrap().len(), 2);
+    assert_eq!(fs::read(source).unwrap(), b"original");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn bound_documents_roll_back_when_source_access_is_denied() {
+    use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("data.sqlite3"));
+    let source = dir.path().join("锁定.pdf");
+    fs::write(&source, b"book").unwrap();
+    let locked = OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&source)
+        .unwrap();
+    assert!(db
+        .save_project_with_documents(
+            None,
+            input("无法访问"),
+            &[source.to_str().unwrap().to_owned()]
+        )
+        .is_err());
+    assert!(db.list_projects("", "").unwrap().is_empty());
+    drop(locked);
+}
+
+#[test]
 fn project_directories_use_book_titles_and_keep_existing_files_on_name_collisions() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(dir.path().join("data.sqlite3"));
