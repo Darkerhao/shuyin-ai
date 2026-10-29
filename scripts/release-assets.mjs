@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { log } from 'node:console'
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
@@ -50,6 +50,28 @@ function nonEmpty(file) {
     if (error.code === 'ENOENT') throw new Error(`缺少发布产物：${file}`, { cause: error })
     throw error
   }
+}
+
+export function createMacDmg(cwd, target, run = (command, args) => execFileSync(command, args, { stdio: 'inherit' })) {
+  const bundle = join(cwd, 'src-tauri/target', target, 'release/bundle')
+  const app = singleBundle(join(bundle, 'macos'), '.app')
+  const name = basename(app, '.app')
+  const directory = join(bundle, 'dmg')
+  const image = join(directory, `${name}.dmg`)
+  const staging = mkdtempSync(join(tmpdir(), 'shuyin-dmg-'))
+  try {
+    // Build from a directory: no Finder customization or explicit attach/detach cycle.
+    run('ditto', [app, join(staging, basename(app))])
+    run('ln', ['-s', '/Applications', join(staging, 'Applications')])
+    mkdirSync(directory, { recursive: true })
+    run('hdiutil', ['create', '-volname', name, '-srcfolder', staging,
+      '-fs', 'HFS+', '-format', 'UDZO', '-ov', image])
+    run('hdiutil', ['verify', image])
+    nonEmpty(image)
+  } finally {
+    rmSync(staging, { recursive: true, force: true })
+  }
+  return image
 }
 
 export function collectAssets(cwd, platform, target, destination) {
@@ -153,9 +175,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const [command, ...args] = process.argv.slice(2)
   let result
   if (command === 'collect') result = collectAssets(process.cwd(), ...args)
+  else if (command === 'dmg') result = createMacDmg(process.cwd(), ...args)
   else if (command === 'verify') result = verifyAssets(...args, releaseNotes(process.cwd()))
   else if (command === 'publish') result = publishAssets(...args, releaseNotes(process.cwd(), args[2]))
   else if (command === 'notes') { log(releaseNotes(process.cwd())); process.exit(0) }
-  else throw new Error('用法：release-assets.mjs collect <平台> <target> <目录> | verify <目录> <版本> | publish <目录> <版本> <提交>')
+  else throw new Error('用法：release-assets.mjs dmg <target> | collect <平台> <target> <目录> | verify <目录> <版本> | publish <目录> <版本> <提交>')
   log(JSON.stringify(result))
 }

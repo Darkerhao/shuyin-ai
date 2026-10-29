@@ -19,6 +19,10 @@
 
 平台默认配置分别位于 `src-tauri/tauri.windows.conf.json`、`tauri.macos.conf.json`、`tauri.linux.conf.json`。Linux 产品名为 `Shuyin AI`，使 DEB/RPM 包名为 `shuyin-ai`；应用内界面和标识符保留。macOS ICNS 从已有 SVG 生成，当前配置 ad-hoc 签名（`signingIdentity: "-"`），未接入 Developer ID 与公证；Windows 也未配置签名证书。首次分发仍需完成真实系统上的安装与信任提示验收。
 
+macOS CI 显式使用 `--bundles app`，由 Tauri 构建并签名 APP、生成 `.app.tar.gz` 更新包及签名，再运行 `node scripts/release-assets.mjs dmg <target>`。脚本通过 `ditto` 将 APP 保留元数据地复制到临时目录，加入 `/Applications` 快捷入口，用 `hdiutil create -srcfolder ... -format UDZO` 直接生成压缩 DMG，并执行 `hdiutil verify`；任一步失败均中止发布，临时目录始终清理。最终文件继续通过原 collect 流程按平台和版本命名。CI 不再调用 Tauri 的 DMG 脚本，不设置 Finder 背景或图标位置；本地默认 Tauri 构建配置仍生成 APP 和 DMG。
+
+实现依据已核对锁定的 CLI 2.12.4 官方源码：[DMG 的挂载和三次卸载逻辑](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.4/crates/tauri-bundler/src/bundle/macos/dmg/bundle_dmg)、[CI 仅跳过 Finder 脚本](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.4/crates/tauri-bundler/src/bundle/macos/dmg/mod.rs)、[APP 目标仍生成更新归档](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.4/crates/tauri-bundler/src/bundle.rs)。
+
 本项目使用 Tauri 官方 Updater。应用从 GitHub Release 的 `latest.json` 获取版本和更新内容，按 `windows-x86_64`、`darwin-aarch64`、`darwin-x86_64`、`linux-x86_64` 选择更新包，下载后使用固定公钥校验签名。Windows 使用 NSIS EXE；macOS 使用 Tauri 生成的 APP TAR.GZ，不能用手工 ZIP 替代；Linux 使用 AppImage。
 
 ## 更新签名与首次启用
@@ -92,6 +96,7 @@ main 与 dev 的版本一致，但提交 SHA 不同，dev 未发布的业务改�
 - 将包含本工作流的提交推送到 main 即可触发，不需要额外创建 PR 或标签。仅保存在本地不会执行，旧推送不会自动补跑；工作流没有手动触发入口。
 - 构建或产物上传失败：远端版本未递增，可选择 **Re-run failed jobs** 复用原版本与成功平台产物；如果 main 已前进，选择 **Re-run all jobs** 或等待下一次合并，以构建最新代码。
 - 如果修复涉及工作流或脚本代码，必须把修复提交推送到 main，启动新运行；重跑旧运行仍使用旧代码。Windows 的 Git Bash 中，GNU tar 会把绝对归档路径中的 `C:` 解释为远程主机并报 `Cannot connect to C: resolve failed`；归档脚本及测试统一通过工作目录和相对归档文件名执行，NSIS 打包不受此调整影响。
+- macOS 出现 `bundle_dmg.sh` / `hdiutil: couldn't eject ... Resource busy`：应用编译与 APP 签名可能已完成，失败发生在临时镜像卸载阶段。2026-10-29 的修复移除了 CI 中显式挂载、修改、卸载镜像的流程。Tauri CLI 2.12.4 的内置脚本对此错误最多尝试三次；`CI=true` 仅跳过 Finder AppleScript，仍会挂载和卸载镜像，因此重复设置 CI 或增加同样的重试不能移除此失败点。日志未表明具体占用进程；缺少 Apple 公证变量的警告不是本次退出原因。修复需要合入 main 后的新运行验证，Windows 上的命令替身测试不等同于真实 DMG 构建。
 - main 前进或远端拒绝写入：main/dev/标签均不由本次更新，重新运行会重新读取当前版本。已上传 artifact 是失败运行的候选产物，以**整个任务成功并存在对应标签**作为交付依据。
 - dev 冲突：自动中止 cherry-pick，保留远端分支。检查 dev 上的版本文件，把版本字段与已发布版本对齐并保留其他开发内容，再重跑；不通过覆盖 dev 解决冲突。
 - 同步成功而 Release 上传/公开失败：选择原运行的 **Re-run failed jobs**，只重跑 publish，使用保留的全部平台产物恢复草稿；不再次增加版本。此时 main/dev/标签已经同步，Git 分支与 GitHub Release API 不属于同一事务。
