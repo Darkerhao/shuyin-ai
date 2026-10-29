@@ -7,6 +7,11 @@
   }
   const exact = (root, text) => [...root.querySelectorAll('*')].filter(e => e.children.length === 0 && e.textContent.trim() === text && visible(e))
   const clean = text => text.replace(/\u200b/g, '').replace(/\r\n/g, '\n').trim()
+  const previewVideo = () => {
+    if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) throw new Error('请先处理官方页弹窗，再核对视频。')
+    const tab = unique([...document.querySelectorAll('[class^="tabItem-"]')].filter(e => visible(e) && e.textContent.trim() === '预览视频'), '视频预览入口已变化。')
+    if (![...tab.classList].some(name => name.startsWith('active-'))) tab.click()
+  }
   const modal = () => unique([...document.querySelectorAll('[role="dialog"]')].filter(e => visible(e) && /[横竖]封面预览（[43]:[34]）/.test(e.innerText)), '封面窗口未就绪，请人工接管。')
   const tile = ratio => {
     if (!['landscape', 'portrait'].includes(ratio)) throw new Error('不支持的封面比例。')
@@ -29,7 +34,8 @@
     const titleInput = unique([...document.querySelectorAll('input[placeholder="填写作品标题，为作品获得更多流量"]')].filter(visible), '标题控件已变化。')
     const descriptionInput = unique([...document.querySelectorAll('[contenteditable="true"][data-slate-editor="true"].editor-comp-publish')].filter(visible), '简介控件已变化。')
     if (action === 'read') {
-      const videos = [...document.querySelectorAll('video')]
+      if (payload.video) previewVideo()
+      const videos = [...document.querySelectorAll('video')].filter(v => !v.closest('[role="dialog"]'))
       return {
         ok: true,
         title: titleInput.value,
@@ -75,7 +81,7 @@
       return { ok: true, available: true, loaded, options, selected: name }
     }
     if (action === 'previewVideo') {
-      unique([...document.querySelectorAll('[class^="tabItem-"]')].filter(e => visible(e) && e.textContent.trim() === '预览视频'), '视频预览入口已变化。').click()
+      previewVideo()
       return { ok: true }
     }
     if (action === 'fill') {
