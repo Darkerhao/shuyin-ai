@@ -100,6 +100,69 @@ fn stopped_jobs_can_resume_but_cannot_take_over_another_active_job() {
 }
 
 #[test]
+fn stopped_task_survives_restart_and_resumes_download_without_regenerating() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("data.sqlite3");
+    let database = Database::open(path.clone());
+    let project = sample_project(&database, "停止后继续", "原书资料");
+    let writing = sample_writing(&database, &project, "完整指导");
+    let original = start_text_job(&database, &project, &writing);
+    advance_to_download(&database, &original);
+    let stopped = database.control_audio_job(&original.id, "cancel").unwrap();
+    drop(database);
+
+    let database = Database::open(path);
+    database.recover_audio_jobs().unwrap();
+    let snapshot = database.audio_job_data(&project.id).unwrap();
+    assert!(snapshot.active_job.is_none());
+    assert_eq!(snapshot.job.unwrap().status, "cancelled");
+    let resumed = database.control_audio_job(&original.id, "resume").unwrap();
+    assert_eq!(resumed.id, original.id);
+    assert_eq!(resumed.status, "downloading");
+    assert_eq!(resumed.stage, "downloading");
+    assert_eq!(resumed.notebook_url, stopped.notebook_url);
+    assert_eq!(resumed.submitted_at, stopped.submitted_at);
+    assert!(resumed.submitted_at.is_some());
+    assert!(resumed.run_id > stopped.run_id);
+    let execution = database.audio_execution_job().unwrap().unwrap();
+    assert_eq!(execution.prompt, "完整指导");
+    assert!(matches!(execution.source, AudioSourceData::Text { ref text } if text == "原书资料"));
+    assert!(database
+        .observe_audio_job(
+            &resumed.id,
+            resumed.run_id,
+            &AudioObservation::GenerationSubmitted
+        )
+        .is_err());
+    assert!(database
+        .audio_download_started(&original.id, original.run_id)
+        .is_err());
+
+    database
+        .audio_download_started(&resumed.id, resumed.run_id)
+        .unwrap();
+    let download = database
+        .audio_download_path(&resumed.id, resumed.run_id)
+        .unwrap();
+    fs::create_dir_all(download.parent().unwrap()).unwrap();
+    fs::write(&download, wav_bytes()).unwrap();
+    let completed = database
+        .complete_audio_download(&resumed.id, resumed.run_id, download.to_str().unwrap())
+        .unwrap();
+    assert_eq!(completed.id, original.id);
+    assert_eq!(completed.status, "succeeded");
+    assert_eq!(
+        database
+            .list_assets(&project.id)
+            .unwrap()
+            .iter()
+            .filter(|asset| asset.asset_type == "audio")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn official_notebook_domains_can_be_saved_and_reopened() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("data.sqlite3");
