@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import process from 'node:process'
 import test from 'node:test'
 import { URL } from 'node:url'
-import { assetNames, collectAssets, publishAssets, verifyAssets, releaseNotes } from '../scripts/release-assets.mjs'
+import { assetNames, collectAssets, createMacDmg, publishAssets, verifyAssets, releaseNotes } from '../scripts/release-assets.mjs'
 
 const notes = '- 新增应用内更新\n- 修复封面导出'
 
@@ -105,11 +105,58 @@ test('Linux TAR.GZ contains the AppImage instead of an unbundled binary', t => {
   assert.deepEqual(execFileSync('tar', ['-xOf', archive, contents], { cwd: output }), readFileSync(join(output, contents)))
 })
 
-test('macOS ZIP preserves the application bundle', { skip: process.platform !== 'darwin' }, t => {
-  const { directory, root, output } = buildFixture(t, [['dmg', '书引 AI_1.2.3_aarch64.dmg'], ['macos', '书引 AI.app.tar.gz'], ['macos', '书引 AI.app.tar.gz.sig']])
+test('macOS DMG creation avoids explicit image mounting and cleans its staging directory', t => {
+  const { directory, root } = buildFixture(t, [])
+  const app = join(root, 'bundle/macos/书引 AI.app')
+  mkdirSync(app, { recursive: true })
+  const calls = []
+  let staging
+  const image = createMacDmg(directory, 'test-target', (command, args) => {
+    calls.push([command, args])
+    if (command === 'ditto') {
+      assert.equal(args[0], app)
+      assert.equal(basename(args[1]), '书引 AI.app')
+    } else if (command === 'ln') {
+      assert.deepEqual(args.slice(0, 2), ['-s', '/Applications'])
+      assert.equal(basename(args[2]), 'Applications')
+    } else if (command === 'hdiutil' && args[0] === 'create') {
+      staging = args[args.indexOf('-srcfolder') + 1]
+      assert.equal(existsSync(staging), true)
+      assert.equal(args[args.indexOf('-format') + 1], 'UDZO')
+      writeFileSync(args.at(-1), 'test disk image')
+    }
+  })
+  assert.deepEqual(calls.map(([command, args]) => [command, args[0]]), [
+    ['ditto', app], ['ln', '-s'], ['hdiutil', 'create'], ['hdiutil', 'verify'],
+  ])
+  assert.deepEqual(calls.at(-1)[1], ['verify', image])
+  assert.equal(existsSync(staging), false)
+  assert.equal(readFileSync(image, 'utf8'), 'test disk image')
+})
+
+test('macOS image creation and verification failures stop packaging and clean staging', t => {
+  for (const failure of ['create', 'verify']) {
+    const { directory, root } = buildFixture(t, [])
+    mkdirSync(join(root, 'bundle/macos/书引 AI.app'), { recursive: true })
+    let staging
+    assert.throws(() => createMacDmg(directory, 'test-target', (command, args) => {
+      if (command !== 'hdiutil') return
+      if (args[0] === 'create') staging = args[args.indexOf('-srcfolder') + 1]
+      if (args[0] === failure) throw new Error(`hdiutil ${failure} failed`)
+      writeFileSync(args.at(-1), 'test disk image')
+    }), new RegExp(`hdiutil ${failure} failed`))
+    assert.equal(existsSync(staging), false)
+  }
+})
+
+test('macOS DMG and ZIP preserve the application bundle', { skip: process.platform !== 'darwin' }, t => {
+  const { directory, root, output } = buildFixture(t, [['macos', '书引 AI.app.tar.gz'], ['macos', '书引 AI.app.tar.gz.sig']])
   const executable = join(root, 'bundle/macos/书引 AI.app/Contents/MacOS')
   mkdirSync(executable, { recursive: true })
   writeFileSync(join(executable, 'shuyin-ai'), 'test executable', { mode: 0o755 })
+  const image = createMacDmg(directory, 'test-target')
+  const info = execFileSync('hdiutil', ['imageinfo', '-plist', image], { encoding: 'utf8' })
+  assert.match(info, /<string>UDZO<\/string>/)
   collectAssets(directory, 'macos-arm64', 'test-target', output)
   const contents = execFileSync('unzip', ['-l', join(output, 'shuyin-ai-1.2.3-macos-arm64.zip')], { encoding: 'utf8' })
   assert.match(contents, /Contents\/MacOS\/shuyin-ai/)

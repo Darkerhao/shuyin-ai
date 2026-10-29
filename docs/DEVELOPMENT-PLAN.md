@@ -1,5 +1,13 @@
 # 书引 AI 开发计划与验收标准
 
+## macOS CI DMG 打包修复（2026-10-29）
+
+日志显示 Intel release 编译、APP 生成与 ad-hoc 签名完成，Tauri DMG 脚本卸载临时磁盘连续三次返回 `Resource busy` 后失败；具体占用进程无法从现有日志确定。已核对锁定的 CLI 2.12.4 源码，`CI=true` 只跳过 Finder 脚本，未移除该挂载/卸载流程。macOS 两种架构的 CI 统一改为 Tauri `--bundles app`，再由现有发布资源脚本暂存 APP 与 Applications 入口，直接创建 UDZO DMG 并校验。保留 Tauri 更新归档、签名及原有分发文件契约；不增加依赖、重试或强制卸载逻辑。
+
+修改 `.github/workflows/release.yml`、`scripts/release-assets.mjs`、`tests/release-assets.test.mjs`，同步 `RELEASE.md` 和本计划；数据库仍为 v13，无迁移或手动升版，按 fix/patch 处理。验收覆盖显式挂载调用移除、创建/校验失败中止、临时目录清理和四平台实际构建参数；macOS 原生用例在两个 macOS runner 上创建并校验真实 DMG 后继续测试归档。
+
+本机 `node --test tests/release-assets.test.mjs`：15 项通过、1 项 macOS 原生用例按平台跳过；完整 `npm run test:release`：60 项通过、1 项跳过、0 失败，耗时约 214 秒；前两次因同步 Git 集成测试长时间没有输出被中断，最终在限制外运行同一命令完成。`npm run lint`、`.tools/actionlint/actionlint.exe .github/workflows/release.yml`、`git diff --check` 通过。通过 Git Bash 对工作流实际脚本进行命令替身验证，macOS Intel/ARM64 使用 APP 目标，Windows/Linux 保留原构建参数。真实 macOS 打包与安装未在 Windows 本机执行，需修复合入 main 后的新 CI 运行确认；重跑旧运行不会使用本次修改。未提交、推送或发布，已有暂存工作保留。
+
 ## 查看音频网站黑屏修复（2026-10-29）
 
 已定位到官方入口重定向域名遗漏及同任务空白窗口未重新导航：本机请求从 notebook.google.com 经 notebooklm.google 到 notebook.google/?location=unsupported；旧白名单取消跳转，查看网站只显示原空白窗口。补齐宿主/页面/数据库的精确官方域名，恢复空白窗口，并在首次导航前有限等待；地区限制明确提示、登录页保留、提交未知不重发。范围为 fix/patch，无迁移、依赖或版本字段变化。

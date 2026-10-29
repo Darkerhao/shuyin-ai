@@ -136,7 +136,14 @@ jobs:
             exit 1
           fi
           export VITE_RELEASE_NOTES="$(node scripts/release-assets.mjs notes)"
-          npm run desktop:build -- --target "$BUILD_TARGET" -- --locked
+          bundle_args=()
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            bundle_args=(--bundles app)
+          fi
+          npm run desktop:build -- --target "$BUILD_TARGET" "${bundle_args[@]}" -- --locked
+      - name: Create and verify macOS disk image
+        if: runner.os == 'macOS'
+        run: node scripts/release-assets.mjs dmg "$BUILD_TARGET"
       - name: Verify Windows automatic-audio bundle
         if: runner.os == 'Windows'
         shell: pwsh
