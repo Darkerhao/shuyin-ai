@@ -17,6 +17,21 @@ function textJob(overrides = {}) {
   }
 }
 
+test('recorded notebook identity survives official domain redirects', async () => {
+  for (const host of ['notebook.google', 'notebooklm.google', 'notebooklm.google.com']) {
+    const { core } = page('', `https://${host}/notebook/notebook-1`)
+    const result = await core.runStep(textJob({ stage: 'opening_site', notebookUrl: 'https://notebook.google.com/notebook/notebook-1' }), {})
+    assert.equal(result.kind, 'login_ready')
+  }
+})
+
+test('notebook identity rejects lookalike domains and different notebook IDs', async () => {
+  for (const url of ['https://notebook.google.evil.test/notebook/notebook-1', 'https://notebook.google/notebook/other']) {
+    const { core } = page('', url)
+    await assert.rejects(core.runStep(textJob({ stage: 'submitting', notebookUrl: 'https://notebook.google.com/notebook/notebook-1' }), {}), error => error.code === 'wrong_notebook')
+  }
+})
+
 test('creating a notebook writes and reads back the required title before reporting success', async () => {
   const job = textJob({ stage: 'creating_notebook', projectTitle: '测试书', notebookUrl: 'https://notebook.google.com/notebook/task-notebook' })
   const { core, document } = page(`

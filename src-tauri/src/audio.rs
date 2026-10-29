@@ -151,11 +151,12 @@ impl AudioAutomation {
                     .map_err(|e| e.to_string())?;
                 window.navigate(url).map_err(|e| e.to_string())?;
                 *self.window_task.lock().map_err(|e| e.to_string())? = Some(job.id.clone());
-            } else if job.notebook_url.is_some()
-                && window.url().is_ok_and(|current| {
-                    current != url && current.host_str() != Some("accounts.google.com")
-                })
-            {
+            } else if window.url().is_ok_and(|current| {
+                current.as_str() == "about:blank"
+                    || (job.notebook_url.is_some()
+                        && current != url
+                        && current.host_str() != Some("accounts.google.com"))
+            }) {
                 window.navigate(url).map_err(|e| e.to_string())?;
             }
             window.show().map_err(|e| e.to_string())?;
@@ -311,12 +312,23 @@ impl AudioAutomation {
             .get_webview_window(LABEL)
             .ok_or("任务网站已关闭，请点击继续跟进重新打开。")?;
         let url = window.url().map_err(|e| e.to_string())?;
+        // WebView2 starts at about:blank before its first navigation commits.
+        // The existing stage timeout bounds this wait if navigation fails.
+        if url.as_str() == "about:blank" {
+            return Ok(2);
+        }
         if !allowed_url(&url) {
             return Err("当前页面不属于音频任务的官方网站。".into());
         }
         if url.host_str() == Some("accounts.google.com") {
             database.observe_audio_job(&job.id, job.run_id, &AudioObservation::LoginRequired)?;
             return Ok(10);
+        }
+        if url
+            .query_pairs()
+            .any(|(key, value)| key == "location" && value == "unsupported")
+        {
+            return Err("Notebook 网站提示当前网络所在地区不受支持，请查看网站核对后继续。".into());
         }
         if self
             .window_task
@@ -452,7 +464,12 @@ fn notebook_url(url: &tauri::Url) -> bool {
     url.scheme() == "https"
         && matches!(
             url.host_str(),
-            Some("notebook.google.com" | "notebooklm.google.com")
+            Some(
+                "notebook.google.com"
+                    | "notebooklm.google.com"
+                    | "notebook.google"
+                    | "notebooklm.google"
+            )
         )
         && url.port_or_known_default() == Some(443)
         && url.username().is_empty()
@@ -587,6 +604,8 @@ mod tests {
         for url in [
             HOME,
             "https://notebooklm.google.com/notebook/a",
+            "https://notebooklm.google/?location=unsupported",
+            "https://notebook.google/?location=unsupported",
             "https://accounts.google.com/signin",
         ] {
             assert!(allowed_url(&url.parse().unwrap()));
@@ -597,6 +616,10 @@ mod tests {
             "https://evil.test/?notebook.google.com",
             "https://notebook.google.com:444",
             "https://user@notebook.google.com",
+            "https://notebook.google.evil.test",
+            "https://notebooklm.google:444",
+            "https://user@notebook.google",
+            "about:blank",
         ] {
             assert!(!allowed_url(&url.parse().unwrap()));
         }

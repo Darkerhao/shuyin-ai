@@ -25,6 +25,8 @@ SQLite v13 仍是唯一持久状态。原书通过大小/SHA-256 冻结副本和
 
 新任务从 opening_site 开始，旧等待扩展任务继续时归一；已开始任务重启先核对，提交不明不重复生成。网站关闭只隐藏，主工作台退出销毁网站窗口。每阶段有限等待，登录由用户操作，网站资料独立存于 audio-webview。
 
+2026-10-29 黑屏修复：实测入口重定向经过 notebooklm.google 到 notebook.google，宿主、页面和数据库补齐这两个精确官方域名。查看网站/继续会恢复同任务的 about:blank，首次导航提交前沿用阶段超时等待，Google 登录页保持原状。location=unsupported 转为明确地区限制提示并保留任务。无新增依赖或迁移，回归证据见 IN-APP-AUDIO-VERIFICATION.md 的黑屏修复记录。
+
 扩展/helper/管道/启动注册及旧打包资源已移除；NSIS 按精确宿主路径清理旧注册和指定随包文件。windows-core 0.62.2 由既有间接依赖显式声明，没有新增库版本。真实 Google 和正式安装升级仍待验收；详见 NOTEBOOKLM-IN-APP-AUDIO-DESIGN.md、IN-APP-AUDIO-VERIFICATION.md。
 
 ## 音频时长贯通（2026-10-27）

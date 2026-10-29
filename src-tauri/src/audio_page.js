@@ -251,7 +251,7 @@
     try {
       const a = new URL(recorded)
       const b = new URL(current)
-      const allowed = new Set(['notebook.google.com', 'notebooklm.google.com'])
+      const allowed = new Set(['notebook.google.com', 'notebooklm.google.com', 'notebook.google', 'notebooklm.google'])
       return [a, b].every(url => url.protocol === 'https:' && !url.username && !url.password && (!url.port || url.port === '443') && allowed.has(url.hostname) && isNotebookPath(url.pathname.replace(/\/$/, ''))) && a.pathname.replace(/\/$/, '') === b.pathname.replace(/\/$/, '')
     } catch {
       return false

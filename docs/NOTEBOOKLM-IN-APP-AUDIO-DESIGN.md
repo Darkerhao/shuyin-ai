@@ -55,7 +55,8 @@ flowchart LR
 ## 4. 窗口与页面操作
 
 - 窗口标识 audio-notebook，独立资料目录为应用数据下的 audio-webview，不导入系统 Chrome 会话。
-- 顶层只允许 HTTPS、443、无用户名密码的精确 notebook.google.com、notebooklm.google.com 和 accounts.google.com；下载期间另仅允许已绑定的精确下载 URL。
+- 顶层只允许 HTTPS、443、无用户名密码的精确 notebook.google.com、notebooklm.google.com、notebook.google、notebooklm.google 和 accounts.google.com；下载期间另仅允许已绑定的精确下载 URL。页面和数据库的笔记本身份校验使用同一组 Notebook 域名，并保留路径 ID 核对。
+- WebView2 首次提交导航前的 about:blank 仅作为有阶段超时限制的等待状态，不放入导航白名单；同一任务点击查看网站或继续时可重新导航空白窗口。已进入 Google 登录页时保留原页。网站返回 location=unsupported 时显示地区不支持并等待用户核对，不重复提交。
 - 登录页只供用户操作，不执行音频脚本。新窗口请求当前拒绝；真实登录若依赖弹窗，须单独实现与验收，不能声称已经支持。
 - 远程窗口没有主工作台 capability、业务 IPC 或任意本机路径权限；主工作台显示完整网址。
 - 使用宿主 Runtime.evaluate(awaitPromise) 获取结构化结果，单次调用上限 30 秒。动态参数通过 JSON 编码。
