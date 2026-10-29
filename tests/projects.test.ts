@@ -23,15 +23,17 @@ vi.mock('../src/services/projects', async (original) => ({
 const saved: Project = { ...emptyProject(), id: 'p1', title: '活着', author: '余华', workspacePath: 'D:/books/p1', createdAt: '2026-10-23T00:00:00Z', updatedAt: '2026-10-23T00:00:00Z', archivedAt: null }
 const asset: Asset = { id: 'a1', projectId: 'p1', assetType: 'video', filePath: 'D:/视频.mp4', originalName: '视频.mp4', fileSize: 1000, modifiedAt: 1, existsStatus: 'missing', createdAt: saved.createdAt }
 const wrappers: ReturnType<typeof mount>[] = []
-async function render(path: string) {
+async function render(path: string, { pendingNavigation = false } = {}) {
   const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/', redirect: '/projects' },
     { path: '/projects', component: ProjectsPage }, { path: '/projects/new', component: ProjectPage },
     { path: '/settings/models', component: { template: '<p>模型设置</p>' } },
     { path: '/projects/:id', component: ProjectPage, props: true }, { path: '/projects/:id/writing', component: { template: '<p>发布文案与音频提示词</p>' } }, { path: '/assets', component: ProjectAssets, props: { projectId: 'p1' } }, { path: '/settings', component: SettingsPage },
   ] })
-  await router.push(path); await router.isReady()
+  if (pendingNavigation) router.options.history.replace(path)
+  else await router.push(path)
   const wrapper = mount(App, { attachTo: document.body, global: { plugins: [router] } })
-  wrappers.push(wrapper); await flushPromises()
+  wrappers.push(wrapper); await router.isReady(); await flushPromises()
   return { wrapper, router }
 }
 function button(wrapper: ReturnType<typeof mount>, text: string) { return wrapper.findAll('button').find(b => b.text() === text)! }
@@ -135,6 +137,22 @@ describe('M1 projects and materials', () => {
     expect(wrapper.findAll('.asset-row')).toHaveLength(1)
     expect(wrapper.get('.asset-row').text()).toContain('书影.png')
     expect(api.unlinkAsset).not.toHaveBeenCalled()
+  })
+  it.each([
+    { path: '/', pendingNavigation: true, title: '我的书籍' },
+    { path: '/settings/models', pendingNavigation: true, title: '模型设置' },
+    { path: '/projects', pendingNavigation: false, title: '我的书籍' },
+  ])('keeps initial focus outside main for $path (pending: $pendingNavigation)', async ({ path, pendingNavigation, title }) => {
+    const { wrapper } = await render(path, { pendingNavigation })
+    expect(document.title).toBe(`${title} · 书引 AI`)
+    expect(document.activeElement).not.toBe(wrapper.get('#main-content').element)
+  })
+  it('preserves search focus when only route query parameters change', async () => {
+    const { wrapper, router } = await render('/projects')
+    const search = wrapper.get('input[type="search"]')
+    ;(search.element as HTMLInputElement).focus()
+    await router.push('/projects?q=余华'); await flushPromises()
+    expect(document.activeElement).toBe(search.element)
   })
   it('provides a skip link and identifies the active top-level destination', async () => {
     const { wrapper, router } = await render('/settings/models')

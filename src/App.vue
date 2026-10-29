@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { RouterLink, RouterView, START_LOCATION, useRoute, useRouter } from 'vue-router'
 import AppIcon from './components/AppIcon.vue'
 import AppNotifications from './components/AppNotifications.vue'
 import OperationFeedback from './components/OperationFeedback.vue'
@@ -15,6 +15,7 @@ const updateMessage = computed(() => updateStatus.value === 'current' ? '当前�
 onMounted(() => { void initialize() })
 
 const route = useRoute()
+const router = useRouter()
 const mainContent = ref<globalThis.HTMLElement | null>(null)
 const inProjects = computed(() => route.path.startsWith('/projects'))
 const navigation = computed(() => [
@@ -27,10 +28,12 @@ const workspaceTitle = computed(() => {
   if (route.params.id) return route.path.endsWith('/writing') ? '内容创作' : route.path.endsWith('/covers') ? '封面工坊' : route.path.endsWith('/publishing') ? '发布准备' : '书籍资料'
   return route.path === '/publishing' ? '发布任务' : inProjects.value ? '我的书籍' : route.path === '/settings/models' ? '模型设置' : route.path === '/about' ? '关于书引 AI' : route.path === '/verification' ? '技术验证' : '数据与备份'
 })
-watch(() => route.path, async () => {
+watch(router.currentRoute, async (to, from) => {
   await nextTick()
   globalThis.document.title = `${workspaceTitle.value} · 书引 AI`
-  mainContent.value?.focus({ preventScroll: true })
+  if (from && from !== START_LOCATION && to.path !== from.path) {
+    mainContent.value?.focus({ preventScroll: true })
+  }
 }, { immediate: true })
 </script>
 
