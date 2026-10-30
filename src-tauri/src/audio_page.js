@@ -9,7 +9,6 @@
 
   const UI = {
     createNotebook: ['Create new notebook', 'Create notebook', 'New notebook', '新建笔记本', '创建笔记本', '新建'],
-    createSubmit: ['Create notebook', 'Create', '创建笔记本', '创建'],
     signIn: ['Sign in', 'Log in', '登录', '登入'],
     addSource: ['Add source', 'Add sources', '添加来源', '添加资料来源'],
     uploadFiles: ['Upload files', 'Upload file', 'Choose files', '上传文件', '选择文件'],
@@ -285,33 +284,6 @@
     return { kind: 'waiting', message: '等待 Gemini Notebook 页面加载完成。' }
   }
 
-  function notebookTitleControl() {
-    const headers = [...document.querySelectorAll('header, [role="banner"]')].filter(visible)
-    const candidates = headers.flatMap(header => [...header.querySelectorAll('[contenteditable="true"], [role="textbox"], input:not([type="hidden"]):not([type="search"])')])
-      .filter(visible)
-    const explicit = candidates.filter(element => {
-      const label = normalize([element.getAttribute('aria-label'), element.getAttribute('title'), element.getAttribute('placeholder')].filter(Boolean).join(' ')).toLocaleLowerCase()
-      return /(?:notebook|document)?\s*title|标题|笔记本名称/u.test(label)
-    })
-    return explicit.length === 1 ? explicit[0] : null
-  }
-
-  function setNotebookTitle(job) {
-    const title = notebookTitleControl()
-    if (!title) return { kind: 'page_changed', message: '进入笔记本后未找到唯一的标题控件，已停止自动命名；请人工核对。' }
-    const expected = `${job.projectTitle || '书引 AI 音频'} · 音频 ${String(job.id).slice(0, 8)}`
-    try {
-      assertRunning()
-      title.click?.()
-      writeAndVerify(title, expected)
-      title.blur?.()
-      setCreationMarker(job, false)
-      return { kind: 'notebook_created', notebookUrl: location.href }
-    } catch (error) {
-      return { kind: 'page_changed', message: error?.message ?? '笔记本标题未能完整回读，已停止自动操作。' }
-    }
-  }
-
   function creationMarker(job) {
     return String(job.id)
   }
@@ -335,29 +307,20 @@
 
   async function createNotebook(job) {
     if (job.notebookUrl) {
-      if (!sameRecordedNotebook(job.notebookUrl)) return { kind: 'page_changed', message: '当前标签页不是本任务记录的笔记本，已停止自动命名。' }
-      return setNotebookTitle(job)
+      ensureTaskNotebook(job)
+      setCreationMarker(job, false)
+      return { kind: 'notebook_created', notebookUrl: location.href }
     }
     if (isNotebookPath()) {
-      if (!hasCreationMarker(job)) return { kind: 'page_changed', message: '当前笔记本没有本任务的新建意图记录，已停止自动命名。' }
+      if (!hasCreationMarker(job)) return { kind: 'page_changed', message: '当前笔记本没有本任务的新建意图记录，已停止自动操作。' }
       if (!sameRecordedNotebook(location.href)) throw new UiError('wrong_notebook', '当前不是受支持的官方笔记本地址。')
       return { kind: 'notebook_identified', notebookUrl: location.href }
     }
+    if (hasCreationMarker(job)) return { kind: 'waiting', message: '已点击新建笔记本，等待页面跳转；不会重复创建。' }
     const create = await waitFor(() => findInteractive(UI.createNotebook), 3000)
     if (!create) throw new UiError('create_notebook_missing', '未找到新建笔记本入口；登录或页面版本可能已变化。')
     setCreationMarker(job, true)
     click(create, '新建笔记本')
-    await sleep(350)
-    const scope = dialogScope()
-    if (scope !== document) {
-      const title = findEditable(['Notebook title', 'Title', '笔记本标题', '标题'], scope)
-      if (title) {
-        const shortId = String(job.id).replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)
-        writeAndVerify(title, `${job.projectTitle || '书引 AI 音频'} · 音频 ${shortId}`)
-      }
-      const submit = findInteractive(UI.createSubmit, scope)
-      if (submit && submit !== create) click(submit, '创建笔记本')
-    }
     return { kind: 'navigating' }
   }
 
@@ -366,16 +329,40 @@
     return '书籍资料文本'
   }
 
-  function findSourceInput() {
-    const inputs = [...document.querySelectorAll('input[type="file"]')].filter(input => !input.disabled)
+  function sourceAddControl() {
+    const headings = [...document.querySelectorAll('h1, h2, h3, [role="heading"]')]
+      .filter(element => visible(element) && /^(sources|来源|资料来源)$/i.test(normalize(element.textContent)))
+    const panels = new Set()
+    for (const heading of headings) {
+      for (let panel = heading.parentElement; panel && panel !== document.body; panel = panel.parentElement) {
+        if (findElements(UI.addSource, panel).length) {
+          panels.add(panel)
+          break
+        }
+      }
+    }
+    if (panels.size > 1) return null
+    const [panel] = panels
+    if (panel) {
+      // The source panel repeats Add source in its empty state; use its top entry.
+      return [...panel.querySelectorAll(INTERACTIVE)]
+        .find(element => visible(element) && matchScore(element, UI.addSource) > 0) ?? null
+    }
+    const matches = findElements(UI.addSource)
+    return matches.length === 1 ? matches[0].element : null
+  }
+
+  function findSourceInput(scope) {
+    const inputs = [...scope.querySelectorAll('input[type="file"]')].filter(input => !input.disabled)
     if (!inputs.length) return null
     if (inputs.length !== 1) throw new UiError('file_input_missing', '来源上传控件不唯一，已停止自动操作。')
     return inputs[0]
   }
   async function uploadAsset(job, scope) {
     const upload = await waitFor(() => findInteractive(UI.uploadFiles, scope), 3000)
-    if (upload) click(upload, '上传文件')
-    const input = await waitFor(findSourceInput, 3000)
+    if (!upload) throw new UiError('upload_files_missing', '添加来源弹窗中未找到“上传文件”入口。')
+    click(upload, '上传文件')
+    const input = await waitFor(() => findSourceInput(scope), 3000)
     if (!input) throw new UiError('file_input_missing', '未找到来源上传控件。')
     assertRunning()
     input.setAttribute('data-shuyin-audio-source', `${job.id}:${job.runId}`)
@@ -398,11 +385,11 @@
     ensureTaskNotebook(job)
     let scope = dialogScope()
     if (scope === document) {
-      const add = await waitFor(() => findInteractive(UI.addSource), 3000)
-      if (!add) throw new UiError('add_source_missing', '未找到添加来源入口，页面版本可能已变化。')
+      const add = await waitFor(sourceAddControl, 3000)
+      if (!add) throw new UiError('add_source_missing', '未找到明确的来源面板“添加来源”入口，已停止自动操作。')
       click(add, '添加来源')
-      await sleep(250)
-      scope = await waitFor(() => (dialogScope() === document ? null : dialogScope()), 3000) ?? document
+      scope = await waitFor(() => (dialogScope() === document ? null : dialogScope()), 3000)
+      if (!scope) throw new UiError('source_dialog_missing', '点击“添加来源”后未出现来源弹窗，已停止自动操作。')
     }
     if (job.source.kind === 'text') await addTextSource(job, scope)
     else return uploadAsset(job, scope)
@@ -627,7 +614,7 @@
   function canRecoverEmptyNotebook() {
     return sameRecordedNotebook(location.href)
       && !websiteIssue()
-      && findElements(UI.addSource).length === 1
+      && sourceAddControl() !== null
       && findTextElements(['0 sources', '0 source', '0 个来源', '0个来源'], document, true).length > 0
       && detectGenerationState() === 'unknown'
       && !hasAnyText([...UI.generating, ...UI.failed])
@@ -655,7 +642,7 @@
     return null
   }
 
-  async function runStep(job, context = {}) {
+  async function executeStep(job, context) {
     if (!job?.id || !Number.isInteger(Number(job.runId))) throw new UiError('invalid_job', '音频任务数据无效。')
     if (location.hostname === 'accounts.google.com') return { kind: 'login_required' }
     activeRun = `${job.id}:${job.runId}`
@@ -705,6 +692,19 @@
     }
   }
 
+  async function runStep(job, context = {}) {
+    try {
+      return await executeStep(job, context)
+    } catch (error) {
+      // CDP exception descriptions can contain only the class name, not its message.
+      return {
+        kind: 'page_error',
+        code: typeof error?.code === 'string' ? error.code : 'page_action_failed',
+        message: typeof error?.message === 'string' && error.message.trim() ? error.message : '网页任务执行失败，请核对网站后继续。',
+      }
+    }
+  }
+
   globalThis.ShuyinAudioPage = Object.freeze({
     UiError,
     canRecoverEmptyNotebook,
@@ -716,7 +716,6 @@
     findInteractive,
     readEditable,
     runStep,
-    setNotebookTitle,
     setEditable,
     sourceIsReady,
     verifyRemote,

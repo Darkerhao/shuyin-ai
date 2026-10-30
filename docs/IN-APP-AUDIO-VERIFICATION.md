@@ -1,5 +1,46 @@
 # 应用内自动音频实施与验收
 
+## 添加来源与上传文件修复（2026-10-30，源码 0.24.0）
+
+用户确认当前网站的文件流程为「来源面板顶部添加来源 → 弹窗内上传文件」。现场截图显示笔记本未命名、0 个来源；之前只显示 `UiError` 的原始触发原因不能仅凭截图还原。本轮针对确认的入口流程、命名阻塞和错误丢失进行修改，不将模拟页面证据等同于真实 Google 服务验收。
+
+### 实现与取舍
+
+- 保留创建意图、先登记笔记本 URL、旧任务明确确认和精确身份核对；移除自动改名及猜测创建弹窗的分支。标题由网站或用户管理，旧命名阶段可核对原 URL 后进入上传。
+- 创建按钮只点击一次，已有创建标记时等待跳转，由原有阶段超时终止等待，不重复新建。
+- 依据来源标题限定面板，点击顶部添加入口；同面板空态同名入口不再制造歧义，多个不能区分的面板仍停止。
+- 必须等待来源弹窗并点击其中唯一的上传按钮，仅选择该弹窗内唯一的文件输入框；不在弹窗缺失时使用页面其他文件输入框。资料文本仍走「复制的文字」。
+- `runStep` 捕获异步异常并回传错误代码与完整消息，Rust 仍经 `audio_step_failed` 处理，保留添加来源/提交结果不明时的只读核对规则。
+
+修改文件：`src-tauri/src/audio_page.js`、`src-tauri/src/audio.rs`（含 Rust 回归）、`tests/audio-page.test.mjs`；同步 `docs/PRD.md`、`docs/TECHNICAL-DESIGN.md`、`docs/DATABASE.md`、`docs/USER-GUIDE.md`、`docs/DEVELOPMENT-PLAN.md` 与本报告。无新依赖、权限、表、列或迁移，SQLite 保持 v13；按 fix/patch 处理，未手动升版、提交、发布或替换安装版。
+
+### 实际验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `node --test --test-name-pattern='recorded notebook proceeds\|missing notebook title\|file upload follows\|file upload never skips\|ambiguous upload controls\|multiple unidentified' tests/audio-page.test.mjs` | 修改实现前 6 项失败，覆盖命名阻塞、来源入口、跳步上传和错误回传 |
+| `node --test --test-name-pattern='waits for navigation' tests/audio-page.test.mjs` | 修复前失败，实测会再次点击新建 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked audio::tests::page_errors_preserve_the_code_and_complete_message -- --nocapture` | 修改宿主解析前失败：结构化错误被当作成功结果 |
+| `node --test tests/audio-page.test.mjs tests/audio-package.test.mjs` | 最终 41 项通过，其中页面 37、打包权限 4 |
+| `npx vitest run tests/ai.test.ts` | 65 项通过 |
+| `npx vitest run` | 14 文件、223 项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked audio:: -- --nocapture` | 26 项通过 |
+| `npm run test:rust` | 127 项通过，1 项既有原生凭据测试忽略，含数据库迁移与恢复 |
+| `npm run lint`、`npm run typecheck`、`npm run check:rust` | 通过；check:rust 包含 fmt 与全目标 Clippy |
+| `npm run tauri -- build --debug --no-bundle --config output/playwright/audio-upload/tauri.json` | 最终独立标识桌面构建通过，包含 TypeScript/Vite 构建；保留约 516 kB 分块提示 |
+| `node output/playwright/audio-upload/run-native.cjs` | 两条隔离真实 WebView2 / Tauri IPC / SQLite 链路通过，网站和音频内容为本地模拟 |
+| `git diff --check` | 通过 |
+
+Rust 命令加载 `. ./.tools/env.ps1`，TEMP/TMP/SQLITE_TMPDIR 指向 `output/audio-upload-test-temp`；首次 Rust 测试因沙箱无法打开既有 Cargo 锁而未执行，经工具审批后重跑。最终桌面二进制已校验包含当前完整页面脚本与独立应用标识，不使用旧构建冒充验证。
+
+### 原生证据与边界
+
+复用既有 native 验证脚本，隔离夹具包含无标签的未命名标题、来源面板两处添加按钮、来源弹窗和无关文件输入框。文件任务点击顶部添加入口及上传按钮各 1 次，空态入口点击 0 次，原生选择读回中文测试文件完整内容；资料文本任务点击添加入口 1 次且未点击上传文件。两条任务均只提交 1 次模拟生成、原生下载 844 字节 blob WAV，字节一致并各登记唯一音频素材。标题保持未命名，无关文件输入框保持空。报告与截图位于 `output/playwright/audio-upload/`，已查看文件任务主窗口截图，显示归档完成和 1 个音频。
+
+测试书籍和文件位于仓库 output，桌面框架的独立 SQLite/WebView 资料位于 `%LOCALAPPDATA%/com.shuyin.audio-upload-verification-20261030`（C 盘）；未接触正式任务、Cookie 或账号资料，没有上传用户真实原书。未运行整体 `npm test` 或队列测试，未构建正式安装包；真实 Google EPUB 上传、生成/下载、旧任务升级恢复与 macOS/Linux 仍未验收。下一步构建正式安装版后，在原任务中继续并核对实际网站流程。
+
+## 历史验收
+
 日期：2026-10-29。平台：Windows x64 / WebView2。源码版本字段：0.21.0；SQLite：v13。
 
 ## 笔记本身份登记与恢复修复（2026-10-29，源码 0.22.3）

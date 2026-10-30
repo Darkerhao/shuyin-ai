@@ -73,11 +73,13 @@ test('recorded notebook identity survives official domain redirects', async () =
 test('notebook identity rejects lookalike domains and different notebook IDs', async () => {
   for (const url of ['https://notebook.google.evil.test/notebook/notebook-1', 'https://notebook.google/notebook/other']) {
     const { core } = page('', url)
-    await assert.rejects(core.runStep(textJob({ stage: 'submitting', notebookUrl: 'https://notebook.google.com/notebook/notebook-1' }), {}), error => error.code === 'wrong_notebook')
+    const result = await core.runStep(textJob({ stage: 'submitting', notebookUrl: 'https://notebook.google.com/notebook/notebook-1' }), {})
+    assert.equal(result.kind, 'page_error')
+    assert.equal(result.code, 'wrong_notebook')
   }
 })
 
-test('creating a notebook writes and reads back the required title before reporting success', async () => {
+test('a recorded notebook proceeds without changing its title', async () => {
   const job = textJob({ stage: 'creating_notebook', projectTitle: '测试书', notebookUrl: 'https://notebook.google.com/notebook/task-notebook' })
   const { core, document } = page(`
     <header><div id="title" role="textbox" contenteditable="true" aria-label="Notebook title">Untitled notebook</div></header>
@@ -85,10 +87,10 @@ test('creating a notebook writes and reads back the required title before report
   `, job.notebookUrl)
   const result = await core.runStep(job, {})
   assert.equal(result.kind, 'notebook_created')
-  assert.equal(document.querySelector('#title').textContent, '测试书 · 音频 job-1')
+  assert.equal(document.querySelector('#title').textContent, 'Untitled notebook')
 })
 
-test('notebook naming requires the creation intent persisted across navigation', async () => {
+test('notebook creation requires the creation intent persisted across navigation', async () => {
   const job = textJob({ stage: 'creating_notebook', projectTitle: '测试书' })
   const { core, window, document } = page(`
     <button id="create">Create new notebook</button>
@@ -102,8 +104,18 @@ test('notebook naming requires the creation intent persisted across navigation',
   assert.equal(result.kind, 'notebook_identified')
   result = await core.runStep({ ...job, notebookUrl: result.notebookUrl }, {})
   assert.equal(result.kind, 'notebook_created')
-  assert.equal(document.querySelector('#title').textContent, '测试书 · 音频 job-1')
+  assert.equal(document.querySelector('#title').textContent, 'Untitled notebook')
   assert.equal(window.sessionStorage.getItem('shuyin-create-intent'), null)
+})
+
+test('notebook creation waits for navigation without clicking Create again', async () => {
+  const { core, document } = page('<button>Create new notebook</button>', 'https://notebook.google.com/')
+  let clicks = 0
+  document.querySelector('button').addEventListener('click', () => clicks++)
+  const job = textJob({ stage: 'creating_notebook' })
+  assert.equal((await core.runStep(job)).kind, 'navigating')
+  assert.equal((await core.runStep(job)).kind, 'waiting')
+  assert.equal(clicks, 1)
 })
 
 test('an untracked existing notebook is never renamed or treated as the new task notebook', async () => {
@@ -117,16 +129,14 @@ test('an untracked existing notebook is never renamed or treated as the new task
   assert.equal(document.querySelector('#title').textContent, "Somebody else's notebook")
 })
 
-test('created notebook identity is saved before naming and survives a title failure', async () => {
-  const { core, window, document } = page('<main>未命名的笔记本</main>')
+test('created notebook identity is saved before proceeding even without a title input', async () => {
+  const { core, window } = page('<main>未命名的笔记本</main>')
   const job = textJob({ stage: 'creating_notebook', projectTitle: '测试书' })
   window.sessionStorage.setItem('shuyin-create-intent', job.id)
   const identified = await core.runStep(job)
   assert.deepEqual(JSON.parse(JSON.stringify(identified)), { kind: 'notebook_identified', notebookUrl: window.location.href })
   job.notebookUrl = identified.notebookUrl
-  assert.equal((await core.runStep(job)).kind, 'page_changed')
   assert.equal(window.sessionStorage.getItem('shuyin-create-intent'), job.id)
-  document.body.innerHTML = '<header><input aria-label="Notebook title"></header>'
   assert.equal((await core.runStep(job)).kind, 'notebook_created')
   assert.equal(window.sessionStorage.getItem('shuyin-create-intent'), null)
 })
@@ -150,7 +160,7 @@ test('empty notebook recovery requires an explicit zero source count and no audi
   assert.equal(outside.core.canRecoverEmptyNotebook(), false)
 })
 
-test('creating a notebook stops when no unique explicit title control exists', async () => {
+test('a missing notebook title control never blocks upload or changes other inputs', async () => {
   let generateClicks = 0
   const job = textJob({ stage: 'creating_notebook', projectTitle: '测试书', notebookUrl: 'https://notebook.google.com/notebook/notebook-1' })
   const { core, document } = page(`
@@ -159,8 +169,9 @@ test('creating a notebook stops when no unique explicit title control exists', a
   `)
   document.querySelector('#generate').addEventListener('click', () => { generateClicks += 1 })
   const result = await core.runStep(job, {})
-  assert.equal(result.kind, 'page_changed')
-  assert.match(result.message, /唯一的标题控件/)
+  assert.equal(result.kind, 'notebook_created')
+  assert.equal(document.querySelector('input').value, '')
+  assert.equal(document.querySelector('textarea').value, '')
   assert.equal(generateClicks, 0)
 })
 
@@ -220,10 +231,9 @@ test('a notebook title or unrelated textarea cannot stand in for the audio promp
 
 test('refuses a different notebook when the task already recorded its notebook URL', async () => {
   const { core } = page('', 'https://notebook.google.com/notebook/other-notebook')
-  await assert.rejects(
-    () => core.runStep(textJob({ stage: 'downloading', notebookUrl: 'https://notebook.google.com/notebook/task-notebook' }), {}),
-    error => error.code === 'wrong_notebook',
-  )
+  const result = await core.runStep(textJob({ stage: 'downloading', notebookUrl: 'https://notebook.google.com/notebook/task-notebook' }), {})
+  assert.equal(result.kind, 'page_error')
+  assert.equal(result.code, 'wrong_notebook')
 })
 
 test('verify_remote only observes the recorded notebook and never resubmits generation', async () => {
@@ -304,7 +314,7 @@ test('download uses only the Audio Overview Download control, not another artifa
 
 test('native file selection gets one marked input and no source bytes in the page contract', async () => {
   const job = textJob({ source: { kind: 'asset', name: '原书.epub', size: 123, sha256: 'frozen' } })
-  const { core, document } = page('<section role="dialog"><input id="source" type="file"></section>')
+  const { core, document } = page('<section role="dialog"><button>上传文件</button><input id="source" type="file"></section>')
   const result = await core.runStep(job)
   assert.equal(result.kind, 'file_input_ready')
   assert.equal(document.querySelector('#source').getAttribute('data-shuyin-audio-source'), 'job-1:1')
@@ -321,7 +331,9 @@ test('pausing during an asynchronous page step prevents the pending source write
       document.querySelector('section').append(input)
     }, 10)
   })
-  await assert.rejects(core.runStep(textJob()), error => error.code === 'stale_run')
+  const result = await core.runStep(textJob())
+  assert.equal(result.kind, 'page_error')
+  assert.equal(result.code, 'stale_run')
   assert.equal(document.querySelector('textarea').value, '')
 })
 
@@ -357,5 +369,90 @@ test('multiple audio artifacts and unrelated generating text cannot pick a task 
 
 test('generation observations also require the exact recorded notebook', async () => {
   const { core } = page('<section><h2>Audio Overview</h2><audio></audio></section>', 'https://notebook.google.com/notebook/other')
-  await assert.rejects(core.runStep(textJob({stage:'generating',notebookUrl:'https://notebook.google.com/notebook/task'})), error => error.code === 'wrong_notebook')
+  const result = await core.runStep(textJob({stage:'generating',notebookUrl:'https://notebook.google.com/notebook/task'}))
+  assert.equal(result.kind, 'page_error')
+  assert.equal(result.code, 'wrong_notebook')
+})
+
+test('file upload follows the source-panel Add source then dialog Upload files sequence', async () => {
+  const { core, document, window } = page(`
+    <input value="未命名的笔记本">
+    <section><nav><h2>来源</h2></nav>
+      <button id="add"><span aria-hidden="true">add</span><span>添加来源</span></button>
+      <p>将文件拖到此处或 <button id="empty-add">添加来源</button></p>
+    </section>
+    <main><button id="other-add">添加来源</button><span>0 个来源</span></main>
+    <section role="dialog" hidden><button id="upload">上传文件</button><input id="source" type="file" hidden></section>
+    <input id="unrelated-file" type="file">
+  `)
+  const clicks = []
+  for (const id of ['add', 'empty-add', 'other-add', 'upload']) {
+    document.getElementById(id).addEventListener('click', () => {
+      clicks.push(id)
+      if (id === 'add') document.querySelector('[role="dialog"]').hidden = false
+    })
+  }
+  const job = textJob({ stage: 'creating_notebook', notebookUrl: window.location.href, source: { kind: 'asset', name: '原书.epub' } })
+  assert.equal(core.canRecoverEmptyNotebook(), true)
+  assert.equal((await core.runStep(job)).kind, 'notebook_created')
+  assert.deepEqual(clicks, [])
+  const result = await core.runStep({ ...job, stage: 'adding_source' })
+  assert.equal(result.kind, 'file_input_ready')
+  assert.deepEqual(clicks, ['add', 'upload'])
+  assert.equal(document.getElementById('source').getAttribute('data-shuyin-audio-source'), 'job-1:1')
+  assert.equal(document.getElementById('unrelated-file').hasAttribute('data-shuyin-audio-source'), false)
+  assert.equal(document.querySelector('input').value, '未命名的笔记本')
+})
+
+test('an already open source dialog uploads without clicking Add source again', async () => {
+  const { core, document } = page('<button id="add">添加来源</button><section role="dialog"><button id="upload">上传文件</button><input type="file"></section>')
+  const clicks = []
+  document.getElementById('add').addEventListener('click', () => clicks.push('add'))
+  document.getElementById('upload').addEventListener('click', () => clicks.push('upload'))
+  const result = await core.runStep(textJob({ source: { kind: 'asset', name: '原书.epub' } }))
+  assert.equal(result.kind, 'file_input_ready')
+  assert.deepEqual(clicks, ['upload'])
+})
+
+test('file upload never skips a missing dialog or Upload files control', async () => {
+  for (const html of [
+    '<button>添加来源</button><button>上传文件</button><input type="file">',
+    '<section role="dialog"><input type="file"></section>',
+    '<section role="dialog"><button>上传文件</button></section><input type="file">',
+  ]) {
+    const { core, document, window } = page(html)
+    // Keep timeout failures deterministic and fast without changing the real step.
+    const now = window.Date.now.bind(window.Date)
+    let elapsed = 0
+    window.Date.now = () => now() + (elapsed += 1000)
+    const result = await core.runStep(textJob({ source: { kind: 'asset', name: '原书.epub' } }))
+    assert.equal(result.kind, 'page_error')
+    assert.ok(['source_dialog_missing', 'upload_files_missing', 'file_input_missing'].includes(result.code))
+    assert.equal(document.querySelector('[data-shuyin-audio-source]'), null)
+  }
+})
+
+test('ambiguous upload controls return a serializable error code and full message', async () => {
+  const { core, document } = page('<section role="dialog"><button>上传文件</button><button>上传文件</button><input type="file"></section>')
+  let clicks = 0
+  document.querySelectorAll('button').forEach(button => button.addEventListener('click', () => clicks++))
+  const result = JSON.parse(JSON.stringify(await core.runStep(textJob({ source: { kind: 'asset', name: '原书.epub' } }))))
+  assert.equal(result.kind, 'page_error')
+  assert.equal(result.code, 'ambiguous_control')
+  assert.match(result.message, /多个.*Upload files/)
+  assert.notEqual(result.message, 'UiError')
+  assert.equal(clicks, 0)
+})
+
+test('multiple unidentified source panels cannot recover a notebook or click a guessed entry', async () => {
+  const { core, document, window } = page('<section><h2>来源</h2><button>添加来源</button></section><section><h2>来源</h2><button>添加来源</button></section><span>0 个来源</span>')
+  let clicks = 0
+  document.querySelectorAll('button').forEach(button => button.addEventListener('click', () => clicks++))
+  assert.equal(core.canRecoverEmptyNotebook(), false)
+  const now = window.Date.now.bind(window.Date)
+  let elapsed = 0
+  window.Date.now = () => now() + (elapsed += 1000)
+  const result = await core.runStep(textJob({ source: { kind: 'asset', name: '原书.epub' } }))
+  assert.equal(result.kind, 'page_error')
+  assert.equal(clicks, 0)
 })
