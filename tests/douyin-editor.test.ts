@@ -28,6 +28,13 @@ afterEach(() => {
 })
 
 describe('official editor adapter safeguards (local DOM fixtures)', () => {
+  it('reads platform status text beside decorative child icons', () => {
+    const inspect = () => runInNewContext(readFileSync('src-tauri/src/douyin_page.js', 'utf8'), { document, location: pageLocation, navigator, getComputedStyle })
+    document.body.insertAdjacentHTML('beforeend', '<span id="status"><svg></svg>上传成功</span>')
+    expect(inspect()).toMatchObject({ processed: true, uploading: false })
+    document.querySelector('#status')!.innerHTML = '<svg></svg>上传中'
+    expect(inspect()).toMatchObject({ processed: false, uploading: true })
+  })
   it('preserves Chinese and line breaks, fires title input events and never clicks publish', () => {
     const title = document.querySelector('input')!
     const input = vi.fn(); title.addEventListener('input', input)
