@@ -8,7 +8,7 @@ pub mod publishing;
 pub mod revision;
 pub const PROMPT_VERSION: &str = "publishing-v4";
 pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v4.md");
-pub const TIMEOUT: Duration = Duration::from_secs(120);
+pub const TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "format", rename_all = "lowercase", deny_unknown_fields)]
