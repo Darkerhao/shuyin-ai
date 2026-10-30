@@ -4,6 +4,15 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { JSDOM } from 'jsdom'
 const contentSource = readFileSync(join(import.meta.dirname, '../src-tauri/src/audio_page.js'), 'utf8')
+test('ignores create controls inside CSS-hidden responsive panels', async () => {
+  const { core } = page('<div style="display:none"><button>Create new notebook</button></div><button>Create new notebook</button>', 'https://notebook.google.com/')
+  assert.equal((await core.runStep(textJob({ stage: 'opening_site' }))).kind, 'login_ready')
+})
+
+test('source name alone does not hide its row processing indicator', () => {
+  const { core } = page('<ul><li><span>原书.txt</span><span role="progressbar"></span></li></ul>')
+  assert.equal(core.sourceIsReady(textJob({ source: { kind: 'asset', name: '原书.txt' } })), false)
+})
 function page(html, url = 'https://notebook.google.com/notebook/notebook-1') {
   const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true })
   dom.window.eval(contentSource)

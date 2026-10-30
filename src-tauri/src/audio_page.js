@@ -58,6 +58,7 @@
     if (element.hidden || element.getAttribute('aria-hidden') === 'true') return false
     for (let parent = element.parentElement; parent; parent = parent.parentElement) {
       if (parent.hidden || parent.getAttribute('aria-hidden') === 'true') return false
+      if (globalThis.getComputedStyle?.(parent).display === 'none') return false
     }
     const style = globalThis.getComputedStyle?.(element)
     if (style && (style.display === 'none' || style.visibility === 'hidden')) return false
@@ -410,6 +411,8 @@
   }
 
   function closestSourceRow(element, sourceNameValue) {
+    const row = element.closest('li, [role="listitem"]')
+    if (row) return row
     let current = element
     for (let depth = 0; current && depth < 7; depth += 1, current = current.parentElement) {
       const text = normalize(current.textContent)
