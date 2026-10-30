@@ -578,6 +578,10 @@ async fn evaluate(
         serde_json::json!({"expression":script,"awaitPromise":true,"returnByValue":true}),
     )
     .await?;
+    page_result(result)
+}
+#[cfg(any(windows, test))]
+fn page_result(result: serde_json::Value) -> Result<serde_json::Value, String> {
     if result.get("exceptionDetails").is_some() {
         return Err(result["exceptionDetails"]["exception"]["description"]
             .as_str()
@@ -587,10 +591,19 @@ async fn evaluate(
             .unwrap_or_default()
             .to_owned());
     }
-    result["result"]
+    let value = result["result"]
         .get("value")
         .cloned()
-        .ok_or("网页没有返回可解析的任务结果。".into())
+        .ok_or("网页没有返回可解析的任务结果。")?;
+    if value["kind"] == "page_error" {
+        let message = value["message"]
+            .as_str()
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or("网页任务执行失败，请核对网站后继续。");
+        let code = value["code"].as_str().unwrap_or("page_action_failed");
+        return Err(format!("[{code}] {message}"));
+    }
+    Ok(value)
 }
 #[cfg(windows)]
 async fn set_source_file(
@@ -668,6 +681,32 @@ fn acquire_instance() -> Result<Option<InstanceGuard>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn page_errors_preserve_the_code_and_complete_message() {
+        let result = serde_json::json!({"result":{"value":{
+            "kind":"page_error",
+            "code":"ambiguous_control",
+            "message":"来源弹窗中有多个上传入口。\n请核对后继续。"
+        }}});
+        assert_eq!(
+            page_result(result),
+            Err("[ambiguous_control] 来源弹窗中有多个上传入口。\n请核对后继续。".into())
+        );
+    }
+
+    #[test]
+    fn page_results_preserve_observations_and_report_protocol_exceptions() {
+        let observation = serde_json::json!({"kind":"file_input_ready"});
+        assert_eq!(
+            page_result(serde_json::json!({"result":{"value":observation}})),
+            Ok(observation)
+        );
+        assert_eq!(
+            page_result(serde_json::json!({"exceptionDetails":{}})),
+            Err("网页任务执行失败，请核对网站后继续。".into())
+        );
+    }
+
     #[test]
     fn recovery_navigation_preserves_login_and_official_notebook_redirects() {
         let target = "https://notebook.google.com/notebook/task".parse().unwrap();
