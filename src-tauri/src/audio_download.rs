@@ -14,7 +14,7 @@ use webview2_com::{
         ICoreWebView2DownloadOperation, ICoreWebView2_4, COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED,
         COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS,
     },
-    StateChangedEventHandler,
+    NavigationStartingEventHandler, StateChangedEventHandler,
 };
 use windows_core::Interface;
 
@@ -42,6 +42,38 @@ pub async fn attach(window: &WebviewWindow, app: AppHandle) -> Result<(), String
             let result = (|| -> windows_core::Result<()> {
                 let view: ICoreWebView2_4 =
                     unsafe { webview.controller().CoreWebView2()? }.cast()?;
+                let navigation_app = app.clone();
+                let navigation =
+                    NavigationStartingEventHandler::create(Box::new(move |_, args| {
+                        let Some(args) = args else { return Ok(()) };
+                        let mut uri = windows_core::PWSTR::null();
+                        let mut id = 0;
+                        let mut redirected = windows_core::BOOL::default();
+                        unsafe {
+                            args.Uri(&mut uri)?;
+                            args.NavigationId(&mut id)?;
+                            args.IsRedirected(&mut redirected)?;
+                        }
+                        let uri = webview2_com::take_pwstr(uri);
+                        let state = navigation_app.state::<AudioAutomation>();
+                        if let Ok(mut pending) = state.download.lock() {
+                            if let Some(intent) = pending.as_mut() {
+                                let allowed = !intent.started
+                                    && intent.epoch == state.epoch.load(Ordering::SeqCst)
+                                    && intent.armed_at.elapsed()
+                                        < std::time::Duration::from_secs(15)
+                                    && intent.allow_navigation(&uri, id, redirected.as_bool());
+                                unsafe {
+                                    args.SetCancel(!allowed)?;
+                                }
+                            }
+                        }
+                        Ok(())
+                    }));
+                let mut navigation_token = 0;
+                unsafe {
+                    view.add_NavigationStarting(&navigation, &mut navigation_token)?;
+                }
                 let handler = DownloadStartingEventHandler::create(Box::new(move |_, args| {
                     let Some(args) = args else {
                         return Ok(());
@@ -57,7 +89,7 @@ pub async fn attach(window: &WebviewWindow, app: AppHandle) -> Result<(), String
                         let intent = pending.as_mut()?;
                         if intent.started
                             || intent.epoch != state.epoch.load(Ordering::SeqCst)
-                            || intent.url != uri
+                            || !intent.matches_url(&uri)
                             || intent.path.exists()
                             || intent.armed_at.elapsed() > std::time::Duration::from_secs(15)
                         {

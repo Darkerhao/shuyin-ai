@@ -47,6 +47,30 @@ struct DownloadIntent {
     started: bool,
     epoch: u64,
     armed_at: std::time::Instant,
+    navigation_id: Option<u64>,
+    redirects: Vec<String>,
+}
+#[cfg(windows)]
+impl DownloadIntent {
+    fn allow_navigation(&mut self, url: &str, navigation_id: u64, redirected: bool) -> bool {
+        if !download_url(url) {
+            return false;
+        }
+        match self.navigation_id {
+            None if !redirected && self.url == url => {
+                self.navigation_id = Some(navigation_id);
+            }
+            Some(expected) if redirected && expected == navigation_id => {
+                self.redirects.push(url.to_owned());
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn matches_url(&self, url: &str) -> bool {
+        self.url == url || self.redirects.iter().any(|redirect| redirect == url)
+    }
 }
 pub struct AudioAutomation {
     operation: tokio::sync::Mutex<()>,
@@ -183,13 +207,11 @@ impl AudioAutomation {
                 .disable_drag_drop_handler()
                 .on_navigation(move |url| {
                     let state = handle.state::<AudioAutomation>();
-                    // A download also raises NavigationStarting without replacing the document.
-                    // Allow only its already-bound URL, including a signed CDN URL.
+                    // The native handler verifies the download's NavigationId and redirects.
                     #[cfg(windows)]
                     if state.download.lock().ok().is_some_and(|pending| {
                         pending.as_ref().is_some_and(|intent| {
-                            intent.url == url.as_str()
-                                && intent.armed_at.elapsed() < Duration::from_secs(15)
+                            intent.armed_at.elapsed() < Duration::from_secs(15)
                         })
                     }) {
                         return true;
@@ -464,6 +486,8 @@ impl AudioAutomation {
                     started: false,
                     epoch,
                     armed_at: std::time::Instant::now(),
+                    navigation_id: None,
+                    redirects: Vec::new(),
                 });
                 let mut request = job.clone();
                 request.stage = "begin_download".into();
@@ -681,6 +705,36 @@ fn acquire_instance() -> Result<Option<InstanceGuard>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn download_redirects_require_the_original_navigation_and_server_redirect_flag() {
+        let original = "https://lh3.googleusercontent.com/notebooklm/audio";
+        let redirected = "https://lh3.google.com/redirected-audio";
+        let mut intent = DownloadIntent {
+            job_id: "job".into(),
+            run_id: 1,
+            url: original.into(),
+            path: "audio.partial".into(),
+            started: false,
+            epoch: 1,
+            armed_at: std::time::Instant::now(),
+            navigation_id: None,
+            redirects: Vec::new(),
+        };
+        assert!(!intent.allow_navigation(redirected, 42, true));
+        assert!(!intent.allow_navigation("https://example.com/unrelated", 42, false));
+        assert!(intent.allow_navigation(original, 42, false));
+        assert!(!intent.allow_navigation(redirected, 99, true));
+        assert!(!intent.allow_navigation(redirected, 42, false));
+        assert!(!intent.allow_navigation("http://example.com/audio", 42, true));
+        assert!(intent.allow_navigation(redirected, 42, true));
+        assert!(intent.matches_url(original));
+        assert!(intent.matches_url(redirected));
+        assert!(!intent.matches_url("https://example.com/unobserved"));
+        assert!(intent.allow_navigation("https://media.example.com/final", 42, true));
+        assert!(intent.matches_url("https://media.example.com/final"));
+    }
+
     #[test]
     fn page_errors_preserve_the_code_and_complete_message() {
         let result = serde_json::json!({"result":{"value":{
