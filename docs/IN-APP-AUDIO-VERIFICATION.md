@@ -1,5 +1,66 @@
 # 应用内自动音频实施与验收
 
+## 真实配置、生成、下载与归档验收（2026-10-31，源码 0.24.2）
+
+### 结果与范围
+
+用户协助新建的《人生由我》沿用原任务 `a5d4bc14c5f00c9b9e210f9574c0224b`、原 EPUB 及 `https://notebook.google.com/notebook/2b83b06f-41b0-4dff-849e-b6dd16e349df`。本轮完成真实中文配置、提交一次生成、生成状态识别、精确原生下载、唯一素材归档和正常退出重启。原任务创建与 EPUB 上传来自前一会话的真实操作，本轮不重复创建或上传。
+
+- 提交前音频指导 1659 字，SHA-256 与冻结快照一致；实际选中“深入探究 / 中文（简体） / 默认”。提交时间为北京时间 21:43:34，页面按钮捕获只记录一次生成。
+- 真实成品“梅耶马斯克的绝地求生”；网站显示 16:39，本地 M4A 容器读得 999.177868 秒并包含音轨。目标 15 分钟不保证精确产出分钟或单人效果；未完整试听或逐段审校。
+- 修复下载后，同一任务于北京时间 22:30:47 归档完成。文件 `D:/书引 AI/projects/人生由我/audio/人生由我-音频-a5d4bc14c5f00c9b9e210f9574c0224b.m4a`，32,174,918 字节（30.68 MiB），SHA-256 `556fcf83d0c0713a8761a3b2b11e69be6b705b8437643080a62b53d6a14da201`，唯一素材 ID `944527e209e6d7cee22aa448517e1fae`。
+- 下载失败期间只恢复下载，生成提交时间不变；书籍仍 10 本、音频任务仍 5 条，素材从 37 增至 38。既有文案/封面/草稿/模型/发布记录和原素材逐行一致，冻结输入不变。
+- 正常关闭调试版后，以不带调试参数的最终 release 程序重启，界面仍显示“音频已保存 / 归档完成 / 1 个音频 / 文件可用”，原音频 ID/大小/摘要保持一致，schema v13、SQLite 完整性及外键检查通过。当前 release 进程和 WebView 均没有调试端口参数。
+
+### 已验证的根因与修复
+
+1. 自定义弹窗指导名称为“AI 主持人在本集节目中应着重于哪些方面？”，格式为“深入探究 / 摘要”；原词表和交互选择器未覆盖。统一原生 label 与 `aria-labelledby` 解析，删除编辑框重复 label 查询，补原生单选和组合框，配置限定当前弹窗；已选中文的组合框不重复展开。新增回归在修改前复现同一 `audio_prompt_missing`，实际提交前回读也通过。
+2. 当前音频下载菜单调用 `window.open(媒体地址, '_blank')`，不会产生原脚本等待的锚点点击。通过真实菜单限定观测及当前公开中文模块 `ewe` 分支确认，回归在旧代码复现 `download_target_missing`。在现有捕获函数内临时捕获选定下载动作触发的 HTTPS/blob 地址，成功或失败均恢复原方法，其他弹窗不在下载动作前拦截；不新增下载实现。
+3. 媒体从 `lh3.googleusercontent.com` 服务器重定向至 `lh3.google.com`，临时原生日志确认初始地址完全匹配而跳转被旧 URL 规则拒绝。`NavigationStarting` 原生事件核对最初完整地址，并以同一 `NavigationId` 和 `IsRedirected=true` 跟踪实际重定向链；下载对象的 URI 必须命中该链，继续核对任务/运行/文档代次、15 秒窗口、目标文件不存在及唯一下载对象。普通网站导航白名单不扩大。新增 Rust 回归在旧语义下失败，合法重定向/错误 ID/非重定向/HTTP 拒绝及未观察地址拒绝均通过。临时日志已删除。
+
+核对锁定 webview2-com 0.39.1 公开 API 和 Wry 0.57.0 事件实现，并阅读 [微软 WebView2 导航事件说明](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/navigation-events)；HTTP 重定向保留 NavigationId。仅从真实菜单捕获公开媒体地址，没有调用私有 RPC 或读取 Cookie。下载 URL 不写业务库或验收报告。
+
+修改 `src-tauri/src/{audio_page.js,audio.rs,audio_download.rs}`、`tests/audio-page.test.mjs`，同步 PRD、技术设计、使用手册、开发计划及规划记录。没有数据库结构、迁移、依赖、权限或手动升版改动，归类 fix/patch。
+
+### 实际命令与结果
+
+| 命令 | 结果 |
+| --- | --- |
+| `node --test --test-name-pattern='current Chinese audio dialog' tests/audio-page.test.mjs` | 修改前 1 项失败，实际 `audio_prompt_missing` |
+| `node --test --test-name-pattern='audio menu window.open' tests/audio-page.test.mjs` | 补齐成品前提后，修改前 1 项失败，实际 `download_target_missing` |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked download_redirects_require -- --nocapture` | 旧精确匹配语义下合法重定向断言失败；修复后纳入音频及完整测试通过 |
+| `node --test tests/audio-page.test.mjs tests/audio-package.test.mjs` | 最终 45 项通过 |
+| `npm run test:release` | 最终 78 项通过，1 项 macOS 原生用例按平台跳过，0 失败 |
+| `npx vitest run` | 14 文件、223 项通过；前端业务无后续改动 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked audio:: -- --nocapture` | 最终 27 项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 最终 128 项通过，1 项既有原生凭据测试按配置忽略 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 最终通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `npm run lint` | 通过 |
+| `npm run tauri -- build --debug --no-bundle --config output/playwright/audio-live-20261031/tauri-live.json` | 最终通过，含 TypeScript / Vite / Rust 编译；该构建完成原生真实下载 |
+| `npm run tauri -- build --bundles nsis --config output/playwright/audio-live-20261031/tauri-live.json` | 最终 release / NSIS 通过，含 TypeScript / Vite；保留约 516 kB 分块提示 |
+| `python output/playwright/audio-live-20261031/restore-approved.py` | 用户确认后恢复快照，13 张表逐行一致，源快照摘要不变，完整性/外键通过 |
+| `python output/playwright/audio-live-20261031/verify-real-result.py before-restart` | 原数据保持、原任务/冻结输入/唯一音频/大小/摘要均通过 |
+| `python output/playwright/audio-live-20261031/verify-real-result.py after-restart` | 正常启动最终 release 后再执行，通过；界面回读另经 Computer Use 验证 |
+| `git diff --check` | 最终通过 |
+
+Rust 先加载 `. ./.tools/env.ps1`，TEMP/TMP/SQLITE_TMPDIR 使用 `output/audio-file-input-test-temp`。完整 `npm test` 和队列测试未运行；没有执行正式安装器、升级原安装目录、跨平台验收或发布。
+
+### 数据恢复及保留的边界
+
+开始时主窗口显示 `C:/Users/haozi/AppData/Local/com.shuyin.desktop/shuyin.sqlite3`，直接读取为旧 schema v7，运行进程 SQLite 文件句柄只读映射快照却为 v13。该真实快照为 `before-live-handle.sqlite3`，SHA-256 `027b0288272dc6ac80d7baba484da718f698f9e4bb0990521abe2482e47252f0`，完整性/外键通过，包含 10 本书、16 个文案版本、37 个素材引用、5 个音频任务、47 个封面版本及草稿/发布记录。
+
+用户关闭后，调试版与未修改原安装都读取到空书架。已停止相关实例、保留当前空库备份、展示差异预览；用户明确“确认，继续”后使用 SQLite Backup 恢复，不复制 WebView 会话、不删除素材。恢复前额外保留 `empty-database-at-approved-restore.sqlite3`，全部 13 张表逐行校验。当前原书 EPUB 存在，37 个原素材引用中 33 个路径存在，4 个原有缺失路径保留。旧读取视图差异根因仍未查明；本轮授权恢复后的正常退出/启动及当前数据回读通过，不能将恢复称为该根因修复。
+
+应用内备份目录对话框曾因桌面工具索引失效无法操作，用户手动取消并关闭。后续已直接通过产品 `create_backup` 两次完成一致性备份，分别保存已生成待下载状态和归档成功状态。Playwright CDP 默认连接可能接管下载行为，核对当前本机源码后采用 `noDefaults=true` 保持原生行为；即使还原默认，原服务器重定向拒绝仍复现，工具影响与产品缺陷分别记录。
+
+### 交付与证据
+
+- Windows 手动安装包：`output/playwright/audio-live-20261031/书引AI-真实音频修复-0.24.2-setup.exe`，5,785,052 字节，SHA-256 `C9F885A4EB9BA898D056676EF9F453B58617771326047C848B7CAFE184609DF2`。临时构建配置仅关闭更新签名产物，未安装、发布或替换正式目录。
+- 当前运行的 release 程序：`output/playwright/audio-live-20261031/shuyin-audio-fixed.exe`，SHA-256 `3A34F893590D2844CEDDFFA20409C46E4BC1C85E20DD283D6F9C18302C213027`；该程序无调试参数并已正常重启回读成功。
+- `restore-result.json`、`live-config-report.json`、`real-download-capture.json`、`real-audio-metadata.json`、`real-result-before-restart.json`、`real-result-after-restart.json` 保存限定证据；`real-generating.png`、`real-generated.png`、`main-succeeded.png` 为真实服务和工作台截图。
+- 本次仅证明当前 Windows、当前账号、这本 EPUB 和深入探究格式的真实链路。首次登录、验证码、其他书籍/格式、完整音频质量、正式安装升级、macOS/Linux 及旧《曾国藩》特殊状态尚未独立验收。未提交或推送。
+
 ## 上传器延迟初始化修复（2026-10-31，源码 0.24.1）
 
 ### 根因与最小修改

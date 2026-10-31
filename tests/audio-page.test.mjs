@@ -216,6 +216,51 @@ test('configures audio, language, duration and verifies the full prompt before g
   assert.equal(document.querySelector('#prompt').value, longPrompt)
 })
 
+test('configures the current Chinese audio dialog without submitting generation', async () => {
+  for (const format of ['deep_dive', 'brief']) {
+    const { core, document } = page(`
+      <input aria-label="Notebook title" value="人生由我">
+      <button>音频概览</button>
+      <button>摘要</button>
+      <section role="dialog" aria-label="自定义音频概览">
+        <label><input id="deep" type="radio" name="format">深入探究</label>
+        <label><input id="brief" type="radio" name="format">摘要</label>
+        <div id="language" role="combobox" aria-label="选择语言" tabindex="0">${format === 'deep_dive' ? '中文（简体）' : 'English'}</div>
+        <button id="short" role="radio" aria-checked="false">短</button>
+        <button id="default" role="radio" aria-checked="true">默认</button>
+        <label id="prompt-label" ${format === 'deep_dive' ? 'for="prompt"' : ''}>AI 主持人在本集节目中应着重于哪些方面？</label>
+        <textarea id="prompt" ${format === 'brief' ? 'aria-labelledby="prompt-label"' : ''}></textarea>
+        <button id="generate">生成</button>
+      </section>
+    `)
+    let submissions = 0
+    let languageOpens = 0
+    let shortClicks = 0
+    document.querySelector('#generate').addEventListener('click', () => { submissions += 1 })
+    document.querySelector('#short').addEventListener('click', () => { shortClicks += 1 })
+    document.querySelector('#language').addEventListener('click', () => {
+      languageOpens += 1
+      const option = document.createElement('div')
+      option.setAttribute('role', 'option')
+      option.textContent = '中文（简体）'
+      option.addEventListener('click', () => { document.querySelector('#language').textContent = option.textContent; option.remove() })
+      document.body.append(option)
+    })
+    const job = textJob({ stage: 'configuring_audio', format, targetDurationSeconds: 600 })
+    const result = await core.runStep(job)
+    assert.equal(result.kind, 'audio_configured', JSON.stringify(result))
+    assert.equal(result.format, format)
+    assert.equal(result.language, 'zh-Hans')
+    assert.equal(document.querySelector(format === 'brief' ? '#brief' : '#deep').checked, true)
+    assert.equal(document.querySelector('#language').textContent, '中文（简体）')
+    assert.equal(languageOpens, format === 'deep_dive' ? 0 : 1)
+    assert.equal(shortClicks, 1)
+    assert.equal(document.querySelector('#prompt').value, job.prompt)
+    assert.equal(document.querySelector('input[aria-label="Notebook title"]').value, '人生由我')
+    assert.equal(submissions, 0)
+  }
+})
+
 test('unknown controls are never clicked by guessed coordinates or labels', () => {
   let clicks = 0
   const { core, document } = page(`<button id="unrelated">Something else</button>`)
@@ -287,6 +332,38 @@ test('captures the actual clicked download anchor target from the Audio Overview
   assert.equal(result.kind, 'download_target')
   assert.equal(result.downloadUrl, 'https://content.example.com/audio/episode.m4a?token=one')
   assert.equal(result.suggestedFilename, 'episode.m4a')
+})
+
+test('captures the audio menu window.open download without opening a popup', async () => {
+  const { core, window, document } = page('<section><h2>音频概览</h2><button>播放</button><button id="more">更多</button></section>')
+  const opened = []
+  const originalOpen = window.open = (...args) => { opened.push(args); return null }
+  document.querySelector('#more').addEventListener('click', () => {
+    window.open('https://example.com/help', '_blank')
+    const menu = document.createElement('div')
+    menu.setAttribute('role', 'menu')
+    menu.innerHTML = '<button role="menuitem">下载</button>'
+    menu.querySelector('button').addEventListener('click', () => { window.open('https://content.example.com/episode.m4a?download=1', '_blank') })
+    document.body.append(menu)
+  })
+  const result = await core.captureDownloadTarget()
+  assert.equal(result.kind, 'download_target')
+  assert.equal(result.downloadUrl, 'https://content.example.com/episode.m4a?download=1')
+  assert.deepEqual(opened, [['https://example.com/help', '_blank']])
+  assert.equal(window.open, originalOpen)
+})
+
+test('download interception restores window.open when the audio menu has no download', async () => {
+  const { core, window, document } = page('<section><h2>Audio Overview</h2><button>Play</button><button id="more">More</button></section>')
+  const originalOpen = window.open = () => null
+  document.querySelector('#more').addEventListener('click', () => {
+    const menu = document.createElement('div')
+    menu.setAttribute('role', 'menu')
+    menu.innerHTML = '<button>Something else</button>'
+    document.body.append(menu)
+  })
+  await assert.rejects(core.captureDownloadTarget(), error => error.code === 'download_missing')
+  assert.equal(window.open, originalOpen)
 })
 
 test('download uses only the Audio Overview Download control, not another artifact', async () => {

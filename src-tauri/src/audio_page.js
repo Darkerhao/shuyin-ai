@@ -19,21 +19,21 @@
     generate: ['Generate', 'Generate audio', '生成', '生成音频'],
     download: ['Download', '下载'],
     more: ['More options', 'More', '更多', '更多选项'],
-    deepDive: ['Deep Dive', 'Deep dive', '深入探索', '深度探索'],
-    brief: ['Brief', '简报'],
+    deepDive: ['Deep Dive', 'Deep dive', '深入探究', '深入探索', '深度探索'],
+    brief: ['Brief', '摘要', '简报'],
     language: ['Language', 'Audio language', '语言', '音频语言'],
     format: ['Format', 'Audio format', '格式', '音频格式'],
     chinese: ['Chinese (Simplified)', 'Chinese', '中文（简体）', '中文(简体)', '简体中文'],
     defaultLength: ['Default', 'Default length', '默认', '默认时长'],
     longer: ['Longer', 'Longer audio', '更长', '详细'],
-    shorter: ['Shorter', 'Shorter audio', '更短', '简短'],
+    shorter: ['Shorter', 'Shorter audio', '更短', '简短', '短'],
     generating: ['Generating', 'Generating audio', 'Preparing', 'Preparing audio', '正在生成', '正在准备', '生成中'],
     failed: ["Can't generate", 'Could not generate', 'Something went wrong', '生成失败', '无法生成', '出现错误'],
     processing: ['Processing', 'Processing source', 'Analyzing', '正在处理', '正在分析'],
     play: ['Play', '播放'],
   }
 
-  const INTERACTIVE = 'button, a, [role="button"], [role="menuitem"], [role="option"], [role="tab"], [role="radio"], [role="checkbox"], input[type="button"], input[type="submit"]'
+  const INTERACTIVE = 'button, a, [role="button"], [role="menuitem"], [role="option"], [role="tab"], [role="radio"], [role="checkbox"], [role="combobox"], input[type="radio"], input[type="button"], input[type="submit"]'
   const TEXT_ELEMENTS = 'span, p, label, div, h1, h2, h3, h4, li, strong'
 
   class UiError extends Error {
@@ -72,6 +72,9 @@
       element.getAttribute?.('title'),
       element.getAttribute?.('placeholder'),
       element.getAttribute?.('value'),
+      ...[...(element.labels ?? [])].map(label => label.textContent),
+      ...(element.getAttribute?.('aria-labelledby') ?? '').split(/\s+/).filter(Boolean)
+        .map(id => element.ownerDocument.getElementById(id)?.textContent),
     ].map(normalize).filter(Boolean)
   }
 
@@ -157,11 +160,6 @@
 
     const scored = candidates.map(element => {
       let score = matchScore(element, labels)
-      const id = element.id
-      if (id) {
-        const label = scope.querySelector?.(`label[for="${globalThis.CSS?.escape ? globalThis.CSS.escape(id) : id}"]`)
-        if (label) score = Math.max(score, matchScore(label, labels))
-      }
       if (labels.length && score === 0) return null
       if (element.tagName === 'TEXTAREA') score += 5
       const rows = Number(element.getAttribute('rows') ?? 0)
@@ -437,18 +435,18 @@
   }
 
   function selectedChoice(element) {
-    return element.getAttribute('aria-checked') === 'true' || element.getAttribute('aria-selected') === 'true' || element.getAttribute('aria-pressed') === 'true'
+    return element.checked === true || element.getAttribute('aria-checked') === 'true' || element.getAttribute('aria-selected') === 'true' || element.getAttribute('aria-pressed') === 'true'
   }
 
   async function chooseDirectChoice(labels, options = {}) {
-    const element = await waitFor(() => findInteractive(labels), options.timeout ?? 1200)
+    const element = await waitFor(() => findInteractive(labels, dialogScope()), options.timeout ?? 1200)
     if (!element) return false
-    if (!selectedChoice(element)) click(element, labels[0])
+    if (!selectedChoice(element) && element.getAttribute('role') !== 'combobox') click(element, labels[0])
     return true
   }
 
   async function chooseDropdown(triggerLabels, optionLabels) {
-    const trigger = await waitFor(() => findInteractive(triggerLabels), 1500)
+    const trigger = await waitFor(() => findInteractive(triggerLabels, dialogScope()), 1500)
     if (!trigger) return false
     click(trigger, triggerLabels[0])
     const option = await waitFor(() => findInteractive(optionLabels), 2000)
@@ -479,7 +477,7 @@
   }
 
   function promptInput() {
-    return findEditable(['Audio instructions', 'Instructions', 'Customize', 'Prompt', 'What should', '音频指导', '音频提示词', '自定义音频', '指导', '提示词'])
+    return findEditable(['Audio instructions', 'Instructions', 'Customize', 'Prompt', 'What should', 'AI 主持人在本集节目中应着重于哪些方面', '音频指导', '音频提示词', '自定义音频', '指导', '提示词'], dialogScope())
   }
 
   async function configureAudio(job) {
@@ -569,9 +567,18 @@
     }
     let captured = null
     let audioActivatedAt = 0
+    // Notebook's download menu opens the media URL instead of clicking an anchor.
+    const originalOpen = globalThis.open
+    globalThis.open = function (url, ...options) {
+      const href = String(url ?? '')
+      if (Date.now() - audioActivatedAt < 3000 && /^(https:|blob:)/.test(href)) {
+        captured = { downloadUrl: href, suggestedFilename: '' }
+        return null
+      }
+      return originalOpen.call(globalThis, url, ...options)
+    }
     const capture = event => {
       const target = event.target
-      if (target && scope.contains(target)) audioActivatedAt = Date.now()
       const anchor = target?.closest?.('a[href]') ?? target?.parentElement?.closest?.('a[href]')
       if (!anchor || !/^(https?:|blob:)/.test(anchor.href)) return
       if (scope.contains(anchor) || Date.now() - audioActivatedAt < 3000) {
@@ -583,7 +590,10 @@
     document.addEventListener('click', capture, true)
     try {
       const download = findInteractive(UI.download, scope)
-      if (download) click(download, '下载')
+      if (download) {
+        audioActivatedAt = Date.now()
+        click(download, '下载')
+      }
       else {
         const more = findInteractive(UI.more, scope)
         if (!more) throw new UiError('download_missing', 'Audio Overview 区域未找到下载入口。')
@@ -599,6 +609,7 @@
       if (!result) throw new UiError('download_target_missing', 'Audio Overview 未暴露可精确关联的下载地址；本次不会猜测下载文件。')
       return { kind: 'download_target', ...result }
     } finally {
+      globalThis.open = originalOpen
       document.removeEventListener('click', capture, true)
     }
   }
