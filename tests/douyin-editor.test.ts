@@ -28,6 +28,33 @@ afterEach(() => {
 })
 
 describe('official editor adapter safeguards (local DOM fixtures)', () => {
+  it('waits for the official document and the unique upload control to mount', () => {
+    const inspect = () => runInNewContext(readFileSync('src-tauri/src/douyin_page.js', 'utf8'), { document, location: pageLocation, navigator, getComputedStyle })
+    pageLocation.pathname = '/creator-micro/content/upload'
+    document.body.innerHTML = ''
+    const readyState = vi.spyOn(document, 'readyState', 'get').mockReturnValue('loading')
+    expect(inspect()).toBeNull()
+    readyState.mockReturnValue('complete')
+    expect(inspect()).toMatchObject({ kind: 'upload', uploadReady: false })
+    document.body.innerHTML = '<input type="file" accept="video/*" disabled>'
+    expect(inspect()).toMatchObject({ uploadReady: false })
+    document.querySelector('input')!.disabled = false
+    expect(inspect()).toMatchObject({ kind: 'upload', uploadReady: true })
+    document.body.append(document.querySelector('input')!.cloneNode())
+    expect(inspect()).toMatchObject({ uploadReady: false })
+  })
+
+  it('recognizes the creator home without requiring its publish menu to be expanded', () => {
+    const inspect = () => runInNewContext(readFileSync('src-tauri/src/douyin_page.js', 'utf8'), { document, location: pageLocation, navigator, getComputedStyle })
+    pageLocation.pathname = '/creator-micro/home'
+    document.body.innerHTML = '<div id="header-avatar"><div class="avatar-a" style="background-image:url(https://example.test/avatar.png)"></div></div><div id="douyin-creator-master-side-upload"><svg></svg>作品发布</div>'
+    expect(inspect()).toMatchObject({ kind: 'home', authenticated: true, blocked: false })
+    document.body.insertAdjacentHTML('beforeend', '<div role="dialog">你还有上次未发布的视频，是否继续编辑？</div>')
+    expect(inspect()).toMatchObject({ kind: 'draft', blocked: true })
+    pageLocation.origin = 'https://example.com'
+    expect(inspect()).toBeNull()
+  })
+
   it('reads platform status text beside decorative child icons', () => {
     const inspect = () => runInNewContext(readFileSync('src-tauri/src/douyin_page.js', 'utf8'), { document, location: pageLocation, navigator, getComputedStyle })
     document.body.insertAdjacentHTML('beforeend', '<span id="status"><svg></svg>上传成功</span>')

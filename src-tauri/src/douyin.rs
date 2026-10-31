@@ -122,6 +122,8 @@ pub struct DouyinPage {
     #[serde(default)]
     pub editor_ready: bool,
     #[serde(default)]
+    pub upload_ready: bool,
+    #[serde(default)]
     pub editor: Option<EditorSnapshot>,
     #[serde(default)]
     pub authenticated: bool,
@@ -159,9 +161,20 @@ pub struct CoverSnapshot {
     pub preview: String,
 }
 
-async fn evaluate(window: &WebviewWindow, script: String) -> Result<String, String> {
-    if !allowed_url(&window.url().map_err(|e| e.to_string())?) {
+fn page_url_ready(url: &tauri::Url) -> Result<bool, String> {
+    // WebView2 starts blank until the first official navigation commits.
+    if url.as_str() == "about:blank" {
+        return Ok(false);
+    }
+    if !allowed_url(url) {
         return Err("当前不是抖音创作者中心，已停止页面操作。".into());
+    }
+    Ok(true)
+}
+
+async fn evaluate(window: &WebviewWindow, script: String) -> Result<String, String> {
+    if !page_url_ready(&window.url().map_err(|e| e.to_string())?)? {
+        return Err("抖音页面尚未加载完成，请稍后继续。".into());
     }
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let sender = Mutex::new(Some(sender));
@@ -290,33 +303,30 @@ async fn inspect_douyin_window(
     window: WebviewWindow,
 ) -> Result<DouyinPage, String> {
     local_main(&window)?;
-    let Some(publish_window) = app.get_webview_window(LABEL) else {
-        return Ok(DouyinPage {
-            supported: cfg!(windows),
-            open: false,
-            path: String::new(),
-            login_visible: false,
-            online: false,
-            editor_ready: false,
-            editor: None,
-            authenticated: false,
-            account: None,
-            kind: "closed".into(),
-            blocked: false,
-            uploading: false,
-            processing: false,
-            processed: false,
-        });
-    };
-    let result = evaluate(&publish_window, include_str!("douyin_page.js").into()).await?;
-    let mut page: DouyinPage =
-        serde_json::from_str(&result).map_err(|_| "页面尚未就绪，请稍后重新检查。")?;
-    page.supported = cfg!(windows);
-    if page.path == "/creator-micro/content/post/video" && page.editor_ready && !page.login_visible
-    {
-        page.editor = Some(read_editor(&publish_window).await?);
+    let publisher = app.state::<DouyinPublisher>();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if publisher.stopped.load(Ordering::SeqCst) {
+            return Err("已停止自动填写，请在官方页面继续处理。".into());
+        }
+        let publish_window = app.get_webview_window(LABEL).ok_or("发布窗口已关闭。")?;
+        if page_url_ready(&publish_window.url().map_err(|e| e.to_string())?)? {
+            let result = evaluate(&publish_window, include_str!("douyin_page.js").into()).await?;
+            let page: Option<DouyinPage> = serde_json::from_str(&result)
+                .map_err(|_| "页面返回了无效状态，请检查官方窗口。")?;
+            if let Some(mut page) = page {
+                page.supported = cfg!(windows);
+                if page.kind == "editor" && page.editor_ready && !page.login_visible {
+                    page.editor = Some(read_editor(&publish_window).await?);
+                }
+                return Ok(page);
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("抖音页面加载超时，请检查网络和官方窗口后重新开始。".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-    Ok(page)
 }
 
 async fn read_editor(window: &WebviewWindow) -> Result<EditorSnapshot, String> {
@@ -378,6 +388,23 @@ fn verify_editor(editor: &EditorSnapshot, snapshot: &PublishSnapshot) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_window_waits_for_official_navigation_without_allowing_blank_page_actions() {
+        let blank = "about:blank".parse().unwrap();
+        assert_eq!(page_url_ready(&blank), Ok(false));
+        assert!(!allowed_url(&blank));
+        assert_eq!(page_url_ready(&PORTAL.parse().unwrap()), Ok(true));
+        for url in [
+            "https://example.com/",
+            "http://creator.douyin.com/",
+            "https://creator.douyin.com.evil.test/",
+            "about:blank#unexpected",
+            "edge-error://edgewebdata/",
+        ] {
+            assert!(page_url_ready(&url.parse().unwrap()).is_err(), "{url}");
+        }
+    }
 
     #[test]
     fn navigation_is_restricted_to_the_official_https_origin() {
