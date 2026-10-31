@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayPath } from '@/lib/displayPath'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import { Input } from '@/components/ui/input'
@@ -21,7 +22,7 @@ const { busy, error, message, run } = useOperation()
 const openFile = (id: string, directory = false) => run(() => api.openAsset(id, directory))
 const labels = { video: '视频', audio: '音频', image: '图片', cover: '封面', subtitle: '字幕', document: '文档' }
 const visible = computed(() => assets.value.filter(asset =>
-  [asset.originalName, asset.filePath].some(value => value.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))
+  [asset.originalName, displayPath(asset.filePath)].some(value => value.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))
   && (type.value === 'all' || asset.assetType === type.value)
   && (availability.value === 'all' || (availability.value === 'available' ? asset.existsStatus === 'available' : asset.existsStatus !== 'available')),
 ))
@@ -161,7 +162,7 @@ onMounted(() => { void run(refresh) })
         </Badge>
       </h3>
       <p class="file-path">
-        {{ asset.filePath }}
+        {{ displayPath(asset.filePath) }}
       </p>
       <p :class="asset.existsStatus === 'available' ? 'muted' : 'error'">
         {{ asset.existsStatus === 'available' ? '文件可用' : asset.existsStatus === 'missing' ? '文件已丢失，请重新定位' : '无法访问文件，请检查权限或磁盘连接' }} · {{ (asset.fileSize / 1024 / 1024).toFixed(2) }} MB · {{ new Date(asset.modifiedAt * 1000).toLocaleString() }}

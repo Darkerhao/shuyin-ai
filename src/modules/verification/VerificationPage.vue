@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayPath } from '@/lib/displayPath'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -134,7 +135,7 @@ onMounted(() => { if (desktop) void load() })
     <OperationFeedback :error="databaseError" />
     <OperationFeedback :message="databaseStatus" />
     <dl v-if="snapshot">
-      <dt>数据库文件</dt><dd>{{ snapshot.databasePath }}</dd>
+      <dt>数据库文件</dt><dd>{{ displayPath(snapshot.databasePath) }}</dd>
       <dt>已保存内容</dt><dd>{{ snapshot.record?.note ?? '尚未保存' }}</dd>
       <dt>写入时间（UTC）</dt><dd>{{ snapshot.record?.updatedAt ?? '—' }}</dd>
     </dl>
@@ -162,7 +163,7 @@ onMounted(() => { if (desktop) void load() })
       v-if="selectedVideo"
       class="file-path"
     >
-      {{ selectedVideo }}
+      {{ displayPath(selectedVideo) }}
     </p>
     <p
       v-else

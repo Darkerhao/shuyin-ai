@@ -180,7 +180,17 @@ dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .generation-actions { min-width: 0; display: flex; gap: 9px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .writing-editor { margin-top: 22px; }
 .editor-section { padding: 22px 25px; }
-.editor-section .muted { font-size: 12px; margin-top: -3px; }
+.editor-section .muted { font-size: 12px; }
+.editor-section .result-heading { flex-wrap: wrap; gap: 10px 14px; }
+.audio-setup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-block: 24px; }
+.audio-setup-field { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); }
+.audio-setup-field > label { margin: 0 0 8px; }
+.audio-setup-field [data-slot='select-value'] { min-width: 0; text-align: left; }
+.audio-setup-field > .muted { margin: 12px 0 0; font-size: 13px; line-height: 1.75; }
+.audio-setup-field > .file-path { width: 100%; padding: 0; border-radius: 0; background: transparent; }
+.audio-setup-field > [data-slot='button'] { margin-top: 16px; }
+.audio-start-actions { margin-top: 0; gap: 12px 16px; }
+.audio-start-actions > .muted { flex: 1 1 240px; }
 .tab-intro { color: var(--muted-foreground); font-size: 12px; padding: 0 2px; margin: 0 0 14px; }
 .book-form-layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 25px; align-items: start; }
 .book-form-layout .panel { padding: 26px 30px; }
@@ -215,6 +225,7 @@ dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
   .model-editor { padding: 22px; }
 }
 @media (max-width: 980px) {
+  .audio-setup-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .model-layout { grid-template-columns: 190px minmax(0, 1fr); gap: 15px; }
   .model-editor { padding: 18px; }
   .model-editor .form-grid { grid-template-columns: 1fr; }
@@ -228,6 +239,7 @@ dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
   .sticky-actions { position: sticky; }
 }
 @media (max-width: 720px) {
+  .audio-setup-field { padding: 16px; }
   .page-heading { align-items: flex-start; flex-wrap: wrap; gap: 12px; }
   h1 { font-size: 26px; }
   .model-layout { grid-template-columns: minmax(0, 1fr); }

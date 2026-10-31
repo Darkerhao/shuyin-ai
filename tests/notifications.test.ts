@@ -6,6 +6,18 @@ import OperationFeedback from '../src/components/OperationFeedback.vue'
 afterEach(() => { vi.restoreAllMocks() })
 
 describe('unified operation notifications', () => {
+  it('displays readable drive and network paths without changing notification props', () => {
+    const success = vi.spyOn(toast, 'success').mockReturnValue('success-path')
+    const error = vi.spyOn(toast, 'error').mockReturnValue('error-path')
+    const message = String.raw`已导出：\\?\D:\书籍\封面.png；\\?\UNC\server\share\封面.png`
+    const failure = String.raw`文件不可用：\\?\D:\书籍\音频.m4a`
+    const wrapper = mount(OperationFeedback, { props: { message, error: failure } })
+    expect(success).toHaveBeenCalledWith(String.raw`已导出：D:\书籍\封面.png；\\server\share\封面.png`, expect.any(Object))
+    expect(error).toHaveBeenCalledWith(String.raw`文件不可用：D:\书籍\音频.m4a`, expect.any(Object))
+    expect(wrapper.props()).toMatchObject({ message, error: failure })
+    wrapper.unmount()
+  })
+
   it('keeps errors until dismissed and clears the old error on retry', async () => {
     const error = vi.spyOn(toast, 'error').mockReturnValue('error-1')
     const dismiss = vi.spyOn(toast, 'dismiss').mockReturnValue('error-1')

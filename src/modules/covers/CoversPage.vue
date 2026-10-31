@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayPath } from '@/lib/displayPath'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -1065,7 +1066,7 @@ onMounted(async () => {
             <p class="muted">
               文字自动换行，过长时缩小字号。当前标题 {{ actualSizes.titleSize }} px，副标题 {{ actualSizes.subtitleSize }} px。每次保存或导出都会新建版本。
             </p><p class="file-path">
-              导出目录：{{ workspace }} / covers
+              导出目录：{{ displayPath(workspace) }} / covers
             </p><Button
               :disabled="busy"
               variant="outline"
@@ -1137,7 +1138,7 @@ onMounted(async () => {
           v-if="selected?.exportedPath"
           class="file-path"
         >
-          {{ selected.exportedPath }}
+          {{ displayPath(selected.exportedPath) }}
         </p>
       </CollapsibleContent>
     </Collapsible>

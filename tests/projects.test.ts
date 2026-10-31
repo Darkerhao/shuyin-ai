@@ -49,6 +49,39 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M1 projects and materials', () => {
+  it('formats pending source paths for display but saves the exact selected path', async () => {
+    const path = String.raw`\\?\D:\书籍\原书.epub`
+    vi.mocked(api.chooseSourceDocument).mockResolvedValue(path)
+    vi.mocked(api.saveProject).mockResolvedValue(saved)
+    const { wrapper } = await render('/projects/new')
+    await wrapper.get('#title').setValue('活着')
+    await button(wrapper, '选择本地文件').trigger('click'); await flushPromises()
+    const files = wrapper.get('[aria-label="本地书籍文件"]')
+    expect(files.text()).toContain(String.raw`D:\书籍\原书.epub`)
+    expect(files.text()).not.toContain('\\\\?\\')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveProject).toHaveBeenCalledWith(null, expect.any(Object), [path])
+  })
+  it('searches network assets using the path displayed to the user', async () => {
+    const networkAsset = { ...asset, filePath: String.raw`\\?\UNC\server\share\视频.mp4` }
+    vi.mocked(api.listAssets).mockResolvedValue([networkAsset])
+    const { wrapper } = await render('/assets')
+    await wrapper.get('input[type="search"]').setValue(String.raw`\\server\share`)
+    expect(wrapper.findAll('.asset-row')).toHaveLength(1)
+    expect(wrapper.get('.asset-row').text()).toContain(String.raw`\\server\share\视频.mp4`)
+    expect(networkAsset.filePath).toBe(String.raw`\\?\UNC\server\share\视频.mp4`)
+  })
+  it('formats workspace and database locations without rewriting settings', async () => {
+    const settings = { root: String.raw`\\?\D:\书引 AI`, databasePath: String.raw`\\?\D:\数据\书引.sqlite3` }
+    vi.mocked(api.workspaceSettings).mockResolvedValue(settings)
+    const { wrapper } = await render('/settings')
+    expect(wrapper.text()).not.toContain('\\\\?\\')
+    expect(wrapper.text()).toContain(String.raw`D:\书引 AI`)
+    expect(wrapper.text()).toContain(String.raw`D:\数据\书引.sqlite3`)
+    expect(settings.root).toBe(String.raw`\\?\D:\书引 AI`)
+    expect(api.setWorkspaceRoot).not.toHaveBeenCalled()
+  })
+
   it('stages local book files until save, ignores duplicate selection and keeps them on save failure', async () => {
     const { wrapper, router } = await render('/projects/new')
     await wrapper.get('#title').setValue('活着')

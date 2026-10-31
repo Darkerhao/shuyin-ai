@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayPath } from '@/lib/displayPath'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -125,7 +126,7 @@ defineExpose({ start })
       role="status"
       aria-live="polite"
     >
-      {{ session.message }}
+      {{ displayPath(session.message) }}
     </p>
     <div
       v-if="session?.status === 'waiting'"

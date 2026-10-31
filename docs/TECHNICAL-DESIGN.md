@@ -1,5 +1,11 @@
 # 书引 AI 技术设计文档
 
+## 音频表单与路径展示（2026-11-01）
+
+音频来源/格式沿用现有控件与品牌色，以字段区域内边距和明确的标签、控件、说明间距替代负边距；980px 以下单列，长文件名省略并可悬停查看，完整路径和说明自然换行。说明通过 `aria-describedby` 关联控件。
+
+`src/lib/displayPath.ts` 是前端唯一的 Windows 路径展示格式化入口：盘符路径去掉扩展前缀，扩展 UNC 转为普通网络共享路径。书籍、素材、音频、发布、封面、备份/恢复、验证页及提示消息共用；素材搜索匹配显示路径。只转换已识别的盘符/UNC 前缀，不改变其他平台路径、设备路径或路径主体。不修改 DTO、数据库、原始选择值、文件身份和文件操作参数；Rust 的原生 shell 路径转换保持原用途。无迁移和依赖变化，SQLite 仍 v13。验证见 `WORKSPACE-UI-UPGRADE.md`。
+
 ## 书籍来源绑定（2026-10-28）
 
 `ProjectPage.vue` 暂存新增文档路径，选择不写库，已保存来源由 `list_assets` 读取。`save_project` 接收可选 `sourcePaths`，`Database::save_project_with_documents` 将书籍写入与既有 `assets::register_existing` 的 document 关联放在单个 SQLite 事务；只读打开校验可读性，任一失败回滚，创建失败仅清理本次空工作目录。未传文件仍走同一保存实现。音频页沿用 `setAssets` 的可用文档优先选择及 asset ID 来源契约，不新增来源表、权限、依赖或文件上传路径。数据库保持 v13。

@@ -1,3 +1,11 @@
+# 音频页面间距与路径展示（2026-11-01）
+
+- `.editor-section .muted` 对所有嵌套说明设置 `margin-top: -3px`，来源与格式没有内部间距结构。修复直接收敛该规则，表单使用明确 gap/padding，不堆叠负边距覆盖。
+- Rust `database/assets.rs` 保存 canonicalize 后的路径，Vue 直接插值。`paths::shell_path` 只供原生 shell 使用；不修改数据库/IPC，前端展示共用一个纯格式化函数。
+- 设计沿用背景 #f5f6f4、卡片 #ffffff、主色 #285b46、正文 #202d28、说明 #56635b、边界 #dfe5df 和本机字体。左右来源/格式，窄窗纵向；标签/控件 8px，说明 12px，区块 24px，字段区内边距 20px。保留原生交互，不新增装饰/动效。
+- 项目 ui-ux-pro-max 的 form spacing helper text 命中可换行、内容自适应和触点间距。Vue 两次查询未命中，不使用虚构推荐；以当前组件源码为准。通知组件为 OperationFeedback.vue，无 services/notifications.ts。
+- 样式主体位于 components 层，不能通过提高选择器权重覆盖 utilities 层的控件类；最终在 SelectTrigger 使用现有类合并设置白底和文本省略，删除无效覆盖。实测标签8px、说明12px，四档宽度无横向溢出，375px标题/标记正确分行。
+
 # 真实音频续验发现（2026-10-31）
 
 - 最终原生重定向修复已在真实服务下载成功，文件32,174,918字节、16:39、SHA-256与库一致，原任务仅一次生成、唯一音频素材。最终无调试端口release正常重启仍读回10本书和已归档音频；原文案/封面/草稿/模型/发布记录及冻结输入保持。没有将调试端口写入产品配置。

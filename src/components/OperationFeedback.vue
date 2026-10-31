@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, watch } from 'vue'
 import { toast } from 'vue-sonner'
+import { displayPath } from '@/lib/displayPath'
 
 const props = withDefaults(defineProps<{
   error?: string
@@ -13,12 +14,12 @@ let messageId: string | number | undefined
 
 watch(() => props.error, value => {
   if (errorId !== undefined) toast.dismiss(errorId)
-  errorId = value ? toast.error(value, { duration: Infinity }) : undefined
+  errorId = value ? toast.error(displayPath(value), { duration: Infinity }) : undefined
 }, { immediate: true })
 
 watch(() => props.message, value => {
   if (messageId !== undefined) toast.dismiss(messageId)
-  messageId = value ? toast[props.variant](value, {
+  messageId = value ? toast[props.variant](displayPath(value), {
     duration: props.variant === 'warning' ? 8000 : 5000,
     onDismiss: () => { if (props.message === value) emit('dismiss') },
     onAutoClose: () => { if (props.message === value) emit('dismiss') },
