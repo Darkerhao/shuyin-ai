@@ -1,5 +1,37 @@
 # 应用内自动音频实施与验收
 
+## 上传器延迟初始化修复（2026-10-31，源码 0.24.1）
+
+### 根因与最小修改
+
+截图报错为 `[file_input_missing] 未找到来源上传控件`。本轮只读获取 [Notebook 官方入口](https://notebook.google.com/) 引用的当前公开前端脚本，构建标识 `LabsTailwindUi.en_US.EGwTjgk_WtE`。其中 `xapUploaderTrigger` 的 `vJ.oa()` 订阅首次 `mouseover` / `focus` 后才构造 `Vnc`，在上传按钮旁插入隐藏文件输入框；`Fe()` 只在实例已存在时点击输入框。项目 `uploadAsset()` 原先直接调用 `click()`，不会聚焦，因而不触发初始化。脚本来源 URL 和只读快照位于 `output/playwright/audio-file-input/{source-url.txt,notebook-public.js}`，不作为产品依赖。
+
+新增回归按这一初始化顺序建立页面夹具，修改前稳定返回与截图完全相同的错误。修复仅在上传入口点击前检查运行令牌并执行 `upload.focus()`，随后沿用弹窗内唯一输入框标记和原生 `DOM.setFileInputFiles`。不扩大查找范围、不增加重试或超时、不修改全局点击行为。
+
+修改文件：`src-tauri/src/audio_page.js`、`tests/audio-page.test.mjs`，同步技术设计、使用手册、开发计划和本报告。无数据库变更，SQLite 保持 v13；无新依赖、权限、手工升版本或发布操作，归类 fix/patch。
+
+### 实际验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `node --test --test-name-pattern='focuses the lazy uploader' tests/audio-page.test.mjs` | 修改前 1 项失败，实际返回 `page_error / file_input_missing / 未找到来源上传控件。` |
+| `node --test tests/audio-page.test.mjs tests/audio-package.test.mjs` | 修改后 42 项通过，含懒初始化、入口顺序、无关文件控件拒绝及不重复提交回归 |
+| `npm run lint` | 通过 |
+| `npm run test:release` | 75 项通过，1 项 macOS 测试按平台跳过 |
+| `npx vitest run` | 14 文件、223 项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked audio:: -- --nocapture` | 26 项通过，含既有音频任务迁移、归档及恢复保护回归 |
+| `npm run tauri -- build --debug --no-bundle --config output/playwright/audio-file-input/tauri.json` | 独立标识桌面构建通过，包含 `npm run build` 的 TypeScript 检查和 Vite 构建；保留约 516 kB 分块提示 |
+| `node output/playwright/audio-file-input/run-native.cjs` | 真实 WebView2 / Tauri IPC / SQLite 的文件与文本两条隔离模拟链路通过 |
+| `git diff --check` | 通过 |
+
+Rust 与桌面构建先加载 `. ./.tools/env.ps1`，TEMP/TMP/SQLITE_TMPDIR 使用仓库 `output/audio-file-input-test-temp`。原生夹具不预置文件输入框，必须先聚焦才能创建；文件任务聚焦和点击上传各 1 次，文本任务均为 0 次，无关输入框保持空。两条链路各只模拟生成一次，下载并归档 844 字节 WAV，校验字节一致且只登记一个音频素材。已查看文件链路主窗口截图，显示“归档完成”和“1 个音频”。报告与截图位于 `output/playwright/audio-file-input/`。
+
+### 旧任务处理与边界
+
+保留 `verify_remote` 的只读保护，不根据错误文案或页面看起来为空强行重传。旧任务已经进入核对阶段时，包含本修复的版本不会自动重置旧任务：用户确认旧笔记本仍为 0 来源、没有开始音频生成后，停止旧任务跟进并重新开始；已有来源或音频则在网站核对并完成后手动导入。旧笔记本、冻结来源和已保存内容不删除。
+
+原生验证使用独立应用标识 `com.shuyin.audio-file-input-verification-20261031`；框架 SQLite/WebView 资料在 `%LOCALAPPDATA%`（C 盘），测试书籍与音频在仓库 output。未接触正式数据库、登录凭据或原书，没有替换正在运行的安装版。真实 Google 登录、EPUB 上传、生成/下载、正式安装升级和 macOS/Linux 尚未验收；没有运行整体 `npm test`、队列测试、完整 Rust 测试或 Clippy。公开源码核对及模拟链路通过不代表真实服务全流程已经通过。
+
 ## 添加来源与上传文件修复（2026-10-30，源码 0.24.0）
 
 用户确认当前网站的文件流程为「来源面板顶部添加来源 → 弹窗内上传文件」。现场截图显示笔记本未命名、0 个来源；之前只显示 `UiError` 的原始触发原因不能仅凭截图还原。本轮针对确认的入口流程、命名阻塞和错误丢失进行修改，不将模拟页面证据等同于真实 Google 服务验收。
