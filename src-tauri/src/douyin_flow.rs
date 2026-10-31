@@ -461,6 +461,15 @@ async fn execute(
     let _ = publish(app, publisher, session);
 }
 
+fn upload_navigation_finished(page: &DouyinPage) -> bool {
+    page.login_visible
+        || page.blocked
+        || !page.online
+        || page.kind == "draft"
+        || (page.kind == "upload" && page.upload_ready)
+        || (page.kind == "editor" && page.editor_ready)
+}
+
 async fn drive(
     app: &AppHandle,
     main: &WebviewWindow,
@@ -518,24 +527,28 @@ async fn drive(
     }
     session.done("connect", false);
     let window = publish_window(app)?;
-    if page.kind == "home" && !page.blocked {
+    if !page.blocked && (page.kind == "home" || (page.kind == "upload" && !page.upload_ready)) {
         running(publisher, snapshot)?;
-        window
-            .navigate(
-                "https://creator.douyin.com/creator-micro/content/upload"
-                    .parse()
-                    .unwrap(),
-            )
-            .map_err(|e| e.to_string())?;
+        session.message = "正在打开发布视频入口，等待上传页面就绪…".into();
+        publish(app, publisher, session)?;
+        if page.kind == "home" {
+            window
+                .navigate(
+                    "https://creator.douyin.com/creator-micro/content/upload"
+                        .parse()
+                        .unwrap(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             running(publisher, snapshot)?;
             let next = inspect_douyin_window(app.clone(), main.clone()).await?;
-            if next.kind != "home" {
+            if upload_navigation_finished(&next) {
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err("发布页打开超时，请在官方窗口检查。".into());
+                return Err("发布视频入口或上传控件加载超时，请在官方窗口检查后重新开始。".into());
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
@@ -966,6 +979,38 @@ async fn stop_current(publisher: &DouyinPublisher, run_id: u64) -> Result<Sessio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upload_navigation_waits_for_controls_and_returns_for_manual_blockers() {
+        let mut page: DouyinPage = serde_json::from_value(json!({
+            "open": true, "path": "/creator-micro/home", "loginVisible": false,
+            "online": true, "kind": "home"
+        }))
+        .unwrap();
+        assert!(!upload_navigation_finished(&page));
+        page.kind = "unknown".into();
+        assert!(!upload_navigation_finished(&page));
+        page.kind = "upload".into();
+        assert!(!upload_navigation_finished(&page));
+        page.upload_ready = true;
+        assert!(upload_navigation_finished(&page));
+        page.kind = "editor".into();
+        assert!(!upload_navigation_finished(&page));
+        page.editor_ready = true;
+        assert!(upload_navigation_finished(&page));
+        page.kind = "draft".into();
+        assert!(upload_navigation_finished(&page));
+        page.kind = "unknown".into();
+        page.blocked = true;
+        assert!(upload_navigation_finished(&page));
+        page.blocked = false;
+        page.login_visible = true;
+        assert!(upload_navigation_finished(&page));
+        page.login_visible = false;
+        page.online = false;
+        assert!(upload_navigation_finished(&page));
+    }
+
     #[test]
     fn changed_fields_require_confirmation_again_without_losing_other_results() {
         let mut session = Session::new(1, "task".into());

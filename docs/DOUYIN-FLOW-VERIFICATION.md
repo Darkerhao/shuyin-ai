@@ -1,5 +1,46 @@
 # 智能辅助流程改版实施与本地验证
 
+## 启动误报与发布入口等待修复（2026-11-01）
+
+用户截图为官方创作者中心已显示，但应用立即提示“当前不是抖音创作者中心，已停止页面操作”。实际调用链为 `start_douyin_task` → `open_douyin_window` → `drive` → `inspect_douyin_window` → `evaluate`。窗口创建只发起导航，不等待页面加载；首次读取可能仍是 `about:blank`，原 URL 校验立即中止，会话不会等到原有首页自动导航逻辑。Rust 回归先用该初始地址复现同一句错误；页面夹具同时复现文档仍在加载却被当作可读上传页。
+
+修复仅区分加载与非法来源：只读检查对初始空白页/未加载文档有限等待 30 秒，保留停止与关闭检查，执行脚本和原生写入的官方来源限制不放宽。账号确认后继续使用唯一的固定官方上传地址，菜单折叠不影响导航，不新增菜单点击或兜底路径。导航完成需要上传控件就绪或可识别的编辑页、登录、草稿、弹窗等状态，不再以“不是首页”判定成功；直接进入上传页同样等待控件，不提前预占视频发送状态。
+
+修改文件：`src-tauri/src/douyin.rs`、`src-tauri/src/douyin_flow.rs`、`src-tauri/src/douyin_page.js`、`tests/douyin-editor.test.ts`、`docs/TECHNICAL-DESIGN.md`、`docs/DEVELOPMENT-PLAN.md`、本记录。无新增依赖、权限、数据库或迁移，SQLite 保持 v13；归类 fix/patch，未改版本号、提交或发布。
+
+### 实际验证
+
+Rust 命令先执行 `. ./.tools/env.ps1`；全量 Rust 测试的 `TEMP`、`TMP`、`SQLITE_TMPDIR` 指向仓库 `output/douyin-startup/rust-temp`。
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked douyin::tests::new_window_waits -- --nocapture`（修复前） | 失败，实际返回截图同文案的非官方来源错误，预期为等待 |
+| `npx vitest run tests/douyin-editor.test.ts`（修复前） | 19 项通过、1 项失败，复现文档加载中没有等待 |
+| `npx vitest run tests/douyin-editor.test.ts tests/douyin.test.ts tests/publishing.test.ts` | 48 项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked douyin:: -- --nocapture` | 12 项通过 |
+| `npm run lint` | 通过 |
+| `npm test` | Vitest 225 项通过；发布/音频脚本 78 项通过、1 项 macOS 跳过；队列 18 项通过、1 项失败 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 130 项通过、1 项既有系统凭据测试忽略 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `npx tauri build --debug --no-bundle --config output/douyin-startup/tauri-test.json` | 隔离桌面构建通过，包含 `npm run build`、TypeScript 检查及 Vite 构建；保留约 516 kB 分块提示 |
+| `node output/douyin-startup/native.cjs` | 5 项隔离原生场景通过，结果为 `output/douyin-startup/native-result.json` |
+| `git diff --check` | 通过 |
+
+整体测试失败仍位于未修改的 `tests/codex-queue.test.mjs:118`：`a missing predecessor report reruns that task and its completed successors` 预期执行 `one,two,one,two`，实际 `one,two`。未删除测试或修改队列逻辑，不能将 `npm test` 写为全部通过。
+
+### 验收与边界
+
+隔离构建使用 `com.shuyin.douyin-startup-20261101`，新建测试数据库及工作区，不读取正式浏览器会话。测试进程临时启用本地 CDP 和阻塞代理，保证首次官方导航停留空白页；随后用本地 HTML 拦截官方页面地址，不连接真实抖音账号，不上传到远程服务，产品未增加调试端口配置。
+
+- 初始空白页不报非官方来源：原生窗口在阻塞导航下保持 running，通过。
+- 有限等待和停止：加载超时提示独立原因，重试后可在等待中停止，通过。
+- 自动进入发布视频：折叠菜单首页经人工账号确认后只导航一次固定上传地址，通过。
+- 等待上传控件：上传页 1.8 秒后才创建文件输入框，宿主等待后选择仓库的测试成片且仅一次，通过；不代表真实平台上传与处理完成。
+- 草稿及任务保护：保留官方页面模拟草稿和弹窗，不再次导航，SQLite 任务仍 ready、没有发布记录，通过。
+
+尚未替换用户正在运行的正式安装版，也未执行本轮 NSIS 打包、真实账号登录后的首页 DOM 兼容性、真实上传/封面/合集或最终发布验收。下一步在包含此修复的正式构建中复验用户截图场景；账号、验证码及最终发布仍由用户确认。
+
 ## 合集确认前恢复视频预览（2026-10-29）
 
 用户截图在「确认本次合集」时报“网页视频身份无法与当前会话核对”。调用链为 `DouyinVerification.vue` → `continue_douyin_task` 的 Collection 决定 → `verify_video`，报错发生在保存、选择合集之前。
