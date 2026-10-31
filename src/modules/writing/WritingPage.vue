@@ -6,6 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
+import { displayPath } from '@/lib/displayPath'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import * as api from '../../services/ai'
@@ -819,8 +820,8 @@ onMounted(async () => {
               <AppIcon name="info" />{{ audioBrowser.message || '当前平台暂不支持自动音频，请使用手动导入。' }}
             </div>
             <template v-else>
-              <div class="grid gap-4 md:grid-cols-2">
-                <div>
+              <div class="audio-setup-grid">
+                <div class="audio-setup-field">
                   <label for="audio-source">本次原书来源</label>
                   <Select
                     v-model="audioSourceKey"
@@ -828,7 +829,9 @@ onMounted(async () => {
                   >
                     <SelectTrigger
                       id="audio-source"
-                      class="w-full"
+                      class="w-full bg-card *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate"
+                      :title="selectedDocument?.originalName"
+                      aria-describedby="audio-source-hint"
                     >
                       <SelectValue placeholder="选择原书文件或资料文本" />
                     </SelectTrigger>
@@ -851,18 +854,21 @@ onMounted(async () => {
                   </Select>
                   <p
                     v-if="selectedDocument"
+                    id="audio-source-hint"
                     class="muted file-path"
                   >
-                    {{ selectedDocument.filePath }}
+                    {{ displayPath(selectedDocument.filePath) }}
                   </p>
                   <p
                     v-else-if="audioSourceKey === 'text' && sourceNotes.trim()"
+                    id="audio-source-hint"
                     class="muted"
                   >
                     将使用「修改书籍资料」中保存的资料文本，不会标记为完整原著。
                   </p>
                   <p
                     v-else
+                    id="audio-source-hint"
                     class="muted"
                   >
                     还没有可选来源。请添加原书文件，或先在书籍资料中填写资料文本。
@@ -876,7 +882,7 @@ onMounted(async () => {
                     <AppIcon name="plus" />添加原书文件
                   </Button>
                 </div>
-                <div>
+                <div class="audio-setup-field">
                   <label for="audio-format">Gemini Notebook 音频格式</label>
                   <Select
                     v-model="audioFormat"
@@ -884,7 +890,8 @@ onMounted(async () => {
                   >
                     <SelectTrigger
                       id="audio-format"
-                      class="w-full"
+                      class="w-full bg-card"
+                      aria-describedby="audio-format-hint"
                     >
                       <SelectValue placeholder="选择格式" />
                     </SelectTrigger>
@@ -897,12 +904,15 @@ onMounted(async () => {
                       </SelectItem>
                     </SelectContent>
                   </Select>
-                  <p class="muted">
+                  <p
+                    id="audio-format-hint"
+                    class="muted"
+                  >
                     「深入探索」通常是双主持人；「简报」较短。网站实际档位和提示词只影响创作要求，不保证精确分钟或单人效果。
                   </p>
                 </div>
               </div>
-              <div class="actions wrap">
+              <div class="actions audio-start-actions">
                 <Button
                   id="start-audio-job"
                   type="button"
@@ -955,7 +965,7 @@ onMounted(async () => {
                 class="error"
                 role="alert"
               >
-                {{ shownAudioJob.errorMessage }}
+                {{ displayPath(shownAudioJob.errorMessage) }}
               </p>
               <p
                 v-if="shownAudioJob.status === 'waiting_user'"
@@ -1120,7 +1130,7 @@ onMounted(async () => {
                 </Badge>
               </h3>
               <p class="file-path">
-                {{ asset.filePath }}
+                {{ displayPath(asset.filePath) }}
               </p>
               <p :class="asset.existsStatus === 'available' ? 'muted' : 'error'">
                 {{ asset.existsStatus === 'available' ? '文件可用' : '文件已丢失，请到发布准备页重新定位' }} · {{ (asset.fileSize / 1024 / 1024).toFixed(2) }} MB

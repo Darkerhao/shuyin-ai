@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayPath } from '@/lib/displayPath'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import { useWindowCloseGuard } from '../../composables/useWindowCloseGuard'
@@ -184,7 +185,7 @@ onMounted(() => { if (desktop && props.id) void load() })
                 {{ document.originalName }}
               </p>
               <p class="file-path muted">
-                {{ document.filePath }}
+                {{ displayPath(document.filePath) }}
               </p>
               <p :class="document.existsStatus === 'available' ? 'muted' : 'error'">
                 {{ document.existsStatus === 'available' ? '已绑定 · 音频制作可直接使用' : '文件不可用，请到发布准备的素材管理中重新定位' }}
@@ -199,7 +200,7 @@ onMounted(() => { if (desktop && props.id) void load() })
                 {{ sourceName(path) }}
               </p>
               <p class="file-path muted">
-                {{ path }}
+                {{ displayPath(path) }}
               </p>
               <div class="actions wrap">
                 <span class="muted">待保存</span>
@@ -246,7 +247,7 @@ onMounted(() => { if (desktop && props.id) void load() })
           aria-label="读书资料导入预览"
         >
           <p class="file-path">
-            来源：{{ imported.sourceName }} · {{ imported.sourcePath }}
+            来源：{{ imported.sourceName }} · {{ displayPath(imported.sourcePath) }}
           </p>
           <Textarea
             :model-value="imported.text"

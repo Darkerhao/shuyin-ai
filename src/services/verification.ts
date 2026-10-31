@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import { displayPath } from '@/lib/displayPath'
 
 export interface ProbeRecord {
   note: string
@@ -27,6 +28,6 @@ export async function selectVideo(): Promise<string | null> {
 }
 
 export function errorMessage(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') return error.message
-  return error instanceof Error ? error.message : String(error)
+  const message = typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string' ? error.message : String(error)
+  return displayPath(message)
 }

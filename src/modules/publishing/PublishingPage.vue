@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayPath } from '@/lib/displayPath'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -426,7 +427,7 @@ onMounted(() => { if (desktop) void loadTask() })
             v-if="audio"
             class="file-path"
           >
-            {{ audio.filePath }}
+            {{ displayPath(audio.filePath) }}
           </p>
           <p
             v-if="audio && audio.existsStatus !== 'available'"
@@ -470,7 +471,7 @@ onMounted(() => { if (desktop) void loadTask() })
             v-if="video"
             class="file-path"
           >
-            {{ video.filePath }}
+            {{ displayPath(video.filePath) }}
           </p>
           <p
             v-if="video && video.existsStatus !== 'available'"
@@ -656,7 +657,7 @@ onMounted(() => { if (desktop) void loadTask() })
         v-if="selected.taskDirectory"
         class="file-path"
       >
-        {{ selected.taskDirectory }}
+        {{ displayPath(selected.taskDirectory) }}
       </p>
       <div class="actions wrap">
         <Button

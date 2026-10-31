@@ -455,6 +455,22 @@ describe('audio automation', () => {
   const audioAsset: Asset = { id: 'audio-1', projectId: 'p1', assetType: 'audio', filePath: 'D:/本期音频.m4a', originalName: '本期音频.m4a', fileSize: 2048, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
   const documentAsset: Asset = { id: 'doc-1', projectId: 'p1', assetType: 'document', filePath: 'D:/原书.pdf', originalName: '原书.pdf', fileSize: 4096, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
 
+  it('shows readable source and audio paths while preserving original assets and selection', async () => {
+    const document = { ...documentAsset, filePath: String.raw`\\?\D:\书籍\原书.pdf` }
+    const recording = { ...audioAsset, filePath: String.raw`\\?\UNC\server\share\本期音频.m4a` }
+    vi.mocked(projects.listAssets).mockResolvedValue([document, recording])
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    expect(wrapper.text()).not.toContain('\\\\?\\')
+    expect(wrapper.text()).toContain(String.raw`D:\书籍\原书.pdf`)
+    expect(wrapper.text()).toContain(String.raw`\\server\share\本期音频.m4a`)
+    expect(wrapper.get('#audio-source').attributes('aria-describedby')).toBe('audio-source-hint')
+    expect(wrapper.get('#audio-format').attributes('aria-describedby')).toBe('audio-format-hint')
+    await wrapper.get('#start-audio-job').trigger('click'); await flushPromises()
+    expect(audio.startAudioJob).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'asset', assetId: 'doc-1' } }))
+    expect(document.filePath).toBe(String.raw`\\?\D:\书籍\原书.pdf`)
+    expect(recording.filePath).toBe(String.raw`\\?\UNC\server\share\本期音频.m4a`)
+  })
+
   it('allows starting with an unopened internal browser and offers no extension setup', async () => {
     vi.mocked(audio.getAudioJobView).mockResolvedValue({
       job: null,

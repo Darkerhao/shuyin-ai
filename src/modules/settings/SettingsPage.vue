@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayPath } from '@/lib/displayPath'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -93,7 +94,7 @@ onMounted(() => { if (desktop) void load() })
       v-else
       :class="error ? 'error' : 'file-path'"
     >
-      {{ error || message }}
+      {{ displayPath(error || message) }}
     </p>
     <p
       v-if="operationBusy"
@@ -109,7 +110,7 @@ onMounted(() => { if (desktop) void load() })
       v-if="settings"
       class="file-path"
     >
-      {{ settings.root }}
+      {{ displayPath(settings.root) }}
     </p><div class="actions">
       <Button
         :disabled="!desktop || busy"
@@ -126,7 +127,7 @@ onMounted(() => { if (desktop) void load() })
         重新读取
       </Button>
     </div><dl v-if="settings">
-      <dt>数据库位置</dt><dd>{{ settings.databasePath }}</dd>
+      <dt>数据库位置</dt><dd>{{ displayPath(settings.databasePath) }}</dd>
     </dl>
   </section>
   <section class="panel backup-primary">
@@ -171,7 +172,7 @@ onMounted(() => { if (desktop) void load() })
     @cancel="fullRestore = null"
   >
     <p class="file-path">
-      {{ fullRestore.manifestPath }}
+      {{ displayPath(fullRestore.manifestPath) }}
     </p>
     <p>{{ fullRestore.fileCount }} 个文件 · {{ (fullRestore.totalBytes / 1024 / 1024).toFixed(1) }} MB · 未包含 {{ fullRestore.omittedVideos }} 个视频。</p>
     <p>将替换当前数据库，并在所选目录内新建恢复文件夹、重建素材和任务包引用；现有文件保留，替换前自动备份当前数据库。密钥需在模型设置核验。</p>
@@ -179,7 +180,7 @@ onMounted(() => { if (desktop) void load() })
       v-if="restoreDirectory"
       class="file-path"
     >
-      恢复位置：{{ restoreDirectory }}
+      恢复位置：{{ displayPath(restoreDirectory) }}
     </p>
     <template #actions>
       <Button
@@ -229,7 +230,7 @@ onMounted(() => { if (desktop) void load() })
         @cancel="restorePath = ''"
       >
         <p class="file-path">
-          {{ restorePath }}
+          {{ displayPath(restorePath) }}
         </p><p>恢复将替换全部项目、创作版本、模型配置、任务、素材关联和普通设置。系统会先校验备份并自动保存当前数据库；原始素材文件保持原位，失效路径可在项目内重新定位。密钥不随备份恢复。</p>
       </ConfirmAction>
     </CollapsibleContent>

@@ -1,5 +1,40 @@
 # 工作台页面与交互升级验收
 
+## 音频页面留白与全站路径展示（2026-11-01）
+
+### 实现与原因
+
+- 删除 `.editor-section .muted` 的通用负上边距；音频来源/格式使用 20px 内边距、24px 分栏间距、8px 标签间距与12px说明间距，窄窗口改为16px内边距和单列。沿用墨绿、灰白与本机字体，不添加依赖或动画。
+- 来源文件名在选择框内省略并通过 title 保留完整名称；路径自然换行，说明关联控件，极窄窗口标题与标记可换行。
+- 原路径来自 Rust canonicalize 并直接由 Vue 展示。新增 `displayPath` 共用展示函数，将 `\\?\D:\...` 显示为 `D:\...`，将 `\\?\UNC\server\share\...` 显示为 `\\server\share\...`；也覆盖提示中的多个路径。不改写存储、命令参数或源文件，设备路径不擅自转换。
+- 素材搜索使用显示路径，避免用户复制正常 UNC 路径后搜不到素材；保存来源与打开音频仍使用原始路径/素材 ID。
+
+### 修改范围
+
+- `src/style.css`、`src/modules/writing/WritingPage.vue`：布局、字段间距、窄窗口、来源提示和显示。
+- `src/lib/displayPath.ts`、`src/components/OperationFeedback.vue`、`src/services/verification.ts`：共用格式化与错误/操作提示。
+- `src/modules/projects/ProjectPage.vue`、`src/modules/projects/ProjectAssets.vue`、`src/modules/publishing/PublishingPage.vue`、`src/modules/publishing/DouyinVerification.vue`、`src/modules/covers/CoversPage.vue`、`src/modules/settings/SettingsPage.vue`、`src/modules/verification/VerificationPage.vue`：展示接入。
+- `tests/display-path.test.ts`、`tests/ai.test.ts`、`tests/projects.test.ts`、`tests/notifications.test.ts`：路径规则、真实页面调用点、原始参数保留与搜索回归。
+- 技术设计、开发计划、本报告及根目录三个规划文件同步。无 Rust、数据库、权限、依赖或版本号变更，归类 fix/patch。
+
+### 实际验证
+
+- `npx vitest run tests/notifications.test.ts tests/ai.test.ts -t 'readable'`：修复前两项回归均失败于界面/浮层仍包含扩展前缀；测试中的一次原始字符串转义错误先修正后再确认真实失败。
+- `npx vitest run tests/display-path.test.ts tests/notifications.test.ts tests/projects.test.ts tests/ai.test.ts`：112 项通过。
+- `npx vitest run`：15 个文件、241 项通过。
+- `npm run lint`：通过，0 lint 警告。
+- `npm run build`：TypeScript 与 Vite 生产构建通过；保留约 517 kB 主包提示及本机 npm 旧配置警告，未为此放宽检查。
+- `node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=audio-spacing run-code --filename output/playwright/audio-spacing/check.js`：隔离浏览器 + 模拟 Tauri IPC，通过1440/1024/720/375px检查；标签间距8px，说明间距12px，字段内容距边界21/17px（含1px边框），无横向溢出。覆盖普通来源、超长中文路径/文件名、资料文本、无来源、键盘展开与选择格式、打开音频的原始ID及设置路径。最终截图已复核。
+- `git diff --check`：通过。
+
+本地证据位于 `output/playwright/audio-spacing/`：`browser-result.log`、`vitest.log`、`lint.log`、`build.log`、桌面/窄窗口/长路径截图。视觉复核发现组件层不能覆盖控件工具类；删除无效覆盖，直接通过现有 SelectTrigger 类合并指定白底及省略。长文件名回归曾捕获 line-clamp-none 的 overflow:visible，改为 block + truncate 后原回归通过。
+
+本轮浏览器与1422开发服务已关闭。技能搜索产生的未跟踪 `__pycache__` 清理被工具策略拒绝，保留在技能 scripts 目录，不属于产品改动，未提交。
+
+### 验收与边界
+
+标签/选择框/说明间距、字段内留白、长路径换行、窄窗口单列、正常盘符/UNC显示及原始文件参数保留均通过本地验证。没有操作真实音频任务、登录网站或更改正式数据；未运行 Rust/数据库迁移测试、发布/队列脚本测试、安装包构建或安装版人工验收。下一步在更新后的 Windows 桌面版确认当前书籍页面与文件打开；既有安装不会随源码修改自动更新。
+
 ## 首次打开焦点边框修复（2026-10-29）
 
 根因是路由监听立即执行，并在首次路由解析后再次把焦点移入整个 `main`，触发已有的 2px 深绿色焦点轮廓。`App.vue` 现在通过 Vue Router 的 `START_LOCATION` 区分初始导航，仅在已有页面之间发生路径变化时转移焦点；页面标题仍在首次加载更新，查询参数变化保留原控件焦点，跳到主要内容及键盘焦点提示继续有效。
