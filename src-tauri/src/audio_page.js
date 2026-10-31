@@ -361,6 +361,9 @@
   async function uploadAsset(job, scope) {
     const upload = await waitFor(() => findInteractive(UI.uploadFiles, scope), 3000)
     if (!upload) throw new UiError('upload_files_missing', '添加来源弹窗中未找到“上传文件”入口。')
+    assertRunning()
+    // Notebook's uploader creates its file input on first focus or mouseover.
+    upload.focus()
     click(upload, '上传文件')
     const input = await waitFor(() => findSourceInput(scope), 3000)
     if (!input) throw new UiError('file_input_missing', '未找到来源上传控件。')

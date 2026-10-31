@@ -414,6 +414,30 @@ test('an already open source dialog uploads without clicking Add source again', 
   assert.deepEqual(clicks, ['upload'])
 })
 
+test('file upload focuses the lazy uploader before clicking Upload files', async () => {
+  const { core, document } = page('<section role="dialog"><button id="upload">上传文件</button></section><input id="unrelated" type="file">')
+  const upload = document.getElementById('upload')
+  const events = []
+  // The website uploader creates its hidden sibling input on first focus or hover.
+  upload.addEventListener('focus', () => {
+    events.push('focus')
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.hidden = true
+    input.addEventListener('click', () => events.push('file'))
+    upload.after(input)
+  }, { once: true })
+  upload.addEventListener('click', () => {
+    events.push('upload')
+    upload.nextElementSibling?.click()
+  })
+  const result = await core.runStep(textJob({ source: { kind: 'asset', name: '原书.epub' } }))
+  assert.equal(result.kind, 'file_input_ready', JSON.stringify(result))
+  assert.deepEqual(events, ['focus', 'upload', 'file'])
+  assert.equal(upload.nextElementSibling.getAttribute('data-shuyin-audio-source'), 'job-1:1')
+  assert.equal(document.getElementById('unrelated').hasAttribute('data-shuyin-audio-source'), false)
+})
+
 test('file upload never skips a missing dialog or Upload files control', async () => {
   for (const html of [
     '<button>添加来源</button><button>上传文件</button><input type="file">',
