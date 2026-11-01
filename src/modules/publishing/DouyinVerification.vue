@@ -148,7 +148,7 @@ defineExpose({ start })
           使用这个账号继续
         </Button>
         <p class="muted">
-          仅昵称无法跨重启识别账号；重新登录或窗口重开后需要再次确认。
+          当前窗口内只需确认一次，后续步骤自动继续；退出登录、切换账号或重开窗口后才需重新确认。
         </p>
       </template>
       <Button
@@ -157,7 +157,7 @@ defineExpose({ start })
         :disabled="pending || stopping"
         @click="decide({ kind: 'existingVideo' })"
       >
-        已核对账号和视频，继续当前任务
+        已核对视频，继续当前任务
       </Button>
       <Button
         v-else-if="session.waitingFor === 'processing'"

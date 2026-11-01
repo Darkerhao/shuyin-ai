@@ -141,6 +141,25 @@ pub struct DouyinPage {
     pub processed: bool,
 }
 
+impl DouyinPage {
+    fn account_loading(&self) -> bool {
+        self.online
+            && !self.login_visible
+            && matches!(
+                self.path.as_str(),
+                "/" | "/creator-micro/home"
+                    | "/creator-micro/content/manage"
+                    | "/creator-micro/content/upload"
+                    | "/creator-micro/content/post/video"
+            )
+            && (!self.authenticated
+                || !self
+                    .account
+                    .as_ref()
+                    .is_some_and(|a| a.id.is_some() || (!a.key.is_empty() && a.key != "0")))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorSnapshot {
@@ -314,7 +333,7 @@ async fn inspect_douyin_window(
             let result = evaluate(&publish_window, include_str!("douyin_page.js").into()).await?;
             let page: Option<DouyinPage> = serde_json::from_str(&result)
                 .map_err(|_| "页面返回了无效状态，请检查官方窗口。")?;
-            if let Some(mut page) = page {
+            if let Some(mut page) = page.filter(|page| !page.account_loading()) {
                 page.supported = cfg!(windows);
                 if page.kind == "editor" && page.editor_ready && !page.login_visible {
                     page.editor = Some(read_editor(&publish_window).await?);

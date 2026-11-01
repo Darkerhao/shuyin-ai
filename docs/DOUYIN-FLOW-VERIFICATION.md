@@ -1,5 +1,51 @@
 # 智能辅助流程改版实施与本地验证
 
+## 已选合集误报与重复账号确认（2026-11-01）
+
+### 根因与最小修复
+
+- `continue_douyin_task` 的合集决定只检查当前展开的选项列表。官方页选择合集后列表会收起，`loaded=false`，即使已选名称匹配，仍抛出截图同文案错误。确认和恢复现在共用已选值/选项校验：先接受官方控件已选的目标；需要变更时才自动展开，最多等待5秒加载唯一精确选项，选择后再次回读。无法读取控件不能当作“不加入合集”，不同的手工选择仍需明确授权。
+- 旧账号指纹对整个 CSS `background-image` 直接按 `?` 截断：无参数时包含结尾 CSS 引号/括号及候补图片，有参数时不含，导致同一头像产生不同 key。现在只提取主图片地址并去除查询/片段参数，不把昵称当稳定公开 ID。
+- 官方页导航时，账号控件或头像短暂未挂载会被立即用于账号比较；登录等待和视频等待还会清除确认。已知官方页身份尚未就绪现在复用30秒有界只读等待，期间可停止；网络中断本身不清除确认。同一窗口确认沿用，真实登录页、账号变化及窗口关闭的重新核对边界保留。
+- 视频来源确认只询问成片，不再重复显示“核对账号”。最终发布仍由用户在官方页执行，没有增加最终发布动作或跨重启账号信任。
+
+修改文件：`src-tauri/src/douyin.rs`、`src-tauri/src/douyin_flow.rs`、`src-tauri/src/douyin_page.js`、`src/modules/publishing/DouyinVerification.vue`、`tests/douyin-editor.test.ts`、`tests/douyin.test.ts`、`docs/TECHNICAL-DESIGN.md`、`docs/USER-GUIDE.md`、`docs/DEVELOPMENT-PLAN.md`、本记录。无依赖、权限、数据库或迁移变更，SQLite 保持v13；归类 fix/patch，未改版本号、提交或发布。
+
+### 实际命令与结果
+
+Rust 命令先执行 `. ./.tools/env.ps1`；全量测试的 `TEMP`、`TMP`、`SQLITE_TMPDIR` 指向仓库 `output/douyin-confirmation/rust-temp`。
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked douyin::flow::tests::selected_collection_remains_valid -- --nocapture`（修复前） | 1项失败，已选名称一致但关闭列表被拒绝 |
+| `npx vitest run tests/douyin-editor.test.ts`（修复前） | 20项通过、1项失败，同一头像仅改变参数/候补图，key 从 `-19068740` 变为 `-1144152651` |
+| `npx vitest run tests/douyin-editor.test.ts tests/douyin.test.ts tests/publishing.test.ts` | 50项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked douyin:: -- --nocapture` | 15项通过 |
+| `npm run lint` | 通过 |
+| `npm test` | Vitest243项通过；发布/音频脚本78项通过、1项macOS跳过；队列18项通过、1项失败 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 133项通过、1项既有系统凭据测试忽略 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `npx tauri build --debug --no-bundle --config output/douyin-confirmation/tauri-test.json` | 隔离桌面构建通过，包含 `npm run build`、TypeScript和Vite构建；保留约517kB分块提示 |
+| `node output/douyin-confirmation/native.cjs` | 最终连续两次运行各7项隔离原生场景通过，结果见 `output/douyin-confirmation/native-result.json` |
+| `git diff --check` | 通过 |
+
+完整测试仍失败于未改动的 `tests/codex-queue.test.mjs:118`，删除前序报告后的预期执行序列为 `one,two,one,two`，实际为 `one,two`，与既有记录相同。未修改队列测试或弱化断言。隔离脚本初版有变量重名的语法错误，执行前修正；随后复现了夹具接入时序问题：启动任务后才连接CDP和安装页面拦截，其中一次连接用时约37秒，超过产品正常的30秒空白页等待，任务已经加载超时。记录时序和页面状态后，改为先打开窗口、接入夹具，再开始任务；不修改产品超时。修正夹具后连续两次完整通过。
+
+### 验收与边界
+
+使用独立标识 `com.shuyin.douyin-confirmation-20261101`、测试数据库与测试素材。脚本通过本地阻塞代理隔离网络，再拦截官方地址返回本地HTML；测试进程临时开启CDP，不改变产品调试配置，不读取正式登录数据。
+
+1. 只确认一次账号：上传页账号控件延迟1.5秒，头像增加查询参数，之后仍自动选择一次本地测试成片并完成文案回读，没有再次询问账号。
+2. 列表延迟加载：选项延迟0.8秒出现，超过原固定0.5秒等待，仍能读取两项。
+3. 截图场景：官方页已选目标且下拉框移除，确认进入 review，合集点击次数为0。
+4. 同窗口恢复：已确认账号、视频、封面和合集继续沿用，不重新打开合集，不重传视频。
+5. 明确更改合集：保留网页不同选择并等待；用户授权后自动重新展开已关闭的列表、选择一次、回读并进入 review。
+6. 数据与发布边界：任务保存合集且仍为 ready，无发布记录，最终发布按钮点击次数为0，上传总次数为1。
+7. 实际账号标记变化：重新要求确认并清除旧账号合集及完成证明。
+
+前两条失败回归和原生夹具证实代码缺陷及修复，但没有读取截图时的真实DOM或事件轨迹，不能把头像参数变化写为用户此次重复询问的唯一现场原因。未操作真实账号、上传真实素材、替换 `D:\MyWork\software\shuyin-ai\shuyin-ai.exe`、构建NSIS安装包或执行安装升级。下一步在包含修复的正式构建中复验用户当前合集和账号；最终发布仍人工操作。
+
 ## 启动误报与发布入口等待修复（2026-11-01）
 
 用户截图为官方创作者中心已显示，但应用立即提示“当前不是抖音创作者中心，已停止页面操作”。实际调用链为 `start_douyin_task` → `open_douyin_window` → `drive` → `inspect_douyin_window` → `evaluate`。窗口创建只发起导航，不等待页面加载；首次读取可能仍是 `about:blank`，原 URL 校验立即中止，会话不会等到原有首页自动导航逻辑。Rust 回归先用该初始地址复现同一句错误；页面夹具同时复现文档仍在加载却被当作可读上传页。
