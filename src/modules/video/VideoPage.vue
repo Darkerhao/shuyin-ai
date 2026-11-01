@@ -16,7 +16,7 @@ import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { videoStatuses, type VideoJob, type VideoScene, type VideoSettings } from '../../types/video'
+import { visualCatalog, videoStatuses, type VideoJob, type VideoScene, type VideoSettings } from '../../types/video'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -46,7 +46,9 @@ const running = computed(() => jobs.value.some(job => job.status === 'running'))
 const audios = computed(() => assets.value.filter(a => a.assetType === 'audio' && a.existsStatus === 'available'))
 const subtitles = computed(() => assets.value.filter(a => a.assetType === 'subtitle' && /\.srt$/i.test(a.originalName) && a.existsStatus === 'available'))
 const editable = computed(() => selected.value && !['running', 'succeeded'].includes(selected.value.status))
-const completePlan = computed(() => scenes.value.length > 0 && scenes.value.at(-1)!.last + 1 === selected.value?.plan.cues.length)
+const legacyPlan = computed(() => scenes.value.some(scene => !scene.beats?.length))
+const completePlan = computed(() => scenes.value.length > 0 && !legacyPlan.value && scenes.value.at(-1)!.last + 1 === selected.value?.plan.cues.length)
+const sceneKindLabel = (kind: VideoScene['kind']) => Object.hasOwn(visualCatalog.kinds, kind) ? visualCatalog.kinds[kind as keyof typeof visualCatalog.kinds] : '旧版文字图解'
 const editorValue = () => JSON.stringify([subtitleText.value, scenes.value])
 const jobLabel = (job: VideoJob) => `${videoStatuses[job.status]} · ${job.createdAt ? new Date(job.createdAt).toLocaleString() : job.id}`
 const dirty = computed(() => loaded.value && editable.value && savedEditor.value !== editorValue())
@@ -74,7 +76,7 @@ async function adopt(job: VideoJob | undefined) {
   const text = await api.subtitles(job.id)
   if (disposed || selectedId.value !== job.id) return
   subtitleText.value = text
-  scenes.value = job.plan.scenes.map(scene => ({ ...scene, labels: [...scene.labels] }))
+  scenes.value = JSON.parse(JSON.stringify(job.plan.scenes))
   savedEditor.value = editorValue()
 }
 function put(job: VideoJob) { jobs.value = [job, ...jobs.value.filter(j => j.id !== job.id)]; selectedId.value = job.id }
@@ -115,13 +117,15 @@ const choosePath = (key: keyof VideoSettings, directory: boolean) => run(async (
   if (typeof path === 'string') config.value[key] = path
 })
 const saveConfig = () => run(async () => { await api.saveSettings(config.value); savedConfig.value = JSON.stringify(config.value); message.value = '视频运行环境已保存，生成时会检查实际可用性。' })
-const create = () => run(async () => {
+const begin = (sourceAudio: string, sourceSubtitle: string | null) => run(async () => {
   if (dirty.value || configDirty.value) throw new Error('请先保存或还原字幕、分镜和运行环境修改。')
-  const job = await api.startJob(props.id, audioId.value, providerId.value, subtitleId.value === 'auto' ? null : subtitleId.value)
+  const job = await api.startJob(props.id, sourceAudio, providerId.value, sourceSubtitle)
   put(job); await adopt(job)
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
+const create = () => begin(audioId.value, subtitleId.value === 'auto' ? null : subtitleId.value)
+const remake = () => { const job = selected.value; if (job?.audioAssetId && job.subtitleAssetId) return begin(job.audioAssetId, job.subtitleAssetId) }
 const resume = (render: boolean) => run(async () => {
   if (!selected.value) return
   if (configDirty.value) throw new Error('请先保存运行环境配置。')
@@ -134,6 +138,7 @@ const resume = (render: boolean) => run(async () => {
 })
 const regenerate = () => run(async () => {
   if (!selected.value) return
+  if (configDirty.value) throw new Error('请先保存运行环境配置。')
   await api.savePlan(selected.value.id, subtitleText.value, [])
   scenes.value = []; savedEditor.value = editorValue()
   put(await api.continueJob(selected.value.id, false))
@@ -222,7 +227,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
   >
     <section class="panel video-inputs">
       <h2>从本书音频开始</h2><p class="muted">
-        横屏 1920 × 1080 · 24 fps · 书卷风。支持两小时以内音频，不重新配音、不加配乐。
+        横屏 1920 × 1080 · 24 fps · 同款书卷手绘。支持两小时以内音频，具体物体逐笔绘制；不重新配音、不加配乐。
       </p>
       <div class="video-form-grid">
         <div class="video-field">
@@ -430,10 +435,18 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           </Button>
           <Button
             v-if="['draft', 'failed', 'cancelled'].includes(selected.status)"
-            :disabled="busy || running"
+            :disabled="busy || running || legacyPlan"
             @click="resume(false)"
           >
             继续准备字幕与分镜
+          </Button>
+          <Button
+            v-if="selected.status === 'succeeded' && selected.audioAssetId && selected.subtitleAssetId"
+            variant="outline"
+            :disabled="busy || running || !providerId"
+            @click="remake"
+          >
+            用原字幕制作新版手绘
           </Button>
           <Button
             v-if="selected.subtitleAssetId"
@@ -474,6 +487,12 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               以实际原声为准。人名、外语请试听核对；每条字幕最多32字。更改条数或内容后应重新生成分镜。
             </p>
           </div>
+          <p
+            v-if="legacyPlan"
+            class="notice"
+          >
+            当前是旧版文字图解分镜，不会按旧模板继续渲染。请保留字幕并升级手绘分镜，原音频和历史成片不变。
+          </p>
           <label for="video-subtitles">SRT 字幕</label><Textarea
             id="video-subtitles"
             v-model="subtitleText"
@@ -494,7 +513,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               :disabled="busy || running"
               @click="regenerate"
             >
-              保存字幕并重新生成分镜
+              {{ legacyPlan ? '保留字幕并升级手绘分镜' : '保存字幕并重新生成分镜' }}
             </Button><Button
               variant="ghost"
               :disabled="busy || !dirty"
@@ -510,27 +529,37 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               class="video-scene"
             >
               <p class="muted">
-                第 {{ index + 1 }} 镜 · 字幕 {{ scene.first + 1 }}—{{ scene.last + 1 }} · {{ { book: '书籍', quote: '观点', compare: '对比', flow: '过程', timeline: '时间线' }[scene.kind] }}
+                第 {{ index + 1 }} 镜 · 字幕 {{ scene.first + 1 }}—{{ scene.last + 1 }} · {{ sceneKindLabel(scene.kind) }}
               </p><Input
                 v-model="scene.title"
-                :disabled="busy"
+                :disabled="busy || !scene.beats?.length"
                 :aria-label="`第${index + 1}镜标题`"
                 maxlength="20"
-              /><div class="video-labels">
+              /><div
+                v-for="(beat, i) in scene.beats"
+                :key="i"
+                class="video-beat"
+              >
+                <label :for="`scene-${index}-beat-${i}`">字幕 {{ beat.cue + 1 }} · {{ visualCatalog.objects[beat.object] }} · {{ visualCatalog.actions[beat.action] }}</label>
                 <Input
-                  v-for="(_, i) in scene.labels"
-                  :key="i"
-                  v-model="scene.labels[i]"
+                  :id="`scene-${index}-beat-${i}`"
+                  v-model="beat.label"
                   :disabled="busy"
-                  :aria-label="`第${index + 1}镜标签${i + 1}`"
-                  maxlength="12"
+                  :aria-label="`第${index + 1}镜物体${i + 1}标签`"
+                  maxlength="8"
                 />
               </div>
+              <p
+                v-if="!scene.beats?.length"
+                class="muted"
+              >
+                {{ scene.labels?.join(' · ') }}
+              </p>
             </article>
           </div>
           <div class="video-render-action">
             <p class="muted">
-              确认后按此字幕和分镜制作，原音频和旧成片保留。自动分镜采用图解模板，不等同于逐镜定制角色动画。
+              使用 whiteboard-teacher-video 读书成片同款物体绘图、构图和动作。请核对物体与台词的含义及触发字幕，确认后制作；原音频和旧成片保留。
             </p><Button
               data-test="render-video"
               :disabled="busy || running || !completePlan"
@@ -551,8 +580,10 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .video-field { display: grid; align-content: start; gap: 8px; min-width: 0; }
 .video-field .muted { margin: 4px 0 0; }
-.video-path, .video-labels { display: flex; gap: 8px; min-width: 0; }
-.video-path input, .video-labels input { min-width: 0; }
+.video-path { display: flex; gap: 8px; min-width: 0; }
+.video-path input { min-width: 0; }
+.video-beat { display: grid; gap: 6px; min-width: 0; }
+.video-beat label { color: var(--muted-foreground); font-size: 12px; overflow-wrap: anywhere; }
 .video-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .video-job-heading [role='combobox'] { max-width: 360px; }
 .video-job { scroll-margin-top: calc(var(--workspace-sticky-top) + 20px); }
@@ -568,5 +599,5 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 audio { width: 100%; align-self: center; }
 video { display: block; width: 100%; max-height: 640px; background: #151d18; border-radius: 10px; }
 @media (max-width: 980px) { .video-form-grid, .video-scenes { grid-template-columns: minmax(0, 1fr); } .video-render-action, .video-job-heading { align-items: stretch; flex-direction: column; } .video-job-heading [role='combobox'] { max-width: none; } }
-@media (max-width: 520px) { .video-inputs, .video-job, .video-runtime { padding: 16px; } .video-labels { flex-wrap: wrap; } }
+@media (max-width: 520px) { .video-inputs, .video-job, .video-runtime { padding: 16px; } }
 </style>

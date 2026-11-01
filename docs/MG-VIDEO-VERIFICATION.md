@@ -2,6 +2,61 @@
 
 日期：2026-11-01。范围：Windows 首版，独立 Frametell 0.7.3，中文原声，1920×1080 / 24 fps / 书卷风。
 
+## 同款手绘生成迭代（2026-11-01）
+
+用户要求生成结果与whiteboard-teacher-video保持一致，不接受只接引擎后输出标题/文字框。初始HEAD=a7502e0、工作区和索引干净。本轮移除旧绘制，保留原声、历史字幕/成片、确认闸门、素材事务和半自动发布，不改外部引擎或正式数据。
+
+### 实现与一致性标准
+
+- `video/illustrations.js`复用参考《我的前半生》可编辑工程实际使用的85物体几何、13构图、逐笔绘制、移动/倾覆/强调及字幕CSS；顶栏改为系列名和当前书名，不写死创作者或书名。6种受控物体动作沿用同一绘制代码。
+- 原参考和当前`sketch`函数归一化后SHA-256均为`96a6bc4e09c4440682d68e97f417b1357cf38c7a0a327482084d8f590b36fe9b`，不是重新画一套近似图标。Node回归覆盖完整85物体×6动作的有限数值和跳转确定性。
+- 唯一`visual-catalog.json`由Rust验证、v2 Prompt、Node和Vue共用。模型只选择`cue/object/action/label`和构图；按原字幕时码触发，附首尾台词/最近分镜上下文，不执行模型代码。最多16条字幕/镜、1—3物体、8字标签；不保留第二套文字框渲染。
+- 旧plan缺beats仍可读。未完成任务明确「保留字幕并升级手绘分镜」；已完成任务「用原字幕制作新版手绘」，原音频/SRT创建新任务。旧作品和发布选择不改。无SQL迁移，仍v14，无新依赖/权限或手动升版。
+
+### 真实画面与桌面闭环
+
+参考输入只读截取83.666秒原声（先dry-run，精确PCM时长83.666009秒），使用原工程39条字幕/5镜物体计划，通过当前正式Node渲染入口输出83.667秒MP4：1920×1080、24fps、H.264/yuv420p、AAC双声道44.1kHz。计划及切片证据在`output/video-reference/input.json`、`cut-plan.json`、`cut-result.json`；成片为`output/video-reference/video.mp4`。已查看成片六格抽帧`contact.png`，中文字体、物体、标签和底部字幕正常，无明显遮挡。
+
+`reference-parity.mjs`在同一引擎、同一编译分镜和页面ID下分别加载当前绘图与原参考绘图，于5/18/35/53/74秒截图。物体区域x=140/y=280/w=1640/h=600五处PNG字节完全相同，浏览器错误0；证据`reference-parity.json`及`app-*.png`/`reference-*.png`。这是这些时间点的物体区域一致性，不宣称不同顶栏/字幕或任意书籍整片每一帧像素相同。
+
+隔离identifier为`com.shuyin.visual-verify`，未启动或写入正式profile。`native/native-check.mjs`通过真实Tauri IPC、SQLite、本地ASR、一次本地分镜契约请求、用户确认入口、独立引擎、原声合成和素材归档：20秒/9条字幕/3镜/6物体，真实帧进度持续更新。WebView2定位12秒并播放至12.5秒后暂停。分镜编辑与渲染面板在1440/1120/800/390四档均无横向溢出；390是WebView视口模拟，不代表改变原生最小窗口。减少动画时animation=none、transition=0s，页面错误0，源输入摘要不变。
+
+最终隔离窗口正常关闭，18472/18473无监听；只读SQLite检查schema14、integrity=ok、外键错误0、running=0，成功任务和素材保留。证据`native/native-result.json`、`native/editor-*.png`、`native/player.png`、`database-and-sources.json`。测试产物/临时目录在D盘；隔离SQLite/WebView2仍使用C盘标准profile，未移动或删除原文件。
+
+续验`native/upgrade-check.mjs`实际点击已完成作品的「用原字幕制作新版手绘」，在暂时清空隔离语音程序/模型路径的条件下仍复用原9条字幕成功准备新任务，确认未重新ASR。仅在新隔离任务中置入旧版labels数据后，界面明确提示升级并禁用旧模板渲染；点击升级时模拟模型返回不支持的物体，真实校验拒绝且字幕/原声摘要保留。再从界面继续，同一新任务run3生成3镜物体分镜并等待确认，未自动渲染。总计3次本地契约请求，原成功任务完整JSON、原视频及音频摘要均不变。脚本重复执行通过，两个新版隔离任务保留等待确认；没有写正式数据。截图已查看，证据`native/upgrade-result.json`、`native/upgrade-database.json`、`native/legacy-upgrade.png`及`native/upgraded-storyboard.png`；随后正常关闭隔离应用，数据库完整性/外键正常且running=0。
+
+### 本轮实际命令
+
+Rust先执行`. ./.tools/env.ps1`，原生验收使用本轮D盘TEMP/TMP目录。下表只记录本轮执行；后续章节保留先前版本历史，不代替本轮结果。
+
+| 命令 | 实际结果 |
+| --- | --- |
+| `node --test tests/video-render.test.mjs` | 10通过：原声时轴、JSON隔离、具体物体/字幕锚点、旧模板拒绝、完整目录/动作、缓存计数、初始化/绘制就绪 |
+| `npx vitest run tests/video.test.ts tests/video-progress.test.ts` | 17通过：确认/失败/重试、物体编辑、旧分镜升级、完成作品新建版本及真实进度 |
+| `npx vitest run --maxWorkers 2` | 276通过，17个测试文件 |
+| `npm run lint`、`npm run typecheck` | 通过，未关闭规则或弱化类型检查 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 152通过、2项默认忽略；包含旧plan只读、禁止旧模板渲染、明确升级不丢字幕/摘要 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 最终通过；初次新测试的一处clone建议已按规则修正 |
+| `npx tauri build --debug --no-bundle --config output/video-reference/tauri.verify.conf.json` | 隔离桌面程序通过，包含真实`npm run build`/TypeScript/Vite；不是安装包或正式升级。保留约551kB主JS分包提示 |
+| `node src-tauri/video/render.mjs output/video-reference/input.json output/video-reference/result.json` | 首次绘制/字幕通过后在合原声时发现中文输出名不匹配；修复后同输入成功，复用25/25片段 |
+| `node output/video-reference/reference-parity.mjs` | 5处物体区域完全相同，浏览器错误0 |
+| `node output/video-reference/native/native-check.mjs` | 真实Windows20秒闭环、四档编辑/渲染视口、原生播放、一次本地模型契约通过 |
+| `node output/video-reference/native/upgrade-check.mjs` | 真实完成作品新建、复用字幕跳过ASR、旧分镜明确升级、非法模型输出拒绝/保留字幕、同任务继续成功；原成功任务/视频/音频不变 |
+| `node output/video-reference/native/close-native.mjs`、只读Python SQLite检查 | 窗口/端口关闭，数据库完整性及外键通过 |
+| ffmpeg-skill `probe.py`、`look.py --tiles 3x2` | 成片参数通过，抽帧已查看 |
+| ffmpeg-skill `check.py --platform youtube`、`loudness.py --measure-only` | YouTube检查10通过/1提醒/1失败；无独立软字幕轨为提醒（画面已烧录）；响度-21.9LUFS不符合其-14±2目标，原输入测得-21.89LUFS。本轮按保留原声约束不擅自归一化，不声称平台交付检查全过 |
+| `git diff --check` | 通过，索引不改 |
+| `node output/video-reference/verify-evidence.mjs` | 当前原生内嵌3份运行源码/输入摘要/5处画面/样片元数据/数据库及8份文档25个本地链接一致 |
+
+### 过程修复、范围和边界
+
+新增Node物体输出/旧模板拒绝和Vue旧分镜升级回归均先失败，实施后通过。目录检查首次漏算椭圆图元而误报锁链，按真实绘图API补正断言，未改绘图规避。真实样片发现Frametell的META.lang=zh输出`film-有字幕.mp4`，旧代码仍读取英文文件名；核对锁定引擎源码后按单一中文输出契约修复，不增加查找/猜测/回退路径。失败日志保留为`render.log`，成功续跑为`render-retry.log`。
+
+修改范围：`src-tauri/video/`、`src-tauri/src/video.rs`/`video_commands.rs`、数据库video回归、`prompts/video-storyboard-v2.md`（替代v1）、前端视频类型/页面/进度预览及对应测试；同步PRD、技术/数据库/AI规则、接入/使用/开发文档和三份规划记录。原声音频制作、发布实现和独立引擎未改。
+
+本轮完成的是同款可信绘图、受约束自动分镜链路、参考原声样片和隔离桌面验收。Native分镜使用本地契约服务，83秒样片使用参考人工分镜；未调用真实付费模型，不能把这些结果冒充其逐镜语义选择已验收。整本书新分镜质量/完整听审、正式安装升级及macOS/Linux仍未验收。无关release/queue和Python转写回归未重跑，不声称完整`npm test`全绿；本轮没有提交、推送、发布、替换正式安装或修改版本号，功能影响为feat/minor。更新实际使用的应用构建后，再通过明确升级/新版入口制作；已运行的旧版本不会自动获得新绘图。
+
 ## 首帧一致性修复（2026-11-01）
 
 ### 复现与根因

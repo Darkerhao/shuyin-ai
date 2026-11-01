@@ -1,6 +1,19 @@
+import visualCatalog from '../../src-tauri/video/visual-catalog.json'
+
+export { visualCatalog }
+export interface VideoBeat {
+  cue: number
+  object: keyof typeof visualCatalog.objects
+  action: keyof typeof visualCatalog.actions
+  label: string
+}
 export interface VideoSettings { engineRoot: string; nodePath: string; pythonPath: string; modelPath: string }
 export interface VideoCue { start: number; end: number; text: string }
-export interface VideoScene { first: number; last: number; kind: 'book' | 'quote' | 'compare' | 'flow' | 'timeline'; title: string; labels: string[] }
+export interface VideoScene {
+  first: number; last: number; kind: keyof typeof visualCatalog.kinds | 'book' | 'quote' | 'flow' | 'timeline'; title: string
+  beats?: VideoBeat[]
+  labels?: string[]
+}
 export interface VideoPlan { title: string; audioSha256: string; duration: number; cues: VideoCue[]; scenes: VideoScene[] }
 export interface VideoProgress {
   startedAt: number; stage: string; phase: string; completed: number; total: number

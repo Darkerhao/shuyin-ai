@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 物体分镜 JSON 迭代（2026-11-01，仍为v14）
+
+无表/列或迁移变更。`video_jobs.plan_json.scenes[].beats`保存`cue`（全局零基字幕索引）、`object`、`action`、`label`；目录由受控源码定义，不存模型代码或文件路径。旧场景的labels仍可解码，缺beats默认为空，仅用于历史读取；不能把旧文字图解当作新版绘图输入。升级由用户明确保存字幕并清空分镜，保留duration/audioSha256/cues，随后复用原任务准备流程。已完成任务不可改写，制作新版使用原音频和已登记SRT新建任务。历史素材、发布快照、备份和恢复不重写。
+
 ## 原声视频任务（2026-11-01，v14）
 
 新增 `0014_video_jobs.sql`，user_version=14。video_jobs 记录书籍、源音频、可选源字幕、文本模型、状态/阶段、递增run_id、plan_json、错误、字幕/视频结果素材ID及时间。plan_json 保存原声SHA-256、标题、时长、带时间码字幕和受约束分镜；不存密钥。状态包括draft/running/awaiting_confirmation/succeeded/failed/cancelled，部分唯一索引限制单个running任务。MP4与最终SRT同一事务登记，重复完成返回已有结果，迟到结果不能写入。

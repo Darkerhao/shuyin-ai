@@ -1,8 +1,16 @@
 # 书引 AI 技术设计文档
 
+## 同款物体分镜与绘图（2026-11-01）
+
+使用单一 `video/visual-catalog.json` 定义物体、构图、动作及长度限制，Rust、版本化 `video-storyboard-v2` Prompt、Node和Vue共用。Scene保留first/last/title/kind，增加beats（cue/object/action/label）；Rust验证连续覆盖、1—3物体、锚点在本镜且有序、目录白名单和短文本。每批24条字幕附首尾台词、最近3镜和后续3条上下文，不能将上下文纳入本批覆盖。
+
+`video/illustrations.js`复用参考读书成片的85物体几何、13构图、原声驱动移动/强调及字幕CSS；不是复制AGPL引擎。Node只把验证后的JSON编译为script，固定页面调用同一EPISODE.draw，旧文字框绘制已删除；模型不能提供代码。绘图、目录、编译器和plan共同参与缓存键，Rust内嵌并写出全部运行脚本，不依赖开发机原影片路径。中文META对应锁定引擎的`film-有字幕.mp4`输出契约。
+
+旧plan缺beats时仍可读取、播放/发布已有成片，但不能继续旧模板渲染。未完成任务经原save_video_plan保存字幕并清空分镜，再走原准备/确认流程；已完成任务通过原start_video_job及原音频/SRT创建新版本，不修改旧任务。没有第二套渲染器、新调度器或SQL迁移。运行结果与画面对照见 [验收记录](MG-VIDEO-VERIFICATION.md)。
+
 ## 应用内 MG 视频（2026-11-01）
 
-`video.rs` 定义字幕/分镜契约，`database/video.rs` 管理 v14 任务与素材事务，`video_commands.rs` 调度独立 ASR/渲染和现有 TextProvider。`video_process.rs` 通过带启动门的 Windows Job Object 管理子进程，取消/退出不遗留渲染树；同一运行的分镜模型配置在批处理前读取，后续配置编辑不切换该轮请求端点。Python 转写只读取完整的本地模型；Node 编译固定图解模板，不执行模型提供的代码，浏览器与Node共用绝对原声时间轴。任务保存已完成分镜批次，渲染缓存按计划、模板源码和引擎路径隔离。
+`video.rs` 定义字幕/分镜契约，`database/video.rs` 管理 v14 任务与素材事务，`video_commands.rs` 调度独立 ASR/渲染和现有 TextProvider。`video_process.rs` 通过带启动门的 Windows Job Object 管理子进程，取消/退出不遗留渲染树；同一运行的分镜模型配置在批处理前读取，后续配置编辑不切换该轮请求端点。Python 转写只读取完整的本地模型；Node 编译受控物体分镜，不执行模型提供的代码，浏览器与Node共用绝对原声时间轴。任务保存已完成分镜批次，渲染缓存按计划、绘图源码、目录和引擎路径隔离。
 
 前端增加 VideoPage 和音频入口，沿用原素材/发布流程；新草稿按明确的 videoJob 选择对应视频及原音频，历史任务不变。Tauri protocol-asset 默认空 scope，主窗口经同项目素材ID校验后只允许单个媒体文件，复用其Range实现。运行时是独立安装工具，不捆绑AGPL源码。具体目录、源码/许可依据、版本锁定、迁移与实跑边界见 [实施与验收](MG-VIDEO-VERIFICATION.md)。
 

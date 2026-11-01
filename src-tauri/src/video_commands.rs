@@ -324,6 +324,14 @@ async fn execute(
         include_bytes!("../video/render.mjs"),
     )?;
     process::write_new(
+        &directory.join("illustrations.js"),
+        include_bytes!("../video/illustrations.js"),
+    )?;
+    process::write_new(
+        &directory.join("visual-catalog.json"),
+        include_bytes!("../video/visual-catalog.json"),
+    )?;
+    process::write_new(
         &directory.join("transcribe.py"),
         include_bytes!("../video/transcribe.py"),
     )?;
@@ -435,11 +443,11 @@ async fn execute(
             return Err("视频任务已停止。".into());
         }
         let end = (first + video::BATCH_SIZE).min(job.plan.cues.len());
-        let user = serde_json::json!({"book": job.plan.title, "cues": job.plan.cues[first..end].iter().enumerate().map(|(offset,c)| serde_json::json!({"index":first+offset,"text":c.text})).collect::<Vec<_>>()}).to_string();
+        let user = video::storyboard_input(&job.plan, first, end);
         let request = ai_commands::request(
             config.clone(),
             app.state::<SystemCredentials>().inner(),
-            video::PROMPT,
+            &video::storyboard_prompt(),
             user,
         )
         .map_err(|e| e.message)?;

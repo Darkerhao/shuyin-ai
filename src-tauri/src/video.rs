@@ -1,7 +1,56 @@
 use serde::{Deserialize, Serialize};
+use std::{collections::BTreeMap, sync::OnceLock};
 
-pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v1.md");
+pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v2.md");
 pub const BATCH_SIZE: usize = 24;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VisualLimits {
+    max_scene_cues: usize,
+    max_beats: usize,
+    label_chars: usize,
+    title_chars: usize,
+}
+
+#[derive(Deserialize)]
+struct VisualCatalog {
+    limits: VisualLimits,
+    kinds: BTreeMap<String, String>,
+    actions: BTreeMap<String, String>,
+    objects: BTreeMap<String, String>,
+}
+
+fn visual_catalog() -> &'static VisualCatalog {
+    static CATALOG: OnceLock<VisualCatalog> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        serde_json::from_str(include_str!("../video/visual-catalog.json"))
+            .expect("bundled visual catalog")
+    })
+}
+
+pub fn storyboard_prompt() -> String {
+    format!(
+        "{PROMPT}\n可用绘图目录（仅可选用这些键）：\n{}",
+        include_str!("../video/visual-catalog.json")
+    )
+}
+
+pub fn storyboard_input(plan: &VideoPlan, first: usize, end: usize) -> String {
+    let cues = |from: usize, to: usize| {
+        plan.cues[from..to].iter().enumerate().map(|(offset, c)| serde_json::json!({"index": from + offset, "start": c.start, "end": c.end, "text": c.text})).collect::<Vec<_>>()
+    };
+    serde_json::json!({
+        "book": plan.title,
+        "duration": plan.duration,
+        "opening": cues(0, plan.cues.len().min(6)),
+        "ending": cues(plan.cues.len().saturating_sub(6), plan.cues.len()),
+        "previousScenes": &plan.scenes[plan.scenes.len().saturating_sub(3)..],
+        "followingContext": cues(end, (end + 3).min(plan.cues.len())),
+        "cues": cues(first, end),
+    })
+    .to_string()
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -39,7 +88,19 @@ pub struct Scene {
     pub last: usize,
     pub kind: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    #[serde(default)]
+    pub beats: Vec<Beat>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Beat {
+    pub cue: usize,
+    pub object: String,
+    pub action: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -81,25 +142,40 @@ pub fn validate_cues(cues: &[Cue], duration: f64) -> Result<(), String> {
 }
 
 pub fn validate_scenes(scenes: &[Scene], first: usize, end: usize) -> Result<(), String> {
+    let catalog = visual_catalog();
     let mut next = first;
     for scene in scenes {
-        let count = scene.labels.len();
-        let valid_kind = match scene.kind.as_str() {
-            "book" => (1..=2).contains(&count),
-            "quote" => (1..=3).contains(&count),
-            "compare" => count == 2,
-            "flow" | "timeline" => (2..=4).contains(&count),
-            _ => false,
-        };
+        if scene.beats.is_empty() {
+            return Err("旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。".into());
+        }
         if scene.first != next
             || scene.last < scene.first
             || scene.last >= end
-            || scene.last - scene.first >= 8
-            || !valid_kind
-            || !short_text(&scene.title, 20)
-            || scene.labels.iter().any(|label| !short_text(label, 12))
+            || scene.last - scene.first >= catalog.limits.max_scene_cues
+            || !catalog.kinds.contains_key(&scene.kind)
+            || !scene.labels.is_empty()
+            || scene.beats.len() > catalog.limits.max_beats
+            || !short_text(&scene.title, catalog.limits.title_chars)
         {
-            return Err("分镜无效：须连续覆盖字幕，每镜最多8条，使用支持的图形和短标签。".into());
+            return Err(
+                "分镜无效：须连续覆盖字幕，每镜最多16条、1—3个具体物体，使用支持的构图和短标题。"
+                    .into(),
+            );
+        }
+        let mut previous = scene.first;
+        for beat in &scene.beats {
+            if beat.cue < previous
+                || beat.cue > scene.last
+                || !catalog.objects.contains_key(&beat.object)
+                || !catalog.actions.contains_key(&beat.action)
+                || !short_text(&beat.label, catalog.limits.label_chars)
+            {
+                return Err(
+                    "物体分镜无效：请选择目录中的物体和动作，按本镜字幕顺序触发，每个标签最多8字。"
+                        .into(),
+                );
+            }
+            previous = beat.cue;
         }
         next = scene.last + 1;
     }
@@ -110,7 +186,11 @@ pub fn validate_scenes(scenes: &[Scene], first: usize, end: usize) -> Result<(),
 }
 
 fn short_text(text: &str, max: usize) -> bool {
-    !text.trim().is_empty() && text.chars().count() <= max && !text.chars().any(char::is_control)
+    !text.trim().is_empty()
+        && text.chars().count() <= max
+        && !text
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '{' | '}' | '`' | '*'))
 }
 
 fn timestamp(text: &str) -> Result<f64, String> {
@@ -227,9 +307,23 @@ mod tests {
         let mut scenes = vec![Scene {
             first: 24,
             last: 27,
-            kind: "flow".into(),
+            kind: "route".into(),
             title: "变化".into(),
-            labels: vec!["之前".into(), "之后".into()],
+            labels: vec![],
+            beats: vec![
+                Beat {
+                    cue: 24,
+                    object: "book".into(),
+                    action: "draw".into(),
+                    label: "之前".into(),
+                },
+                Beat {
+                    cue: 27,
+                    object: "certificate".into(),
+                    action: "check".into(),
+                    label: "之后".into(),
+                },
+            ],
         }];
         assert!(validate_scenes(&scenes, 24, 28).is_ok());
         assert!(validate_scenes(&scenes, 0, 28).is_err());
@@ -239,5 +333,61 @@ mod tests {
             r#"{"first":0,"last":0,"kind":"book","title":"x","labels":["x"],"code":"evil"}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn object_storyboards_reject_unknown_drawings_actions_labels_and_anchors() {
+        let raw = r#"{"first":0,"last":3,"kind":"collapse","title":"变化","beats":[{"cue":0,"object":"crown","action":"tilt","label":"皇冠"},{"cue":3,"object":"certificate","action":"check","label":"公民"}]}"#;
+        let scene: Scene = serde_json::from_str(raw).unwrap();
+        assert!(validate_scenes(std::slice::from_ref(&scene), 0, 4).is_ok());
+        for (field, value) in [
+            ("object", "../../evil.js"),
+            ("action", "eval"),
+            ("label", "超过八个字的物体标签"),
+            ("label", "{r:错误}"),
+        ] {
+            let mut value_json: serde_json::Value = serde_json::from_str(raw).unwrap();
+            value_json["beats"][0][field] = serde_json::Value::String(value.into());
+            let bad: Scene = serde_json::from_value(value_json).unwrap();
+            assert!(validate_scenes(&[bad], 0, 4).is_err());
+        }
+        let mut bad = scene.clone();
+        bad.beats[1].cue = 4;
+        assert!(validate_scenes(&[bad], 0, 4).is_err());
+        let mut bad = scene;
+        bad.beats[0].cue = 2;
+        bad.beats[1].cue = 1;
+        assert!(validate_scenes(&[bad], 0, 4).is_err());
+        let old: Scene = serde_json::from_str(
+            r#"{"first":0,"last":3,"kind":"book","title":"旧图解","labels":["书籍"]}"#,
+        )
+        .unwrap();
+        assert!(validate_scenes(&[old], 0, 4)
+            .unwrap_err()
+            .contains("重新生成分镜"));
+    }
+
+    #[test]
+    fn storyboard_requests_share_the_catalog_and_keep_context_outside_batch_coverage() {
+        let plan = VideoPlan {
+            title: "原书".into(),
+            duration: 30.0,
+            cues: (0..30)
+                .map(|i| Cue {
+                    start: i as f64,
+                    end: i as f64 + 1.0,
+                    text: format!("字幕{i}"),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let input: serde_json::Value =
+            serde_json::from_str(&storyboard_input(&plan, 24, 30)).unwrap();
+        assert_eq!(input["cues"].as_array().unwrap().len(), 6);
+        assert_eq!(input["cues"][0]["index"], 24);
+        assert_eq!(input["opening"][0]["index"], 0);
+        assert_eq!(input["ending"][5]["index"], 29);
+        assert_eq!(visual_catalog().objects.len(), 85);
+        assert!(storyboard_prompt().contains("certificate"));
     }
 }

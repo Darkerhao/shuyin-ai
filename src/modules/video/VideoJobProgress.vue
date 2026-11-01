@@ -192,7 +192,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
               class="scene-preview"
             >
               <span class="scene-number">{{ String(job.plan.scenes.length - previewScenes.length + index + 1).padStart(2, '0') }}</span>
-              <div><strong>{{ scene.title }}</strong><p>{{ scene.labels.join(' · ') }}</p></div>
+              <div><strong>{{ scene.title }}</strong><p>{{ scene.beats?.map(beat => beat.label).join(' · ') || scene.labels?.join(' · ') }}</p></div>
             </article>
           </div>
         </template>

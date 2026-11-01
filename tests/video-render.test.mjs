@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
@@ -13,7 +14,7 @@ import { buildEpisode, measureRenderProgress } from '../src-tauri/video/render.m
 const plan = {
   title: '书籍原声', duration: 12,
   cues: [{ start: 0.5, end: 2, text: '第一句' }, { start: 5, end: 9, text: '第二句' }],
-  scenes: [{ first: 0, last: 0, kind: 'book', title: '开场', labels: ['一本书'] }, { first: 1, last: 1, kind: 'flow', title: '变化', labels: ['之前', '之后'] }],
+  scenes: [{ first: 0, last: 0, kind: 'opening', title: '开场', beats: [{ cue: 0, object: 'book', action: 'draw', label: '一本书' }] }, { first: 1, last: 1, kind: 'route', title: '变化', beats: [{ cue: 1, object: 'steps', action: 'slide', label: '变化' }] }],
 };
 test('original audio timing is identical in Node and browser, including silence and tail', () => {
   const result = buildEpisode(plan);
@@ -36,6 +37,72 @@ test('model text remains data and does not become JavaScript', () => {
   assert.equal(ctx.pwned, undefined);
   assert.equal(ctx.SCRIPT.META.title, "'; globalThis.pwned=true; //");
   assert.equal(result.pages.length, 2);
+});
+
+test('object storyboards compile the reference composition and exact subtitle anchors', () => {
+  const illustrated = {
+    ...plan,
+    scenes: [{ first: 0, last: 1, kind: 'collapse', title: '身份变化', beats: [
+      { cue: 0, object: 'crown', action: 'tilt', label: '皇冠' },
+      { cue: 1, object: 'certificate', action: 'check', label: '公民' },
+    ] }],
+  };
+  const result = buildEpisode(illustrated);
+  const context = { TIMING: {} };
+  vm.runInNewContext(result.script, context);
+  const page = context.TIMING.layout().pages[0];
+  assert.equal(context.SCRIPT.META.lang, 'zh');
+  assert.equal(context.SCRIPT.META.fadeDelay, 0);
+  assert(context.SCRIPT.META.extras.includes('illustrations.js'));
+  assert.equal(page.kind, 'collapse');
+  assert.equal(page.beats[1].cue, 1);
+  assert.equal(page.cues[1].id, 1);
+  assert.equal(page.cues[1].start, 5);
+  assert.match(result.visuals, /case 'crown'/);
+  assert.match(result.visuals, /font-size:44px/);
+  assert.match(result.visuals, /P\.move/);
+});
+
+test('text-card plans and unknown objects cannot silently render as same-style animation', () => {
+  assert.throws(() => buildEpisode({ ...plan, scenes: [{ first: 0, last: 1, kind: 'book', title: '旧图解', labels: ['一本书'] }] }), /重新生成分镜/);
+  const scene = { first: 0, last: 1, kind: 'focus', title: '场景', beats: [{ cue: 0, object: '../../evil.js', action: 'draw', label: '物体' }] };
+  assert.throws(() => buildEpisode({ ...plan, scenes: [scene] }), /object/i);
+  scene.beats[0].object = 'book';
+  scene.beats[0].cue = 2;
+  assert.throws(() => buildEpisode({ ...plan, scenes: [scene] }), /cue/i);
+});
+
+test('every catalog object has the reference drawing and every action is finite and seek-independent', () => {
+  const catalog = JSON.parse(fs.readFileSync(new URL('../src-tauri/video/visual-catalog.json', import.meta.url), 'utf8'));
+  const source = fs.readFileSync(new URL('../src-tauri/video/illustrations.js', import.meta.url), 'utf8');
+  const normalized = source.replaceAll('\r\n', '\n');
+  const geometry = normalized.slice(normalized.indexOf('  function sketch('), normalized.indexOf('  function draw('));
+  assert.equal(createHash('sha256').update(geometry).digest('hex'), '96a6bc4e09c4440682d68e97f417b1357cf38c7a0a327482084d8f590b36fe9b', 'Keep all reference object geometry, not approximate replacements.');
+  assert.deepEqual(new Set([...source.matchAll(/case '([^']+)'/g)].map(match => match[1])), new Set(Object.keys(catalog.objects)));
+  assert.equal(Object.keys(catalog.objects).length, 85);
+  for (const object of Object.keys(catalog.objects)) {
+    for (const action of Object.keys(catalog.actions)) {
+      const transforms = [], live = [], calls = [];
+      const page = { id: 'p01', index: 0, title: '手绘物体', kind: 'focus', start: 0, end: 12, cues: [{ id: 0, start: 0 }], beats: [{ cue: 0, object, action, label: '物体' }] };
+      const builder = () => new Proxy({ page, c: () => 0, layer: () => builder(), move: (_, fn) => transforms.push(fn), liveRough: fn => live.push(fn) }, {
+        get(target, key) { return key in target ? target[key] : (...args) => { calls.push([key, ...args]); }; },
+      });
+      const context = { SCRIPT: { META: { title: '原书' } }, PV: { K: (t, at, duration) => Math.max(0, Math.min(1, (t - at) / duration)), col: () => '#FBF8F1' }, window: {}, document: { createElement: () => ({}), head: { appendChild() {} } } };
+      vm.runInNewContext(source, context);
+      context.window.EPISODE.draw(builder());
+      const drawAt = t => [...transforms.map(fn => fn(t)), ...live.map(fn => fn(t, { line: (...args) => args }))];
+      const first = JSON.stringify(drawAt(5));
+      drawAt(11); drawAt(0);
+      assert.equal(JSON.stringify(drawAt(5)), first, `${object}/${action} must be a pure function of time`);
+      const finite = value => {
+        if (typeof value === 'number') assert(Number.isFinite(value), `${object}/${action}: invalid geometry`);
+        else if (typeof value === 'string') assert.doesNotMatch(value, /NaN|Infinity/);
+        else if (value && typeof value === 'object') Object.values(value).forEach(finite);
+      };
+      finite([calls, drawAt(0), drawAt(5), drawAt(11)]);
+      assert(calls.some(([method]) => ['path', 'circle', 'box', 'ellipse', 'line'].includes(method)), `${object} must draw a real object`);
+    }
+  }
 });
 
 test('render progress counts cached and finalized fragments, not a growing encoder file', t => {
