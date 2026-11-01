@@ -1,3 +1,13 @@
+# 视频制作进度续作发现（2026-11-01）
+
+- 上次聊天已接入转写 progress.json、Rust 当前运行快照和 VideoJobProgress，但渲染仅报告阶段，追加的制作进度需求尚未实施；前次检查不能替代本轮复验。
+- 独立 Frametell 0.7.3 的 render.mjs 提供 --plan 输出每个片段的精确帧区间/缓存文件，以及 --skip-video/--skip-subs 阶段入口。render-chunk.mjs 每600帧输出一次，但片段最多6秒/144帧，不能把该日志当作持续帧进度。
+- 引擎仅在整个 worker 分组完成后才将 .part.mp4 改名；只数缓存文件会长时间不变。以 FFmpeg 已写完整 moov 的片段统计完成帧数，仍由原引擎绘制、合成和校验，不复制渲染算法、不修改外部源码。
+- 取消后缓存目录可能留有已封口、未正式提交的 .part.mp4；新增回归复现其让新运行误报96/96而非24/96。临时片段只统计本轮启动后写入的文件，正式缓存照常复用，避免重试初始进度虚高后回退。
+- 视觉沿用现有墨绿/白底及字体，以真实百分比环、五步流程和内容预览为重点。ui-ux-pro-max 的 long task progress feedback 查询命中 Progress Indicators；未知阶段不用伪百分比，支持减少动态效果。
+- 第二次原生复验遇到确定的路径问题：重复书名使字体链接路径从258增长到262字符，Chrome报ERR_FILE_NOT_FOUND，但文件实际存在；同一浏览器对258字符别名和140字符真实路径均加载成功。生成HTML现在始终引用引擎/依赖的规范file URL，不经深层junction访问字体，不改变外部引擎或业务路径。
+- 引擎openStage在返回browser前可能因字体失败抛错，原main只设置exitCode，遗留Playwright连接使任务仍running。新增子进程回归先实测4秒超时，现失败边界明确退出1，由Rust现有Job Object回收进程树并写失败状态，不再等6小时渲染超时。
+
 # 应用内 MG 视频实施发现（2026-11-01）
 
 - 真实Windows调用中，数据库canonical路径直接传Node主脚本触发EISDIR/lstat D:；外部调用统一复用已有shell_path，DB原值不动。带扩展路径的Windows进程树取消回归已通过。

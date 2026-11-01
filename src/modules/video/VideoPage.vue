@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
+import VideoJobProgress from './VideoJobProgress.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -15,7 +16,7 @@ import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { videoStages, videoStatuses, type VideoJob, type VideoScene, type VideoSettings } from '../../types/video'
+import { videoStatuses, type VideoJob, type VideoScene, type VideoSettings } from '../../types/video'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -38,6 +39,8 @@ const savedEditor = ref('')
 const audioUrl = ref('')
 const videoUrl = ref('')
 const mediaError = ref('')
+const progressError = ref('')
+const jobPanel = ref<globalThis.HTMLElement>()
 const selected = computed(() => jobs.value.find(job => job.id === selectedId.value))
 const running = computed(() => jobs.value.some(job => job.status === 'running'))
 const audios = computed(() => assets.value.filter(a => a.assetType === 'audio' && a.existsStatus === 'available'))
@@ -95,6 +98,7 @@ async function poll() {
     const previous = selected.value
     const history = await api.listJobs(projectId)
     if (disposed || projectId !== props.id) return
+    progressError.value = ''
     jobs.value = history
     if (previous?.status === 'running' && selected.value?.status !== 'running') {
       await adopt(selected.value)
@@ -103,7 +107,7 @@ async function poll() {
       assets.value = files
       if (selected.value?.status === 'succeeded') message.value = '原声 MG 视频已保存，可直接播放或用于发布。'
     }
-  } catch (cause) { if (!disposed) error.value = `任务状态读取失败：${String(cause)}` }
+  } catch (cause) { if (!disposed && projectId === props.id) progressError.value = String(cause) }
   finally { polling = false }
 }
 const choosePath = (key: keyof VideoSettings, directory: boolean) => run(async () => {
@@ -115,6 +119,8 @@ const create = () => run(async () => {
   if (dirty.value || configDirty.value) throw new Error('请先保存或还原字幕、分镜和运行环境修改。')
   const job = await api.startJob(props.id, audioId.value, providerId.value, subtitleId.value === 'auto' ? null : subtitleId.value)
   put(job); await adopt(job)
+  await nextTick()
+  jobPanel.value?.scrollIntoView({ block: 'start' })
 })
 const resume = (render: boolean) => run(async () => {
   if (!selected.value) return
@@ -123,6 +129,8 @@ const resume = (render: boolean) => run(async () => {
   else if (dirty.value) throw new Error('字幕已修改，请使用“保存字幕并重新生成分镜”。')
   savedEditor.value = editorValue()
   put(await api.continueJob(selected.value.id, render))
+  await nextTick()
+  jobPanel.value?.scrollIntoView({ block: 'start' })
 })
 const regenerate = () => run(async () => {
   if (!selected.value) return
@@ -370,6 +378,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 
     <section
       v-if="jobs.length"
+      ref="jobPanel"
       class="panel video-job"
     >
       <div class="video-job-heading">
@@ -392,18 +401,10 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
         </Select>
       </div>
       <template v-if="selected">
-        <p
-          role="status"
-          aria-live="polite"
-        >
-          <strong>{{ videoStatuses[selected.status] }}</strong> · {{ videoStages[selected.stage] || selected.stage }} · {{ selected.plan.cues.length }} 条字幕 / {{ selected.plan.scenes.length }} 镜
-        </p>
-        <p
-          v-if="selected.status === 'running'"
-          class="muted"
-        >
-          任务在后台执行，可离开本页。实际耗时取决于音频长度和电脑性能；关闭应用会中断本次执行，重开后可手动重试。
-        </p>
+        <VideoJobProgress
+          :job="selected"
+          :sync-error="selected.status === 'running' ? progressError : ''"
+        />
         <p
           v-if="selected.error"
           class="notice video-error"
@@ -554,6 +555,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-path input, .video-labels input { min-width: 0; }
 .video-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .video-job-heading [role='combobox'] { max-width: 360px; }
+.video-job { scroll-margin-top: calc(var(--workspace-sticky-top) + 20px); }
 .video-runtime summary { cursor: pointer; font-weight: 600; }
 .video-runtime summary span { font-weight: 400; margin-left: 12px; }
 .video-runtime > :not(summary) { margin-top: 18px; }
