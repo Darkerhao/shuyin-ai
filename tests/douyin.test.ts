@@ -105,6 +105,13 @@ describe('single host-owned Douyin workflow', () => {
     expect(api.startDouyinTask).not.toHaveBeenCalled()
     expect(api.continueDouyinTask).not.toHaveBeenCalled()
   })
+  it('only asks about the existing video after the account has been confirmed', async () => {
+    vi.mocked(api.getDouyinSession).mockResolvedValue(state({ step: 'video', waitingFor: 'video', completed: ['connect'] }))
+    const w = render(); await flushPromises()
+    expect(w.text()).not.toContain('使用这个账号继续')
+    await button(w, '已核对视频，继续当前任务').trigger('click'); await flushPromises()
+    expect(api.continueDouyinTask).toHaveBeenCalledWith(1, { kind: 'existingVideo' })
+  })
   it('clears an unconfirmed manual collection when the account changes', async () => {
     vi.mocked(api.getDouyinSession).mockResolvedValue(state({ waitingFor: 'collection', step: 'collection' }))
     const w = render(); await flushPromises()

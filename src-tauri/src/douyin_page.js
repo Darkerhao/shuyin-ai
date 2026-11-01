@@ -14,7 +14,8 @@
     const names = [...document.querySelectorAll('[class^="bottom-binder-"] [class^="user-name-"]')].filter(visible).map(e => e.textContent.trim().replace(/^@/, ''))
     const avatarImage = avatar?.querySelector('[class^="avatar-"]')
     const background = avatarImage ? getComputedStyle(avatarImage).backgroundImage : ''
-    const identity = background && background !== 'none' ? background.split('?')[0] : ''
+    // Only the primary avatar identifies this window's account, not CSS fallbacks or URL parameters.
+    const identity = (background.match(/^url\(["']?([^"')]+)["']?\)/)?.[1] || '').split(/[?#]/)[0]
     let identityKey = 0
     for (const c of identity) identityKey = (Math.imul(identityKey, 31) + c.charCodeAt(0)) | 0
     const account = authenticated ? { id: null, name: names.length === 1 ? names[0] : '', key: String(identityKey) } : null

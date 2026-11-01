@@ -168,6 +168,17 @@ describe('official editor adapter safeguards (local DOM fixtures)', () => {
     expect(act('selectCollection', { name: '失效合集' })).toMatchObject({ ok: false })
     expect(click).toHaveBeenCalledOnce()
   })
+  it('keeps the same account key when only avatar query parameters or fallback images change', () => {
+    const inspect = () => runInNewContext(readFileSync('src-tauri/src/douyin_page.js', 'utf8'), { document, location: pageLocation, navigator, getComputedStyle })
+    document.body.insertAdjacentHTML('beforeend', '<div id="header-avatar"><div class="avatar-a"></div></div><span id="douyin-creator-master-side-upload">作品发布</span>')
+    const avatar = document.querySelector('.avatar-a') as HTMLElement
+    avatar.style.backgroundImage = 'url("https://example.test/avatar.png")'
+    const original = inspect().account.key
+    avatar.style.backgroundImage = 'url("https://example.test/avatar.png?size=80"), url("https://example.test/fallback.png")'
+    expect(inspect().account.key).toBe(original)
+    avatar.style.backgroundImage = 'url("https://example.test/another.png?size=80")'
+    expect(inspect().account.key).not.toBe(original)
+  })
   it('cannot claim no collection while another selection is present or accept an unloaded list', () => {
     document.body.insertAdjacentHTML('beforeend', '<div class="semi-select select-collection-a"><span class="semi-select-selection-text">手工合集</span></div>')
     expect(act('selectCollection', { name: null })).toMatchObject({ ok: false })

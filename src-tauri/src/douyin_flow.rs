@@ -26,6 +26,35 @@ struct Collections {
     selected: Option<String>,
 }
 
+impl Collections {
+    fn matches_choice(&self, name: Option<&str>) -> bool {
+        self.available && self.selected.as_deref() == name
+    }
+
+    fn validate_choice(&self, name: Option<&str>) -> Result<(), String> {
+        if !self.available {
+            return Err("无法读取官方页合集，请在官方页设置并人工确认。".into());
+        }
+        if self.matches_choice(name) {
+            return Ok(());
+        }
+        if name.is_none() {
+            return Err("网页已加入合集，请先在官方页移除后重新核对。".into());
+        }
+        if !self.loaded
+            || self
+                .options
+                .iter()
+                .filter(|o| Some(o.name.as_str()) == name)
+                .count()
+                != 1
+        {
+            return Err("合集重名、未加载或已失效，请重新读取。".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Session {
@@ -346,18 +375,12 @@ pub async fn continue_douyin_task(
             let editor = read_video_editor(&publish_window, &publisher, &snapshot).await?;
             verify_video(&session, &editor)?;
             if !manual {
-                let options = read_collections(&publish_window).await?;
-                if name.is_some()
-                    && (!options.loaded
-                        || options
-                            .options
-                            .iter()
-                            .filter(|o| Some(&o.name) == name.as_ref())
-                            .count()
-                            != 1)
-                {
-                    return Err("合集重名、未加载或已失效，请重新读取。".into());
+                let mut options = read_collections(&publish_window).await?;
+                if name.is_some() && options.available && !options.matches_choice(name.as_deref()) {
+                    options =
+                        load_collection_options(&publish_window, &publisher, &snapshot).await?;
                 }
+                options.validate_choice(name.as_deref())?;
             }
             let account = session.account.as_ref().ok_or("请先确认账号。")?;
             let choice = CollectionChoice {
@@ -436,6 +459,24 @@ async fn read_collections(window: &WebviewWindow) -> Result<Collections, String>
         .map_err(|_| "无法回读合集。".into())
 }
 
+async fn load_collection_options(
+    window: &WebviewWindow,
+    publisher: &DouyinPublisher,
+    snapshot: &PublishSnapshot,
+) -> Result<Collections, String> {
+    running(publisher, snapshot)?;
+    page_action(window, "openCollections", json!({})).await?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        running(publisher, snapshot)?;
+        let collections = read_collections(window).await?;
+        if collections.loaded || !collections.available || tokio::time::Instant::now() >= deadline {
+            return Ok(collections);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
 async fn execute(
     app: &AppHandle,
     main: &WebviewWindow,
@@ -496,8 +537,10 @@ async fn drive(
         if page.authenticated && !page.login_visible {
             break page;
         }
-        session.account_confirmed = false;
-        *publisher.confirmed.lock().map_err(|e| e.to_string())? = None;
+        if page.login_visible {
+            session.account_confirmed = false;
+            *publisher.confirmed.lock().map_err(|e| e.to_string())? = None;
+        }
         if tokio::time::Instant::now() >= deadline {
             return Err("等待登录超时，请重新开始。".into());
         }
@@ -597,7 +640,7 @@ async fn drive(
     } else if !session.sent_video {
         session.wait(
             "video",
-            "网页已有视频，无法证明属于本任务。请核对账号和成片后确认；不会重传或清空草稿。",
+            "网页已有视频，无法证明属于本任务。请核对成片后确认；不会重传或清空草稿。",
         );
         return Ok(());
     }
@@ -609,8 +652,13 @@ async fn drive(
             || page.login_visible
             || !same_account(session.account.as_ref(), page.account.as_ref())
         {
-            session.account_confirmed = false;
-            *publisher.confirmed.lock().map_err(|e| e.to_string())? = None;
+            if page.login_visible
+                || (page.authenticated
+                    && !same_account(session.account.as_ref(), page.account.as_ref()))
+            {
+                session.account_confirmed = false;
+                *publisher.confirmed.lock().map_err(|e| e.to_string())? = None;
+            }
             session.wait("page", "网络或账号已变化，请检查后继续核对。");
             return Ok(());
         }
@@ -818,34 +866,14 @@ async fn drive(
     }
     let mut collections = read_collections(&window).await?;
     if !session.manual.iter().any(|s| s == "collection") {
-        if session
-            .collection
-            .as_ref()
-            .is_some_and(|c| c.name.is_some())
-            && collections.available
-            && !session.collection_authorized
+        if collections.available
+            && !session
+                .collection
+                .as_ref()
+                .is_some_and(|c| collections.matches_choice(c.name.as_deref()))
         {
-            running(publisher, snapshot)?;
-            page_action(&window, "openCollections", json!({})).await?;
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            collections = read_collections(&window).await?;
+            collections = load_collection_options(&window, publisher, snapshot).await?;
             session.options = collections.options.clone();
-            let target = session.collection.as_ref().and_then(|c| c.name.as_ref());
-            if !collections.loaded
-                || collections
-                    .options
-                    .iter()
-                    .filter(|o| Some(&o.name) == target)
-                    .count()
-                    != 1
-            {
-                session.completed.retain(|s| s != "collection");
-                session.wait(
-                    "collection",
-                    "目标合集未加载、重名或已失效，请重新选择，不会重传视频。",
-                );
-                return Ok(());
-            }
         }
         let changed = session
             .collection
@@ -861,37 +889,21 @@ async fn drive(
         }
         session.completed.retain(|s| s != "collection");
         if let Some(choice) = &session.collection {
-            if collections.available && collections.selected == choice.name {
+            if collections.matches_choice(choice.name.as_deref()) {
                 session.done("collection", false);
-            } else if collections.available {
+            } else if collections.validate_choice(choice.name.as_deref()).is_ok() {
                 running(publisher, snapshot)?;
-                page_action(&window, "openCollections", json!({})).await?;
+                ensure_account(app, main, session).await?;
+                running(publisher, snapshot)?;
+                page_action(&window, "selectCollection", json!({"name":choice.name})).await?;
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let loaded = read_collections(&window).await?;
-                session.options = loaded.options.clone();
-                if loaded.loaded
-                    && loaded
-                        .options
-                        .iter()
-                        .filter(|o| Some(&o.name) == choice.name.as_ref())
-                        .count()
-                        == 1
+                if read_collections(&window)
+                    .await?
+                    .matches_choice(choice.name.as_deref())
                 {
-                    running(publisher, snapshot)?;
-                    ensure_account(app, main, session).await?;
-                    running(publisher, snapshot)?;
-                    page_action(&window, "selectCollection", json!({"name":choice.name})).await?;
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    if read_collections(&window).await?.selected == choice.name {
-                        session.done("collection", false);
-                    }
+                    session.done("collection", false);
                 }
             }
-        } else if collections.available {
-            running(publisher, snapshot)?;
-            page_action(&window, "openCollections", json!({})).await?;
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            session.options = read_collections(&window).await?.options;
         }
         if !session.completed.iter().any(|s| s == "collection") {
             session.wait(
@@ -916,8 +928,9 @@ async fn drive(
         return Ok(());
     }
     if !session.manual.iter().any(|s| s == "collection")
-        && read_collections(&window).await?.selected
-            != session.collection.as_ref().and_then(|c| c.name.clone())
+        && !read_collections(&window)
+            .await?
+            .matches_choice(session.collection.as_ref().and_then(|c| c.name.as_deref()))
     {
         session.wait("collection", "最终核对发现合集变化，请重新确认。");
         return Ok(());
@@ -979,6 +992,67 @@ async fn stop_current(publisher: &DouyinPublisher, run_id: u64) -> Result<Sessio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_collection_remains_valid_after_the_popup_closes() {
+        let collections = Collections {
+            available: true,
+            selected: Some("甲子读书 | 10分钟读懂一本书".into()),
+            ..Default::default()
+        };
+        assert!(collections
+            .validate_choice(collections.selected.as_deref())
+            .is_ok());
+        assert!(collections.validate_choice(Some("另一个合集")).is_err());
+    }
+
+    #[test]
+    fn collection_changes_require_a_loaded_unique_option_and_no_collection_requires_readback() {
+        let mut collections = Collections::default();
+        assert!(collections.validate_choice(None).is_err());
+        collections.available = true;
+        assert!(collections.validate_choice(None).is_ok());
+        collections.options = vec![CollectionOption {
+            id: None,
+            name: "读书".into(),
+        }];
+        assert!(collections.validate_choice(Some("读书")).is_err());
+        collections.loaded = true;
+        assert!(collections.validate_choice(Some("读书")).is_ok());
+        collections.options.push(collections.options[0].clone());
+        assert!(collections.validate_choice(Some("读书")).is_err());
+        assert!(collections.validate_choice(Some("已失效")).is_err());
+        collections.selected = Some("手工合集".into());
+        assert!(collections.validate_choice(None).is_err());
+    }
+
+    #[test]
+    fn navigation_waits_for_account_controls_but_login_and_offline_are_observable() {
+        let mut page: DouyinPage = serde_json::from_value(json!({
+            "open": true, "path": "/creator-micro/content/upload", "loginVisible": false,
+            "online": true, "kind": "upload"
+        }))
+        .unwrap();
+        assert!(page.account_loading());
+        page.authenticated = true;
+        page.account = Some(Account {
+            id: None,
+            name: String::new(),
+            key: "0".into(),
+        });
+        assert!(page.account_loading());
+        page.account.as_mut().unwrap().key = "123".into();
+        assert!(!page.account_loading());
+        page.account = None;
+        page.login_visible = true;
+        assert!(!page.account_loading());
+        page.login_visible = false;
+        page.online = false;
+        assert!(!page.account_loading());
+        page.online = true;
+        page.path = "/unsupported".into();
+        assert!(!page.account_loading());
+    }
 
     #[test]
     fn upload_navigation_waits_for_controls_and_returns_for_manual_blockers() {
