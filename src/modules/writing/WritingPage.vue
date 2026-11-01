@@ -140,6 +140,12 @@ async function refreshAudioAssets() {
 function applyAudioView(next: AudioJobView, refreshOnSuccess = true) {
   const previous = audioView.value
   audioView.value = next
+  const nextJob = shownAudioJob.value
+  const previousJob = [previous?.job, previous?.activeJob].find(job => job?.id === nextJob?.id)
+  if (previous && nextJob?.errorMessage && ['waiting_user', 'failed'].includes(nextJob.status) &&
+    (previousJob?.errorMessage !== nextJob.errorMessage || previousJob?.errorCode !== nextJob.errorCode || previousJob?.runId !== nextJob.runId)) {
+    error.value = `《${nextJob.projectTitle}》的音频任务：${nextJob.errorMessage}`
+  }
   if (refreshOnSuccess && next.job?.status === 'succeeded' &&
     (previous?.job?.status !== 'succeeded' || previous?.job?.assetId !== next.job.assetId)) {
     void refreshAudioAssets().catch(cause => { error.value = errorMessage(cause) })
@@ -172,6 +178,7 @@ const load = () => run(async () => {
   savedDurationSeconds.value = project.targetDurationSeconds
   durationConfigured.value = !!project.audioDurationSource
   setAssets(files)
+  // Restore task history without replaying past errors as new notifications.
   audioView.value = savedAudio
   providers.value = models.filter(p => p.isEnabled && p.modelKind === 'text')
   providerId.value = providers.value.find(p => p.isDefault)?.id ?? providers.value[0]?.id ?? ''
@@ -423,7 +430,6 @@ onMounted(async () => {
     @dismiss="message = ''"
   />
   <OperationFeedback :error="autosave.error.value" />
-  <OperationFeedback :error="shownAudioJob?.errorMessage || ''" />
   <Button
     v-if="!ready"
     :disabled="!desktop || busy"
