@@ -2,8 +2,10 @@ import { chooseSelect, openSelect, tab, tabPanel } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import { toast } from 'vue-sonner'
 import App from '../src/App.vue'
 import WritingPage from '../src/modules/writing/WritingPage.vue'
+import ProjectPage from '../src/modules/projects/ProjectPage.vue'
 import ModelsPage from '../src/modules/settings/ModelsPage.vue'
 import * as api from '../src/services/ai'
 import * as projects from '../src/services/projects'
@@ -15,7 +17,7 @@ import { emptyProvider, emptyPublishing, type ModelProvider, type WritingVersion
 import type { AudioJob, AudioJobStatus, AudioJobView } from '../src/types/audio'
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), setAudioDuration: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/audio', () => ({ getAudioJobView: vi.fn(), startAudioJob: vi.fn(), controlAudioJob: vi.fn() }))
-vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn() }))
+vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn() }))
 const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模型', modelName: 'model', isDefault: true, credentialStatus: 'available' }
 const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'publishing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
 const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
@@ -39,6 +41,7 @@ async function render(path = '/projects/p1/writing') {
     { path: '/projects/:id/writing', component: WritingPage, props: true },
     { path: '/settings/models', component: ModelsPage },
     { path: '/projects', component: { template: '<p>Projects</p>' } },
+    { path: '/projects/new', component: ProjectPage },
     { path: '/projects/:id', component: { template: '<p>Project</p>' } },
     { path: '/projects/:id/covers', component: { template: '<p>封面工坊</p>' } },
     { path: '/projects/:id/publishing', component: { template: '<p>发布准备</p>' } },
@@ -66,7 +69,7 @@ beforeEach(() => {
   vi.mocked(audio.startAudioJob).mockResolvedValue(audioView(makeAudioJob('created', { stage: 'opening_site' })))
   vi.mocked(audio.controlAudioJob).mockResolvedValue(audioView(makeAudioJob('paused')))
 })
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
   it('opens audio directly, keeps its tab on return and validates unsupported tab values', async () => {
     const { wrapper, router } = await render('/projects/p1/writing?tab=audio')
@@ -474,6 +477,97 @@ describe('audio automation', () => {
   const projectNotes = () => ({ ...emptyProject(), id: 'p1', title: '测试书', sourceNotes: '用户整理的原书资料', audioDurationSource: 'manual' as const, workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
   const audioAsset: Asset = { id: 'audio-1', projectId: 'p1', assetType: 'audio', filePath: 'D:/本期音频.m4a', originalName: '本期音频.m4a', fileSize: 2048, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
   const documentAsset: Asset = { id: 'doc-1', projectId: 'p1', assetType: 'document', filePath: 'D:/原书.pdf', originalName: '原书.pdf', fileSize: 4096, modifiedAt: 1, existsStatus: 'available', createdAt: '' }
+
+  it('does not replay another book audio error after saving book details', async () => {
+    const saved = { ...projectNotes(), title: '我的前半生' }
+    const previousJob = makeAudioJob('waiting_user', {
+      projectId: 'p2', projectTitle: '另一本书', stage: 'configuring_audio',
+      errorCode: 'page_action_failed', errorMessage: '[audio_prompt_missing] 未找到音频指导输入框。',
+    })
+    vi.mocked(projects.saveProject).mockResolvedValue(saved)
+    vi.mocked(projects.getProject).mockResolvedValue(saved)
+    vi.mocked(api.listVersions).mockResolvedValue([])
+    vi.mocked(audio.getAudioJobView).mockResolvedValue({ job: null, activeJob: previousJob, browser })
+    const { wrapper, router } = await render('/projects/new')
+    await wrapper.get('#title').setValue(saved.title)
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+
+    expect(projects.saveProject).toHaveBeenCalledExactlyOnceWith(null, expect.objectContaining({ title: saved.title }), [])
+    expect(router.currentRoute.value.path).toBe('/projects/p1/writing')
+    expect(wrapper.get('h1').text()).toBe(saved.title)
+    expect(audio.startAudioJob).not.toHaveBeenCalled()
+    expect(audio.controlAudioJob).not.toHaveBeenCalled()
+    expect(wrapper.findAll('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').map(item => item.text())).toEqual([])
+
+    await tab(wrapper, '音频制作').trigger('click')
+    expect(wrapper.get('[aria-labelledby="audio-job-title"]').text()).toContain(previousJob.errorMessage)
+    expect(wrapper.get('#start-audio-job').attributes('disabled')).toBeDefined()
+  })
+
+  it.each([
+    ['waiting_user', 'page_action_failed', '[audio_prompt_missing] 未找到音频指导输入框。'],
+    ['failed', 'generation_failed', 'Gemini Notebook 明确返回生成失败。'],
+    ['cancelled', 'tracking_stopped', '已停止本地跟进，不等于取消 Google 生成。'],
+  ] as const)('keeps a saved %s audio error on its task card without replaying a notification', async (status, errorCode, errorMessage) => {
+    const job = makeAudioJob(status, { errorCode, errorMessage })
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(job))
+    const notify = vi.spyOn(toast, 'error')
+    const { wrapper, router } = await render('/projects/p1/writing?tab=audio')
+    expect(wrapper.get('[aria-labelledby="audio-job-title"]').text()).toContain(job.errorMessage)
+    globalThis.dispatchEvent(new Event('focus')); await flushPromises()
+    await tab(wrapper, '发布文案').trigger('click')
+    await tab(wrapper, '音频制作').trigger('click')
+    await router.push('/projects'); await router.push('/projects/p1/writing?tab=audio'); await flushPromises()
+    expect(wrapper.get('[aria-labelledby="audio-job-title"]').text()).toContain(job.errorMessage)
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it.each(['p1', 'p2'])('notifies a new audio error for %s once with book context and allows notification after retry', async projectId => {
+    const job = makeAudioJob('preparing', { projectId, projectTitle: '音频任务所属书籍', stage: 'configuring_audio' })
+    const view = (current: AudioJob): AudioJobView => ({ job: projectId === 'p1' ? current : null, activeJob: current, browser })
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(view(job))
+    const { wrapper } = await render()
+    const notify = vi.spyOn(toast, 'error')
+    const failed = { ...job, status: 'waiting_user' as const, errorCode: 'page_action_failed', errorMessage: '[audio_prompt_missing] 未找到音频指导输入框。' }
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(view(failed))
+    globalThis.dispatchEvent(new Event('focus')); await flushPromises()
+    expect(notify).toHaveBeenCalledExactlyOnceWith(`《${job.projectTitle}》的音频任务：${failed.errorMessage}`, { duration: Infinity })
+    expect(wrapper.get('[role="tab"][data-state="active"]').text()).toBe('发布文案')
+    globalThis.dispatchEvent(new Event('focus')); await flushPromises()
+    expect(notify).toHaveBeenCalledTimes(1)
+
+    await tab(wrapper, '音频制作').trigger('click')
+    vi.mocked(audio.controlAudioJob).mockResolvedValue(view({ ...job, runId: 2 }))
+    await button(wrapper, '继续跟进').trigger('click'); await flushPromises()
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(view({ ...failed, runId: 2 }))
+    globalThis.dispatchEvent(new Event('focus')); await flushPromises()
+    expect(notify).toHaveBeenCalledTimes(2)
+    expect(audio.startAudioJob).not.toHaveBeenCalled()
+  })
+
+  it('does not notify an unchanged historical error when another audio task stops', async () => {
+    const saved = makeAudioJob('cancelled', { errorCode: 'tracking_stopped', errorMessage: '已停止本地跟进，不等于取消 Google 生成。' })
+    const other = makeAudioJob('generating', { id: 'other-job', projectId: 'p2' })
+    vi.mocked(audio.getAudioJobView).mockResolvedValue({ job: saved, activeJob: other, browser })
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    const notify = vi.spyOn(toast, 'error')
+    vi.mocked(audio.getAudioJobView).mockResolvedValue({ job: saved, activeJob: null, browser })
+    globalThis.dispatchEvent(new Event('focus')); await flushPromises()
+    expect(wrapper.get('[aria-labelledby="audio-job-title"]').text()).toContain(saved.errorMessage)
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('does not treat an intentional audio stop message as a new error', async () => {
+    const job = makeAudioJob('generating')
+    vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(job))
+    vi.mocked(audio.controlAudioJob).mockResolvedValue(audioView({ ...job, status: 'cancelled', errorCode: 'tracking_stopped', errorMessage: '已停止本地跟进，不等于取消 Google 生成。' }))
+    const { wrapper } = await render('/projects/p1/writing?tab=audio')
+    const notify = vi.spyOn(toast, 'error')
+    await button(wrapper, '停止跟进').trigger('click')
+    await button(wrapper, '确认停止跟进').trigger('click'); await flushPromises()
+    expect(notify).not.toHaveBeenCalled()
+    expect(audio.controlAudioJob).toHaveBeenCalledExactlyOnceWith(job.id, 'cancel')
+  })
 
   it('shows readable source and audio paths while preserving original assets and selection', async () => {
     const document = { ...documentAsset, filePath: String.raw`\\?\D:\书籍\原书.pdf` }
