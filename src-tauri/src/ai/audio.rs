@@ -22,7 +22,7 @@ pub fn context(seconds: i64) -> serde_json::Value {
     serde_json::json!({
         "targetDurationSeconds": seconds,
         "duration": duration_label(seconds),
-        "seriesName": format!("{}读懂一本书", duration_label(seconds)),
+        "seriesName": "读懂一本书",
         "spokenCharacters": seconds * 220 / 60
     })
 }
@@ -50,6 +50,17 @@ impl DurationRecommendation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duration_context_keeps_series_name_independent_of_target_minutes() {
+        for minutes in [1, 18, 30, 1440] {
+            let value = context(minutes * 60);
+            assert_eq!(value["seriesName"], "读懂一本书");
+            assert_eq!(value["targetDurationSeconds"], minutes * 60);
+            assert_eq!(value["duration"], format!("{minutes}分钟"));
+            assert_eq!(value["spokenCharacters"], minutes * 220);
+        }
+    }
 
     #[test]
     fn rejects_invalid_recommendations_and_durations() {

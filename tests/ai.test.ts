@@ -97,7 +97,8 @@ describe('publishing workflow', () => {
     await button(wrapper, '一键生成').trigger('click'); await flushPromises()
     expect(api.setAudioDuration).toHaveBeenCalledExactlyOnceWith('p1', 2100)
     expect(api.startGeneration).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', providerId: 'm1', targetDurationSeconds: 2100 })
-    expect(wrapper.text()).toContain('35分钟读懂一本书')
+    expect(wrapper.text()).toContain('读懂一本书 · 目标 35 分钟')
+    expect(wrapper.text()).not.toContain('35分钟读懂一本书')
   })
   it('passes the chosen duration to audio revision while keeping other fields unchanged', async () => {
     vi.mocked(api.executeGeneration).mockResolvedValue({ taskId: 't1', fields: ['audioPrompt'], before: initial.content, content: { ...initial.content, audioPrompt: '30分钟的新指导' } })

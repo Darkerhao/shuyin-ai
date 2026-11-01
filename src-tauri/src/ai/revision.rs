@@ -4,8 +4,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "publishing-revision-v4";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v4.md");
+pub const PROMPT_VERSION: &str = "publishing-revision-v5";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v5.md");
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -253,6 +253,12 @@ mod tests {
         assert!(audio.contains("欢迎大家收听今天的节目，我是甲子。"));
         assert!(audio.contains("30分钟"));
         assert!(!audio.contains("10分钟"));
+        assert!(!audio.contains("30分钟读懂一本书"));
+        assert!(!audio.contains("接下来30分钟"));
+        assert!(audio.contains("接下来，我们一起读懂这本书。"));
+        assert!(audio.ends_with(
+            "我是甲子。如果你喜欢这样的读书分享，记得关注我。下一期，我们继续一起读书。\n"
+        ));
         assert!(audio.contains("## 第五部分：主题5"));
         assert!(audio.contains("《测试书》这本书"));
         let mut expected = serde_json::to_value(original()).unwrap();
