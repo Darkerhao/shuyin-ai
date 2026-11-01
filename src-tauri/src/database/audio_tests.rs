@@ -571,7 +571,7 @@ fn wav_bytes() -> Vec<u8> {
 }
 
 #[test]
-fn migrates_v12_database_to_v13_without_losing_projects() {
+fn migrates_v12_database_to_current_without_losing_projects() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("v12.sqlite3");
     {
@@ -596,7 +596,7 @@ fn migrates_v12_database_to_v13_without_losing_projects() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
             .unwrap(),
-        13
+        crate::database::MIGRATIONS.len() as u32
     );
     assert_eq!(
         connection

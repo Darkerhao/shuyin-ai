@@ -71,7 +71,7 @@ describe('publishing workflow', () => {
   it('opens audio directly, keeps its tab on return and validates unsupported tab values', async () => {
     const { wrapper, router } = await render('/projects/p1/writing?tab=audio')
     expect(wrapper.get('[role="tab"][data-state="active"]').text()).toBe('音频制作')
-    expect(button(wrapper, '下一步：关联成片与发布')).toBeDefined()
+    expect(button(wrapper, '下一步：制作视频')).toBeDefined()
     await router.push('/projects'); router.back(); await flushPromises()
     expect(wrapper.get('[role="tab"][data-state="active"]').text()).toBe('音频制作')
     await router.replace({ query: { tab: 'invalid' } }); await flushPromises()

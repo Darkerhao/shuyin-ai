@@ -14,6 +14,7 @@ const paths = {
   pen: 'm15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15v5ZM13 20h7',
   image: 'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM3 16l6-6 5 5 3-3 4 4M16 7h.01',
   headphones: 'M4 14v-3a8 8 0 0 1 16 0v3M4 12H3v8h4v-8H4ZM20 12h1v8h-4v-8h3Z',
+  video: 'M3 5h18v14H3V5ZM10 9l5 3-5 3V9Z',
   upload: 'M12 16V3M7 8l5-5 5 5M4 15v6h16v-6',
   copy: 'M9 9h12v12H9V9ZM5 15H3V3h12v2',
   check: 'm5 12 4 4L19 6',

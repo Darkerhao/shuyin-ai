@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
-tauri = { version = "=2.12.5", features = [] }
+tauri = { version = "=2.12.5", features = ["protocol-asset"] }
 tauri-plugin-dialog = "=2.8.3"
 tauri-plugin-updater = "=2.14.0"
 tauri-plugin-process = "=2.4.0"
@@ -33,7 +33,7 @@ mp4parse = "=0.17.0"
 # Already locked by Tauri; used only for host-side, task-bound file selection.
 webview2-com = "=0.39.1"
 windows-core = "=0.62.2"
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_JobObjects"] }
 
 [dev-dependencies]
 tempfile = "=3.27.0"

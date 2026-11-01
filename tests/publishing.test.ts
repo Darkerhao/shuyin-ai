@@ -9,6 +9,8 @@ import * as projects from '../src/services/projects'
 import * as ai from '../src/services/ai'
 import * as covers from '../src/services/covers'
 import * as douyin from '../src/services/douyin'
+import * as video from '../src/services/video'
+import type { VideoJob } from '../src/types/video'
 import { emptyPublishing } from '../src/types/ai'
 import { emptyProject, type Asset } from '../src/types/project'
 import { newCover } from '../src/types/cover'
@@ -18,11 +20,25 @@ vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.
 vi.mock('../src/services/ai', () => ({ listVersions: vi.fn() }))
 vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), readCoverExport: vi.fn() }))
 vi.mock('../src/services/douyin', () => ({ openDouyinWindow: vi.fn(), getDouyinSession: vi.fn(), startDouyinTask: vi.fn(), continueDouyinTask: vi.fn(), stopDouyinTask: vi.fn(), onDouyinProgress: vi.fn() }))
+vi.mock('../src/services/video', () => ({ listJobs: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ decodeBackground: vi.fn(async () => ({ src: 'data:image/png;base64,thumbnail' })) }))
 const task: PublishTask = { id: 't1', projectId: 'p1', writingVersionId: null, title: '中文标题', description: '第一行\n第二行', tags: '#读书', videoAssetId: 'a1', audioAssetId: 'a2', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: true, coversConfirmed: true, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [{ key: 'video', label: '视频已关联且文件可用', passed: true }], record: null }
 const asset: Asset = { id: 'a1', projectId: 'p1', assetType: 'video', originalName: '视频.mp4', filePath: 'D:/视频.mp4', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
 const audio: Asset = { id: 'a2', projectId: 'p1', assetType: 'audio', originalName: '本期音频.m4a', filePath: 'D:/本期音频.m4a', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
 const wrappers: ReturnType<typeof mount>[] = []
+
+it('uses the explicitly selected MG result and its original audio only in a new publishing draft', async () => {
+  const result: VideoJob = { id: 'mg1', projectId: 'p1', audioAssetId: 'mg-audio', sourceSubtitleId: null, providerId: 'm1', status: 'succeeded', stage: 'complete', runId: 1, plan: { title: '测试书', audioSha256: 'hash', duration: 10, cues: [], scenes: [] }, error: '', subtitleAssetId: 'mg-srt', videoAssetId: 'mg-video', createdAt: '', updatedAt: '' }
+  vi.mocked(video.listJobs).mockResolvedValue([result])
+  vi.mocked(projects.listAssets).mockResolvedValue([asset, audio, { ...asset, id: 'mg-video', originalName: 'MG成片.mp4' }, { ...audio, id: 'mg-audio', originalName: '所用原声.m4a' }])
+  const { wrapper } = await render('/projects/p1/publishing?task=new&videoJob=mg1')
+  expect(wrapper.get('#publish-video').text()).toContain('MG成片.mp4')
+  expect(wrapper.get('#publish-audio').text()).toContain('所用原声.m4a')
+  expect(api.savePublishTask).not.toHaveBeenCalled()
+  const existing = await render('/projects/p1/publishing?task=t1&videoJob=mg1')
+  expect(existing.wrapper.get('#publish-video').text()).toContain('视频.mp4')
+  expect(existing.wrapper.get('#publish-audio').text()).toContain('本期音频.m4a')
+})
 async function render(path = '/projects/p1/publishing') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/projects/:id/publishing', component: PublishingPage, props: route => ({ id: route.params.id, taskId: route.query.task }) },

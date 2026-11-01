@@ -58,6 +58,16 @@ fn main() {
             "audio_job_snapshot",
             "start_audio_job",
             "control_audio_job",
+            "video_settings",
+            "save_video_settings",
+            "list_video_jobs",
+            "start_video_job",
+            "continue_video_job",
+            "cancel_video_job",
+            "save_video_plan",
+            "video_subtitles",
+            "export_video_subtitles",
+            "media_asset_path",
         ]),
     ))
     .expect("Tauri build configuration failed");

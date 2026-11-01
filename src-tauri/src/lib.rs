@@ -13,6 +13,9 @@ mod note_import;
 mod paths;
 mod publish_commands;
 mod updates;
+mod video;
+mod video_commands;
+mod video_process;
 mod webview_host;
 
 use database::{Database, ProbeSnapshot};
@@ -42,8 +45,10 @@ pub fn run() {
             if database.read().is_ok() {
                 database.recover_ai_tasks()?;
                 database.recover_audio_jobs()?;
+                database.recover_video_jobs()?;
             }
             app.manage(database);
+            app.manage(video_commands::VideoRuntime::default());
             app.manage(audio::AudioAutomation::initialize(app.handle()));
             app.state::<audio::AudioAutomation>()
                 .start(app.handle().clone());
@@ -56,6 +61,10 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window
+                    .app_handle()
+                    .state::<video_commands::VideoRuntime>()
+                    .stop_all();
                 if let Some(audio) = window.app_handle().get_webview_window("audio-notebook") {
                     let _ = audio.destroy();
                 }
@@ -123,7 +132,17 @@ pub fn run() {
             ai_commands::set_audio_duration,
             audio_commands::audio_job_snapshot,
             audio_commands::start_audio_job,
-            audio_commands::control_audio_job
+            audio_commands::control_audio_job,
+            video_commands::video_settings,
+            video_commands::save_video_settings,
+            video_commands::list_video_jobs,
+            video_commands::start_video_job,
+            video_commands::continue_video_job,
+            video_commands::cancel_video_job,
+            video_commands::save_video_plan,
+            video_commands::video_subtitles,
+            video_commands::export_video_subtitles,
+            video_commands::media_asset_path
         ])
         .run(tauri::generate_context!())
         .expect("书引 AI 桌面容器启动失败");

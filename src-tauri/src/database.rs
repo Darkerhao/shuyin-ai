@@ -8,6 +8,7 @@ pub mod full_backup;
 pub mod image_generation;
 mod projects;
 pub mod publishing;
+pub mod video;
 pub use assets::Asset;
 pub use projects::{Project, ProjectInput, WorkspaceSettings};
 
@@ -80,6 +81,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0011_douyin_collection.sql"),
     include_str!("../migrations/0012_audio_duration.sql"),
     include_str!("../migrations/0013_audio_jobs.sql"),
+    include_str!("../migrations/0014_video_jobs.sql"),
 ];
 
 impl Database {

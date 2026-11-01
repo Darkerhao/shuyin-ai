@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 原声视频任务（2026-11-01，v14）
+
+新增 `0014_video_jobs.sql`，user_version=14。video_jobs 记录书籍、源音频、可选源字幕、文本模型、状态/阶段、递增run_id、plan_json、错误、字幕/视频结果素材ID及时间。plan_json 保存原声SHA-256、标题、时长、带时间码字幕和受约束分镜；不存密钥。状态包括draft/running/awaiting_confirmation/succeeded/failed/cancelled，部分唯一索引限制单个running任务。MP4与最终SRT同一事务登记，重复完成返回已有结果，迟到结果不能写入。
+
+重启/恢复将running置failed并递增run_id，保留已保存字幕和分镜，须手动重试。素材ID复用assets；完整备份沿用原声/字幕必需、视频可选的规则，缓存不备份。运行中禁止源素材移除/重新定位、书籍删除及数据库恢复。v12/v13升级和备份恢复检查见 [MG视频验收](MG-VIDEO-VERIFICATION.md)。后文v13及之前条目为历史切片记录。
+
 ## 多尺寸封面 JSON 扩展（2026-11-01）
 
 SQLite 结构保持 v13，无迁移脚本或表/列变更：

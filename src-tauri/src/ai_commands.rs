@@ -75,7 +75,7 @@ pub(crate) fn provider_key(
     Ok(key)
 }
 
-fn request(
+pub(crate) fn request(
     config: ProviderConfig,
     vault: &SystemCredentials,
     system: &str,

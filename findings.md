@@ -1,3 +1,21 @@
+# 应用内 MG 视频实施发现（2026-11-01）
+
+- 真实Windows调用中，数据库canonical路径直接传Node主脚本触发EISDIR/lstat D:；外部调用统一复用已有shell_path，DB原值不动。带扩展路径的Windows进程树取消回归已通过。
+- faster-whisper1.2.1与自动解析出的PyAV19.0.2不兼容(metadata_errors已移除)；核对16.1.0源码后锁定依赖，真实20秒ASR通过。模型缺tokenizer时SDK会调用from_pretrained，因此先校验完整模型文件，拒绝隐式下载。
+- 本地small模型可运行，但实测存在书名/人名误识别，加入书名作者热词也不保证逐字准确；必须保留试听校对，不将生成成功当作人工审核通过。
+- Reka2.11.0 SelectItemText仅onMounted登记textContent，历史任务默认label不会随status更新；真实截图与回归均复现。使用SelectValue已有slot直接绑定单一jobLabel，不重新挂载或增加重复状态。
+- 切书时旧轮询可能迟到覆盖新书任务；回归复现后按发起时projectId接收响应。五步流程在窄窗口隐藏次要说明/编号，四档真实WebView视口无溢出。
+- 分镜配置按单轮读取，JSON必须连续覆盖批次且只含固定图解类型；渲染脚本不执行模型代码。原声节点没有引擎TTS/响度处理，最终由FFmpeg合入原音频。
+
+# 应用内 MG 视频接入评估（2026-11-01）
+
+- 本仓库初始工作区干净；whiteboard-teacher-video 已有未跟踪的计划、素材等文件，本轮仅只读检查，不改动该项目。
+- 书引已经登记 audio/video/subtitle 素材，但音频页和发布页仍明确要求剪映制片；没有应用内视频播放器与音频转写 Provider。当前 TextProvider 只请求 chat/completions，不能拿音频指导冒充逐字稿。
+- 外层工具许可 MIT；实际本地 @frametell/engine 0.7.3 声明 AGPL-3.0-only。2026-11-01 读取上游 main 的 package.json 为 0.7.4，仍为 AGPL-3.0-only；本轮不更新引擎。独立进程不等于自动免除许可义务。
+- 本地 runtime/timing.js 默认依照配音或字数排时；D:/films/视频风格实验/08-人生由我 已存在原声绝对时间轴适配和逐页动画工程。既有 SRT 是输入，不代表当前工具具有音频识别能力；既有影片也不代表自动生成新书分镜已实现。
+- 官方 faster-whisper 当前 README 与 transcribe.py 确认 CPU/int8、word_timestamps、download_root/local_files_only；只核对 API，没有安装模型或进行音频识别。模型/缓存应使用用户选定的 D 盘位置，不隐式下载到默认 C 盘缓存。
+- 真实预览需要按已登记素材限制本地媒体读取和支持 Range；当前 Tauri CSP 未开放媒体协议，不能仅增加 video 标签或把长视频转 base64。
+
 # 音频页面间距与路径展示（2026-11-01）
 
 - `.editor-section .muted` 对所有嵌套说明设置 `margin-top: -3px`，来源与格式没有内部间距结构。修复直接收敛该规则，表单使用明确 gap/padding，不堆叠负边距覆盖。

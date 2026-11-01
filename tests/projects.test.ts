@@ -325,7 +325,8 @@ describe('M1 projects and materials', () => {
   })
   it('marks only the exact workflow step and returns keyboard focus after navigation', async () => {
     const { wrapper, router } = await render('/projects/p1')
-    expect(wrapper.findAll('.project-navigation a')).toHaveLength(4)
+    expect(wrapper.findAll('.project-navigation a')).toHaveLength(5)
+    expect(wrapper.get('.project-navigation a[href="/projects/p1/video"]').text()).toContain('视频制作')
     expect(wrapper.findAll('.project-navigation .is-current')).toHaveLength(1)
     expect(wrapper.get('.project-navigation [aria-current="step"]').text()).toContain('书籍资料')
     await wrapper.get('.project-navigation a[href="/projects/p1/writing"]').trigger('click'); await flushPromises()

@@ -264,7 +264,7 @@ const importAudio = () => run(async () => {
   if (!path) return
   await linkAsset(props.id, path)
   await refreshAudioAssets()
-  message.value = '音频已导入。请到剪映生成字幕、添加视频背景并导出最终成片。'
+  message.value = '音频已导入。可在视频制作中识别字幕并生成原声 MG 视频，也可使用外部剪辑工具。'
 })
 const playAudio = (id: string) => run(() => openAsset(id))
 async function persistDuration() {
@@ -743,7 +743,7 @@ onMounted(async () => {
           :value="tab.value"
         >
           <p class="tab-intro">
-            {{ tab.value === 'publishing' ? '一份有吸引力的标题，一段让人想点开的介绍。' : tab.value === 'audio' ? '自动生成或手动导入音频，再交给剪映生成字幕、添加背景并导出最终成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
+            {{ tab.value === 'publishing' ? '一份有吸引力的标题，一段让人想点开的介绍。' : tab.value === 'audio' ? '自动生成或手动导入音频，再到视频制作识别字幕、生成原声 MG 成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
           </p>
           <section
             v-if="tab.value === 'cover' && draft.coverDesign"
@@ -1096,14 +1096,14 @@ onMounted(async () => {
           >
             <div class="result-heading">
               <h2 id="audio-assets-title">
-                音频成品与剪映制作
+                音频成品与视频制作
               </h2>
               <Badge variant="secondary">
                 {{ audioAssets.length }} 个音频
               </Badge>
             </div>
             <p class="muted">
-              自动任务成功后，音频会出现在这里。也可继续手动导入外部生成的音频；随后在剪映生成字幕、添加视频背景，导出最终成片，再到发布准备关联成片。
+              自动任务成功后，音频会出现在这里。也可手动导入外部音频，选择「制作 MG 视频」生成字幕与动画；外部剪辑工具导出的成片仍可在发布准备中关联。
             </p>
             <div class="actions wrap">
               <Button
@@ -1144,6 +1144,14 @@ onMounted(async () => {
               >
                 打开音频
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                :disabled="busy || asset.existsStatus !== 'available'"
+                @click="router.push({ path: `/projects/${id}/video`, query: { audio: asset.id } })"
+              >
+                <AppIcon name="video" />制作 MG 视频
+              </Button>
             </article>
           </section>
         </TabsContent>
@@ -1165,9 +1173,9 @@ onMounted(async () => {
             v-if="activeTab === 'audio'"
             type="button"
             :disabled="busy || revisionLocked"
-            @click="router.push(`/projects/${id}/publishing`)"
+            @click="router.push(`/projects/${id}/video`)"
           >
-            下一步：关联成片与发布<AppIcon name="arrow" />
+            下一步：制作视频<AppIcon name="arrow" />
           </Button>
           <Button
             v-else

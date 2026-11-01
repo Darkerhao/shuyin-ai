@@ -25,7 +25,7 @@ const navigation = computed(() => [
 ] as const)
 const workspaceTitle = computed(() => {
   if (route.path === '/projects/new') return '添加一本书'
-  if (route.params.id) return route.path.endsWith('/writing') ? '内容创作' : route.path.endsWith('/covers') ? '封面工坊' : route.path.endsWith('/publishing') ? '发布准备' : '书籍资料'
+  if (route.params.id) return route.path.endsWith('/writing') ? '内容创作' : route.path.endsWith('/covers') ? '封面工坊' : route.path.endsWith('/video') ? '视频制作' : route.path.endsWith('/publishing') ? '发布准备' : '书籍资料'
   return route.path === '/publishing' ? '发布任务' : inProjects.value ? '我的书籍' : route.path === '/settings/models' ? '模型设置' : route.path === '/about' ? '关于书引 AI' : route.path === '/verification' ? '技术验证' : '数据与备份'
 })
 watch(router.currentRoute, async (to, from) => {
