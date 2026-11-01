@@ -10,7 +10,7 @@ import type { VideoJob } from '../src/types/video'
 vi.mock('../src/services/video', () => ({ settings: vi.fn(), saveSettings: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), mediaSource: vi.fn(), chooseRuntimePath: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: () => true, getProject: vi.fn(), listAssets: vi.fn(), openAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn() }))
-const job: VideoJob = { id: 'j1', projectId: 'p1', audioAssetId: 'a1', sourceSubtitleId: null, providerId: 'm1', status: 'awaiting_confirmation', stage: 'storyboard', runId: 1, plan: { title: '原书', audioSha256: 'hash', duration: 8, cues: [{ start: 0, end: 7, text: '原声字幕' }], scenes: [{ first: 0, last: 0, kind: 'book', title: '观点', labels: ['一本书'] }] }, error: '', subtitleAssetId: 's1', videoAssetId: null, createdAt: '', updatedAt: '' }
+const job: VideoJob = { id: 'j1', projectId: 'p1', audioAssetId: 'a1', sourceSubtitleId: null, providerId: 'm1', status: 'awaiting_confirmation', stage: 'storyboard', runId: 1, plan: { title: '原书', audioSha256: 'hash', duration: 8, cues: [{ start: 0, end: 7, text: '原声字幕' }], scenes: [{ first: 0, last: 0, kind: 'opening', title: '观点', beats: [{ cue: 0, object: 'book', action: 'draw', label: '一本书' }] }] }, error: '', subtitleAssetId: 's1', videoAssetId: null, createdAt: '', updatedAt: '' }
 const mounted: ReturnType<typeof mount>[] = []
 beforeEach(() => {
   vi.resetAllMocks()
@@ -94,4 +94,37 @@ it('refreshes intermediate transcription feedback and clears the stale connectio
   expect(wrapper.text()).toContain('识别中的真实句子')
   expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('50')
   expect(wrapper.text()).not.toContain('当前展示上次读取的进度')
+})
+
+it('does not render legacy text cards and upgrades only the storyboard while preserving subtitles', async () => {
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...job, plan: { ...job.plan, scenes: [{ first: 0, last: 0, kind: 'book', title: '旧图解', labels: ['一本书'] }] } }])
+  const wrapper = await render()
+  expect(wrapper.text()).toContain('旧版文字图解分镜')
+  expect(wrapper.get('[data-test="render-video"]').attributes('disabled')).toBeDefined()
+  vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'storyboard' })
+  const upgrade = wrapper.findAll('button').find(button => button.text().includes('保留字幕并升级手绘分镜'))!
+  await upgrade.trigger('click'); await flushPromises()
+  expect(api.savePlan).toHaveBeenCalledWith('j1', expect.stringContaining('原声字幕'), [])
+  expect(api.continueJob).toHaveBeenCalledWith('j1', false)
+  expect(api.startJob).not.toHaveBeenCalled()
+})
+
+it('shows the concrete object, action and subtitle trigger and saves label edits', async () => {
+  const wrapper = await render()
+  expect(wrapper.text()).toContain('字幕 1 · 书本 · 逐笔绘制')
+  await wrapper.get('[aria-label="第1镜物体1标签"]').setValue('原书')
+  vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'rendering' })
+  await wrapper.get('[data-test="render-video"]').trigger('click'); await flushPromises()
+  expect(api.savePlan).toHaveBeenCalledWith('j1', expect.any(String), [{ ...job.plan.scenes[0], beats: [{ cue: 0, object: 'book', action: 'draw', label: '原书' }] }])
+  expect(job.plan.scenes[0]?.beats?.[0]?.label).toBe('一本书')
+})
+
+it('makes a separate hand-drawn version from the completed task audio and saved subtitles', async () => {
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...job, status: 'succeeded', videoAssetId: 'v1' }])
+  vi.mocked(api.startJob).mockResolvedValue({ ...job, id: 'j2', status: 'running', plan: { ...job.plan, cues: [], scenes: [] } })
+  const wrapper = await render()
+  const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版手绘'))!
+  await remake.trigger('click'); await flushPromises()
+  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1')
+  expect(api.savePlan).not.toHaveBeenCalled()
 })

@@ -5,60 +5,50 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
-// All executable drawing code is owned here. Model output only supplies JSON data.
+const catalog = JSON.parse(fs.readFileSync(new URL('./visual-catalog.json', import.meta.url), 'utf8'));
+const visuals = fs.readFileSync(new URL('./illustrations.js', import.meta.url), 'utf8');
+
+// The model selects trusted drawings and subtitle anchors; it never supplies code.
 export function buildEpisode(plan) {
+  const shortText = (value, limit) => typeof value === 'string' && value.trim() && [...value].length <= limit && !/[\p{Cc}{}*`]/u.test(value);
+  let next = 0;
+  for (const scene of plan.scenes) {
+    if (!scene.beats?.length) throw new Error('旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。');
+    if (!Object.hasOwn(catalog.kinds, scene.kind)) throw new Error('Unknown scene kind.');
+    if (!shortText(scene.title, catalog.limits.titleChars) || scene.labels?.length) throw new Error('Invalid scene title or legacy labels.');
+    if (!Number.isInteger(scene.first) || scene.first !== next || !Number.isInteger(scene.last) || scene.last < scene.first || scene.last >= plan.cues.length || scene.last - scene.first >= catalog.limits.maxSceneCues) throw new Error('Invalid scene cue coverage.');
+    if (scene.beats.length > catalog.limits.maxBeats) throw new Error('A scene supports at most three objects.');
+    let previous = scene.first;
+    for (const beat of scene.beats) {
+      if (!Object.hasOwn(catalog.objects, beat.object)) throw new Error('Unknown drawing object.');
+      if (!Object.hasOwn(catalog.actions, beat.action ?? 'draw')) throw new Error('Unknown drawing action.');
+      if (!shortText(beat.label, catalog.limits.labelChars)) throw new Error('Invalid object label.');
+      if (!Number.isInteger(beat.cue) || beat.cue < previous || beat.cue > scene.last) throw new Error('Invalid object cue anchor.');
+      previous = beat.cue;
+    }
+    next = scene.last + 1;
+  }
+  if (!plan.scenes.length || next !== plan.cues.length) throw new Error('Incomplete scene cue coverage.');
   const pages = plan.scenes.map((scene, index) => ({
-    id: `p${String(index + 1).padStart(4, '0')}`, title: scene.title, scene,
+    id: `p${String(index + 1).padStart(4, '0')}`, title: scene.title, kind: scene.kind, beats: scene.beats,
     start: index === 0 ? 0 : plan.cues[scene.first].start,
     end: index + 1 === plan.scenes.length ? plan.duration : plan.cues[plan.scenes[index + 1].first].start,
-    cues: plan.cues.slice(scene.first, scene.last + 1).map(c => ({ t: c.text, start: c.start, end: c.end })),
+    cues: plan.cues.slice(scene.first, scene.last + 1).map((c, offset) => ({ id: scene.first + offset, t: c.text, start: c.start, end: c.end })),
   }));
-  const data = { META: { title: plan.title, name: 'film', lang: 'en', style: 'study', extras: ['timeline.js'], fadeOut: 0, pageMotion: false }, PAGES: pages, duration: plan.duration };
+  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style: 'study', extras: ['timeline.js', 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, duration: plan.duration };
   const script = `(function(root) {
 root.SCRIPT = ${JSON.stringify(data)};
 root.applyVideoTimeline = function() {
   root.TIMING.layout = function() {
     return { duration: root.SCRIPT.duration, gap: 0,
       pages: root.SCRIPT.PAGES.map((p, index) => ({ ...p, index, speechEnd: p.cues.at(-1).end,
-        cues: p.cues.map(c => ({ text: c.t, sub: c.t, start: c.start, end: c.end, dur: c.end-c.start, hold: 0 })) })) };
+        cues: p.cues.map(c => ({ id: c.id, text: c.t, sub: c.t, start: c.start, end: c.end, dur: c.end-c.start, hold: 0 })) })) };
   };
 };
 if (root.TIMING) root.applyVideoTimeline();
 })(typeof window === 'undefined' ? globalThis : window);`;
-  return { script, pages };
+  return { script, pages, visuals };
 }
-
-const drawing = `
-const scene = SCRIPT.PAGES.find(p => p.id === ID).scene;
-ENGINE.visual(ID, P => {
-  P.text(scene.title, { x: 960, y: 215, w: 1600, align: 'c', size: 72, weight: 700, at: 0, cps: 18 });
-  P.underline(760, 320, 400, { color: 'orange', at: 0.3 });
-  const count = scene.labels.length;
-  const when = i => P.c(Math.min(i, scene.last - scene.first), 0.2);
-  if (scene.kind === 'book') {
-    P.box(630, 390, 660, 370, { color: 'ink', fill: 'blueF', at: 0.2 });
-    P.line(695, 390, 695, 760, { color: 'blue', at: 0.5 });
-    P.text(scene.labels[0], { x: 990, y: 490, w: 530, align: 'c', size: 54, at: when(0), cps: 8 });
-    P.text(scene.labels.slice(1).join(' / '), { x: 990, y: 640, w: 530, align: 'c', size: 34, color: 'soft', at: when(1) });
-  } else if (scene.kind === 'quote') {
-    P.line(300, 420, 300, 760, { color: 'orange', sw: 8, at: 0.3 });
-    scene.labels.forEach((text, i) => P.text(text, { x: 1030, y: 440 + i * 95, w: 1240, align: 'c', size: 60, at: when(i), cps: 10 }));
-  } else {
-    const step = 1500 / count;
-    scene.labels.forEach((text, i) => {
-      const x = 210 + step * (i + 0.5), at = when(i);
-      if (scene.kind === 'timeline') {
-        P.line(210, 580, 1710, 580, { color: 'soft', at: 0.2 });
-        P.circle(x, 580, 44, { color: 'orange', fill: 'orangeF', at });
-      } else {
-        P.box(x - step * 0.43, 420, step * 0.86, 260, { color: i % 2 ? 'orange' : 'blue', fill: i % 2 ? 'orangeF' : 'blueF', at });
-        if (i && scene.kind === 'flow') P.arrow(x - step * 0.56, 550, x - step * 0.45, 550, { color: 'ink', at });
-      }
-      P.text(text, { x, y: scene.kind === 'timeline' ? 650 : 505, w: step * 0.8, align: 'c', size: 44, at, cps: 10 });
-      P.text(String(i + 1).padStart(2, '0'), { x, y: 365, w: 100, align: 'c', size: 30, color: 'muted', at });
-    });
-  }
-});`;
 
 // FFmpeg seals mdat and appends moov when a fragment finishes. The engine only
 // renames fragments after a whole worker group finishes, so size alone is not progress.
@@ -141,7 +131,7 @@ async function main(inputFile, outputFile) {
   };
   report('checking_layout');
   if (Math.abs(metadata.duration - plan.duration) > 0.15) throw new Error('The audio duration changed. Create a new video task.');
-  const key = createHash('sha256').update(JSON.stringify(plan)).update(engine).update(fs.readFileSync(fileURLToPath(import.meta.url))).digest('hex').slice(0, 24);
+  const key = createHash('sha256').update(JSON.stringify(plan)).update(engine).update(fs.readFileSync(fileURLToPath(import.meta.url))).update(visuals).update(JSON.stringify(catalog)).digest('hex').slice(0, 24);
   const episode = input.cacheRoot ? path.join(path.resolve(input.cacheRoot), key) : path.join(path.dirname(inputFile), 'episode');
   const fresh = !fs.existsSync(episode);
   if (fresh) fs.mkdirSync(path.join(episode, 'pages'), { recursive: true });
@@ -151,6 +141,7 @@ async function main(inputFile, outputFile) {
   const result = buildEpisode(plan);
   fs.writeFileSync(path.join(episode, 'script.js'), result.script);
   fs.writeFileSync(path.join(episode, 'timeline.js'), 'window.applyVideoTimeline();');
+  fs.writeFileSync(path.join(episode, 'illustrations.js'), result.visuals);
   // Chromium cannot read some Windows file URLs through deeply nested junctions.
   const modulesUrl = pathToFileURL(fs.realpathSync(path.join(episode, 'engine_modules')) + path.sep).href.replaceAll('&', '&amp;');
   const bootUrl = pathToFileURL(path.join(engine, 'boot.js')).href.replaceAll('&', '&amp;');
@@ -158,7 +149,7 @@ async function main(inputFile, outputFile) {
   fs.writeFileSync(path.join(episode, 'index.html'), `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="engine-modules" content="${modulesUrl}"><script src="script.js"></script><script src="${bootUrl}"></script>
 <script>window.__ready = window.__ready.then(duration => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(duration)))));</script>
 </head><body></body></html>`);
-  for (const page of result.pages) fs.writeFileSync(path.join(episode, 'pages', `${page.id}.js`), `{ const ID = ${JSON.stringify(page.id)}; ${drawing} }`);
+  for (const page of result.pages) fs.writeFileSync(path.join(episode, 'pages', `${page.id}.js`), `ENGINE.visual(${JSON.stringify(page.id)}, P => EPISODE.draw(P));`);
   process.chdir(episode);
   const { openStage, loadEpisode, closeStage } = await import(pathToFileURL(path.join(engine, 'tools/lib.mjs')));
   const { lintPages } = await import(pathToFileURL(path.join(engine, 'tools/checks.mjs')));
@@ -186,7 +177,7 @@ async function main(inputFile, outputFile) {
   const video = path.join(path.dirname(inputFile), 'video.mp4');
   // Render without the engine's voice track: its mixer normalizes speech. Keep the user's original track instead.
   report('muxing_audio');
-  await run(FFMPEG, ['-nostdin', '-n', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', path.join(episode, 'out/film-with-subtitles.mp4'), '-protocol_whitelist', 'file,pipe', '-i', input.audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', video], episode);
+  await run(FFMPEG, ['-nostdin', '-n', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', path.join(episode, 'out/film-有字幕.mp4'), '-protocol_whitelist', 'file,pipe', '-i', input.audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', video], episode);
   report('checking_video');
   const output = probe(video);
   if (output.width !== 1920 || output.height !== 1080 || Math.abs(output.duration - plan.duration) > 0.2) throw new Error('Rendered video metadata does not match the audio.');

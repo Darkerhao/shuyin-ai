@@ -385,6 +385,39 @@ mod tests {
     }
 
     #[test]
+    fn legacy_storyboards_remain_readable_and_only_explicitly_upgrade_the_scenes() {
+        let (_dir, db, input) = fixture();
+        let job = db.create_video_job(input).unwrap();
+        let old = serde_json::json!({"title":"旧视频", "audioSha256":"preserved", "duration":5.0, "cues":[{"start":0.5,"end":4.0,"text":"保留的字幕"}], "scenes":[{"first":0,"last":0,"kind":"book","title":"旧图解","labels":["书籍"]}]});
+        db.with_connection(|c| {
+            c.execute(
+                "UPDATE video_jobs SET plan_json=?1,status='awaiting_confirmation' WHERE id=?2",
+                params![old.to_string(), job.id],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        let saved = db.video_job(&job.id).unwrap();
+        assert_eq!(saved.plan.scenes[0].labels[0], "书籍");
+        assert!(db
+            .claim_video_job(&job.id, true)
+            .unwrap_err()
+            .contains("重新生成分镜"));
+        assert_eq!(
+            db.video_job(&job.id).unwrap().status,
+            "awaiting_confirmation"
+        );
+        db.edit_video_plan(&job.id, saved.plan.cues, vec![])
+            .unwrap();
+        let upgraded = db.video_job(&job.id).unwrap();
+        assert_eq!(upgraded.plan.cues[0].text, "保留的字幕");
+        assert_eq!(upgraded.plan.audio_sha256, "preserved");
+        assert!(upgraded.plan.scenes.is_empty());
+        assert!(db.claim_video_job(&job.id, false).is_ok());
+    }
+
+    #[test]
     fn video_completion_registers_both_files_atomically_and_is_idempotent() {
         let (dir, db, input) = fixture();
         let job = db.create_video_job(input).unwrap();
