@@ -1,3 +1,30 @@
+# 应用内 MG 视频实施（2026-11-01）
+
+- 已实现v14视频任务、独立ASR/渲染、受约束分镜与人工确认、取消恢复、素材事务、原生播放器、字幕校对/导出及发布选用；未修改外部whiteboard项目或正式安装/数据库。
+- D盘安装faster-whisper1.2.1与约461MiB的small模型，依赖/模型固定；整套venv/缓存/模型约869MiB。Tauri隔离identifier com.shuyin.mg-verify的数据库/WebView2 profile在C盘标准目录，约69MiB；基础Python和Chrome沿用已有C盘程序。
+- 红绿记录：Node原声时轴测试从缺失模块到2通过；Vue确认/保存失败测试通过；动态历史标签和跨书迟到轮询分别复现后修复。原4步/旧按钮用例按新增视频入口更新；旧v12迁移用例改断言当前迁移版本，保留原书与音频表检查。
+- Cargo开启官方protocol-asset需新增已声明的http-range传递依赖；首次locked拒绝、offline缺包，随后更新锁并按locked下载/验证。当前sha2输出不实现LowerHex，采用仓库既有逐字节十六进制写法。PyAV兼容、Node扩展/相对路径问题均已定位并修复。
+- 实际短片：从已有原声只读截20秒，本地ASR输出真实时间码；独立渲染20秒/1080p24/H.264/AAC，布局0错误。默认YouTube技术检查0失败2提醒(无软字幕轨、保留原声响度)，已查看6帧拼图；不作为平台发布验收。
+- node output/video-smoke/native-check.mjs通过真实Tauri IPC/SQLite/ASR/渲染/SRT导出/WebView2播放定位。分镜为一次本地HTTP契约请求，不是付费模型。8字幕/3镜，四档视口无横向溢出，页面错误0；原声及正式数据保留。
+- npm run lint通过；npx vitest run --maxWorkers 2最终254通过，Node视频2通过，Python3通过。一次默认npm test遇未改动更新用例5秒超时，限制并发重跑完整前端通过，未调高超时或弱化断言。
+- cargo test --manifest-path src-tauri/Cargo.toml --locked最终146通过/2忽略；新增Windows进程树测试以SHUYIN_TEST_NODE与--ignored显式运行通过(含扩展路径)。Clippy全目标-D warnings通过。忽略的另一项为原有系统凭据测试，未操作真实密钥。
+- npm run test:queue为18通过/1失败，聚焦missing predecessor report仍失败；git diff确认该脚本及测试均未改动。不将全量npm test写为全绿，也不修无关队列逻辑。
+- 最终隔离identifier构建及正常关闭/重启通过；restart-check验证字幕回读、成功任务、原生媒体、实时任务标签、跨书访问拒绝与四档视口。重新定位12秒后实际播放至12.499秒，readyState=4，已查看final-player.png；随后正常关闭，库schema14/完整性/外键/任务状态均通过。
+- 发布脚本最终78通过/1项macOS跳过，256.5秒，完整日志位于output/video-smoke/release-check.log。未创建真实发行或推送版本。
+- 收尾发现多数文件被暂存，按规范停止并询问；用户明确确认是手动暂存，现保留索引继续文档收尾。未提交、推送、发布或手动升版本，助手没有暂存/撤销暂存；最后文档改动保持未暂存。
+- 已核对实际MP4为1,818,942字节、导出SRT为555字节，源结果文件存在；本轮没有重新转写或渲染。验收应用已关闭，18452/18453端口无监听。实现、修改范围、全部命令/失败和后续验收边界已补齐docs/MG-VIDEO-VERIFICATION.md。
+- 本轮文档收尾检查通过：python校验8份文档的代码围栏及19个本地链接、重启证据与暂存区内容摘要；git diff --check和git diff --cached --check通过。暂存区与用户确认时一致，仅工作区保留补充文档。
+
+# 应用内 MG 视频接入评估（2026-11-01）
+
+- 已检查两仓库状态、五份工程文档、素材类型、音频页、发布页、TextProvider、Tauri CSP、备份实现和 Frametell 实际渲染/时间轴源码。
+- 已查证本地引擎与上游许可、faster-whisper 官方使用文档和参数实现；推荐先独立引擎接入，字幕以实际音频为准，分镜使用数据契约而不是任意代码。
+- 当前只做设计，不安装运行时/模型、不调用付费模型、不读写正式数据库、不重新生成已有音频、不启动渲染或改变其他项目。
+- 检索中三个假定路径不存在（components/audio/AudioProductionPanel.vue、engine/LICENSE、capabilities/default.json），已由文件枚举定位真实 WritingPage.vue、外层 LICENSE/engine/package.json 和 capabilities/main.json；不据不存在路径推断能力。
+- 文档首轮补丁因技术设计/开发计划的完整标题不匹配而整体未应用；核对真实标题后重新应用成功，无部分落盘或业务文件改动。
+- 已新增 `docs/MG-VIDEO-INTEGRATION.md` 并同步三份工程文档入口。`python -` 文档检查通过：5个本地源码链接、3个设计入口、8节结构、代码围栏和「尚未实施」标记；`git diff --check` 通过。未运行 lint、类型检查、单测、构建或桌面验证，因为本轮仅文档。
+- 已追加读取 faster-whisper v1.2.1 标签源码，确认 word_timestamps/download_root/local_files_only 参数；未安装依赖或下载模型。另一项目未跟踪文件列表与开始时相同，未修改、提交或发布任何项目。
+
 # 音频页面间距与路径展示（2026-11-01）
 
 - 初始工作区干净。已检查工程文档、项目 UI skills、实际音频模板、共享 CSS、路径保存与页面/浮层展示入口。

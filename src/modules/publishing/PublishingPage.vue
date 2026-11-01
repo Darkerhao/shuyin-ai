@@ -13,6 +13,7 @@ import * as api from '../../services/publishing'
 import { getProject, isDesktop, listAssets } from '../../services/projects'
 import { listVersions } from '../../services/ai'
 import { listCovers } from '../../services/covers'
+import { listJobs as listVideoJobs } from '../../services/video'
 import { publishInput, publishStatuses, type PublishInput, type PublishQueueItem, type PublishTask } from '../../types/publishing'
 import type { Asset } from '../../types/project'
 import type { CoverVersion } from '../../types/cover'
@@ -96,7 +97,15 @@ const load = () => run(async () => {
   const target = props.taskId === 'new' ? null : props.taskId ? saved.find(task => task.id === props.taskId) : saved[0] ?? null
   if (props.taskId && props.taskId !== 'new' && !target) throw new Error('此任务不属于当前书籍或已不存在，请返回发布任务列表。')
   title.value = project.title; tasks.value = saved; assets.value = files; covers.value = exported; writing.value = versions
-  accept(target ?? null); loaded.value = true
+  accept(target ?? null)
+  if (props.taskId === 'new' && typeof route.query.videoJob === 'string') {
+    const job = (await listVideoJobs(props.id)).find(job => job.id === route.query.videoJob && job.status === 'succeeded')
+    if (!job || !files.some(asset => asset.id === job.videoAssetId && asset.assetType === 'video' && asset.existsStatus === 'available') || !files.some(asset => asset.id === job.audioAssetId && asset.assetType === 'audio' && asset.existsStatus === 'available')) throw new Error('所选视频任务或原音频不可用，请回到视频制作检查素材。')
+    draft.value.videoAssetId = job.videoAssetId
+    draft.value.audioAssetId = job.audioAssetId
+    draft.value.titleConfirmed = false
+  }
+  loaded.value = true
 })
 async function loadTask() {
   await load()
@@ -443,7 +452,7 @@ onMounted(() => { if (desktop) void loadTask() })
               音频制作
             </RouterLink> 导入音频成品；音频仅用于制作记录，不会上传抖音。
           </p>
-          <label for="publish-video">剪映导出的最终成片</label>
+          <label for="publish-video">最终成片</label>
           <Select
             v-model="draft.videoAssetId"
             :disabled="busy || published || recordOpen"
@@ -483,7 +492,7 @@ onMounted(() => { if (desktop) void loadTask() })
             v-if="!videos.length"
             class="muted"
           >
-            先展开上方“关联素材”，关联剪映导出的最终成片。发布检查会验证 MP4/MOV 文件、可读取画面和音轨。
+            可在视频制作中生成并选用成片，也可展开上方“关联素材”导入外部成片。发布检查会验证 MP4/MOV 文件、可读取画面和音轨。
           </p>
           <Button
             type="button"

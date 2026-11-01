@@ -181,11 +181,19 @@ impl Database {
         asset_id: Option<&str>,
     ) -> Result<String, String> {
         self.with_connection(|connection| {
+            if let Some(id) = asset_id {
+                if connection.query_row("SELECT EXISTS(SELECT 1 FROM video_jobs WHERE status='running' AND (audio_asset_id=?1 OR source_subtitle_id=?1))", [id], |r| r.get::<_, bool>(0)).map_err(|e| e.to_string())? {
+                    return Err("素材正在用于视频生成，请先停止任务再重新定位。".into());
+                }
+            }
             register_existing(connection, project_id, Path::new(path), None, asset_id)
         })
     }
     pub fn unlink_asset(&self, id: &str) -> Result<(), String> {
         self.with_connection(|c| {
+            if c.query_row("SELECT EXISTS(SELECT 1 FROM video_jobs WHERE status='running' AND (audio_asset_id=?1 OR source_subtitle_id=?1))", [id], |r| r.get::<_, bool>(0)).map_err(|e| e.to_string())? {
+                return Err("素材正在用于视频生成，请先停止任务。".into());
+            }
             if c.execute(
                 "DELETE
                 FROM assets

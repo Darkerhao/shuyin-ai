@@ -9,6 +9,7 @@ import CoversPage from '../../modules/covers/CoversPage.vue'
 import PublishingPage from '../../modules/publishing/PublishingPage.vue'
 import PublishQueuePage from '../../modules/publishing/PublishQueuePage.vue'
 import AboutPage from '../../modules/settings/AboutPage.vue'
+import VideoPage from '../../modules/video/VideoPage.vue'
 
 export const router = createRouter({
   history: createWebHashHistory(),
@@ -24,6 +25,7 @@ export const router = createRouter({
     { path: '/projects/:id', component: ProjectPage, props: true },
     { path: '/projects/:id/writing', component: WritingPage, props: true },
     { path: '/projects/:id/covers', component: CoversPage, props: true },
+    { path: '/projects/:id/video', component: VideoPage, props: true },
     { path: '/projects/:id/publishing', component: PublishingPage, props: route => ({ id: route.params.id, taskId: typeof route.query.task === 'string' ? route.query.task : undefined }) },
     { path: '/settings/models', component: ModelsPage },
     { path: '/settings', component: SettingsPage },

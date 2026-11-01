@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-video"
+description = "本书原声音频的字幕、分镜、视频任务及已登记媒体预览。"
+commands.allow = ["video_settings", "save_video_settings", "list_video_jobs", "start_video_job", "continue_video_job", "cancel_video_job", "save_video_plan", "video_subtitles", "export_video_subtitles", "media_asset_path"]

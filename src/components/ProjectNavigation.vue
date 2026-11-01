@@ -6,6 +6,7 @@ const steps = [
   { path: '', label: '书籍资料', icon: 'book', description: '整理阅读素材' },
   { path: 'writing', label: '内容创作', icon: 'pen', description: '文案与音频制作' },
   { path: 'covers', label: '封面工坊', icon: 'image', description: '排版与比例导出' },
+  { path: 'video', label: '视频制作', icon: 'video', description: '原声字幕与动画' },
   { path: 'publishing', label: '发布准备', icon: 'upload', description: '检查素材与发布' },
 ] as const
 </script>

@@ -220,6 +220,10 @@ dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .settings-footer a { text-decoration: none; }
 
 
+@media (max-width: 1280px) {
+  .project-navigation .step-number, .project-navigation .step-chevron, .project-navigation .step-copy small { display: none; }
+  .project-navigation a { padding: 10px; gap: 7px; }
+}
 @media (max-width: 1180px) {
   .model-layout { grid-template-columns: 220px minmax(0, 1fr); gap: 18px; }
   .model-editor { padding: 22px; }

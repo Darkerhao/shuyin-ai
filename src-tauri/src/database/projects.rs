@@ -282,6 +282,15 @@ impl Database {
     pub fn delete_project(&self, id: &str) -> Result<(), String> {
         self.with_connection(|c| {
             get(c, id)?;
+            if c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM video_jobs WHERE project_id=?1 AND status='running')",
+                [id],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(|e| e.to_string())?
+            {
+                return Err("请先停止本书正在执行的视频任务。".into());
+            }
             c.execute(
                 "DELETE
                 FROM book_projects
