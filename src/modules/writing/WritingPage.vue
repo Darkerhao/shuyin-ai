@@ -442,7 +442,7 @@ onMounted(async () => {
           name="sparkle"
           :class="{ spin: !!taskId }"
         /></span>
-        <div><h2>让灵感，成为这一期内容</h2><p>甲子 · {{ durationValid ? `${durationMinutes}分钟读懂一本书 · 目标 ${durationMinutes} 分钟` : '读懂一本书 · 请设置目标时长' }}</p></div>
+        <div><h2>让灵感，成为这一期内容</h2><p>甲子 · 读懂一本书 · {{ durationValid ? `目标 ${durationMinutes} 分钟` : '请设置目标时长' }}</p></div>
       </div>
       <div class="generation-actions">
         <template v-if="providers.length > 1">

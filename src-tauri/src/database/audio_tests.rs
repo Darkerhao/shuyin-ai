@@ -761,6 +761,61 @@ fn archives_verified_audio_once_and_keeps_project_asset_in_sync() {
 }
 
 #[test]
+fn generating_again_after_archive_uses_new_prompt_and_preserves_both_audio_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("data.sqlite3"));
+    let project = sample_project(&database, "重新试听", "原书资料");
+    let mut completed_jobs = Vec::new();
+    for prompt in ["第一次的指导", "修正开场和结尾后的指导"] {
+        let writing = sample_writing(&database, &project, prompt);
+        let created = start_text_job(&database, &project, &writing);
+        assert_eq!(
+            created.writing_version_id.as_deref(),
+            Some(writing.id.as_str())
+        );
+        assert_eq!(
+            database.audio_execution_job().unwrap().unwrap().prompt,
+            prompt
+        );
+        assert_eq!(start_text_job(&database, &project, &writing).id, created.id);
+        advance_to_download(&database, &created);
+        let download = database
+            .audio_download_path(&created.id, created.run_id)
+            .unwrap();
+        fs::create_dir_all(download.parent().unwrap()).unwrap();
+        fs::write(&download, wav_bytes()).unwrap();
+        completed_jobs.push(
+            database
+                .complete_audio_download(&created.id, created.run_id, download.to_str().unwrap())
+                .unwrap(),
+        );
+    }
+    assert_ne!(completed_jobs[0].id, completed_jobs[1].id);
+    assert_ne!(completed_jobs[0].asset_id, completed_jobs[1].asset_id);
+    let assets = database.list_assets(&project.id).unwrap();
+    assert_eq!(
+        assets
+            .iter()
+            .filter(|asset| asset.asset_type == "audio")
+            .count(),
+        2
+    );
+    for completed in completed_jobs {
+        let preserved = database
+            .with_connection(|connection| job(connection, &completed.id))
+            .unwrap();
+        assert_eq!(preserved.status, "succeeded");
+        assert_eq!(preserved.asset_id, completed.asset_id);
+        let asset = assets
+            .iter()
+            .find(|asset| Some(&asset.id) == completed.asset_id.as_ref())
+            .unwrap();
+        assert!(asset.file_path.contains(&completed.id));
+        assert_eq!(fs::read(&asset.file_path).unwrap(), wav_bytes());
+    }
+}
+
+#[test]
 fn rejects_html_and_outside_task_paths_without_archiving() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("data.sqlite3"));

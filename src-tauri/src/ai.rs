@@ -6,8 +6,8 @@ pub mod audio;
 pub mod images;
 pub mod publishing;
 pub mod revision;
-pub const PROMPT_VERSION: &str = "publishing-v5";
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v5.md");
+pub const PROMPT_VERSION: &str = "publishing-v6";
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v6.md");
 pub const TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

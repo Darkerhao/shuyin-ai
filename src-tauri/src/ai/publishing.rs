@@ -96,7 +96,7 @@ impl AudioDraft {
             })
             .collect::<Vec<_>>()
             .join("\n\n---\n\n");
-        Ok(include_str!("../../../prompts/audio-template-v2.md")
+        Ok(include_str!("../../../prompts/audio-template-v3.md")
             .replace(
                 "{{duration}}",
                 &super::audio::duration_label(duration_seconds),
@@ -167,8 +167,8 @@ impl PublishingDraft {
 mod tests {
     use super::*;
     #[test]
-    fn selected_duration_controls_all_template_timings_and_word_budget() {
-        for minutes in [1, 5, 15, 30, 60, 1440] {
+    fn selected_duration_controls_planning_without_spoken_time_promises() {
+        for minutes in [1, 5, 15, 18, 30, 60, 1440] {
             let seconds = minutes * 60;
             let content = serde_json::from_value::<PublishingDraft>(draft())
                 .unwrap()
@@ -177,9 +177,28 @@ mod tests {
             let WritingContent::Publishing { audio_prompt, .. } = content else {
                 panic!()
             };
-            assert!(audio_prompt.contains(&format!("## 时长\n{minutes}分钟。")));
-            assert!(audio_prompt.contains(&format!("接下来{minutes}分钟，我们一起读懂这本书。")));
-            assert!(audio_prompt.contains(&format!("“{minutes}分钟读懂一本书”")));
+            assert!(audio_prompt.contains(&format!("目标时长：{minutes}分钟")));
+            let opening = audio_prompt
+                .split_once("## 固定开场（逐字朗读）\n\n")
+                .unwrap()
+                .1
+                .split_once("\n\n## 书籍引入")
+                .unwrap()
+                .0;
+            assert_eq!(
+                opening,
+                "欢迎大家收听今天的节目，我是甲子。接下来，我们一起读懂这本书。"
+            );
+            let closing = audio_prompt
+                .split_once("## 固定结尾（逐字朗读）\n\n")
+                .unwrap()
+                .1
+                .trim();
+            assert_eq!(closing, "如果你对今天的内容感兴趣，建议读一读《测试书》这本书。\n我是甲子。如果你喜欢这样的读书分享，记得关注我。下一期，我们继续一起读书。");
+            assert!(!audio_prompt.contains(&format!("接下来{minutes}分钟")));
+            assert!(!audio_prompt.contains(&format!("{minutes}分钟读懂一本书")));
+            assert!(audio_prompt.contains("第一句必须是固定开场的第一句"));
+            assert!(audio_prompt.contains("固定结尾之后立即结束"));
             assert!(audio_prompt.contains(&format!("口播文字约{}字", minutes * 220)));
             assert!(!audio_prompt.contains("十分钟"));
             assert!(!audio_prompt.contains("8—10"));
@@ -249,7 +268,7 @@ mod tests {
         assert!(audio_prompt.contains("欢迎大家收听今天的节目，我是甲子。"));
         assert!(audio_prompt.contains("《明朝那些事儿》这本书"));
         assert!(audio_prompt.contains("## 第五部分：主题4"));
-        assert!(audio_prompt.contains("下一期，\n我们继续一起读书。"));
+        assert!(audio_prompt.contains("下一期，我们继续一起读书。"));
         assert!(!audio_prompt.contains("{{"));
         assert_eq!(cover_title, "权力背后的人间故事");
         assert_eq!(cover_subtitle, "《明朝那些事儿》里的起落");

@@ -1,5 +1,11 @@
 # 书引 AI 技术设计文档
 
+## 音频固定口播模板（2026-11-01）
+
+全量 `publishing-v6` 与按项 `publishing-revision-v5` 共用 `AudioDraft::into_prompt` 的 `audio-template-v3`。`audio.seriesName` 固定为「读懂一本书」；目标秒数、字数和分段计算不变，仅用于不朗读的制作参数。固定开场结尾独立于分钟数并声明逐字朗读，模型生成的引入/正文不重复固定段或时长承诺。提示词遵从性不等同于输入回读校验，也不等同于归档成功。
+
+不增加重生成接口：成功任务不占活动任务名额，保存新指导后复用 `start_audio_job` 新建冻结输入和任务，按任务 ID 归档到新路径。旧任务/文件、未选中字段与发布关联不自动改变。无依赖或 SQL 迁移，具体取舍、生效边界和验证见 `AUDIO-PROMPT-REGENERATION.md`；后文旧模板说明为历史记录。
+
 ## 多尺寸封面工作区（2026-11-01）
 
 `types/cover.ts` 定义 `CoverWorkspace`（schemaVersion=2、activeSize、三份 CoverConfig）；页面只维护这份工作区，当前表单通过 computed 指向选中配置。背景解码按素材 ID 复用，画布与导出均使用对应尺寸的配置/背景，仍只有一个 Canvas 渲染器。历史按尺寸取最新版本；旧单份草稿展开为三份独立配置。加载历史只替换其所属尺寸。
