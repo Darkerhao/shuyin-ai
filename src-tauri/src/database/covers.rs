@@ -71,6 +71,8 @@ pub struct CoverConfig {
     pub background_y: f64,
     #[serde(default = "one")]
     pub background_zoom: f64,
+    #[serde(default)]
+    pub background_prompt: String,
 }
 fn center() -> f64 {
     0.5
@@ -106,8 +108,9 @@ impl CoverConfig {
             || self.title.chars().count() > 200
             || self.subtitle.chars().count() > 300
             || self.brand.chars().count() > 60
+            || self.background_prompt.chars().count() > 2000
         {
-            return Err("主标题必填且最多 200 字，副标题最多 300 字，品牌标识最多 60 字。".into());
+            return Err("主标题必填且最多 200 字，副标题最多 300 字，品牌标识最多 60 字，画面描述最多 2000 字。".into());
         }
         for color in [
             &self.background_color,

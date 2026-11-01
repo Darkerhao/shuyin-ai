@@ -14,7 +14,7 @@ import { listProviders, listVersions, cancelGeneration } from '../../services/ai
 import { emptyPublishing, type ModelProvider, type PublishingContent } from '../../types/ai'
 import { getProject, isDesktop, linkAsset, listAssets, openProjectDirectory } from '../../services/projects'
 import { backgroundRect, coverFonts, coverPng, decodeBackground, renderCover } from '../../services/coverRenderer'
-import { coverSizes, coverTemplates, newCover, type CoverConfig, type CoverVersion, type CoverPreset } from '../../types/cover'
+import { coverSizes, coverTemplates, newCover, coverWorkspace, recoverCoverWorkspace, normalizeCover, coverSizeIndex, type CoverWorkspace, type CoverConfig, type CoverVersion, type CoverPreset } from '../../types/cover'
 import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import { useEditorDraft } from '../../composables/useEditorDraft'
@@ -33,9 +33,11 @@ const desktop = isDesktop()
 const ready = ref(false)
 const bookTitle = ref('')
 const workspace = ref('')
-const draft = ref(newCover())
-const original = ref(JSON.stringify(draft.value))
-const dirty = computed(() => original.value !== JSON.stringify(draft.value))
+const editor = ref(coverWorkspace([]))
+const draft = computed(() => editor.value.covers[editor.value.activeSize]!)
+const currentSize = computed(() => coverSizes[editor.value.activeSize]!)
+const original = ref(JSON.stringify(editor.value.covers))
+const dirty = computed(() => original.value !== JSON.stringify(editor.value.covers))
 const versions = ref<CoverVersion[]>([])
 const selected = ref<CoverVersion | null>(null)
 const images = ref<Asset[]>([])
@@ -46,9 +48,12 @@ const presetId = ref<string | null>(null)
 const presetName = ref('')
 const deletingPreset = ref(false)
 const selectedPreset = computed(() => presets.value.find(p => p.id === presetId.value))
-const background = shallowRef<globalThis.HTMLImageElement | null>(null)
-const backgroundLoading = ref(false)
-const backgroundError = ref('')
+const backgrounds = shallowRef<Record<string, { image: globalThis.HTMLImageElement | null; error: string }>>({})
+const backgroundTasks = new Map<string, Promise<void>>()
+const background = computed(() => backgrounds.value[draft.value.backgroundAssetId ?? '']?.image ?? null)
+const backgroundLoading = computed(() => !!draft.value.backgroundAssetId && !backgrounds.value[draft.value.backgroundAssetId])
+const backgroundError = computed(() => backgrounds.value[draft.value.backgroundAssetId ?? '']?.error ?? '')
+const allBackgroundsReady = computed(() => editor.value.covers.every(config => !config.backgroundAssetId || backgrounds.value[config.backgroundAssetId]?.image))
 const previewError = ref('')
 const actualSizes = ref({ titleSize: 112, subtitleSize: 44 })
 const { busy, error, message, operation, run } = useOperation()
@@ -58,19 +63,17 @@ const coverView = ref('edit')
 const tabs = [{ value: 'text', label: '文字内容' }, { value: 'style', label: '排版样式' }, { value: 'background', label: '背景图片' }]
 const imageModels = ref<ModelProvider[]>([])
 const providerId = ref('')
-const description = ref('')
+const description = computed({ get: () => draft.value.backgroundPrompt, set: value => { draft.value.backgroundPrompt = value } })
 const writing = ref<PublishingContent | null>(null)
 const writingError = ref('')
-const promptRatio = ref<'landscape' | 'portrait'>('landscape')
-const suggestedPrompt = computed(() => (promptRatio.value === 'landscape' ? writing.value?.coverPromptLandscape : writing.value?.coverPromptPortrait) ?? '')
+const suggestedPrompt = computed(() => writing.value?.[currentSize.value.promptField] ?? '')
 const taskId = ref('')
 const cancelling = ref(false)
-let loadedBackgroundId: string | null = null
-let backgroundRequest = 0
 let disposed = false
 let fontsReady = false
 const canDiscard = () => !dirty.value || globalThis.confirm('封面尚未保存，确定放弃修改？')
-const autosave = useEditorDraft(() => props.id, 'cover', draft, () => selected.value?.id ?? null, dirty, ready, () => !busy.value)
+// A saved version contains one size; retain the workspace to recover all sizes and the active selection.
+const autosave = useEditorDraft(() => props.id, 'cover', editor, () => selected.value?.id ?? null, dirty, ready, () => !busy.value, true)
 const canLeave = async () => {
   if (busy.value) return false
   try { if (ready.value) await autosave.flush(); return true } catch { return false }
@@ -79,15 +82,16 @@ onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate((to, from) => to.params.id === from.params.id || canLeave())
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
-onBeforeUnmount(() => { disposed = true; backgroundRequest++; globalThis.removeEventListener('beforeunload', beforeUnload) })
+onBeforeUnmount(() => { disposed = true; globalThis.removeEventListener('beforeunload', beforeUnload) })
 
 function accept(version: CoverVersion | null) {
   selected.value = version
-  const config = { ...newCover(bookTitle.value), ...version?.config, ...(version ? { subtitleColor: version.config.subtitleColor ?? version.config.textColor } : {}) }
-  const size = coverSizes.find(s => s.width === config.width && s.height === config.height) ?? coverSizes[config.width > config.height ? 0 : 1]
+  const config = version?.config ?? newCover(bookTitle.value)
+  const index = coverSizeIndex(config)
+  const size = coverSizes[index]!
   if (size.width !== config.width || size.height !== config.height) message.value = `历史封面为 ${config.width} × ${config.height}，当前按${size.label}继续编辑，原版本和文件保留。`
-  draft.value = { ...config, width: size.width, height: size.height }
-  original.value = JSON.stringify(draft.value)
+  editor.value.activeSize = index
+  editor.value.covers[index] = normalizeCover(config)
 }
 async function loadWriting() {
   writingError.value = ''
@@ -100,15 +104,22 @@ async function loadWriting() {
   }
 }
 const load = () => run(async () => {
-  const [project, saved, assets, recovery, styles] = await Promise.all([getProject(props.id), api.listCovers(props.id), listAssets(props.id), readDraft<CoverConfig>(props.id, 'cover'), api.listPresets(), loadWriting()])
+  const [project, saved, assets, recovery, styles] = await Promise.all([getProject(props.id), api.listCovers(props.id), listAssets(props.id), readDraft<CoverWorkspace | CoverConfig>(props.id, 'cover'), api.listPresets(), loadWriting()])
   bookTitle.value = project.title; workspace.value = project.workspacePath
   versions.value = saved; images.value = assets.filter(a => a.assetType === 'image')
   presets.value = styles
-  accept(recovery ? saved.find(v => v.id === recovery.basedOn) ?? null : saved[0] ?? null)
-  if (recovery) { draft.value = { ...newCover(), ...recovery.content, subtitleColor: recovery.content.subtitleColor ?? recovery.content.textColor }; message.value = '已恢复自动暂存的封面草稿，尚未新增历史版本。' }
+  editor.value = coverWorkspace(saved, newCover(bookTitle.value))
+  accept(saved[0] ?? null)
+  original.value = JSON.stringify(editor.value.covers)
+  if (recovery) {
+    selected.value = saved.find(v => v.id === recovery.basedOn) ?? null
+    editor.value = recoverCoverWorkspace(recovery.content)
+    message.value = '已恢复各尺寸封面编辑配置，未新增历史版本。'
+  }
   else if (!saved.length && writing.value?.coverTitle && writing.value.coverSubtitle) {
     applyWritingTitles()
     if (writing.value.coverDesign) applyWritingDesign()
+    editor.value.covers = coverSizes.map((_, index) => normalizeCover(draft.value, index))
   }
   ready.value = true
   await nextTick(); paint()
@@ -137,27 +148,35 @@ function usePrompt() {
   void loadImageModels()
 }
 async function loadBackground(id: string | null) {
-  const request = ++backgroundRequest
-  background.value = null; loadedBackgroundId = null; backgroundError.value = ''; backgroundLoading.value = !!id
-  try {
-    if (id) {
+  if (!id) return
+  if (backgroundTasks.has(id)) return backgroundTasks.get(id)
+  const task = (async () => {
+    try {
       const image = await decodeBackground(await api.readBackground(props.id, id))
-      if (request === backgroundRequest) { background.value = image; loadedBackgroundId = id }
+      if (!disposed) backgrounds.value = { ...backgrounds.value, [id]: { image, error: '' } }
+    } catch (cause) {
+      if (!disposed) backgrounds.value = { ...backgrounds.value, [id]: { image: null, error: cause instanceof Error ? cause.message : String(cause) } }
+    } finally {
+      backgroundTasks.delete(id)
+      paint()
     }
-  } catch (cause) {
-    if (request === backgroundRequest) backgroundError.value = cause instanceof Error ? cause.message : String(cause)
-  } finally {
-    if (request === backgroundRequest) { backgroundLoading.value = false; paint() }
-  }
+  })()
+  backgroundTasks.set(id, task)
+  await task
 }
 function paint() {
   if (!canvas.value || !fontsReady || disposed) return
   previewError.value = ''
   try {
     actualSizes.value = renderCover(canvas.value, draft.value, background.value)
-    coverSizes.forEach((size, index) => { const target = previewCanvases[index]; if (target) renderCover(target, { ...draft.value, width: size.width, height: size.height }, background.value) })
   }
   catch (cause) { previewError.value = cause instanceof Error ? cause.message : String(cause) }
+  editor.value.covers.forEach((config, index) => {
+    const target = previewCanvases[index]
+    if (!target) return
+    try { renderCover(target, config, backgrounds.value[config.backgroundAssetId ?? '']?.image ?? null) }
+    catch { target.width = config.width; target.height = config.height }
+  })
 }
 function setPreviewCanvas(el: globalThis.Element | ComponentPublicInstance | null, index: number) {
   previewCanvases[index] = el instanceof globalThis.HTMLCanvasElement ? el : null
@@ -192,8 +211,10 @@ const deletePreset = () => run(async () => {
   await api.deletePreset(presetId.value)
   presets.value = presets.value.filter(p => p.id !== presetId.value); presetId.value = null; deletingPreset.value = false; message.value = '已删除个人样式，当前封面保持原样。'
 })
-watch(() => draft.value.backgroundAssetId, id => { if (!id || id !== loadedBackgroundId) void loadBackground(id) })
-watch(draft, paint, { deep: true, flush: 'post' })
+watch(() => editor.value.covers.map(config => config.backgroundAssetId), ids => {
+  for (const id of new Set(ids)) if (id && !backgrounds.value[id]) void loadBackground(id)
+})
+watch(editor, paint, { deep: true, flush: 'post' })
 
 function applyTemplate(key: CoverConfig['templateId']) {
   Object.assign(draft.value, coverTemplates[key].style, { templateId: key })
@@ -203,8 +224,18 @@ function isTemplateApplied(key: CoverConfig['templateId']) {
   return draft.value.templateId === key && Object.entries(coverTemplates[key].style).every(([field, value]) => draft.value[field as keyof CoverConfig] === value)
 }
 function changeSize(index: number) {
-  const size = coverSizes[index]!
-  draft.value.width = size.width; draft.value.height = size.height
+  if (busy.value) return
+  editor.value.activeSize = index
+  presetId.value = null
+  drag = null
+}
+function shareCover(backgroundOnly: boolean) {
+  if (!globalThis.confirm(backgroundOnly ? '将当前背景和裁切应用到其他尺寸？其他尺寸的文字、排版和提示词保持不变。' : '将当前封面的文字、排版、背景、裁切和画面描述应用到其他尺寸？将替换其他尺寸的编辑，可继续分别调整；历史版本保留。')) return
+  const source = { ...draft.value }
+  editor.value.covers = editor.value.covers.map((config, index) => normalizeCover(backgroundOnly
+    ? { ...config, backgroundAssetId: source.backgroundAssetId, backgroundColor: source.backgroundColor, overlayOpacity: source.overlayOpacity, backgroundX: source.backgroundX, backgroundY: source.backgroundY, backgroundZoom: source.backgroundZoom }
+    : source, index))
+  message.value = backgroundOnly ? '全部尺寸已共用当前背景，仍可分别调整。' : '已应用到全部尺寸，仍可分别调整；导出时按各自尺寸裁切排版。'
 }
 function switchVersion(id: string | null) {
   if (canDiscard()) accept(versions.value.find(v => v.id === id) ?? null)
@@ -228,18 +259,18 @@ function toggleAi() {
   }
 }
 const generateBackground = () => run(async () => {
+  const target = draft.value
   try {
-    taskId.value = await api.startCoverGeneration(props.id, providerId.value, description.value)
+    taskId.value = await api.startCoverGeneration(props.id, providerId.value, description.value, target.width, target.height)
     const asset = await api.executeCoverGeneration(taskId.value)
     if (disposed) return
     images.value = [asset, ...images.value]
     const image = await decodeBackground(await api.readBackground(props.id, asset.id))
     if (disposed) return
     // Apply only after reading and decoding succeeds; preserve all text and style edits.
-    backgroundRequest++; loadedBackgroundId = asset.id
-    background.value = image; backgroundLoading.value = false; backgroundError.value = ''
-    draft.value.backgroundAssetId = asset.id
-    message.value = 'AI 背景已生成，文字和样式已保留。确认预览后可导出全部比例封面。'
+    backgrounds.value = { ...backgrounds.value, [asset.id]: { image, error: '' } }
+    Object.assign(target, { backgroundAssetId: asset.id, backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1 })
+    message.value = '当前尺寸的 AI 背景已生成，其他尺寸不变。可单独导出，或主动应用到全部尺寸。'
   } finally { taskId.value = '' }
 })
 async function cancelImage() {
@@ -249,14 +280,21 @@ async function cancelImage() {
   catch { error.value = '取消失败，请稍后重试。' }
   finally { cancelling.value = false }
 }
-const save = (exportPng = false) => run(async () => {
+const save = (exportPng = false, currentOnly = false) => run(async () => {
   operation.value = '正在暂存编辑…'
   await autosave.flush()
   const source = { ...draft.value }
-  const configs = exportPng ? coverSizes.map(size => ({ ...source, width: size.width, height: size.height })) : [source]
+  const configs = (currentOnly ? [source] : editor.value.covers).map(config => ({ ...config }))
   // Render all ratios before writing any file so layout failures keep the whole draft.
-  operation.value = exportPng ? '正在渲染三种比例…' : '正在检查排版…'
-  const outputs = await Promise.all(configs.map(async config => ({ config, png: exportPng ? await coverPng(config, background.value) : null })))
+  operation.value = exportPng ? '正在读取背景并渲染…' : '正在保存全部编辑配置…'
+  const outputs = await Promise.all(configs.map(async config => {
+    if (exportPng && config.backgroundAssetId) {
+      await loadBackground(config.backgroundAssetId)
+      const loaded = backgrounds.value[config.backgroundAssetId]
+      if (!loaded?.image) throw new Error(`${coverSizes[coverSizeIndex(config)]!.label}：${loaded?.error || '背景尚未读取'}`)
+    }
+    return { config, png: exportPng ? await coverPng(config, backgrounds.value[config.backgroundAssetId ?? '']?.image ?? null) : null }
+  }))
   const saved: CoverVersion[] = []
   for (const { config, png } of outputs) {
     operation.value = exportPng ? `正在导出 ${saved.length + 1}/${outputs.length} 张封面…` : '正在保存编辑配置…'
@@ -264,9 +302,12 @@ const save = (exportPng = false) => run(async () => {
     versions.value = [version, ...versions.value]; saved.push(version)
     if (exportPng) message.value = `已导出 ${saved.length}/${outputs.length} 张封面：${saved.map(v => v.exportedPath).join('；')}`
   }
-  accept(saved.find(v => v.config.width === source.width && v.config.height === source.height) ?? saved[0]!)
+  selected.value = saved.find(v => v.config.width === source.width && v.config.height === source.height) ?? saved[0]!
+  const baseline = JSON.parse(original.value) as CoverConfig[]
+  for (const config of configs) baseline[coverSizeIndex(config)] = config
+  original.value = JSON.stringify(baseline)
   await autosave.flush()
-  message.value = exportPng ? `已导出 ${saved.length} 张封面：${saved.map((v, i) => `${coverSizes[i]!.label}：${v.exportedPath}`).join('；')}` : `编辑配置已保存为 v${saved[0]!.versionNo}。`
+  message.value = exportPng ? `已导出 ${saved.length} 张封面：${saved.map(v => `${coverSizes[coverSizeIndex(v.config)]!.label}：${v.exportedPath}`).join('；')}` : `全部尺寸编辑配置已保存，共 ${saved.length} 个版本。`
 })
 async function showPreview() {
   coverView.value = 'preview'; await nextTick()
@@ -354,6 +395,56 @@ onMounted(async () => {
     <p>删除后无法恢复此个人样式，当前封面和已保存的封面历史保持原样。</p>
   </ConfirmAction>
   <template v-if="ready">
+    <section
+      class="panel space-y-3"
+      aria-label="封面尺寸设置"
+    >
+      <label
+        for="cover-size"
+      >当前编辑尺寸</label><Select
+        :model-value="editor.activeSize"
+        :disabled="busy"
+        @update:model-value="changeSize"
+      >
+        <SelectTrigger
+          id="cover-size"
+          class="w-full min-w-0 sm:w-72"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem
+            v-for="(size, index) in coverSizes"
+            :key="index"
+            :value="index"
+          >
+            {{ size.label }}
+          </SelectItem>
+        </SelectContent>
+      </Select>
+
+      <p class="muted">
+        文字、排版、背景和画面描述只修改当前尺寸。需要共用时主动应用，之后仍可分别调整。
+      </p>
+      <div class="actions wrap">
+        <Button
+          type="button"
+          variant="outline"
+          :disabled="busy"
+          @click="shareCover(true)"
+        >
+          仅共用当前背景
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          :disabled="busy"
+          @click="shareCover(false)"
+        >
+          将当前封面应用到全部尺寸
+        </Button>
+      </div>
+    </section>
     <div class="cover-jump actions">
       <Button
         variant="outline"
@@ -831,13 +922,13 @@ onMounted(async () => {
                       required
                     />
                     <p class="muted">
-                      AI 生成无字背景，中文由本地排版。书名、作者和画面描述会发送至所选服务，可能产生费用。
+                      仅为 {{ currentSize.label }} 生成无字背景，中文由本地排版。图片服务按横竖方向生成，最终按目标尺寸裁切。书名、作者和画面描述会发送至所选服务，可能产生费用。
                     </p>
                     <Button
                       type="submit"
                       :disabled="!description.trim() || !providerId"
                     >
-                      <AppIcon name="sparkle" />生成 AI 背景
+                      <AppIcon name="sparkle" />生成当前尺寸背景
                     </Button>
                   </fieldset>
                 </form>
@@ -867,7 +958,6 @@ onMounted(async () => {
               </div>
             </section>
             <Collapsible
-              v-if="writing?.coverPromptLandscape || writing?.coverPromptPortrait"
               class="cover-suggestions"
               :unmount-on-hide="false"
             >
@@ -875,23 +965,17 @@ onMounted(async () => {
                 本书的画面提示词
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <label for="cover-prompt-ratio">封面提示词比例</label><Select
-                  v-model="promptRatio"
+                <p class="muted">
+                  {{ currentSize.label }} · 专属提示词
+                </p>
+                <p
+                  v-if="!suggestedPrompt"
+                  class="notice"
                 >
-                  <SelectTrigger
-                    id="cover-prompt-ratio"
-                    class="w-full min-w-0"
-                  >
-                    <SelectValue placeholder="请选择" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="landscape">
-                      横版 4:3 · 1440 × 1080
-                    </SelectItem><SelectItem value="portrait">
-                      竖版 3:4 · 1080 × 1440
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                  该尺寸暂无提示词，可在 <RouterLink :to="`/projects/${id}/writing?tab=cover`">
+                    内容创作的按项调整
+                  </RouterLink> 中单独生成，或自行填写画面描述。
+                </p>
                 <label for="cover-suggested-prompt">书籍专属画面提示词</label><Textarea
                   id="cover-suggested-prompt"
                   :model-value="suggestedPrompt"
@@ -916,7 +1000,7 @@ onMounted(async () => {
                   </Button>
                 </div>
                 <p class="muted">
-                  外部工具请选择对应比例；内置 AI 生成一张背景，再裁切排版导出 {{ coverSizes.length }} 种比例。切换提示词不会替换你的画面描述。
+                  外部工具请选择对应比例；用于 AI 背景只填入当前尺寸的画面描述，不修改其他尺寸。
                 </p>
               </CollapsibleContent>
             </Collapsible>
@@ -932,30 +1016,6 @@ onMounted(async () => {
         <div class="section-heading">
           <h2><i class="status-dot" /> 实时预览</h2><span class="preview-dimensions">{{ draft.width }} × {{ draft.height }}</span>
         </div>
-        <label
-          class="sr-only"
-          for="cover-size"
-        >预览比例</label><Select
-          :model-value="coverSizes.findIndex(s => s.width === draft.width && s.height === draft.height)"
-          :disabled="busy"
-          @update:model-value="changeSize"
-        >
-          <SelectTrigger
-            id="cover-size"
-            class="mb-4 w-full min-w-0 sm:w-64"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem
-              v-for="(size, index) in coverSizes"
-              :key="index"
-              :value="index"
-            >
-              {{ size.label }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
         <p
           v-if="backgroundLoading"
           class="muted"
@@ -1035,20 +1095,33 @@ onMounted(async () => {
             :key="size.label"
             class="min-w-0 space-y-2"
           >
-            <canvas
-              :ref="el => setPreviewCanvas(el, index)"
-              class="w-full"
-              :style="{ aspectRatio: `${size.width}/${size.height}` }"
-              :aria-label="size.label"
-              role="img"
-            />
+            <button
+              type="button"
+              class="size-preview"
+              :aria-label="`编辑${size.label}`"
+              :aria-pressed="editor.activeSize === index"
+              :disabled="busy"
+              @click="changeSize(index)"
+            >
+              <canvas
+                :ref="el => setPreviewCanvas(el, index)"
+                class="w-full"
+                :style="{ aspectRatio: `${size.width}/${size.height}` }"
+                :aria-label="size.label"
+                role="img"
+              />
+            </button>
             <figcaption class="text-center text-xs text-muted-foreground">
               {{ size.width }} × {{ size.height }}
+              <span
+                v-if="editor.covers[index]!.backgroundAssetId && !backgrounds[editor.covers[index]!.backgroundAssetId!]?.image"
+                class="block text-destructive"
+              >背景待读取或不可用</span>
             </figcaption>
           </figure>
         </div>
         <p class="preview-caption">
-          同一份内容，{{ coverSizes.length }} 种精心排版的封面
+          {{ coverSizes.length }} 个独立封面 · 点击缩略图切换编辑
         </p>
         <div class="export-formats">
           <span><i class="ratio-icon landscape" />横版 4:3</span><span><i class="ratio-icon portrait" />竖版 3:4</span><span><i class="ratio-icon widescreen" />横版 16:9</span><Badge variant="secondary">
@@ -1091,10 +1164,17 @@ onMounted(async () => {
           :disabled="busy"
           variant="outline"
         >
-          <AppIcon name="save" />保存编辑配置
+          <AppIcon name="save" />保存全部配置
         </Button><Button
           type="button"
           :disabled="busy || backgroundLoading || !!previewError || !!backgroundError"
+          variant="outline"
+          @click="save(true, true)"
+        >
+          导出当前封面
+        </Button><Button
+          type="button"
+          :disabled="busy || !allBackgroundsReady"
           @click="save(true)"
         >
           <AppIcon name="download" />导出 {{ coverSizes.length }} 张封面
@@ -1151,6 +1231,10 @@ onMounted(async () => {
 .cover-controls .muted { font-size: 13px; }
 .cover-controls .form-grid { gap: 0 12px; }
 .cover-colors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.size-preview { display: block; width: 100%; padding: 4px; border: 2px solid transparent; border-radius: 6px; cursor: pointer; }
+.size-preview[aria-pressed="true"] { border-color: var(--primary); }
+.size-preview:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.size-preview:disabled { cursor: wait; }
 .style-card { min-width: 0; transition: border-color .15s; }
 .style-card:hover, .style-card[aria-pressed="true"] { border-color: var(--primary); }
 .style-card[aria-pressed="true"] { box-shadow: 0 0 0 1px var(--primary); }

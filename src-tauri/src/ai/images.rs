@@ -3,8 +3,8 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use image::{ImageFormat, ImageReader, Limits};
 use std::{future::Future, io::Cursor, pin::Pin, time::Duration};
 
-pub const PROMPT_VERSION: &str = "cover-background-v1";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/cover-background-v1.md");
+pub const PROMPT_VERSION: &str = "cover-background-v2";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/cover-background-v2.md");
 pub const TIMEOUT: Duration = Duration::from_secs(180);
 pub const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
 
@@ -46,6 +46,8 @@ pub struct ImageRequest {
     pub model: String,
     pub key: Option<String>,
     pub prompt: String,
+    pub width: u32,
+    pub height: u32,
 }
 pub trait ImageProvider {
     fn generate_image(
@@ -89,8 +91,14 @@ impl ImageProvider for OpenAiCompatible {
         request: ImageRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AiError>> + Send + '_>> {
         Box::pin(async move {
+            // GPT Image exposes orientation sizes; the local renderer crops to the exact cover ratio.
+            let size = if request.width > request.height {
+                "1536x1024"
+            } else {
+                "1024x1536"
+            };
             let data = self.post_json(&request.base_url, "images/generations", request.key,
-                serde_json::json!({"model":request.model,"prompt":request.prompt,"n":1,"size":"1024x1024","response_format":"b64_json"}),
+                serde_json::json!({"model":request.model,"prompt":request.prompt,"n":1,"size":size,"response_format":"b64_json"}),
                 MAX_IMAGE_BYTES * 4 / 3 + 1024 * 1024).await?;
             let encoded = data["data"]
                 .as_array()

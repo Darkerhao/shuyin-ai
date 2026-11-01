@@ -8,6 +8,8 @@ fn image_request(base_url: String) -> ImageRequest {
         model: "configured-image-model".into(),
         key: Some("contract-only-secret".into()),
         prompt: "无字山林".into(),
+        width: 1920,
+        height: 1080,
     }
 }
 
@@ -31,8 +33,26 @@ async fn image_contract_decodes_image_and_uses_the_configured_model() {
         serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(
         body,
-        serde_json::json!({"model":"configured-image-model","prompt":"无字山林","n":1,"size":"1024x1024","response_format":"b64_json"})
+        serde_json::json!({"model":"configured-image-model","prompt":"无字山林","n":1,"size":"1536x1024","response_format":"b64_json"})
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn image_contract_uses_portrait_size_for_a_portrait_cover() {
+    let body = serde_json::json!({"data":[{"b64_json":STANDARD.encode(test_png())}]}).to_string();
+    let (url, handle) = server(200, &body, Duration::ZERO);
+    let mut request = image_request(url.clone());
+    request.width = 1080;
+    request.height = 1440;
+    OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .generate_image(request)
+        .await
+        .unwrap();
+    let received = handle.join().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["size"], "1024x1536");
 }
 
 #[tokio::test(flavor = "current_thread")]

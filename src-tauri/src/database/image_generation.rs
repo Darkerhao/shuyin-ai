@@ -15,10 +15,14 @@ pub struct ImageGenerationInput {
     pub project_id: String,
     pub provider_id: String,
     pub description: String,
+    pub width: u32,
+    pub height: u32,
 }
 pub struct PreparedImage {
     pub provider: ProviderConfig,
     pub prompt: String,
+    pub width: u32,
+    pub height: u32,
 }
 impl Database {
     pub fn start_cover_generation(
@@ -28,6 +32,12 @@ impl Database {
         input.description = input.description.trim().into();
         if input.description.is_empty() || input.description.chars().count() > 2000 {
             return Err("请填写画面描述，最多 2000 字。".into());
+        }
+        if !matches!(
+            (input.width, input.height),
+            (1440, 1080) | (1080, 1440) | (1920, 1080)
+        ) {
+            return Err("封面生成尺寸无效。".into());
         }
         self.with_connection(|c| {
             get(c, &input.project_id)?;
@@ -48,9 +58,15 @@ impl Database {
             let project = get(c, &input.project_id)?;
             let provider = super::ai::provider(c, &input.provider_id)?;
             if !provider.input.is_enabled || provider.input.model_kind != "image" { return Err("请选择已启用的图片模型。".into()); }
+            let ratio = match (input.width, input.height) {
+                (1440, 1080) => "4:3",
+                (1080, 1440) => "3:4",
+                (1920, 1080) => "16:9",
+                _ => return Err("封面生成尺寸无效。".into()),
+            };
             let data = serde_json::json!({"bookTitle":project.input.title,"author":project.input.author,"visualDescription":input.description});
             c.execute("UPDATE ai_tasks SET status='running',model_name=?2 WHERE id=?1", params![id,provider.input.model_name]).map_err(|e|e.to_string())?;
-            Ok(PreparedImage { provider, prompt: format!("{SYSTEM_PROMPT}\n{data}") })
+            Ok(PreparedImage { provider, width: input.width, height: input.height, prompt: format!("{SYSTEM_PROMPT}\n本次目标封面：{ratio}，{}×{}。按此比例独立构图，并为最终裁切保留安全边距。\n{data}", input.width, input.height) })
         })
     }
     pub fn finish_cover_generation(&self, task_id: &str, bytes: &[u8]) -> Result<Asset, String> {

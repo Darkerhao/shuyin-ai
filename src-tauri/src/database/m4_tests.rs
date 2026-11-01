@@ -576,6 +576,7 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
             cover_subtitle: "从书中看见生活".into(),
             cover_prompt_landscape: format!("横版 4:3，《{title}》的主题，无字背景。"),
             cover_prompt_portrait: format!("竖版 3:4，《{title}》的主题，纵向构图，无字背景。"),
+            cover_prompt_widescreen: format!("横版 16:9，《{title}》的主题，宽屏构图，无字背景。"),
             cover_design: None,
         };
         let first = db

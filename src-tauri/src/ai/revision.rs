@@ -4,8 +4,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "publishing-revision-v3";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v3.md");
+pub const PROMPT_VERSION: &str = "publishing-revision-v4";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v4.md");
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -17,6 +17,7 @@ pub enum PublishingField {
     CoverSubtitle,
     CoverPromptLandscape,
     CoverPromptPortrait,
+    CoverPromptWidescreen,
     CoverDesign,
 }
 impl PublishingField {
@@ -29,6 +30,7 @@ impl PublishingField {
             Self::CoverSubtitle => "coverSubtitle",
             Self::CoverPromptLandscape => "coverPromptLandscape",
             Self::CoverPromptPortrait => "coverPromptPortrait",
+            Self::CoverPromptWidescreen => "coverPromptWidescreen",
             Self::CoverDesign => "coverDesign",
         }
     }
@@ -91,6 +93,7 @@ pub fn revise(
             }
             if (*field == PublishingField::CoverPromptLandscape && !text.contains("4:3"))
                 || (*field == PublishingField::CoverPromptPortrait && !text.contains("3:4"))
+                || (*field == PublishingField::CoverPromptWidescreen && !text.contains("16:9"))
             {
                 return Err("封面提示词必须标明对应比例，原有内容保留。".into());
             }
@@ -98,14 +101,18 @@ pub fn revise(
         };
         content[field.key()] = serde_json::Value::String(text);
     }
-    if fields.iter().any(|f| {
-        matches!(
-            f,
-            PublishingField::CoverPromptLandscape | PublishingField::CoverPromptPortrait
-        )
-    }) && content["coverPromptLandscape"] == content["coverPromptPortrait"]
-    {
-        return Err("横竖版提示词需要分别构图，原有内容保留。".into());
+    let prompts = [
+        PublishingField::CoverPromptLandscape,
+        PublishingField::CoverPromptPortrait,
+        PublishingField::CoverPromptWidescreen,
+    ];
+    for field in fields.iter().filter(|field| prompts.contains(field)) {
+        if prompts
+            .iter()
+            .any(|other| other != field && content[field.key()] == content[other.key()])
+        {
+            return Err("各尺寸提示词需要分别构图，原有内容保留。".into());
+        }
     }
     let content: WritingContent = serde_json::from_value(content).map_err(|e| e.to_string())?;
     content.validate("publishing", None)?;
@@ -116,6 +123,36 @@ pub fn revise(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn widescreen_prompt_can_be_added_to_old_content_without_changing_other_fields() {
+        let base = original();
+        let text = "横版 16:9，宽屏城墙两侧延伸，中央留白，无字背景。";
+        let updated = revise(
+            &json!({"coverPromptWidescreen":text}).to_string(),
+            &base,
+            &[PublishingField::CoverPromptWidescreen],
+            "测试书",
+            600,
+        )
+        .unwrap();
+        let mut expected = serde_json::to_value(&base).unwrap();
+        expected["coverPromptWidescreen"] = json!(text);
+        assert_eq!(serde_json::to_value(updated).unwrap(), expected);
+        for invalid in [
+            "横版 4:3 错误比例".to_string(),
+            format!("16:9 {}", "字".repeat(2000)),
+        ] {
+            assert!(revise(
+                &json!({"coverPromptWidescreen":invalid}).to_string(),
+                &base,
+                &[PublishingField::CoverPromptWidescreen],
+                "测试书",
+                600
+            )
+            .is_err());
+        }
+    }
 
     fn original() -> WritingContent {
         serde_json::from_value(json!({"format":"publishing","title":"原标题","description":"原内容\n保留换行","audioPrompt":"原音频提示词","coverTitle":"原封面标题","coverSubtitle":"原封面副标题","coverPromptLandscape":"横版 4:3 原画面","coverPromptPortrait":"竖版 3:4 原画面"})).unwrap()

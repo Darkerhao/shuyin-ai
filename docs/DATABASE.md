@@ -1,5 +1,16 @@
 # 书引 AI 数据库设计文档
 
+## 多尺寸封面 JSON 扩展（2026-11-01）
+
+SQLite 结构保持 v13，无迁移脚本或表/列变更：
+
+- `editor_drafts(kind=cover).content_json` 保存 `{schemaVersion:2, activeSize, covers:[4:3配置,3:4配置,16:9配置]}`，含各尺寸未完成内容。即使正式保存后仍保留该工作区，记录当前选择和完整配置；based_on 继续引用本书合法封面版本。旧 schemaVersion=1 单份草稿在前端读取时展开，不改写原历史。
+- `cover_versions.config_json` 仍为单个 CoverConfig schemaVersion=1，新增 `backgroundPrompt`（缺失默认为空，正式保存最多2000字）。每条版本及 PNG 仍只有一种尺寸，发布准备的双封面选择不变。
+- `writing_versions.content_json` 增加 `coverPromptWidescreen`（缺失默认为空），新全量 AI 输出要求完整；旧数据仍可编辑/按项补全。
+- `ai_tasks(kind=cover).input_json` 新任务记录目标 width/height。启动时既有中断任务恢复策略不变，不自动重发历史任务。
+
+多尺寸配置和工作区随 SQLite 备份/恢复保留；背景仍引用 assets 的 ID，完整备份既有素材收集和路径重映射不变。兼容方向为新版读取旧记录；未承诺旧版应用能读取新版 JSON。验证见 `COVER-INDEPENDENT-VERIFICATION.md`。
+
 ## 新建书籍与来源文件原子保存（2026-10-28）
 
 本地书籍绑定复用 `assets.asset_type=document` 与现有项目外键，不新增表或列，版本保持 v13。书籍和本次新增文档关联在同一事务内写入，路径重复、不可读、缺失或不支持的文件均使整次保存回滚；重开应用及备份恢复继续使用现有素材记录。

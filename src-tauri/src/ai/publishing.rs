@@ -47,6 +47,7 @@ pub struct PublishingDraft {
     cover_subtitle: String,
     cover_prompt_landscape: String,
     cover_prompt_portrait: String,
+    cover_prompt_widescreen: String,
     cover_design: CoverDesign,
 }
 #[derive(Deserialize)]
@@ -125,15 +126,20 @@ impl PublishingDraft {
             &self.cover_subtitle,
             &self.cover_prompt_landscape,
             &self.cover_prompt_portrait,
+            &self.cover_prompt_widescreen,
         ]
         .iter()
         .any(|value| value.trim().is_empty())
             || !self.cover_prompt_landscape.contains("4:3")
             || !self.cover_prompt_portrait.contains("3:4")
+            || !self.cover_prompt_widescreen.contains("16:9")
             || self.cover_prompt_landscape.trim() == self.cover_prompt_portrait.trim()
+            || self.cover_prompt_widescreen.trim() == self.cover_prompt_landscape.trim()
+            || self.cover_prompt_widescreen.trim() == self.cover_prompt_portrait.trim()
         {
             return Err(
-                "封面需要主标题、副标题及分别标明 4:3、3:4 的两份不同提示词，原有内容保留。".into(),
+                "封面需要主标题、副标题及分别标明 4:3、3:4、16:9 的三份不同提示词，原有内容保留。"
+                    .into(),
             );
         }
         let audio_prompt = AudioDraft {
@@ -149,6 +155,7 @@ impl PublishingDraft {
             cover_subtitle: self.cover_subtitle.trim().into(),
             cover_prompt_landscape: self.cover_prompt_landscape.trim().into(),
             cover_prompt_portrait: self.cover_prompt_portrait.trim().into(),
+            cover_prompt_widescreen: self.cover_prompt_widescreen.trim().into(),
             cover_design: Some(Box::new(self.cover_design)),
         };
         content.validate("publishing", None)?;
@@ -191,7 +198,7 @@ mod tests {
         }
     }
     fn draft() -> serde_json::Value {
-        serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "introduction":"今天我们要聊的这本书，是《明朝那些事儿》。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。", "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}})
+        serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "introduction":"今天我们要聊的这本书，是《明朝那些事儿》。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。", "coverPromptWidescreen":"横版 16:9，城墙横向绵延，远景开阔，中央留白，无文字。", "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}})
     }
     #[test]
     fn validates_design_before_accepting_ai_output() {
@@ -279,11 +286,12 @@ mod tests {
             ("coverSubtitle", 60),
             ("coverPromptLandscape", 2000),
             ("coverPromptPortrait", 2000),
+            ("coverPromptWidescreen", 2000),
         ] {
             let mut missing = draft();
             missing.as_object_mut().unwrap().remove(field);
             assert!(serde_json::from_value::<PublishingDraft>(missing).is_err());
-            for text in [" ".into(), format!("4:3 3:4 {}", "字".repeat(limit))] {
+            for text in [" ".into(), format!("4:3 3:4 16:9 {}", "字".repeat(limit))] {
                 let mut invalid = draft();
                 invalid[field] = serde_json::json!(text);
                 assert!(serde_json::from_value::<PublishingDraft>(invalid)

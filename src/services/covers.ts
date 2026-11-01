@@ -3,7 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import type { CoverConfig, CoverVersion, CoverPreset } from '../types/cover'
 import type { Asset } from '../types/project'
 
-export const startCoverGeneration = (projectId: string, providerId: string, description: string) => invoke<string>('start_cover_generation', { input: { projectId, providerId, description } })
+export const startCoverGeneration = (projectId: string, providerId: string, description: string, width: number, height: number) => invoke<string>('start_cover_generation', { input: { projectId, providerId, description, width, height } })
 export const executeCoverGeneration = (id: string) => invoke<Asset>('execute_cover_generation', { id })
 
 export const listCovers = (projectId: string) => invoke<CoverVersion[]>('list_cover_versions', { projectId })

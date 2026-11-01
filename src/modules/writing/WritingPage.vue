@@ -355,6 +355,7 @@ const fields: { key: PublishingTextField; label: string; rows: number; limit: nu
   { key: 'coverSubtitle', label: '封面副标题', rows: 2, limit: 60, help: '用书名和具体看点补充主标题，可直接带入制作封面。' },
   { key: 'coverPromptLandscape', label: '横版 4:3 封面提示词', rows: 7, limit: 2000, help: '用于 1440 × 1080 横版构图，复制到图片工具并选择 4:3。只生成无字背景，主副标题在制作封面时添加。' },
   { key: 'coverPromptPortrait', label: '竖版 3:4 封面提示词', rows: 7, limit: 2000, help: '用于 1080 × 1440 竖版构图，复制到图片工具并选择 3:4。与横版保持同一主题，分别安排主体和留白。' },
+  { key: 'coverPromptWidescreen', label: '横版 16:9 封面提示词', rows: 7, limit: 2000, help: '用于 1920 × 1080 宽屏构图，独立安排横向叙事与文字留白。旧内容可通过按项调整单独补充，不改动其他结果。' },
 ]
 const revisionOptions: { key: PublishingField; label: string }[] = [...fields, { key: 'coverDesign', label: '封面字号与配色' }]
 const canSave = computed(() => [draft.value.title, draft.value.description, draft.value.audioPrompt].every(value => value.trim()))

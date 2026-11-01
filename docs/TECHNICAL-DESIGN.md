@@ -1,5 +1,17 @@
 # 书引 AI 技术设计文档
 
+## 多尺寸封面工作区（2026-11-01）
+
+`types/cover.ts` 定义 `CoverWorkspace`（schemaVersion=2、activeSize、三份 CoverConfig）；页面只维护这份工作区，当前表单通过 computed 指向选中配置。背景解码按素材 ID 复用，画布与导出均使用对应尺寸的配置/背景，仍只有一个 Canvas 渲染器。历史按尺寸取最新版本；旧单份草稿展开为三份独立配置。加载历史只替换其所属尺寸。
+
+自动保存复用 `useEditorDraft` 的串行队列。封面启用 retainSavedDraft：即使配置已保存为正式历史，也保留完整工作区和当前尺寸；内容创作原有保存后清理草稿行为不变。保存全部配置依次追加三条历史；单张导出只追加当前尺寸，其他编辑继续暂存。批量导出先读取所有所需背景、渲染全部 PNG，再写版本；部分写入失败明确保留已完成版本和全部编辑，不宣称全部成功。其他尺寸的背景缺失不阻止有效尺寸单张导出。
+
+文本协议为 `publishing-v5` / `publishing-revision-v4`，增加 coverPromptWidescreen；全量要求三份非空、不同且标明各自比例的提示词，单项修改沿用候选预览/采用。旧 WritingContent 缺失字段按空字符串读取。CoverConfig 新增 backgroundPrompt，旧配置默认为空。
+
+图片任务冻结 width/height，Rust 只接受三种封面尺寸；`cover-background-v2` 以指定比例独立构图，不再要求方形兼容全部尺寸。现有 GPT Image 适配器按方向请求 1536x1024 / 1024x1536，本地裁切为准确目标尺寸；不猜测第三方自定义尺寸、不静默重试其他协议。服务不支持时返回原错误并保留配置。接口依据：[OpenAI Images Generate](https://developers.openai.com/api/reference/resources/images/methods/generate?site_locale=en)（本轮已读取官方当前页面）；兼容供应商实际支持情况需单独验收。
+
+无新增依赖、Command、权限或 SQL 表/列。此前“同一配置改变尺寸”的运行路径已替换，旧版本 Prompt 仅作为历史保留。验证见 `COVER-INDEPENDENT-VERIFICATION.md`。
+
 ## 音频表单与路径展示（2026-11-01）
 
 音频来源/格式沿用现有控件与品牌色，以字段区域内边距和明确的标签、控件、说明间距替代负边距；980px 以下单列，长文件名省略并可悬停查看，完整路径和说明自然换行。说明通过 `aria-describedby` 关联控件。

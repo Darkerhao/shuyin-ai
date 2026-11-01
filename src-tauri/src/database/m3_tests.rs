@@ -20,8 +20,109 @@ fn image_task(db: &Database, project_id: &str, provider_id: &str) -> String {
         project_id: project_id.into(),
         provider_id: provider_id.into(),
         description: "安静的水墨树林".into(),
+        width: 1440,
+        height: 1080,
     })
     .unwrap()
+}
+
+#[test]
+fn cover_generation_freezes_and_validates_each_target_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let p = project(&db);
+    let model = image_model(&db);
+    for (width, height, ratio) in [
+        (1440, 1080, "4:3"),
+        (1080, 1440, "3:4"),
+        (1920, 1080, "16:9"),
+    ] {
+        let id = db
+            .start_cover_generation(ImageGenerationInput {
+                project_id: p.id.clone(),
+                provider_id: model.id.clone(),
+                description: "独立构图".into(),
+                width,
+                height,
+            })
+            .unwrap();
+        let prepared = db.prepare_cover_generation(&id).unwrap();
+        assert_eq!((prepared.width, prepared.height), (width, height));
+        assert!(prepared.prompt.contains(&format!("本次目标封面：{ratio}")));
+        assert!(!prepared.prompt.contains("画面为方形"));
+        db.end_generation(&id, "cancelled", "cancelled", "取消")
+            .unwrap();
+    }
+    assert!(db
+        .start_cover_generation(ImageGenerationInput {
+            project_id: p.id,
+            provider_id: model.id,
+            description: "无效尺寸".into(),
+            width: 1,
+            height: 1,
+        })
+        .is_err());
+}
+
+#[test]
+fn independent_cover_configs_and_recovery_survive_restart_and_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db.sqlite3");
+    let db = Database::open(path.clone());
+    let p = project(&db);
+    let mut configs = Vec::new();
+    for (index, (width, height)) in [(1440, 1080), (1080, 1440), (1920, 1080)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut cover = config();
+        cover.width = width;
+        cover.height = height;
+        cover.title = format!("独立封面{index}");
+        cover.background_prompt = format!("独立构图{index}");
+        cover.background_x = index as f64 / 2.0;
+        db.save_cover_version(&p.id, cover.clone(), None).unwrap();
+        configs.push(cover);
+    }
+    let workspace = serde_json::json!({"schemaVersion":2,"activeSize":1,"covers":configs});
+    db.save_editor_draft(
+        &p.id,
+        "cover",
+        Some(super::drafts::EditorDraft {
+            based_on: None,
+            content: workspace.clone(),
+            updated_at: String::new(),
+        }),
+    )
+    .unwrap();
+    let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    drop(db);
+    let db = Database::open(path);
+    assert_eq!(
+        db.read_editor_draft(&p.id, "cover")
+            .unwrap()
+            .unwrap()
+            .content,
+        workspace
+    );
+    assert_eq!(
+        db.list_cover_versions(&p.id)
+            .unwrap()
+            .iter()
+            .rev()
+            .map(|v| v.config.clone())
+            .collect::<Vec<_>>(),
+        configs
+    );
+    db.save_editor_draft(&p.id, "cover", None).unwrap();
+    db.restore_backup(&backup).unwrap();
+    assert_eq!(
+        db.read_editor_draft(&p.id, "cover")
+            .unwrap()
+            .unwrap()
+            .content,
+        workspace
+    );
 }
 
 #[test]
@@ -50,7 +151,9 @@ fn image_and_text_defaults_are_independent_and_wrong_task_types_are_rejected() {
         .start_cover_generation(ImageGenerationInput {
             project_id: p.id.clone(),
             provider_id: text.id,
-            description: "树林".into()
+            description: "树林".into(),
+            width: 1080,
+            height: 1440,
         })
         .is_err());
     let task = image_task(&db, &p.id, &image.id);
