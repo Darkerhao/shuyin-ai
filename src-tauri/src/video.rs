@@ -20,6 +20,18 @@ pub struct Cue {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VideoProgress {
+    pub started_at: u64,
+    pub stage: String,
+    pub phase: String,
+    pub completed: f64,
+    pub total: f64,
+    pub cue_count: usize,
+    pub preview: Vec<Cue>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scene {

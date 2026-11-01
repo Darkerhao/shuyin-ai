@@ -6,10 +6,10 @@ use crate::{
         video::{StartVideoInput, VideoJob},
         Database,
     },
-    video::{self, Cue, Scene, VideoSettings},
+    video::{self, Cue, Scene, VideoProgress, VideoSettings},
     video_process as process,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -21,12 +21,44 @@ use std::{
 use tauri::{AppHandle, Manager, State};
 
 #[derive(Default)]
-pub struct VideoRuntime(Mutex<Option<(String, Arc<AtomicBool>)>>);
+pub struct VideoRuntime(Mutex<Option<ActiveVideo>>);
+
+struct ActiveVideo {
+    id: String,
+    run_id: i64,
+    flag: Arc<AtomicBool>,
+    started_at: u64,
+    directory: Option<PathBuf>,
+}
+
+#[derive(Serialize)]
+pub struct VideoJobView {
+    #[serde(flatten)]
+    job: VideoJob,
+    progress: Option<VideoProgress>,
+}
+
+fn active_progress(active: &ActiveVideo, job: &VideoJob) -> Option<VideoProgress> {
+    if job.status != "running" || active.id != job.id || active.run_id != job.run_id {
+        return None;
+    }
+    let mut progress = active
+        .directory
+        .as_ref()
+        .and_then(|dir| process::read_small(&dir.join("progress.json")).ok())
+        .and_then(|raw| serde_json::from_str::<VideoProgress>(&raw).ok())
+        .filter(|progress| progress.stage == job.stage)
+        .unwrap_or_default();
+    progress.started_at = active.started_at;
+    progress.stage.clone_from(&job.stage);
+    Some(progress)
+}
+
 impl VideoRuntime {
     pub fn stop_all(&self) {
         if let Ok(active) = self.0.lock() {
-            if let Some((_, flag)) = &*active {
-                flag.store(true, Ordering::SeqCst);
+            if let Some(active) = &*active {
+                active.flag.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -46,9 +78,20 @@ pub fn save_video_settings(
 #[tauri::command]
 pub fn list_video_jobs(
     database: State<'_, Database>,
+    runtime: State<'_, VideoRuntime>,
     project_id: String,
-) -> Result<Vec<VideoJob>, String> {
-    database.video_jobs(&project_id)
+) -> Result<Vec<VideoJobView>, String> {
+    let jobs = database.video_jobs(&project_id)?;
+    let active = runtime.0.lock().map_err(|e| e.to_string())?;
+    Ok(jobs
+        .into_iter()
+        .map(|job| VideoJobView {
+            progress: active
+                .as_ref()
+                .and_then(|active| active_progress(active, &job)),
+            job,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -87,8 +130,8 @@ pub fn continue_video_job(app: AppHandle, id: String, render: bool) -> Result<Vi
 pub fn cancel_video_job(app: AppHandle, id: String) -> Result<(), String> {
     let runtime = app.state::<VideoRuntime>();
     let active = runtime.0.lock().map_err(|e| e.to_string())?;
-    if let Some((active_id, flag)) = &*active {
-        if active_id == &id {
+    if let Some(active) = &*active {
+        if active.id == id {
             let db = app.state::<Database>();
             let job = db.video_job(&id)?;
             db.end_video_job(
@@ -97,7 +140,7 @@ pub fn cancel_video_job(app: AppHandle, id: String) -> Result<(), String> {
                 "cancelled",
                 "用户已停止任务，已保存内容保留。",
             )?;
-            flag.store(true, Ordering::SeqCst);
+            active.flag.store(true, Ordering::SeqCst);
             return Ok(());
         }
     }
@@ -145,14 +188,18 @@ pub fn media_asset_path(
     Ok(path.to_string_lossy().into_owned())
 }
 
-fn spawn(
-    app: &AppHandle,
-    active: &mut Option<(String, Arc<AtomicBool>)>,
-    job: &VideoJob,
-    render: bool,
-) {
+fn spawn(app: &AppHandle, active: &mut Option<ActiveVideo>, job: &VideoJob, render: bool) {
     let flag = Arc::new(AtomicBool::new(false));
-    *active = Some((job.id.clone(), flag.clone()));
+    *active = Some(ActiveVideo {
+        id: job.id.clone(),
+        run_id: job.run_id,
+        flag: flag.clone(),
+        started_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        directory: None,
+    });
     let app = app.clone();
     let job = job.clone();
     tauri::async_runtime::spawn(async move {
@@ -261,6 +308,17 @@ async fn execute(
             .as_nanos()
     ));
     std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
+    if let Some(active) = app
+        .state::<VideoRuntime>()
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_mut()
+    {
+        if active.id == job.id && active.run_id == job.run_id {
+            active.directory = Some(directory.clone());
+        }
+    }
     process::write_new(
         &directory.join("render.mjs"),
         include_bytes!("../video/render.mjs"),
@@ -399,4 +457,96 @@ async fn execute(
     }
     db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(directory: &Path) -> (ActiveVideo, VideoJob) {
+        (
+            ActiveVideo {
+                id: "job".into(),
+                run_id: 2,
+                flag: Arc::new(AtomicBool::new(false)),
+                started_at: 1234,
+                directory: Some(directory.to_path_buf()),
+            },
+            VideoJob {
+                id: "job".into(),
+                project_id: "book".into(),
+                audio_asset_id: None,
+                source_subtitle_id: None,
+                provider_id: None,
+                status: "running".into(),
+                stage: "transcribing".into(),
+                run_id: 2,
+                plan: Default::default(),
+                error: String::new(),
+                subtitle_asset_id: None,
+                video_asset_id: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+            },
+        )
+    }
+
+    #[test]
+    fn progress_is_scoped_to_the_active_job_run_and_stage() {
+        let directory = tempfile::tempdir().unwrap();
+        let (active, mut job) = fixture(directory.path());
+        std::fs::write(directory.path().join("progress.json"), r#"{"stage":"transcribing","phase":"recognizing","startedAt":99,"completed":30,"total":100,"cueCount":3,"preview":[{"start":27,"end":30,"text":"preview"}]}"#).unwrap();
+        let progress = active_progress(&active, &job).unwrap();
+        assert_eq!(progress.started_at, 1234);
+        assert_eq!(progress.completed, 30.0);
+        assert_eq!(progress.preview[0].text, "preview");
+        job.stage = "storyboard".into();
+        let progress = active_progress(&active, &job).unwrap();
+        assert_eq!(progress.started_at, 1234);
+        assert!(progress.preview.is_empty());
+        assert!(progress.phase.is_empty());
+        job.run_id = 3;
+        assert!(active_progress(&active, &job).is_none());
+        job.run_id = 2;
+        job.id = "other-job".into();
+        assert!(active_progress(&active, &job).is_none());
+        job.id = "job".into();
+        job.status = "cancelled".into();
+        assert!(active_progress(&active, &job).is_none());
+    }
+
+    #[test]
+    fn missing_or_invalid_telemetry_keeps_the_job_and_run_clock_available() {
+        let directory = tempfile::tempdir().unwrap();
+        let (active, job) = fixture(directory.path());
+        assert_eq!(active_progress(&active, &job).unwrap().started_at, 1234);
+        std::fs::write(directory.path().join("progress.json"), "incomplete").unwrap();
+        let progress = active_progress(&active, &job).unwrap();
+        assert_eq!(progress.started_at, 1234);
+        assert_eq!(progress.completed, 0.0);
+        assert!(progress.preview.is_empty());
+    }
+
+    #[test]
+    fn rendering_frame_counts_are_exposed_in_the_existing_job_view() {
+        let directory = tempfile::tempdir().unwrap();
+        let (active, mut job) = fixture(directory.path());
+        job.stage = "rendering".into();
+        std::fs::write(
+            directory.path().join("progress.json"),
+            r#"{"stage":"rendering","phase":"rendering_frames","completed":144,"total":480}"#,
+        )
+        .unwrap();
+        let view = serde_json::to_value(VideoJobView {
+            progress: active_progress(&active, &job),
+            job,
+        })
+        .unwrap();
+        assert_eq!(view["id"], "job");
+        assert_eq!(view["progress"]["startedAt"], 1234);
+        assert_eq!(view["progress"]["phase"], "rendering_frames");
+        assert_eq!(view["progress"]["completed"], 144.0);
+        assert_eq!(view["progress"]["total"], 480.0);
+        assert_eq!(view["progress"]["preview"], serde_json::json!([]));
+    }
 }

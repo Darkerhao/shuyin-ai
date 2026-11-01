@@ -2,6 +2,62 @@
 
 日期：2026-11-01。范围：Windows 首版，独立 Frametell 0.7.3，中文原声，1920×1080 / 24 fps / 书卷风。
 
+## 实时进度续作（2026-11-01）
+
+承接字幕识别反馈及追加的视频制作进度需求。保留之前未完成的实现，不重新实现任务调度、不修改外部引擎，不替换正在运行的正式安装。
+
+### 实现与取舍
+
+- 字幕显示真实音频位置、识别条数与最近三条预览；分镜显示已保存覆盖数和标题。统一五步流程、本次用时、进度环和停止/失败/确认/完成状态。
+- 绘制进度来自引擎 `--plan` 的帧区间，以及正式缓存或本轮已写完整moov的临时MP4；不按文件大小、等待时间或工作线程启动数估算。取消遗留的旧临时片段不计入新运行，正式缓存可以计入。
+- 画面绘制、字幕合成、原声合入、成片检查分别反馈。没有可靠计数的阶段保持不定进度，不提供虚假整体百分比或ETA；画面100%不代表成片已经归档。
+- 沿用墨绿视觉和现有控件；开始制作后定位到任务面板，窄窗标题全宽、步骤文字分行，减少动态效果时停用动画。临时同步失败保留上次快照并提示。
+- 真实复验发现字体别名从258增长到262字符后Chrome报ERR_FILE_NOT_FOUND，而140字符真实路径可读。生成HTML改用规范引擎/依赖file URL；引擎初始化错误直接退出1，由原Job Object回收进程树，不再因遗留浏览器连接长期保持running。
+
+### 本轮实际验证
+
+Rust命令先执行 `. ./.tools/env.ps1`。以下为本轮实际结果，后文首版实施表的旧测试数量保留为历史证据。
+
+| 命令 | 实际结果 |
+| --- | --- |
+| `npx vitest run --maxWorkers 2` | 最终272通过，17个测试文件 |
+| `npx vitest run tests/video-progress.test.ts tests/video.test.ts` | 13通过：真实数字/字幕、分镜覆盖、确认、结束/失败/停止、重试计时、跨阶段隔离、同步恢复、计时器清理和开始渲染后定位 |
+| `node --test tests/video-render.test.mjs` | 6通过：原声时轴、模型文本隔离、缓存/已封口/未完成片段、大MP4盒头、旧运行临时片段隔离，以及初始化失败及时退出和规范URL |
+| `python -B -m unittest discover -s tests -p test_video_transcribe.py` | 4通过，含语段反馈、三条预览上限和原子快照 |
+| `npm run lint` | 通过；模板换行和Node显式导入按现有规则修正，无豁免 |
+| `npm run build` | TypeScript/Vite通过；仍有主JS约548kB的既有分包提示，未提高阈值 |
+| `node --check src-tauri/video/render.mjs` | 通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 149通过，2项默认忽略 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked cancelling_video_worker_terminates_its_descendants -- --ignored` | 设置 `SHUYIN_TEST_NODE` 后专项1通过；另一项系统凭据测试未运行 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `npx tauri build --debug --no-bundle --config output/playwright/video-progress/tauri.verify.conf.json` | 隔离桌面程序构建通过，不是安装包 |
+| `node output/playwright/video-progress/native-check.mjs` | 首次真实IPC/ASR/分镜夹具/渲染/归档通过：20秒、9条字幕、3镜、480帧；一次本地模型契约请求 |
+| `node output/playwright/video-progress/native-check.mjs a318311054f2d43682078d83bab28944` | 在先前字体失败的同一长目录、同一任务上从run2恢复到run3成功；未重新转写或调用模型。真实帧数0→80→181→308→366→424→452→480，最终成片1920×1080/20秒；原音频摘要不变 |
+| `node output/playwright/video-progress/cache-check.mjs` | 实际复用10/10片段，绘制快照480/480，随后继续合成而非误报任务完成 |
+| `node output/playwright/video-progress/close-native.mjs` | 正常关闭隔离应用，最终18462/18463无监听 |
+| `python -B -`（只读SQLite/文档证据检查） | schema14、integrity=ok、外键错误0、原任务succeeded/run3、running任务0；8份Markdown、12个本地链接及原生/缓存/截图证据通过 |
+| `git diff --check` | 通过 |
+
+最终原生1440/1120/800/390四档视口均无页面或面板横向溢出；390为WebView视口模拟，未改变原生800px最小窗口。截图已复核，窄窗标签不再挤在一起；页面运行错误0，reduced-motion下动画为none、transition为0s。证据为 `output/playwright/video-progress/native-first-result.json`、`native-result.json`、`cache-result.json`、`render-panel.png` 及 `render-{宽度}.png`。
+
+过程失败同样保留：新增回归先复现缺少渲染百分比、遗留临时片段被误计及初始化错误后4秒不退出；修复后全部通过。首轮lint/TypeScript错误已修复。第二次原生运行在262字符字体链接处超时，文件存在性及Chrome对照结果保留在 `font-result.json` / `native-long-path-failure.json`，随后只停止该隔离任务并在原目录成功复验。未通过改书名或缩短测试目录避开问题。
+
+### 文件、数据和边界
+
+- 前端：`src/modules/video/VideoJobProgress.vue`、`src/modules/video/VideoPage.vue`、`src/types/video.ts`。
+- 后端/脚本：`src-tauri/src/video.rs`、`src-tauri/src/video_commands.rs`、`src-tauri/video/transcribe.py`、`src-tauri/video/render.mjs`。
+- 回归：`tests/video-progress.test.ts`、`tests/video.test.ts`、`tests/video-render.test.mjs`、`tests/test_video_transcribe.py`。
+- 文档：`docs/PRD.md`、`docs/TECHNICAL-DESIGN.md`、`docs/USER-GUIDE.md`、`docs/DEVELOPMENT-PLAN.md`、本文及根目录 `task_plan.md` / `progress.md` / `findings.md`。
+
+本轮无数据库结构、迁移、依赖、权限或版本号变更，SQLite仍v14；瞬时快照不写入数据库、素材或备份。只在既有 `com.shuyin.mg-verify` 隔离库创建/恢复验收记录；正式库、原音频、旧成片及外部引擎源码未改。沿用已有D盘运行时，测试产物在D盘仓库output，隔离SQLite/WebView2沿用C盘标准profile。
+
+隔离应用已正常关闭，数据库检查见 `output/playwright/video-progress/database-result.json`，最终Rust全量日志在同目录 `rust-check.log`。原正式安装进程保持运行，开始时已有的两处Python字节码缓存未删除，Git索引未改动。
+
+验收对应：真实计数/内容反馈、重试隔离、异常结束、窄窗与减少动画、短片归档均有上述回归或实跑证据。整本书长片、真实分镜模型质量、完整试听、正式安装升级及跨平台仍未验收；不把本地契约服务当作真实AI服务。不重跑本轮未修改的release/queue测试，未声称完整 `npm test` 全绿；后文历史队列失败未在本轮修复或复验。进度为feat/minor兼容增强，附带可靠性修复，不手动升版本、不提交、不发布。
+
+下一步是长片试用与按既有发布流程打包更新；已经运行的旧安装版不会自动获得这次源码中的进度面板。
+
 ## 已实现
 
 - 音频成品卡的「制作 MG 视频」及书籍内「视频制作」页面；明确选用本书音频或已关联的 SRT。

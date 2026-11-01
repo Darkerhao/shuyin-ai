@@ -31,6 +31,8 @@ async function render() {
 }
 it('requires an explicit confirmation before rendering a prepared storyboard', async () => {
   const wrapper = await render()
+  const scroll = vi.fn()
+  wrapper.get('.video-job').element.scrollIntoView = scroll
   expect(wrapper.text()).toContain('等待确认分镜')
   expect(api.continueJob).not.toHaveBeenCalled()
   vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'rendering' })
@@ -38,6 +40,7 @@ it('requires an explicit confirmation before rendering a prepared storyboard', a
   expect(api.savePlan).toHaveBeenCalledWith('j1', expect.stringContaining('原声字幕'), job.plan.scenes)
   expect(api.continueJob).toHaveBeenCalledWith('j1', true)
   expect(wrapper.get('[aria-label="选择视频历史任务"]').text()).toContain('制作中')
+  expect(scroll).toHaveBeenCalledWith({ block: 'start' })
 })
 it('a failed save keeps the edited subtitles and never starts a render', async () => {
   const wrapper = await render()
@@ -60,4 +63,19 @@ it('does not show another book after a late background polling response', async 
   finish([{ ...job, status: 'succeeded' }])
   await flushPromises()
   expect(wrapper.text()).not.toContain('任务与成片')
+})
+it('refreshes intermediate transcription feedback and clears the stale connection notice after recovery', async () => {
+  vi.useFakeTimers()
+  const current: VideoJob = { ...job, status: 'running', stage: 'transcribing', plan: { ...job.plan, cues: [], scenes: [] } }
+  vi.mocked(api.listJobs).mockResolvedValue([current])
+  const wrapper = await render()
+  expect(wrapper.text()).toContain('正在准备原声识别')
+  vi.mocked(api.listJobs).mockRejectedValueOnce(new Error('disconnected'))
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(wrapper.text()).toContain('当前展示上次读取的进度')
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...current, progress: { startedAt: Date.now() - 10000, stage: 'transcribing', phase: 'recognizing', completed: 4, total: 8, cueCount: 1, preview: [{ start: 1, end: 4, text: '识别中的真实句子' }] } }])
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(wrapper.text()).toContain('识别中的真实句子')
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('50')
+  expect(wrapper.text()).not.toContain('当前展示上次读取的进度')
 })

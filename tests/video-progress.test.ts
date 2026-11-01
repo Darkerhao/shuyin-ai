@@ -1,0 +1,119 @@
+import { afterEach, expect, it, vi } from 'vitest'
+import { mount } from '@vue/test-utils'
+import VideoJobProgress from '../src/modules/video/VideoJobProgress.vue'
+import type { VideoJob, VideoProgress } from '../src/types/video'
+
+const startedAt = Date.parse('2026-11-01T08:00:00Z')
+const progress: VideoProgress = { startedAt, stage: 'transcribing', phase: 'loading_model', completed: 0, total: 0, cueCount: 0, preview: [] }
+const job: VideoJob = {
+  id: 'j1', projectId: 'p1', audioAssetId: 'a1', sourceSubtitleId: null, providerId: 'm1',
+  status: 'running', stage: 'transcribing', runId: 1, error: '', subtitleAssetId: null, videoAssetId: null,
+  createdAt: '2026-10-30T08:00:00Z', updatedAt: '2026-11-01T08:00:00Z', progress,
+  plan: { title: '原书', audioSha256: 'hash', duration: 100, cues: [], scenes: [] },
+}
+const mounted: ReturnType<typeof mount>[] = []
+function render(value = job) {
+  const wrapper = mount(VideoJobProgress, { props: { job: structuredClone(value) } })
+  mounted.push(wrapper)
+  return wrapper
+}
+afterEach(() => { mounted.splice(0).forEach(w => w.unmount()); vi.useRealTimers() })
+
+it('explains model loading without claiming a percentage and ticks only the current run', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(startedAt + 5000)
+  const wrapper = render()
+  expect(wrapper.text()).toContain('正在唤醒本地语音模型')
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBeUndefined()
+  expect(wrapper.get('[aria-label="本次执行已用时间"]').text()).toContain('00:05')
+  await vi.advanceTimersByTimeAsync(2000)
+  expect(wrapper.get('[aria-label="本次执行已用时间"]').text()).toContain('00:07')
+  expect(wrapper.findAll('[aria-current="step"]')).toHaveLength(1)
+})
+
+it('uses actual audio position and shows real intermediate subtitles', async () => {
+  const wrapper = render()
+  const preview = [{ start: 38, end: 41.5, text: '刚刚识别的真实原声' }]
+  await wrapper.setProps({ job: { ...job, progress: { ...progress, phase: 'recognizing', completed: 41.5, total: 100, cueCount: 8, preview } } })
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('41')
+  expect(wrapper.text()).toContain('已识别 00:41 / 01:40')
+  expect(wrapper.text()).toContain('刚刚识别的真实原声')
+  expect(wrapper.text()).toContain('实时字幕预览')
+  expect(wrapper.text()).toContain('本阶段 41%')
+})
+
+it('shows progress from saved storyboard coverage, including the saved scene preview', () => {
+  const wrapper = render({ ...job, stage: 'storyboard', plan: { ...job.plan,
+    cues: Array.from({ length: 4 }, (_, i) => ({ start: i * 10, end: i * 10 + 5, text: `字幕${i}` })),
+    scenes: [{ first: 0, last: 0, kind: 'book', title: '已保存的第一镜', labels: ['故事开始'] }],
+  } })
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('25')
+  expect(wrapper.text()).toContain('已编排 1 / 4 条字幕')
+  expect(wrapper.text()).toContain('已保存的第一镜')
+  expect(wrapper.get('[aria-current="step"]').text()).toContain('动画分镜')
+})
+
+it('ends running feedback at confirmation, failure, cancellation and completion', async () => {
+  vi.useFakeTimers()
+  const wrapper = render()
+  for (const status of ['awaiting_confirmation', 'failed', 'cancelled', 'succeeded'] as const) {
+    await wrapper.setProps({ job: { ...job, status } })
+    expect(wrapper.find('[role="progressbar"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="本次执行已用时间"]').exists()).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    if (status === 'awaiting_confirmation') expect(wrapper.get('[aria-current="step"]').text()).toContain('确认分镜')
+    if (status === 'succeeded') expect(wrapper.findAll('.is-done')).toHaveLength(5)
+  }
+})
+
+it('does not reuse the previous run or stage progress when resuming', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(startedAt + 120000)
+  const wrapper = render()
+  await wrapper.setProps({ job: { ...job, runId: 2, progress: { ...progress, startedAt: startedAt + 120000 } } })
+  expect(wrapper.get('[aria-label="本次执行已用时间"]').text()).toContain('00:00')
+  await wrapper.setProps({ job: { ...job, stage: 'rendering', progress: { ...progress, completed: 80, total: 100 } } })
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBeUndefined()
+  expect(wrapper.text()).not.toContain('80%')
+  expect(wrapper.text()).toContain('正在准备视频画面')
+})
+
+it('explains real rendering phases and a temporarily stale snapshot', async () => {
+  const wrapper = render({ ...job, stage: 'rendering', progress: { ...progress, stage: 'rendering', phase: 'muxing_audio' } })
+  expect(wrapper.text()).toContain('正在把原声合入画面')
+  await wrapper.setProps({ syncError: 'IPC disconnected' })
+  expect(wrapper.text()).toContain('当前展示上次读取的进度')
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBeUndefined()
+})
+
+it('shows real rendered frame progress without treating it as overall completion', async () => {
+  const rendering: VideoJob = { ...job, stage: 'rendering', progress: { ...progress, stage: 'rendering', phase: 'rendering_frames', completed: 480, total: 960 } }
+  const wrapper = render(rendering)
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('50')
+  expect(wrapper.text()).toContain('已绘制 480 / 960 帧')
+  expect(wrapper.get('.emblem-value').text()).toBe('50%')
+  expect(wrapper.get('[aria-current="step"]').text()).toContain('画面渲染')
+  await wrapper.setProps({ job: { ...rendering, progress: { ...rendering.progress!, completed: 960 } } })
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
+  expect(wrapper.text()).not.toContain('成片和字幕已保存')
+  expect(wrapper.get('[aria-current="step"]').text()).toContain('进行中')
+})
+
+it('does not carry frame percentages into subtitle compositing or audio muxing', async () => {
+  const wrapper = render({ ...job, stage: 'rendering' })
+  for (const [phase, title] of [['rendering_subtitles', '正在把字幕放入画面'], ['muxing_audio', '正在把原声合入画面']] as const) {
+    await wrapper.setProps({ job: { ...job, stage: 'rendering', progress: { ...progress, stage: 'rendering', phase, completed: 960, total: 960 } } })
+    expect(wrapper.text()).toContain(title)
+    expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBeUndefined()
+    expect(wrapper.find('.emblem-value').exists()).toBe(false)
+  }
+})
+
+it('clears the elapsed timer when the panel unmounts', () => {
+  vi.useFakeTimers()
+  const wrapper = render()
+  expect(vi.getTimerCount()).toBe(1)
+  wrapper.unmount()
+  expect(vi.getTimerCount()).toBe(0)
+  mounted.splice(mounted.indexOf(wrapper), 1)
+})

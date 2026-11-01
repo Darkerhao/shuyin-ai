@@ -6,7 +6,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 
-def transcribe(source, model_path, context=""):
+def transcribe(source, model_path, context="", progress=None):
     if version("faster-whisper") != "1.2.1" or version("av") != "16.1.0":
         raise RuntimeError("Install the tested faster-whisper==1.2.1 and av==16.1.0 runtime first.")
     required = ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt")
@@ -14,12 +14,22 @@ def transcribe(source, model_path, context=""):
         raise RuntimeError("The local model is incomplete. Download all model files before transcription.")
     from faster_whisper import WhisperModel
 
+    def report(phase, completed=0, total=0, cues=()):
+        if progress:
+            progress({"stage": "transcribing", "phase": phase,
+                      "completed": completed, "total": total,
+                      "cueCount": len(cues), "preview": list(cues[-3:])})
+
+    report("loading_model")
     model = WhisperModel(str(model_path), device="cpu", compute_type="int8",
                          cpu_threads=4, local_files_only=True)
+    report("decoding_audio")
     segments, info = model.transcribe(str(source), language="zh", beam_size=5,
                                       word_timestamps=True, vad_filter=True,
                                       hotwords=context[:120] or None)
     cues = []
+    completed = 0
+    report("recognizing", total=info.duration)
     for segment in segments:
         words = segment.words or []
         text, start, end = "", None, None
@@ -36,9 +46,18 @@ def transcribe(source, model_path, context=""):
                 text, start = "", None
         if text.strip():
             cues.append({"start": start, "end": end, "text": text.strip()})
+        completed = min(info.duration, max(completed, segment.end))
+        report("recognizing", completed, info.duration, cues)
     if not cues:
         raise RuntimeError("No speech recognized. Check the audio or import a verified SRT.")
+    report("finalizing_subtitles", info.duration, info.duration, cues)
     return {"duration": info.duration, "cues": cues}
+
+
+def write_progress(path, progress):
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(progress, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
 
 
 if __name__ == "__main__":
@@ -50,7 +69,9 @@ if __name__ == "__main__":
                     raise RuntimeError("Host process gate timed out.")
                 time.sleep(0.05)
         request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-        result = transcribe(Path(request["audioPath"]), Path(request["modelPath"]), request.get("context", ""))
+        progress_path = Path(sys.argv[2]).parent / "progress.json"
+        result = transcribe(Path(request["audioPath"]), Path(request["modelPath"]),
+                            request.get("context", ""), lambda value: write_progress(progress_path, value))
         with Path(sys.argv[2]).open("x", encoding="utf-8") as output:
             json.dump(result, output, ensure_ascii=False)
     except Exception as error:

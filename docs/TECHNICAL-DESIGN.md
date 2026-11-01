@@ -6,6 +6,12 @@
 
 前端增加 VideoPage 和音频入口，沿用原素材/发布流程；新草稿按明确的 videoJob 选择对应视频及原音频，历史任务不变。Tauri protocol-asset 默认空 scope，主窗口经同项目素材ID校验后只允许单个媒体文件，复用其Range实现。运行时是独立安装工具，不捆绑AGPL源码。具体目录、源码/许可依据、版本锁定、迁移与实跑边界见 [实施与验收](MG-VIDEO-VERIFICATION.md)。
 
+进度仍由同一调度器管理：`VideoRuntime` 记录当前任务ID、run_id、启动时间与本轮目录，`list_video_jobs` 将匹配的 `progress.json` 合入现有任务视图。Python 每个已识别语段原子替换快照，最多附三条字幕；Node 使用锁定引擎的 `--plan` 取得真实帧区间，每秒统计正式缓存及本轮已封口的临时MP4，只读取顶层盒头、不扫描视频数据。临时片段须有完整moov且写入时间不早于本轮启动，取消遗留片段不冒充新进度。通过原引擎 `--skip-subs` / `--skip-video` 分开报告画面与字幕合成，随后合入原声并校验；未复制渲染算法。
+
+`VideoJobProgress` 仅从当前任务/进度派生状态，不建立第二份任务缓存；沿用1.5秒轮询并提示临时同步失败，组件销毁或任务结束时清理计时器。转写的 completed/total 单位为秒，rendering_frames 为已完成片段的帧数，分镜比例来自已保存字幕覆盖；其他阶段保持不定进度。侧车快照不进入SQLite、素材或备份，不改变v14、Tauri权限或依赖；原声和已保存成果仍由原流程管理。
+
+浏览器的引擎脚本和依赖入口使用规范 file URL，并转义HTML属性，不经深层缓存junction访问字体；解决本机262字符字体别名在Chrome中报ERR_FILE_NOT_FOUND、真实路径可读的问题。若openStage初始化抛错，独立Node入口明确退出1，避免仅设置exitCode后遗留浏览器连接让任务一直running；Rust沿用原Job Object回收进程树并记录失败，不增加重试或另一套调度。
+
 ## 音频固定口播模板（2026-11-01）
 
 全量 `publishing-v6` 与按项 `publishing-revision-v5` 共用 `AudioDraft::into_prompt` 的 `audio-template-v3`。`audio.seriesName` 固定为「读懂一本书」；目标秒数、字数和分段计算不变，仅用于不朗读的制作参数。固定开场结尾独立于分钟数并声明逐字朗读，模型生成的引入/正文不重复固定段或时长承诺。提示词遵从性不等同于输入回读校验，也不等同于归档成功。
