@@ -103,7 +103,7 @@ test('a new run ignores finalized temporary fragments left by a cancelled worker
   ], directory, Date.now()), { completed: 24, total: 96 });
 });
 
-test('stage initialization errors exit promptly and browser dependencies use canonical file URLs', t => {
+function failedStageEpisode(t) {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-stage-error-')));
   assert.equal(path.dirname(directory), fs.realpathSync(os.tmpdir()));
   t.after(() => fs.rmSync(directory, { recursive: true }));
@@ -121,8 +121,46 @@ test('stage initialization errors exit promptly and browser dependencies use can
   const script = fileURLToPath(new URL('../src-tauri/video/render.mjs', import.meta.url));
   const result = spawnSync(process.execPath, [script, input, path.join(directory, 'output.json')], { encoding: 'utf8', windowsHide: true, timeout: 4000 });
   const html = fs.readFileSync(path.join(directory, 'episode/index.html'), 'utf8');
+  return { result, html, modules, engine };
+}
+
+test('stage initialization errors exit promptly and browser dependencies use canonical file URLs', t => {
+  const { result, html, modules, engine } = failedStageEpisode(t);
   assert.equal(result.status, 1, `The failed worker must exit rather than wait on browser handles: ${result.stderr}`);
   assert.match(result.stderr, /fixture stage initialization failed/);
   assert(html.includes(`content="${pathToFileURL(modules + path.sep).href.replaceAll('&', '&amp;')}"`));
   assert(html.includes(`src="${pathToFileURL(path.join(engine, 'boot.js')).href.replaceAll('&', '&amp;')}"`));
+});
+
+test('episode readiness waits for the initial paint before checks or frame capture', async t => {
+  const { html } = failedStageEpisode(t);
+  const readyScript = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
+  assert.ok(readyScript, 'The generated episode must wait for paint after the engine boot script.');
+  assert(html.indexOf('<script>') > html.indexOf('boot.js'));
+  const frames = [];
+  const engine = Promise.withResolvers();
+  const window = { __ready: engine.promise };
+  vm.runInNewContext(readyScript, { window, requestAnimationFrame: callback => frames.push(callback) });
+  let ready = false;
+  window.__ready.then(() => { ready = true; });
+  await Promise.resolve();
+  assert.equal(frames.length, 0, 'Paint must wait for the engine, including its fonts.');
+  engine.resolve(12);
+  await Promise.resolve();
+  assert.equal(ready, false);
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  await Promise.resolve();
+  assert.equal(ready, false, 'The first animation callback runs before paint.');
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  assert.equal(await window.__ready, 12, 'Preserve the duration returned by the engine.');
+  assert.equal(frames.length, 0);
+
+  const failedEngine = Promise.withResolvers();
+  const failedWindow = { __ready: failedEngine.promise };
+  vm.runInNewContext(readyScript, { window: failedWindow, requestAnimationFrame: () => assert.fail('Do not capture a failed stage.') });
+  const error = new Error('engine could not load its fonts');
+  failedEngine.reject(error);
+  await assert.rejects(failedWindow.__ready, cause => cause === error);
 });

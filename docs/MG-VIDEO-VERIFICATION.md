@@ -2,6 +2,58 @@
 
 日期：2026-11-01。范围：Windows 首版，独立 Frametell 0.7.3，中文原声，1920×1080 / 24 fps / 书卷风。
 
+## 首帧一致性修复（2026-11-01）
+
+### 复现与根因
+
+用户截图对应《我的前半生》原任务：437条字幕、113镜、933.37秒；原 `layout-check.json` 在p0001中点（报告5.3秒）记录45.21%差异。只读原缓存，以及使用当前源码重新生成同一计划，均复现 `nondeterministic`。失败截图为空白底色/纸张与完整图解，而两次目标时间的DOM摘要相同、字体为loaded、活动动画0、引擎错误0。裁剪到一镜后连续20次不复现，不能以短样片代替这个加载条件。
+
+Frametell 0.7.3的 `runtime/main.js` 在建DOM、加载字体和设置时间0之后就完成 `window.__ready`；检查立即截图，首次绘制尚未完成时读到了旧画面。取消CSS图层提示仍复现45.21%，不采用该方案。仅等待初始绘制的对照连续20次通过。已核对本机当前源码/README、Playwright 1.61.1的截图实现和double-rAF稳定截图实现；本轮读取的 [上游0.7.4清单](https://github.com/sitor-ai/frametell/blob/main/packages/engine/package.json)、[检查实现](https://github.com/sitor-ai/frametell/blob/main/packages/engine/tools/checks.mjs) 与 [页面样式](https://github.com/sitor-ai/frametell/blob/main/packages/engine/runtime/base.css) 中相关检查仍相同，不通过盲目升级解决。
+
+### 修改与边界
+
+- `src-tauri/video/render.mjs`：生成HTML在boot后扩展同一个ready承诺，等待两次绘制回调，保留原时长及错误。所有检查/编码工作进程共享；不改引擎源码、不加固定睡眠、逐帧等待或自动重试，检查阈值不变。
+- `tests/video-render.test.mjs`：覆盖引擎未就绪不提前等待绘制、第一次回调仍不能开始捕获、就绪时长不变、原错误继续拒绝；保留初始化退出与规范路径测试。
+- `tests/video.test.ts`：渲染失败后明确确认，只重试同一任务的render分支，传入原字幕/分镜，不新建任务；停止后仍可继续编辑原字幕。
+- 文档同步技术设计、开发计划、本文及根目录三份规划记录。无SQL、依赖、权限或版本号变更，版本影响fix/patch。
+
+正式任务/输入只读；新渲染输出全部写入 `output/playwright/video-determinism/full-render`。未更新或重启正式安装版，未写正式数据库、重新ASR、调用分镜模型、覆盖原音频或旧成片。界面仍使用「确认并生成视频」重试，不必点击「保存字幕并重新生成分镜」。内嵌脚本需要重新构建/更新应用才在正式任务生效。
+
+### 本轮验证记录
+
+Rust命令先执行 `. ./.tools/env.ps1`。
+
+| 命令 | 实际结果 |
+| --- | --- |
+| `node --test --test-name-pattern='episode readiness' tests/video-render.test.mjs`（修复前） | 1失败，生成页面缺少初始绘制就绪契约 |
+| `node --test tests/video-render.test.mjs`（修复后） | 7通过 |
+| `node --check src-tauri/video/render.mjs` | 通过 |
+| `npx vitest run tests/video.test.ts tests/video-progress.test.ts` | 14通过，含失败重试保留原字幕/分镜 |
+| `node output/playwright/video-determinism/replay-original.mjs <修复后缓存目录> 20 fixed` | 使用真实生成HTML，重新打开浏览器20次，原113镜加载/首镜确定性检查20次全部通过；没有额外绘制等待 |
+| `npm run lint` | 通过 |
+| `npx vitest run --maxWorkers 2` | 最终273通过，17个测试文件 |
+| `npm run typecheck` | 当前0.30.0通过 |
+| `npm run build` | 保留用户0.30.0更新后重新执行，TypeScript/Vite通过；保留既有主JS大于500kB提示 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked video` | 17通过、1项进程树专项默认忽略；本轮未修改进程管理 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 当前0.30.0全量149通过，系统凭据和进程树2项默认忽略，未声称其在本轮实跑 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `cargo build --manifest-path src-tauri/Cargo.toml --locked` | 当前0.30.0桌面开发程序构建通过，包含内嵌渲染脚本；未启动或替换正式安装 |
+| `node src-tauri/video/render.mjs output/playwright/video-determinism/full-render/input.json output/playwright/video-determinism/full-render/result.json` | 退出0，原437条字幕/113镜完整成片生成，933.375秒、1920×1080、24fps、22,401帧、H.264/AAC双声道44.1kHz；79,341,677字节 |
+| `node output/playwright/video-determinism/replay-original.mjs <修复后缓存目录> 1 positive-control` | 故意加入状态相关背景后退出1并报87.69%差异；真实不一致仍被原检查拒绝 |
+| `python <ffmpeg-skill>/scripts/probe.py <成片> --json` | 读取完整音视频参数通过；音轨933.371995秒，与画面相差约3毫秒 |
+| `python <ffmpeg-skill>/scripts/look.py <成片> --tiles 4x3 --width 1600 -o <contact.png> --no-timecode --json-brief` | 12帧全片抽样图生成并人工视觉复核；另提取5.27秒原失败位置与932秒片尾，图解/中文字幕可见且无明显遮挡 |
+| `ffmpeg -hide_banner -v error -xerror -nostdin -i <成片> -map 0:v:0 -map 0:a:0 -progress <decode-progress.txt> -nostats -f null -` | 全部22,401帧和音轨解码通过，错误日志为空，progress=end |
+| `node output/playwright/video-determinism/playback-check.mjs` | 独立Chrome本地文件播放通过，5.27/466/932秒定位均就绪，实际播放超过6.3秒，媒体/页面错误0；不是正式WebView2验收 |
+| `node output/playwright/video-determinism/verify-evidence.mjs` | 4个原文件摘要、字幕/分镜、当前源码缓存键、20次fresh检查、负向校验、解码及播放证据全部核对通过 |
+| `git diff --check` | 通过；9个修复文件，索引保持空 |
+
+原计划完整113镜布局检查通过：错误0；9条文字占比偏高、1条内容偏稀的非阻断提醒保留，没有通过丢弃提醒或提高阈值获取通过。首帧就绪回归、20次原加载条件检查、真实不一致负向校验、失败重试保留原计划、完整成片解码和抽样视觉核验均完成。原输入JSON、原运行脚本、原布局结果与原音频SHA-256保持不变；验证成片没有自动登记到正式任务，也没有将正式失败状态伪造为成功。
+
+初次媒体脚本因PATH未包含ffprobe退出127，随后使用已存在的 `D:/MyWork/software/ffmpeg/current/bin`，仅修改验证命令的PATH；未安装软件或改全局配置。诊断脚本和证据统一保留在已忽略的 `output/playwright/video-determinism/`，其中README注明仅作回归证据，不是另一套生产渲染路径。完整成片位于 `output/playwright/video-determinism/full-render/video.mp4`。
+
+用户确认后保留发布提交e7f0e12（v0.30.0），未回退版本、修改索引、提交或发布。无数据库结构/依赖/权限变更。正式安装升级、正式任务内重新归档、完整人工听审、其他长片/两小时上限和跨平台仍未验收；本轮只证明这一真实15分33秒原计划的完整渲染及上述回归。未运行与本修复无关的release/queue测试，不声称完整 `npm test` 通过。下一步通过既有发布流程打包更新，再在原任务使用「确认并生成视频」，不必重做字幕或分镜。
+
 ## 实时进度续作（2026-11-01）
 
 承接字幕识别反馈及追加的视频制作进度需求。保留之前未完成的实现，不重新实现任务调度、不修改外部引擎，不替换正在运行的正式安装。

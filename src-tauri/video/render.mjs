@@ -154,7 +154,10 @@ async function main(inputFile, outputFile) {
   // Chromium cannot read some Windows file URLs through deeply nested junctions.
   const modulesUrl = pathToFileURL(fs.realpathSync(path.join(episode, 'engine_modules')) + path.sep).href.replaceAll('&', '&amp;');
   const bootUrl = pathToFileURL(path.join(engine, 'boot.js')).href.replaceAll('&', '&amp;');
-  fs.writeFileSync(path.join(episode, 'index.html'), `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="engine-modules" content="${modulesUrl}"><script src="script.js"></script><script src="${bootUrl}"></script></head><body></body></html>`);
+  // Engine readiness covers DOM/fonts, not paint. All capture workers must await the initial paint too.
+  fs.writeFileSync(path.join(episode, 'index.html'), `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="engine-modules" content="${modulesUrl}"><script src="script.js"></script><script src="${bootUrl}"></script>
+<script>window.__ready = window.__ready.then(duration => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(duration)))));</script>
+</head><body></body></html>`);
   for (const page of result.pages) fs.writeFileSync(path.join(episode, 'pages', `${page.id}.js`), `{ const ID = ${JSON.stringify(page.id)}; ${drawing} }`);
   process.chdir(episode);
   const { openStage, loadEpisode, closeStage } = await import(pathToFileURL(path.join(engine, 'tools/lib.mjs')));
