@@ -179,6 +179,25 @@ describe('publishing workflow', () => {
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.saveWriting).toHaveBeenLastCalledWith(expect.objectContaining({ content: expect.objectContaining({ coverDesign: design }) }))
   })
+  it('adds only the 16:9 prompt through preview and adoption while preserving older content', async () => {
+    const content = { ...initial.content, coverPromptWidescreen: '横版 16:9，宽屏独立构图，中央留白。' }
+    vi.mocked(api.executeGeneration).mockResolvedValue({ taskId: 't1', fields: ['coverPromptWidescreen'], before: initial.content, content })
+    vi.mocked(api.applyGeneration).mockResolvedValue({ ...generated, content })
+    const { wrapper } = await render()
+    await button(wrapper, '按项调整').trigger('click')
+    await wrapper.get('#revision-title').trigger('click')
+    await wrapper.get('#revision-coverPromptWidescreen').trigger('click')
+    await button(wrapper, '生成预览').trigger('click'); await flushPromises()
+    expect(api.startGeneration).toHaveBeenLastCalledWith(expect.objectContaining({ revision: { basedOn: initial.id, fields: ['coverPromptWidescreen'], instruction: '' } }))
+    expect(wrapper.get('#result-coverPromptWidescreen').element).toHaveProperty('value', '')
+    expect(wrapper.get('#revision-after-coverPromptWidescreen').element).toHaveProperty('value', content.coverPromptWidescreen)
+    await button(wrapper, '采用并保存新版本').trigger('click'); await flushPromises()
+    expect(api.applyGeneration).toHaveBeenCalledWith('t1')
+    for (const key of ['title', 'description', 'audioPrompt', 'coverPromptLandscape', 'coverPromptPortrait'] as const) {
+      expect(wrapper.get(`#result-${key}`).element).toHaveProperty('value', initial.content[key])
+    }
+    expect(wrapper.get('#result-coverPromptWidescreen').element).toHaveProperty('value', content.coverPromptWidescreen)
+  })
   it('previews selected changes without replacing the editor and adopts exactly one new version', async () => {
     const candidate = { ...initial.content, title: '更有悬念的标题' }
     vi.mocked(api.executeGeneration).mockResolvedValue({ taskId: 't1', fields: ['title'], before: initial.content, content: candidate })
@@ -280,9 +299,9 @@ describe('publishing workflow', () => {
     expect(api.listVersions).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('请在桌面应用')
   })
-  it('generates publishing and four cover fields in one task', async () => {
+  it('generates publishing and five cover fields in one task', async () => {
     const { wrapper } = await render()
-    expect(wrapper.findAll('textarea')).toHaveLength(7)
+    expect(wrapper.findAll('textarea')).toHaveLength(8)
     expect(wrapper.find('#writing-kind').exists()).toBe(false)
     expect(wrapper.find('#writing-count').exists()).toBe(false)
     expect(wrapper.find('#writing-reference').exists()).toBe(false)
@@ -292,7 +311,7 @@ describe('publishing workflow', () => {
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('新标题')
     expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('新内容')
     expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('新提示词')
-    for (const field of ['coverTitle', 'coverSubtitle', 'coverPromptLandscape', 'coverPromptPortrait'] as const) {
+    for (const field of ['coverTitle', 'coverSubtitle', 'coverPromptLandscape', 'coverPromptPortrait', 'coverPromptWidescreen'] as const) {
       expect((wrapper.get(`#result-${field}`).element as HTMLTextAreaElement).value).toBe(generated.content[field])
     }
   })
@@ -418,7 +437,7 @@ describe('publishing workflow', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     const { wrapper } = await render()
-    for (const [field, label] of [['coverTitle', '封面主标题'], ['coverSubtitle', '封面副标题'], ['coverPromptLandscape', '横版 4:3 封面提示词'], ['coverPromptPortrait', '竖版 3:4 封面提示词']]) {
+    for (const [field, label] of [['coverTitle', '封面主标题'], ['coverSubtitle', '封面副标题'], ['coverPromptLandscape', '横版 4:3 封面提示词'], ['coverPromptPortrait', '竖版 3:4 封面提示词'], ['coverPromptWidescreen', '横版 16:9 封面提示词']]) {
       await wrapper.get(`#result-${field}`).setValue(`${label}\n我的修改`)
       await button(wrapper, `复制${label}`).trigger('click'); await flushPromises()
       expect(writeText).toHaveBeenLastCalledWith(`${label}\n我的修改`)
@@ -438,7 +457,7 @@ describe('publishing workflow', () => {
   })
   it('can edit and save old three-field versions without generating covers', async () => {
     const legacy = JSON.parse(JSON.stringify(initial)) as WritingVersion
-    for (const field of ['coverTitle', 'coverSubtitle', 'coverPromptLandscape', 'coverPromptPortrait'] as const) Reflect.deleteProperty(legacy.content, field)
+    for (const field of ['coverTitle', 'coverSubtitle', 'coverPromptLandscape', 'coverPromptPortrait', 'coverPromptWidescreen'] as const) Reflect.deleteProperty(legacy.content, field)
     vi.mocked(api.listVersions).mockResolvedValue([legacy])
     const { wrapper } = await render()
     expect((wrapper.get('#result-coverTitle').element as HTMLTextAreaElement).value).toBe('')

@@ -38,6 +38,8 @@ pub async fn execute_cover_generation(
             base_url: crate::ai::normalize_base_url(&prepared.provider.input.base_url).map_err(|e|AiError::new("configuration", &e))?,
             model: prepared.provider.input.model_name,
             prompt: prepared.prompt,
+            width: prepared.width,
+            height: prepared.height,
         };
         let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?;
         let bytes = tokio::select! {

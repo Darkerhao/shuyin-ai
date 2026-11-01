@@ -6,8 +6,8 @@ pub mod audio;
 pub mod images;
 pub mod publishing;
 pub mod revision;
-pub const PROMPT_VERSION: &str = "publishing-v4";
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v4.md");
+pub const PROMPT_VERSION: &str = "publishing-v5";
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v5.md");
 pub const TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -32,6 +32,8 @@ pub enum WritingContent {
         cover_prompt_landscape: String,
         #[serde(rename = "coverPromptPortrait", default)]
         cover_prompt_portrait: String,
+        #[serde(rename = "coverPromptWidescreen", default)]
+        cover_prompt_widescreen: String,
         #[serde(
             rename = "coverDesign",
             default,
@@ -53,6 +55,7 @@ impl WritingContent {
                     cover_subtitle,
                     cover_prompt_landscape,
                     cover_prompt_portrait,
+                    cover_prompt_widescreen,
                     cover_design,
                 },
             ) => {
@@ -70,6 +73,7 @@ impl WritingContent {
                         (cover_subtitle, 60),
                         (cover_prompt_landscape, 2000),
                         (cover_prompt_portrait, 2000),
+                        (cover_prompt_widescreen, 2000),
                     ]
                     .iter()
                     .all(|(value, limit)| value.chars().count() <= *limit)
