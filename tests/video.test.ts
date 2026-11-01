@@ -50,6 +50,22 @@ it('a failed save keeps the edited subtitles and never starts a render', async (
   expect((wrapper.get('#video-subtitles').element as HTMLTextAreaElement).value).toBe('未保存的校对')
   expect(api.continueJob).not.toHaveBeenCalled()
 })
+it('retries a failed render with the saved subtitles and storyboard instead of starting over', async () => {
+  vi.useFakeTimers()
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...structuredClone(job), status: 'failed', stage: 'rendering', error: 'Layout check failed: not deterministic' }])
+  const wrapper = await render()
+  wrapper.get('.video-job').element.scrollIntoView = vi.fn()
+  const subtitles = (wrapper.get('#video-subtitles').element as HTMLTextAreaElement).value
+  expect(api.continueJob).not.toHaveBeenCalled()
+  vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'rendering', runId: 2 })
+  await wrapper.get('[data-test="render-video"]').trigger('click'); await flushPromises()
+  expect(api.savePlan).toHaveBeenCalledExactlyOnceWith('j1', subtitles, job.plan.scenes)
+  expect(api.continueJob).toHaveBeenCalledExactlyOnceWith('j1', true)
+  expect(api.startJob).not.toHaveBeenCalled()
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...job, status: 'cancelled', stage: 'rendering', runId: 2 }])
+  await vi.advanceTimersByTimeAsync(1500)
+  expect((wrapper.get('#video-subtitles').element as HTMLTextAreaElement).value).toBe(subtitles)
+})
 it('does not show another book after a late background polling response', async () => {
   vi.useFakeTimers()
   vi.mocked(api.listJobs).mockResolvedValue([{ ...job, status: 'running' }])
