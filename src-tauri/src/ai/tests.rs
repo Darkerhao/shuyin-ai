@@ -117,14 +117,23 @@ fn image_validation_rejects_truncated_corrupt_and_oversized_data() {
 }
 use std::{
     io::{Read, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     thread,
 };
 
 fn server(status: u16, body: &str, delay: Duration) -> (String, thread::JoinHandle<String>) {
+    let body = body.to_string();
+    reply_server(move |_, stream| {
+        thread::sleep(delay);
+        let _=write!(stream,"HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nLocation: http://127.0.0.1:1/stolen\r\nConnection: close\r\n\r\n{body}",body.len());
+    })
+}
+
+fn reply_server(
+    reply: impl FnOnce(&str, &mut TcpStream) + Send + 'static,
+) -> (String, thread::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}/v1", listener.local_addr().unwrap());
-    let body = body.to_string();
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         stream
@@ -153,9 +162,9 @@ fn server(status: u16, body: &str, delay: Duration) -> (String, thread::JoinHand
                 }
             }
         }
-        thread::sleep(delay);
-        let _=write!(stream,"HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nLocation: http://127.0.0.1:1/stolen\r\nConnection: close\r\n\r\n{body}",body.len());
-        String::from_utf8(bytes).unwrap()
+        let request = String::from_utf8(bytes).unwrap();
+        reply(&request, &mut stream);
+        request
     });
     (address, handle)
 }
@@ -353,4 +362,141 @@ fn native_system_credential_roundtrip() {
     vault.delete("roundtrip").unwrap();
     assert_eq!(secret.as_deref(), Some("isolated-test-value"));
     assert!(vault.get("roundtrip").unwrap().is_none());
+}
+
+fn sse_server(body: String) -> (String, thread::JoinHandle<String>) {
+    reply_server(move |_, stream| {
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+        // Split JSON, CRLF and Chinese UTF-8 across HTTP chunks.
+        for chunk in body.as_bytes().chunks(7) {
+            if write!(stream, "{:x}\r\n", chunk.len()).is_err()
+                || stream.write_all(chunk).is_err()
+                || stream.write_all(b"\r\n").is_err()
+            {
+                return;
+            }
+        }
+        let _ = stream.write_all(b"0\r\n\r\n");
+    })
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn streaming_avoids_a_gateway_that_times_out_buffered_completions() {
+    let (url, handle) = reply_server(|request, stream| {
+        let body: serde_json::Value =
+            serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let (status, mime, response) = if body["stream"] == true {
+            (200, "text/event-stream", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"分镜\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+        } else {
+            (
+                524,
+                "text/plain",
+                "gateway timed out waiting for the full generation",
+            )
+        };
+        write!(stream, "HTTP/1.1 {status} Test\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+    });
+    let result = OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .generate(request(url))
+        .await;
+    handle.join().unwrap();
+    assert_eq!(result.unwrap(), "分镜");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn streaming_collects_only_content_and_preserves_reasoning_setting() {
+    let (url, handle) = sse_server(concat!(
+        ": heartbeat\r\n\r\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"private reasoning\"}}]}\r\n\r\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"中文\"}}]}\r\n\r\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"分镜\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"total_tokens\":10}}\n\n",
+        "data: [DONE]\n\n"
+    ).into());
+    let mut req = request(url.clone());
+    req.reasoning_effort = Some("high".into());
+    let result = OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .generate(req)
+        .await;
+    let received = handle.join().unwrap();
+    assert_eq!(result.unwrap(), "中文分镜");
+    let body: serde_json::Value =
+        serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["reasoning_effort"], "high");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn streaming_rejects_partial_refused_malformed_and_error_responses() {
+    for body in [
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "data: [DONE]\n\n",
+        "data: not-json contract-only-secret\n\n",
+        "data: {\"error\":{\"message\":\"contract-only-secret\"}}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"stop\"}]}\n\n",
+    ] {
+        let (url, handle) = sse_server(body.into());
+        let error = OpenAiCompatible::new(TIMEOUT, &url).unwrap().generate(request(url)).await.unwrap_err();
+        assert!(!error.message.contains("contract-only-secret"));
+        handle.join().unwrap();
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn streaming_done_finishes_without_waiting_for_connection_close() {
+    let (url, handle) = reply_server(|_, stream| {
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"OK\"}},\"finish_reason\":\"stop\"}}]}}\n\ndata: [DONE]\n\n").unwrap();
+        stream.flush().unwrap();
+        thread::sleep(Duration::from_millis(500));
+    });
+    let result = OpenAiCompatible::new(Duration::from_millis(250), &url)
+        .unwrap()
+        .generate(request(url))
+        .await;
+    handle.join().unwrap();
+    assert_eq!(result.unwrap(), "OK");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn streaming_heartbeats_do_not_extend_the_total_timeout() {
+    let (url, handle) = reply_server(|_, stream| {
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        for _ in 0..30 {
+            if stream.write_all(b": heartbeat\n\n").is_err() {
+                break;
+            }
+            let _ = stream.flush();
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let error = OpenAiCompatible::new(Duration::from_millis(150), &url)
+        .unwrap()
+        .generate(request(url))
+        .await
+        .unwrap_err();
+    handle.join().unwrap();
+    assert_eq!(error.code, "timeout");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn streaming_rejects_oversized_answers() {
+    let (url, handle) = reply_server(|_, stream| {
+        let event = serde_json::json!({"choices":[{"index":0,"delta":{"content":"a".repeat(2_000_001)},"finish_reason":"stop"}]}).to_string();
+        let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {event}\n\ndata: [DONE]\n\n");
+    });
+    let error = OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .generate(request(url))
+        .await
+        .unwrap_err();
+    handle.join().unwrap();
+    assert_eq!(error.code, "invalid_response");
 }

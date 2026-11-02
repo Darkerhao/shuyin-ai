@@ -6,6 +6,7 @@ pub mod audio;
 pub mod images;
 pub mod publishing;
 pub mod revision;
+mod stream;
 pub const PROMPT_VERSION: &str = "publishing-v6";
 pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v6.md");
 pub const TIMEOUT: Duration = Duration::from_secs(300);
@@ -194,19 +195,29 @@ impl TextProvider for OpenAiCompatible {
         Box::pin(async move {
             let mut body = serde_json::json!({"model":request.model,"messages":[
                 {"role":"system","content":request.system}, {"role":"user","content":request.user}
-            ],"stream":false});
+            ],"stream":true});
             if let Some(effort) = request.reasoning_effort {
                 body["reasoning_effort"] = effort.into();
             }
-            let data = self
-                .post_json(
-                    &request.base_url,
-                    "chat/completions",
-                    request.key,
-                    body,
-                    2_000_000,
-                )
+            let response = self
+                .post_response(&request.base_url, "chat/completions", request.key, body)
                 .await?;
+            if response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| {
+                    v.split(';')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .eq_ignore_ascii_case("text/event-stream")
+                })
+            {
+                return stream::read(response).await;
+            }
+            // Some compatible services return a complete JSON response even with stream=true.
+            let data = Self::read_json(response, 2_000_000).await?;
             let choice = &data["choices"][0];
             if choice["finish_reason"].as_str() != Some("stop") {
                 return Err(AiError::new(
@@ -224,14 +235,13 @@ impl TextProvider for OpenAiCompatible {
 }
 
 impl OpenAiCompatible {
-    async fn post_json(
+    async fn post_response(
         &self,
         base_url: &str,
         endpoint: &str,
         key: Option<String>,
         body: serde_json::Value,
-        limit: usize,
-    ) -> Result<serde_json::Value, AiError> {
+    ) -> Result<reqwest::Response, AiError> {
         let mut call = self
             .client
             .post(format!("{base_url}/{endpoint}"))
@@ -239,7 +249,7 @@ impl OpenAiCompatible {
         if let Some(key) = key.filter(|s| !s.is_empty()) {
             call = call.bearer_auth(key);
         }
-        let mut response = call.send().await.map_err(network_error)?;
+        let response = call.send().await.map_err(network_error)?;
         let status = response.status().as_u16();
         if !response.status().is_success() {
             // Never surface provider response bodies/headers: some gateways echo secrets.
@@ -263,6 +273,28 @@ impl OpenAiCompatible {
                 ),
             });
         }
+        Ok(response)
+    }
+
+    async fn post_json(
+        &self,
+        base_url: &str,
+        endpoint: &str,
+        key: Option<String>,
+        body: serde_json::Value,
+        limit: usize,
+    ) -> Result<serde_json::Value, AiError> {
+        Self::read_json(
+            self.post_response(base_url, endpoint, key, body).await?,
+            limit,
+        )
+        .await
+    }
+
+    async fn read_json(
+        mut response: reqwest::Response,
+        limit: usize,
+    ) -> Result<serde_json::Value, AiError> {
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(network_error)? {
             if body.len() + chunk.len() > limit {
