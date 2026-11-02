@@ -2,6 +2,60 @@
 
 日期：2026-11-01。范围：Windows 首版，独立 Frametell 0.7.3，中文原声，1920×1080 / 24 fps / 书卷风。
 
+## 中文路径原生崩溃修复（2026-11-02）
+
+本轮基线94808c9，初始工作区干净；检测到发布更新020a57c/v0.32.0后暂停，用户确认保留并继续，最终检查基于020a57c。截图对应《我的前半生》第二个工作目录中的原469条字幕、72镜、933.46秒原声任务；日志有完整309片段/22403帧的PLAN，紧接`Render process exited 3221226505`，布局检查无错误，尚未进入编码。
+
+根因是Node24.11.0的原生`fs.rmSync`错误转换非ASCII路径。Frametell0.7.3在`--plan`退出事件删除`out/.render.lock`时触发0xC0000409，故完整PLAN会留在日志里且锁文件未清理。不是字幕/分镜内容、超时、FFmpeg、Windows路径长度或stdout截断；不应重做AI内容或修改书名。
+
+### 根因与最小修复证据
+
+- 原计划复制到隔离英文目录通过；同样文件放入`我的前半生 (2)`中文目录，Node24.11.0连续3次以相同原生退出码失败，309片段全部到达。去掉引擎/字幕/长输出，直接对同目录锁文件执行`fs.rmSync`仍失败；读写和`unlinkSync`通过。
+- 只更换Node24.22.1，原中文目录计划连续3次通过；随后使用官方Node24.22.2同样3次通过，没有修改独立引擎。证据在`output/video-plan-failure/repro-*.json`、`exact-cleanup-result.json`；英文目录的Rust文件句柄/Job Object重放也通过，排除把一般进程收集误判为根因。
+- 已核对 [上游修复61108](https://github.com/nodejs/node/pull/61108) 的源码：改为`path.ToPath()`正确处理Windows编码。首次修复版本是 [24.13.1](https://nodejs.org/en/blog/release/v24.13.1) / [25.4.0](https://nodejs.org/en/blog/release/v25.4.0)。
+- 现有Node入口在启动门之后、任务输入/引擎/音频之前拒绝已知缺陷版本；不添加兼容渲染器、文件系统补丁或无限重试。PLAN只由程序消费，普通诊断stdout/stderr及非零退出仍保留。现有前端提示直接说明Node升级和原任务重试入口。
+
+### 本轮实际验证
+
+工程命令在会话PATH前置`D:/MyWork/software/shuyin-video-node/v24.22.2`后执行，Rust命令先加载`. ./.tools/env.ps1`。日志位于`output/video-plan-failure/`，不与下文历史结果混用。
+
+| 命令/验证 | 实际结果 |
+| --- | --- |
+| 旧Node：`node output/video-plan-failure/repro-plan.mjs 3 '我的前半生 (2)'` | 3/3复现3221226505；同计划英文目录通过 |
+| 官方修复版Node执行同一命令 | 3/3通过，309片段/22403帧，中文目录不改名 |
+| `npm run test:video` | 20通过；新增版本边界、真实入口提前拒绝及长PLAN错误收集回归，3项初始回归先失败后通过 |
+| `npx vitest run tests/video.test.ts tests/video-progress.test.ts tests/video-storyboard.test.ts` | 24通过 |
+| `npx vitest run --maxWorkers 2` | 全量283通过，18个测试文件 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked video` | 23通过、1项现有进程树专项默认忽略 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | v0.32.0全量155通过、2项默认忽略 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked cancelling_video_worker_terminates_its_descendants -- --ignored` | 设置SHUYIN_TEST_NODE为官方24.22.2后，专项1通过；系统凭据专项未运行 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | v0.32.0通过 |
+| `npm run lint` | 通过 |
+| `npm run build` | 最终v0.32.0 TypeScript/Vite通过；保留既有560kB主包提示，未改规则/阈值 |
+| 原生`video_process::run` + Node24.11.0 + 当前入口 | 明确拒绝并提供设置入口，未创建缓存或读取任务/调用引擎；不再原生崩溃或输出长PLAN |
+| 原生`video_process::run` + 官方Node24.22.2 + 原完整计划 | 中文隔离目录完整成功；严格排版检查0错误，22403帧、469条硬字幕及原声合入，宿主退出0 |
+| `python "$ffmpegSkills/probe.py" "$video" --json` | 933.459002秒、1920×1080、24fps、22403帧、H.264/yuv420p、AAC双声道44.1kHz，74660771字节 |
+| `python "$ffmpegSkills/check.py" "$video" --platform custom --aspect 16:9 --no-loudness --content --json` | 全音视频解码检查8通过、1软字幕提醒、0失败；无软字幕因字幕已烧录，不作平台响度验收 |
+| `python "$ffmpegSkills/look.py" "$video" --tiles 4x3 --width 1600 -o output/video-plan-failure/full-contact.png --dry-run --json`，再去掉`--dry-run`执行 | 生成并查看12格抽帧；与浏览器首尾截图一起核对中文绘图/字幕，没有把抽样当完整美学或听审验收 |
+| `node output/playwright/video-plan-failure/playback-check.mjs` | 独立Chrome在5.27/466/932秒定位、实际推进播放成功，媒体/页面错误0；浏览器正常关闭 |
+| `node output/video-plan-failure/verify-evidence.mjs` | 4份原件、5份引擎源码摘要不变；3份实际运行源码与当前仓库一致；7份文档/21个本地链接、成片/计划/Node摘要及空索引核对通过 |
+| `git diff --check` | 通过 |
+
+上述`$ffmpegSkills`为`C:/Users/haozi/.agents/skills/ffmpeg-skill/scripts`，`$video`为仓库内`output/video-plan-failure/原任务完整复验 (2)/video.mp4`；媒体检查会话PATH前置已有`D:/MyWork/software/ffmpeg/current/bin`，未另装FFmpeg。完整重放命令是：
+
+```powershell
+./output/video-plan-failure/native-repro.exe "$PWD/output/video-plan-failure/原任务完整复验 (2)" 'D:/MyWork/software/shuyin-video-node/v24.22.2/node.exe' 21600
+```
+
+此命令已经执行，不应覆盖现有gate/输出再次运行；继续复验需新建隔离运行目录。成片和`verified-evidence.json`是验证产物，没有登记到正式素材库或将原失败任务标为成功。`full-contact.png`使用媒体工具的输入seek，格内计时从裁取起点约38.894秒重新计算，不是原声绝对时间；准确首/中/尾定位以`output/playwright/video-plan-failure/playback-result.json`为准。部分镜头在已保存字幕锚点触发前留白，本轮保留分镜内容，不扩展为美学改稿。
+
+便携Node下载自 [官方24.22.2](https://nodejs.org/dist/v24.22.2/win-x64/node.exe)，对照官方SHASUMS256核验为`1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9`，OpenJS Foundation签名有效。约89.6MiB，仅安装到独立D盘目录，不替换全局Node或写入仓库依赖。
+
+本轮修改渲染入口、设置提示、视频Node回归及相应技术/开发/使用/验收/规划记录；无SQL迁移、模型调用、业务依赖、权限或手动版本号修改，不提交或发布，保留用户的v0.32.0提交。正式数据库、任务状态、原声、已有计划/成片、外部引擎和全局Node不改。当前安装版可在「视频运行环境 → Node 程序」选择下方新路径并保存，随后在原任务确认生成；早期版本检查和日志精简需要包含源码修复的新构建。
+
+验收对应：原错误红绿对照、已知缺陷版本明确拒绝、原469字幕/72镜完整同源渲染、实际播放/解码、原件保留均已完成。未替换正式安装、未代改用户运行环境设置、未通过正式任务归档、未完整人工听审或验证真实模型/跨平台，也未重跑无关release/queue/ASR回归。原生重放进程树已结束；测试输出和独立Node在D盘，常规Node回归/独立Chrome播放仍可使用C盘系统临时目录，不承诺零C盘写入。
+
 2026-11-02 P0续作已完成导演校对/显式字幕触发与同源试片。独立记录见 [P0实施与验收](VIDEO-DIRECTOR-VERIFICATION.md)，包含283前端/16Node/155Rust、真实30秒/尾段/83秒渲染、取消重启和同源对照证据。下文为历史切片记录，不代表本轮重跑了其中所有检查；P0主次与时机调整不再承诺旧版布局逐像素一致，85物体几何仍保持。
 
 ## 同款手绘生成迭代（2026-11-01）
@@ -179,7 +233,7 @@ Rust命令先执行 `. ./.tools/env.ps1`。以下为本轮实际结果，后文�
 
 ## 运行环境准备
 
-引擎和语音运行环境不随书引安装包捆绑。需要已安装的 Node 22.19+、Chrome/Edge，以及 whiteboard-teacher-video 的完整 engine 0.7.3、字体和 FFmpeg。引擎目录指向 `engine/`，不是外层仓库根目录。
+引擎和语音运行环境不随书引安装包捆绑。Node推荐24.22.2 LTS，24.x至少24.13.1，避免旧版的Windows中文路径崩溃；另需Chrome/Edge，以及 whiteboard-teacher-video 的完整 engine 0.7.3、字体和 FFmpeg。引擎目录指向 `engine/`，不是外层仓库根目录。
 
 语音环境在本机 Python 3.12 验证；依赖锁定在 `scripts/video-requirements.txt`。首次准备可从项目根目录运行：
 
@@ -189,16 +243,16 @@ Rust命令先执行 `. ./.tools/env.ps1`。以下为本轮实际结果，后文�
 
 脚本在选定目录安装 Python venv、缓存和 small 模型，不修改系统 Python 包，不安装或复制 AGPL 引擎。下载需要网络；转写阶段只读取本地完整模型，不下载缺失 tokenizer。模型锁定到 Systran/faster-whisper-small 的 `536b0662742c02347bc0e980a01041f333bce120`。
 
-本轮已准备的路径，可填入「视频运行环境」：
+本机已准备的路径，可填入「视频运行环境」（2026-11-02仅更新Node，不替换全局安装）：
 
 | 设置 | 本机路径 |
 | --- | --- |
 | 引擎 | `D:/MyWork/project/JIAZI-PROJECT/whiteboard-teacher-video/engine` |
-| Node | `D:/MyWork/software/nodejs/node.exe` |
+| Node | `D:/MyWork/software/shuyin-video-node/v24.22.2/node.exe` |
 | Python | `D:/MyWork/project/JIAZI-PROJECT/shuyin-ai/.tools/video-runtime/Scripts/python.exe` |
 | 模型 | `D:/MyWork/project/JIAZI-PROJECT/shuyin-ai/.tools/video-model-small` |
 
-运行环境、模型和下载缓存合计约869 MiB，均在 D 盘。沿用已有 C 盘 Python 基础解释器和 Chrome。隔离桌面验收的 SQLite/WebView2 profile 位于 `C:/Users/haozi/AppData/Local/com.shuyin.mg-verify`，约69 MiB；这不是正式书引数据。实际生成文件在仓库 `output/video-smoke/`。未移动或删除用户原文件。
+首版记录中的运行环境、模型和下载缓存合计约869 MiB，均在 D 盘；此数不包含2026-11-02新增的约89.6MiB独立Node。沿用已有 C 盘 Python 基础解释器和 Chrome。首版隔离桌面验收的 SQLite/WebView2 profile 位于 `C:/Users/haozi/AppData/Local/com.shuyin.mg-verify`，约69 MiB；这不是正式书引数据。首版生成文件在仓库 `output/video-smoke/`。未移动或删除用户原文件。
 
 ## 数据库与权限
 

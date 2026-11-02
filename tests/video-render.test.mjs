@@ -9,7 +9,35 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
-import { buildEpisode, measureRenderProgress } from '../src-tauri/video/render.mjs';
+import * as renderer from '../src-tauri/video/render.mjs';
+
+const { buildEpisode, measureRenderProgress } = renderer;
+
+test('Windows video rejects Node releases whose rmSync can crash on Chinese paths', () => {
+  for (const version of ['23.0.0', '23.11.1', '24.0.0', '24.11.0', '24.12.0', '24.13.0', '25.0.0', '25.3.0']) {
+    assert.throws(() => renderer.assertNodeRuntime(version, 'win32'), error =>
+      error.message.includes(`Node.js ${version}`) && error.message.includes('24.13.1') && error.message.includes('Node 程序'));
+  }
+});
+
+test('fixed Node releases and other platforms are not rejected by the Windows path check', () => {
+  for (const version of ['22.19.0', '22.22.0', '24.13.1', '24.14.0', '24.22.2', '25.4.0', '26.0.0']) {
+    assert.doesNotThrow(() => renderer.assertNodeRuntime(version, 'win32'));
+  }
+  for (const platform of ['darwin', 'linux']) assert.doesNotThrow(() => renderer.assertNodeRuntime('24.11.0', platform));
+});
+
+test('the entry point rejects an affected runtime before reading the task or loading the engine', () => {
+  const script = fileURLToPath(new URL('../src-tauri/video/render.mjs', import.meta.url));
+  const setup = `Object.defineProperty(process, 'platform', { value: 'win32' }); Object.defineProperty(process.versions, 'node', { value: '24.11.0' });`;
+  const result = spawnSync(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(setup), script, 'missing-video-input.json', 'missing-video-output.json'], { encoding: 'utf8', windowsHide: true, timeout: 4000 });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Node\.js 24\.11\.0/);
+  assert.match(result.stderr, /24\.13\.1/);
+  assert.match(result.stderr, /Node 程序/);
+  assert.doesNotMatch(result.stderr, /ENOENT/);
+  assert.equal(result.stdout, '');
+});
 
 const plan = {
   title: '书籍原声', duration: 12,
@@ -251,7 +279,7 @@ test('a new run ignores finalized temporary fragments left by a cancelled worker
   ], directory, Date.now()), { completed: 24, total: 96 });
 });
 
-function failedStageEpisode(t, extraInput = {}) {
+function renderEpisodeFixture(t, extraInput = {}, engineFiles = {}) {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-stage-error-')));
   assert.equal(path.dirname(directory), fs.realpathSync(os.tmpdir()));
   t.after(() => fs.rmSync(directory, { recursive: true }));
@@ -264,6 +292,7 @@ function failedStageEpisode(t, extraInput = {}) {
   fs.writeFileSync(path.join(engine, 'tools/project.mjs'), `import fs from 'node:fs'; import path from 'node:path'; export function linkProject(dir) { fs.symlinkSync(${JSON.stringify(modules)}, path.join(dir, 'engine_modules'), process.platform === 'win32' ? 'junction' : 'dir'); }`);
   fs.writeFileSync(path.join(engine, 'tools/lib.mjs'), `export async function openStage() { setInterval(() => {}, 1000); throw new Error('fixture stage initialization failed'); } export const closeStage = async () => {}; export const loadEpisode = () => ({});`);
   fs.writeFileSync(path.join(engine, 'tools/checks.mjs'), 'export const lintPages = async () => [];');
+  for (const [name, source] of Object.entries(engineFiles)) fs.writeFileSync(path.join(engine, 'tools', name), source);
   const input = path.join(directory, 'input.json');
   fs.writeFileSync(input, JSON.stringify({ action: 'render', engineRoot: engine, audioPath: 'fixture.mp3', plan, ...extraInput }));
   const script = fileURLToPath(new URL('../src-tauri/video/render.mjs', import.meta.url));
@@ -272,8 +301,21 @@ function failedStageEpisode(t, extraInput = {}) {
   return { result, html, modules, engine, script: fs.readFileSync(path.join(directory, 'episode/script.js'), 'utf8'), progress: JSON.parse(fs.readFileSync(path.join(directory, 'progress.json'), 'utf8')) };
 }
 
+test('planner failures retain diagnostics without dumping the long machine-readable PLAN into the error log', t => {
+  const { result } = renderEpisodeFixture(t, {}, {
+    'lib.mjs': `export const openStage = async () => ({ browser: {}, page: { evaluate: async () => {}, screenshot: async () => {} } }); export const closeStage = async () => {}; export const loadEpisode = () => ({ L: { pages: [] }, META: {} });`,
+    'render.mjs': `console.log('planner diagnostic'); console.log('PLAN ' + JSON.stringify({ segments: Array.from({ length: 309 }, (_, i) => ({ i, a: i * 72, b: (i + 1) * 72, file: 'seg-' + String(i).padStart(16, '0') + '.mp4', cached: false })) })); console.error('fixture planner failed'); process.exit(23);`,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /fixture planner failed/);
+  assert.match(result.stderr, /Render process exited 23/);
+  assert.match(result.stdout, /planner diagnostic/);
+  assert.doesNotMatch(result.stdout, /PLAN |seg-000000/);
+  assert(result.stdout.length + result.stderr.length < 500, 'User-facing logs should contain diagnostics, not thousands of segment fields.');
+});
+
 test('the render entry point routes a preview through the same compiler and reports preview progress', t => {
-  const { script, progress } = failedStageEpisode(t, { action: 'preview', window: { start: 5, end: 8 }, signature: 'fixture' });
+  const { script, progress } = renderEpisodeFixture(t, { action: 'preview', window: { start: 5, end: 8 }, signature: 'fixture' });
   const context = { TIMING: {} };
   vm.runInNewContext(script, context);
   assert.equal(context.TIMING.layout().duration, 3);
@@ -282,7 +324,7 @@ test('the render entry point routes a preview through the same compiler and repo
 });
 
 test('stage initialization errors exit promptly and browser dependencies use canonical file URLs', t => {
-  const { result, html, modules, engine } = failedStageEpisode(t);
+  const { result, html, modules, engine } = renderEpisodeFixture(t);
   assert.equal(result.status, 1, `The failed worker must exit rather than wait on browser handles: ${result.stderr}`);
   assert.match(result.stderr, /fixture stage initialization failed/);
   assert(html.includes(`content="${pathToFileURL(modules + path.sep).href.replaceAll('&', '&amp;')}"`));
@@ -290,7 +332,7 @@ test('stage initialization errors exit promptly and browser dependencies use can
 });
 
 test('episode readiness waits for the initial paint before checks or frame capture', async t => {
-  const { html } = failedStageEpisode(t);
+  const { html } = renderEpisodeFixture(t);
   const readyScript = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
   assert.ok(readyScript, 'The generated episode must wait for paint after the engine boot script.');
   assert(html.indexOf('<script>') > html.indexOf('boot.js'));

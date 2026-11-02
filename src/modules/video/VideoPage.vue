@@ -62,7 +62,7 @@ const configDirty = computed(() => loaded.value && savedConfig.value !== JSON.st
 const previewKey = computed(() => selected.value?.preview && !dirty.value ? `${props.id}:${selected.value.id}:${selected.value.runId}:${selected.value.preview.signature}` : '')
 const runtimeFields: { key: keyof VideoSettings; label: string; directory: boolean; hint: string }[] = [
   { key: 'engineRoot', label: 'Frametell 引擎目录', directory: true, hint: '选择 whiteboard-teacher-video 内的 engine，当前适配 0.7.3。' },
-  { key: 'nodePath', label: 'Node 程序', directory: false, hint: '选择 Node 22.19 或更新版本的 node.exe。' },
+  { key: 'nodePath', label: 'Node 程序', directory: false, hint: '选择 Node.js 24.13.1 或更新的 24.x LTS（推荐 24.22.2）的 node.exe，避免旧版中文路径崩溃。' },
   { key: 'pythonPath', label: '字幕识别程序', directory: false, hint: '选择已安装 faster-whisper 1.2.1 的环境内 python.exe。使用已有 SRT 时不需要。' },
   { key: 'modelPath', label: '本地语音模型目录', directory: true, hint: '选择包含 model.bin 的多语言 small 模型。不会隐式下载模型。' },
 ]

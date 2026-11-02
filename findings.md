@@ -1,3 +1,14 @@
+# 视频再次渲染失败排查（2026-11-02）
+
+- 原生video_process::run将stdout/stderr合入同一个日志，失败时返回末4000字节；截图包含片段PLAN JSON而非可定位错误，需要检查原日志。
+- 当前render.mjs用引擎0.7.3的--plan收集片段，再分别执行--skip-subs、--skip-video和原声合入；保留P0预览/整片同源流程。
+- 正式profile只读检查仍为schema13，不等于用户视频运行所用数据库；本轮应从本书已存在的运行快照复现，不以旧profile推断任务状态。
+- 准确根因：Node24.11.0的Windows原生rmSync错误地处理非ASCII路径；Frametell0.7.3在--plan退出事件中用rmSync删除out/.render.lock，导致0xC0000409原生崩溃。完整PLAN已经到达，故不是模型、字幕、FFmpeg、超时或输出截断。
+- 最小对照：相同中文目录中的write/read/unlink成功，rm/rm-on-exit均退出3221226505；英文目录全通过。只换Node24.22.1后原309片段计划成功。普通“中文”短目录未触发，必须保留真实书名目录条件，不能用过浅用例代替。
+- 官方修复将`std::filesystem::path(path.ToStringView())`替换为`path.ToPath()`，正确处理Windows路径编码；24.x首次包含于24.13.1，25.x于25.4.0。依据：https://github.com/nodejs/node/pull/61108 和 https://github.com/nodejs/node/commit/0ed0a30f74388d9f0a5e0715cabae5dcc1d6ea10 。
+- 采用升级独立Node运行时并在现有渲染入口拒绝已知缺陷版本的单一方案；不修改书名/原路径，不monkey-patch fs，不忽略非零退出码，不放宽布局检查。PLAN是机器数据，不应继续回显到用户错误日志。
+- 官方24.22.2完整重放原469字幕/72镜成功，证明修复不仅通过了短片或英文目录：22403帧、933.459002秒、音视频全量解码及首中尾播放通过，原9份数据/引擎摘要保留。版本检查提前报具体恢复步骤，但当前安装版仍需用户明确更换Node设置，未静默代改正式数据库。
+
 # P0 导演与试片实施发现（2026-11-01）
 
 - 当前仍为d4a9dac，只有上一轮已知5份Markdown改动。video_jobs.stage是自由文本，运行代次/取消/确认可直接复用；正式finish_video_job才登记成片，预览应独立返回确认而不触达素材事务。

@@ -8,6 +8,14 @@ import { createInterface } from 'node:readline';
 const catalog = JSON.parse(fs.readFileSync(new URL('./visual-catalog.json', import.meta.url), 'utf8'));
 const visuals = fs.readFileSync(new URL('./illustrations.js', import.meta.url), 'utf8');
 
+export function assertNodeRuntime(version = process.versions.node, platform = process.platform) {
+  const [major, minor, patch] = version.split('.').map(Number);
+  // nodejs/node#61108 fixes native rmSync crashes on Windows non-ASCII paths.
+  if (platform === 'win32' && (major === 23 || (major === 24 && (minor < 13 || (minor === 13 && patch === 0))) || (major === 25 && minor < 4))) {
+    throw new Error(`Node.js ${version} 存在 Windows 中文路径处理缺陷，会导致视频进程崩溃。请在「视频运行环境」的「Node 程序」中选择 Node.js 24.13.1 或更新的 24.x LTS（推荐 24.22.2），保存后重试；已保存字幕和分镜会保留。`);
+  }
+}
+
 // The model selects trusted drawings and subtitle anchors; it never supplies code.
 export function buildEpisode(plan, range) {
   const shortText = (value, limit) => typeof value === 'string' && value.trim() && [...value].length <= limit && !/[\p{Cc}{}*`]/u.test(value);
@@ -99,7 +107,6 @@ function run(executable, args, cwd, onLine) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { cwd, stdio: onLine ? ['ignore', 'pipe', 'inherit'] : 'inherit', windowsHide: true });
     if (onLine) {
-      child.stdout.on('data', chunk => process.stdout.write(chunk));
       createInterface({ input: child.stdout }).on('line', onLine);
     }
     child.on('error', reject);
@@ -117,6 +124,7 @@ async function main(inputFile, outputFile) {
       await new Promise(resolve => setTimeout(resolve, 50));
     }
   }
+  assertNodeRuntime();
   const input = JSON.parse(fs.readFileSync(inputFile, 'utf8'));
   const engine = path.resolve(input.engineRoot);
   const pkg = JSON.parse(fs.readFileSync(path.join(engine, 'package.json'), 'utf8'));
@@ -187,7 +195,10 @@ async function main(inputFile, outputFile) {
   } finally { await closeStage(stage.browser); }
   const renderArgs = [path.join(engine, 'tools/render.mjs'), '--fps', '24', '--workers', '2', '--name', 'film'];
   let planJson = '';
-  await run(process.execPath, [...renderArgs, '--plan'], episode, line => { if (line.startsWith('PLAN ')) planJson = line.slice(5); });
+  await run(process.execPath, [...renderArgs, '--plan'], episode, line => {
+    if (line.startsWith('PLAN ')) planJson = line.slice(5);
+    else console.log(line);
+  });
   const { segments } = JSON.parse(planJson);
   const startedAt = Date.now();
   const updateFrames = () => report('rendering_frames', measureRenderProgress(segments, path.join(episode, 'out/chunks'), startedAt));
