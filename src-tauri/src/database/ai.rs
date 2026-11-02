@@ -21,6 +21,8 @@ pub struct ProviderInput {
     pub name: String,
     pub base_url: String,
     pub model_name: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     pub is_default: bool,
     pub is_enabled: bool,
 }
@@ -44,13 +46,14 @@ fn row_provider(r: &Row<'_>) -> rusqlite::Result<ProviderConfig> {
             is_default: r.get(4)?,
             is_enabled: r.get(5)?,
             model_kind: r.get(7)?,
+            reasoning_effort: r.get(8)?,
         },
         credential_ref: r.get(6)?,
         credential_status: "missing".into(),
     })
 }
 pub(super) fn provider(c: &Connection, id: &str) -> Result<ProviderConfig, String> {
-    c.query_row("SELECT id,name,base_url,model_name,is_default,is_enabled,credential_ref,model_kind FROM model_providers WHERE id=?1", [id], row_provider)
+    c.query_row("SELECT id,name,base_url,model_name,is_default,is_enabled,credential_ref,model_kind,reasoning_effort FROM model_providers WHERE id=?1", [id], row_provider)
         .optional().map_err(|e|e.to_string())?.ok_or_else(||"模型配置不存在。".into())
 }
 #[derive(Serialize)]
@@ -211,7 +214,7 @@ fn append(
 impl Database {
     pub fn list_providers(&self, vault: &impl Credentials) -> Result<Vec<ProviderConfig>, String> {
         self.with_connection(|c| {
-            let mut q=c.prepare("SELECT id,name,base_url,model_name,is_default,is_enabled,credential_ref,model_kind FROM model_providers ORDER BY is_default DESC,name,id").map_err(|e|e.to_string())?;
+            let mut q=c.prepare("SELECT id,name,base_url,model_name,is_default,is_enabled,credential_ref,model_kind,reasoning_effort FROM model_providers ORDER BY is_default DESC,name,id").map_err(|e|e.to_string())?;
             let rows=q.query_map([],row_provider).map_err(|e|e.to_string())?;
             rows.map(|r| {let mut p=r.map_err(|e|e.to_string())?; p.credential_status=match p.credential_ref.as_deref().map(|s|vault.get(s)) {
                 Some(Ok(Some(_)))=>"available", Some(Err(_))=>"unavailable", _=>"missing"
@@ -240,6 +243,17 @@ impl Database {
         {
             return Err("请填写服务名称、模型名；默认模型必须启用。".into());
         }
+        if input.model_kind == "image" {
+            input.reasoning_effort = None;
+        }
+        if input.reasoning_effort.as_deref().is_some_and(|effort| {
+            !matches!(
+                effort,
+                "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+            )
+        }) {
+            return Err("不支持的推理强度，请选择服务默认或列表中的档位。".into());
+        }
         if api_key
             .is_some_and(|s| s.trim().is_empty() || s.len() > 4096 || s.contains(['\r', '\n']))
         {
@@ -259,9 +273,9 @@ impl Database {
             let saved=(|| {
                 let tx=c.transaction().map_err(|e|e.to_string())?;
                 if input.is_default {tx.execute("UPDATE model_providers SET is_default=0 WHERE model_kind=?1",[&input.model_kind]).map_err(|e|e.to_string())?;}
-                tx.execute(&format!("INSERT INTO model_providers(id,name,provider_type,base_url,model_name,is_default,is_enabled,credential_ref,created_at,updated_at,model_kind)
-                    VALUES(?1,?2,'openai-compatible',?3,?4,?5,?6,?7,{NOW},{NOW},?8) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,model_name=excluded.model_name,is_default=excluded.is_default,is_enabled=excluded.is_enabled,credential_ref=excluded.credential_ref,updated_at=excluded.updated_at,model_kind=excluded.model_kind"),
-                    params![id,input.name,input.base_url,input.model_name,input.is_default,input.is_enabled,new_ref,input.model_kind]).map_err(|e|e.to_string())?;
+                tx.execute(&format!("INSERT INTO model_providers(id,name,provider_type,base_url,model_name,is_default,is_enabled,credential_ref,created_at,updated_at,model_kind,reasoning_effort)
+                    VALUES(?1,?2,'openai-compatible',?3,?4,?5,?6,?7,{NOW},{NOW},?8,?9) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,model_name=excluded.model_name,is_default=excluded.is_default,is_enabled=excluded.is_enabled,credential_ref=excluded.credential_ref,updated_at=excluded.updated_at,model_kind=excluded.model_kind,reasoning_effort=excluded.reasoning_effort"),
+                    params![id,input.name,input.base_url,input.model_name,input.is_default,input.is_enabled,new_ref,input.model_kind,input.reasoning_effort]).map_err(|e|e.to_string())?;
                 let saved=provider(&tx,&id)?; tx.commit().map_err(|e|e.to_string())?; Ok::<_,String>(saved)
             })();
             if saved.is_err() && api_key.is_some() {if let Some(r)=&new_ref {vault.delete(r)?;}}

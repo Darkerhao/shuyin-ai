@@ -10,10 +10,19 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import * as api from '../../services/ai'
 import { isDesktop } from '../../services/projects'
-import { emptyProvider, type ModelProvider, type ProviderInput } from '../../types/ai'
+import { emptyProvider, type ModelProvider, type ProviderInput, type ReasoningEffort } from '../../types/ai'
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
+const reasoningEffortOptions: { value: ReasoningEffort; label: string }[] = [
+  { value: 'none', label: '关闭 · none' },
+  { value: 'minimal', label: '极低 · minimal' },
+  { value: 'low', label: '低 · low' },
+  { value: 'medium', label: '中 · medium' },
+  { value: 'high', label: '高 · high' },
+  { value: 'xhigh', label: '极高 · xhigh' },
+  { value: 'max', label: '最高 · max' },
+]
 const desktop = isDesktop()
 const route = useRoute()
 const router = useRouter()
@@ -39,7 +48,7 @@ function edit(provider?: ModelProvider) {
 }
 function selectProvider(provider?: ModelProvider) {
   id.value = provider?.id ?? null
-  form.value = provider ? { modelKind: provider.modelKind, name: provider.name, baseUrl: provider.baseUrl, modelName: provider.modelName, isEnabled: provider.isEnabled, isDefault: provider.isDefault } : emptyProvider()
+  form.value = provider ? { modelKind: provider.modelKind, name: provider.name, baseUrl: provider.baseUrl, modelName: provider.modelName, reasoningEffort: provider.reasoningEffort, isEnabled: provider.isEnabled, isDefault: provider.isDefault } : emptyProvider()
   apiKey.value = ''; original.value = JSON.stringify(form.value); deleting.value = false
 }
 const load = () => run(async () => {
@@ -49,7 +58,7 @@ const load = () => run(async () => {
   loaded.value = true
 }, '正在读取模型列表…')
 const save = () => run(async () => {
-  const input: ProviderInput = { ...form.value }
+  const input: ProviderInput = { ...form.value, reasoningEffort: form.value.modelKind === 'text' ? form.value.reasoningEffort : null }
   const result = await api.saveProvider(id.value, input, apiKey.value || null)
   apiKey.value = ''; id.value = result.provider.id
   form.value = { ...input, baseUrl: result.provider.baseUrl }; original.value = JSON.stringify(form.value)
@@ -57,7 +66,7 @@ const save = () => run(async () => {
   providers.value = await api.listProviders()
   await router.replace({ query: { ...route.query, model: id.value } })
 }, '正在保存模型配置…')
-const test = () => run(async () => { if (id.value) message.value = await api.testConnection(id.value) }, '正在测试连接，最多等待 120 秒…')
+const test = () => run(async () => { if (id.value) message.value = await api.testConnection(id.value) }, '正在测试连接，最多等待 300 秒（5 分钟）…')
 const remove = () => run(async () => {
   if (!id.value) return
   await api.deleteProvider(id.value)
@@ -241,6 +250,40 @@ onMounted(() => { if (desktop) void load() })
             maxlength="200"
             placeholder="填写服务实际支持的模型 ID"
           />
+          <div v-if="form.modelKind === 'text'">
+            <label for="reasoning-effort">推理强度</label>
+            <Select
+              :model-value="form.reasoningEffort ?? 'default'"
+              :disabled="!desktop || busy || !loaded"
+              @update:model-value="form.reasoningEffort = $event === 'default' ? null : $event as ReasoningEffort"
+            >
+              <SelectTrigger
+                id="reasoning-effort"
+                class="w-full min-w-0"
+                aria-describedby="reasoning-effort-help"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">
+                  服务默认（推荐）
+                </SelectItem>
+                <SelectItem
+                  v-for="option in reasoningEffortOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p
+              id="reasoning-effort-help"
+              class="muted"
+            >
+              默认由服务决定。仅对支持推理的文本模型生效，可用档位以服务说明为准；强度越高通常耗时、用量越多。不支持时请选择「服务默认」。保存后可测试连接。
+            </p>
+          </div>
           <label for="api-key">API Key <span class="optional">{{ id ? '· 留空保留已有密钥' : '· 本机免密服务可留空' }}</span></label>
           <Input
             id="api-key"

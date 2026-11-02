@@ -16,7 +16,7 @@ beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), id: 'p1', title: '原书', workspacePath: 'D:/books', createdAt: '', updatedAt: '', archivedAt: null })
   vi.mocked(projects.listAssets).mockResolvedValue([{ id: 'a1', projectId: 'p1', assetType: 'audio', filePath: 'D:/原声.m4a', originalName: '原声.m4a', fileSize: 100, modifiedAt: 1, existsStatus: 'available', createdAt: '' }])
-  vi.mocked(ai.listProviders).mockResolvedValue([{ id: 'm1', modelKind: 'text', name: '文本模型', modelName: 'text', baseUrl: 'http://localhost', isDefault: true, isEnabled: true, credentialStatus: 'available' }])
+  vi.mocked(ai.listProviders).mockResolvedValue([{ id: 'm1', modelKind: 'text', name: '文本模型', modelName: 'text', reasoningEffort: null, baseUrl: 'http://localhost', isDefault: true, isEnabled: true, credentialStatus: 'available' }])
   vi.mocked(api.settings).mockResolvedValue({ engineRoot: 'D:/engine', nodePath: 'D:/node.exe', pythonPath: 'D:/python.exe', modelPath: 'D:/model' })
   vi.mocked(api.listJobs).mockResolvedValue([structuredClone(job)])
   vi.mocked(api.subtitles).mockResolvedValue('1\n00:00:00,000 --> 00:00:07,000\n原声字幕\n')

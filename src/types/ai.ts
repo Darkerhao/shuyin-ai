@@ -1,8 +1,9 @@
 import type { CoverDesign } from './cover'
 
-export interface ProviderInput { modelKind: 'text' | 'image'; name: string; baseUrl: string; modelName: string; isDefault: boolean; isEnabled: boolean }
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export interface ProviderInput { modelKind: 'text' | 'image'; name: string; baseUrl: string; modelName: string; reasoningEffort: ReasoningEffort | null; isDefault: boolean; isEnabled: boolean }
 export interface ModelProvider extends ProviderInput { id: string; credentialStatus: 'available' | 'missing' | 'unavailable' }
-export const emptyProvider = (): ProviderInput => ({ modelKind: 'text', name: '', baseUrl: 'https://api.openai.com/v1', modelName: '', isDefault: false, isEnabled: true })
+export const emptyProvider = (): ProviderInput => ({ modelKind: 'text', name: '', baseUrl: 'https://api.openai.com/v1', modelName: '', reasoningEffort: null, isDefault: false, isEnabled: true })
 export type WritingKind = 'publishing'
 export interface PublishingContent {
   format: 'publishing'

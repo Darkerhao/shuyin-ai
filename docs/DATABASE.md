@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 文本模型推理强度（2026-11-02，v15）
+
+新增迁移 `0015_reasoning_effort.sql`，`model_providers.reasoning_effort` 为可空TEXT：NULL表示服务默认，仅文本模型可存none/minimal/low/medium/high/xhigh/max。SQL约束拒绝非法值及图片模型的非空值；保存层将图片用途的推理强度清空。
+
+原v14配置新增列后均为NULL，模型、凭据引用、默认/启用标记及原时间戳保留。迁移及版本更新复用现有事务，失败保留v14；旧备份恢复在快照内升级，源备份不改写。v15备份与重启保留显式值，API Key仍仅存系统凭据库。低于v15的应用不能打开升级后的库，回退需使用升级前备份。
+
 ## 场景与景别 JSON 扩展（2026-11-02，仍为v14）
 
 `video_jobs.plan_json.scenes[]`新增`environment`与`framing`，值来自唯一绘图目录；不增加表、列、迁移、素材用途或第二份状态。缺字段的旧物体计划读取为plain/reference，不执行UPDATE；显式空值/非法枚举和任意镜头字段不能保存或渲染。旧文字图解仍需原来的明确升级入口，已完成记录不能编辑。
@@ -186,6 +192,7 @@ SQLite 结构保持 v13，无迁移脚本或表/列变更：
 | provider_type | TEXT | 服务类型 |
 | base_url | TEXT | 服务地址 |
 | model_name | TEXT | 模型名称 |
+| reasoning_effort | TEXT NULL | v15：服务默认或文本模型的显式推理强度 |
 | capabilities_json | TEXT | 能力声明 |
 | is_default | INTEGER | 是否默认 |
 | is_enabled | INTEGER | 是否启用 |

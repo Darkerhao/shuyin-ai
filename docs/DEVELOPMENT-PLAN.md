@@ -1,5 +1,37 @@
 # 书引 AI 开发计划与验收标准
 
+## 文本模型推理强度（2026-11-02）
+
+验收标准：文本模型可选择七档或服务默认；保存、切页回读、正常重启与备份恢复保留；未保存不能测试连接，保存失败保留选择；图片模型隐藏且保存清空；统一文本请求在配置时准确传参，默认不传；v14升级保留原配置、迁移冲突回滚、旧备份源不改写；不支持参数时显示错误并保留原内容。
+
+沿用现有Provider/IPC/Select和统一300秒超时；新增v15兼容迁移，无新依赖或权限。属于feat/minor增强，不手动修改版本。
+
+实际验证（2026-11-02）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run lint` | 通过 |
+| `npm run build` | TypeScript及生产构建通过；保留Vite的大包体积提示 |
+| `npx vitest run` | 18个文件、286项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 161项通过、2项按原设置忽略（系统凭据实测、视频子进程专项） |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `npx --yes --package @playwright/cli playwright-cli --raw -s=reasoning-ui run-code --filename output/playwright/reasoning-check.cjs` | 隔离浏览器夹具通过；保存xhigh、刷新回读、连接按钮、键盘恢复默认、图片隐藏及1440/1120/800/360px无横向溢出 |
+| `npx --yes --package @playwright/cli playwright-cli -s=reasoning-ui console error` | 浏览器错误0条 |
+| `git diff --check` | 通过 |
+
+Rust命令先加载 `. ./.tools/env.ps1`；本轮TEMP/TMP/SQLITE_TMPDIR设为仓库 `output/reasoning-test-temp`，仅影响测试进程。首次检查暴露两处旧断言（120秒提示、v14固定版本）及视频页模型夹具缺新字段，已同步；迁移断言保持核对实际最新版本，不跳过校验。浏览器键盘测试按锁定reka-ui 2.11.0的异步焦点完成状态等待，不增加产品延时或补丁。
+
+本地验收标准全部通过。协议以本机HTTP契约服务验证，浏览器使用模拟IPC和独立localStorage；均未接触真实密钥或业务数据库。未验证第三方服务是否接受各档位或实际推理质量，未进行原生桌面/正式安装升级、真实模型计费调用或macOS/Linux实机验收。下一步在包含本改动的桌面构建中保存所需档位并测试真实服务；不支持时改回服务默认。
+
+修改文件：
+- 前端：`src/modules/settings/ModelsPage.vue`、`src/types/ai.ts`。
+- 后端与迁移：`src-tauri/src/ai.rs`、`src-tauri/src/ai_commands.rs`、`src-tauri/src/database.rs`、`src-tauri/src/database/ai.rs`、`src-tauri/migrations/0015_reasoning_effort.sql`。
+- 测试：`tests/ai.test.ts`、`tests/video.test.ts`、`src-tauri/src/ai/tests.rs`、`src-tauri/src/database/m2_tests.rs`、`src-tauri/src/database/video.rs`（仅当前schema断言）。
+- 文档：`docs/PRD.md`、`docs/TECHNICAL-DESIGN.md`、`docs/DATABASE.md`、`docs/DEVELOPMENT-PLAN.md`、`docs/USER-GUIDE.md`。
+
+浏览器检查脚本、结果及截图位于忽略的 `output/playwright/reasoning-setup.cjs`、`reasoning-check.cjs`、`reasoning-result.txt`、`reasoning-desktop.png`、`reasoning-narrow.png`，不作为产品代码或发布产物。
+
 ## P1 场景层次与画面内容扩展（2026-11-02）
 
 用户确认后基于0e86f39/v0.32.1实施：6类轻场景、三景别和8项真实字幕缺口物体（共93），保留plain/reference、13构图/6动作和3主体上限。两项Scene字段贯通唯一目录、Rust校验、v4 Prompt、Node和原确认页；detail+focus使用一次受控轻推近，标题/字幕不动。旧85项几何、原声、旧作品和既有任务/试片流程保留，不新增表/依赖/权限或手动升版，属于feat/minor兼容增强。

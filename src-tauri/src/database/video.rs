@@ -594,9 +594,9 @@ mod tests {
         let db = Database::open(path);
         db.with_connection(|c| {
             assert_eq!(
-                c.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
                     .unwrap(),
-                14
+                super::super::MIGRATIONS.len() as u32
             );
             assert_eq!(
                 c.query_row(
