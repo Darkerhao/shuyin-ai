@@ -1142,22 +1142,24 @@ onMounted(async () => {
               <p :class="asset.existsStatus === 'available' ? 'muted' : 'error'">
                 {{ asset.existsStatus === 'available' ? '文件可用' : '文件已丢失，请到发布准备页重新定位' }} · {{ (asset.fileSize / 1024 / 1024).toFixed(2) }} MB
               </p>
-              <Button
-                type="button"
-                variant="outline"
-                :disabled="busy || asset.existsStatus !== 'available'"
-                @click="playAudio(asset.id)"
-              >
-                打开音频
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                :disabled="busy || asset.existsStatus !== 'available'"
-                @click="router.push({ path: `/projects/${id}/video`, query: { audio: asset.id } })"
-              >
-                <AppIcon name="video" />制作 MG 视频
-              </Button>
+              <div class="actions">
+                <Button
+                  type="button"
+                  variant="outline"
+                  :disabled="busy || asset.existsStatus !== 'available'"
+                  @click="playAudio(asset.id)"
+                >
+                  打开音频
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  :disabled="busy || asset.existsStatus !== 'available'"
+                  @click="router.push({ path: `/projects/${id}/video`, query: { audio: asset.id } })"
+                >
+                  <AppIcon name="video" />制作 MG 视频
+                </Button>
+              </div>
             </article>
           </section>
         </TabsContent>

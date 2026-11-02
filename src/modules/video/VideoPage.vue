@@ -895,9 +895,12 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 
 <style scoped>
 .video-workspace { display: grid; gap: 24px; }
-.video-inputs, .video-job, .video-runtime { display: grid; gap: 18px; padding: 24px; }
+.video-inputs, .video-job, .video-runtime { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 24px; }
+.video-job > .actions { margin-top: 0; }
 .video-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .video-field { display: grid; align-content: start; gap: 8px; min-width: 0; }
+.video-field [role='combobox'] { width: 100%; min-width: 0; }
+.video-workspace :deep([data-slot='select-value']) { min-width: 0; text-align: left; }
 .video-field .muted { margin: 4px 0 0; }
 .video-scene-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .video-scene-kind { grid-column: 1 / -1; }
@@ -921,7 +924,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-storyboard-notes li { display: flex; gap: 10px; align-items: baseline; margin-top: 6px; font-size: 13px; }
 .video-storyboard-notes button { padding: 0; height: auto; }
 .video-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.video-job-heading [role='combobox'] { max-width: 360px; }
+.video-job-heading [role='combobox'] { width: 100%; min-width: 0; max-width: 360px; }
 .video-job { scroll-margin-top: calc(var(--workspace-sticky-top) + 20px); }
 .video-runtime summary { cursor: pointer; font-weight: 600; }
 .video-runtime summary span { font-weight: 400; margin-left: 12px; }

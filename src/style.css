@@ -129,10 +129,10 @@ header { margin-bottom: 25px; }
 .back-link { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--muted-foreground); font-size: 12px; margin-bottom: 8px; }
 .back-link .app-icon { width: 14px; height: 14px; }
 .panel { background: var(--card); border: 1px solid var(--line); padding: 24px; border-radius: 14px; margin-bottom: 24px; min-width: 0; }
-.section-heading, .result-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+.section-heading, .result-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
 .section-heading h2, .result-heading h2 { margin: 0; }
 .result-heading label { margin: 0; font-size: 15px; font-weight: 600; }
-.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 18px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 20px; }
 .wrap { flex-wrap: wrap; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
 .notice, .error { padding: 13px 16px; border-radius: 9px; line-height: 1.8; font-size: 12px; overflow-wrap: anywhere; }
@@ -177,7 +177,7 @@ dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .generation-symbol { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: #dfead4; color: #648354; flex-shrink: 0; }
 .generation-info h2 { font-size: 14px; margin: 0 0 4px; }
 .generation-info p { margin: 0; font-size: 12px; color: var(--muted-foreground); }
-.generation-actions { min-width: 0; display: flex; gap: 9px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.generation-actions { min-width: 0; display: flex; gap: 12px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .writing-editor { margin-top: 22px; }
 .editor-section { padding: 22px 25px; }
 .editor-section .muted { font-size: 12px; }
