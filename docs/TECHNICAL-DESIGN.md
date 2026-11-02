@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## 轻场景、景别与内容扩展（2026-11-02，P1）
+
+唯一`visual-catalog.json`新增`environments`（plain及6场景）、`framings`（reference/wide/medium/detail）和8项物体，共93项；13构图/6动作/3主体限制不变。`Scene`仅增加`environment`/`framing`字符串字段，Rust缺字段分别默认为plain/reference并按目录校验，显式null/非法键/未知字段拒绝。Node使用同一白名单，编译到原PAGES，不改cue、beat.at、drawDuration或原声。旧记录只读时不重写JSON，现有保存与备份恢复直接承载新字段。
+
+`illustrations.js`同一`sketch`增加8个case，原85项几何及primitive保留原SHA基准；背景是一个低对比结构层，不调用sketch生成额外叙事物体。路径环境复用原route路径常量，避免两条路线重叠。新景别调整既有摆位/主体比例，reference走同一函数的既有摆位。非reference的route/transfer箭头端点随主体比例留白，wall隔墙取最后两个主体边缘之间的中点；单主体则放在主体右缘与画面右界之间。reference保留原辅助线坐标，避免特写三主体错指或隔墙穿过物体。全体主体仍按字幕触发，背景可预先出现。
+
+锁定Frametell 0.7.3的`Builder.cam`/独立`hud`经本机源码核对：仅detail+focus且首beat后有至少3秒时，生成一次`{at: firstBeat.at, x:960, y:540, s:1.06, dur:3}`；其他组合静止，不开放camera字段。标题、系列信息、页号和进度线使用HUD，字幕仍由引擎固定层负责。镜头时钟使用原scene，窗口截短不会加速或取消源镜头动作。2493组实测发现特写叠加倾斜会碰到标题/标签，因此主比例收敛到1.2，次物体标签按尺寸留白；没有提高校验阈值。
+
+生成入口唯一替换为`video-storyboard-v4`，不并留v3生成路径。Vue继续使用原scenes状态，新选择立即触发dirty/预览失效；未选择时只显示默认值，不在adopt中改写历史。重复提醒加入环境/景别的归一化键，语义变化不再误报完全重复。任务、IPC、Provider、权限、依赖、缓存键机制和SQL结构不变。验证见 [P1验收](VIDEO-SCENES-VERIFICATION.md)。
+
 ## Windows 视频运行时检查（2026-11-02）
 
 原任务在 Frametell `--plan` 输出完成后清理 `out/.render.lock` 时，触发 Node24.11.0 原生 `fs.rmSync` 的非ASCII路径缺陷，以0xC0000409退出；不是模型超时或FFmpeg编码失败。依据为原中文目录复现、最小文件删除对照及 [Node官方修复61108](https://github.com/nodejs/node/pull/61108)。24.x首次修复于24.13.1，25.x于25.4.0，视频运行环境推荐24.22.2 LTS。

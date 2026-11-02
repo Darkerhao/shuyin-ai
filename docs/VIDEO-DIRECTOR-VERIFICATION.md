@@ -11,7 +11,7 @@
 - 起始镜号+30/60秒试片，经同一渲染器产生MP4与最多12张真实分镜缩略图。保留源cue索引、场景序号、物体时刻和原镜头绘制时长，只截取显示/原声窗口；不足时使用剩余音频，不重做ASR或配音。
 - 试片复用同一video_jobs/运行锁/run_id/停止进程树，结束回到等待确认，不登记为正式成片。修改立即隐藏，保存、重跑、源码签名不符或文件缺失后失效；完整视频仍须明确确认。
 
-P1的6场景、24候选物体、景别和P2图片/AI插画均未实施。本文不把P0称为已完成整套画质升级。
+P0当时没有实施场景/扩库/景别或图片，本文数据保留为历史证据。用户随后确认P1，实际采用6类场景/三景别/8项物体，见 [P1验收](VIDEO-SCENES-VERIFICATION.md)；P2仍未实施，24候选未全量采用。
 
 ## 2. 文件与数据边界
 
@@ -19,7 +19,7 @@ P1的6场景、24候选物体、景别和P2图片/AI插画均未实施。本文�
 | --- | --- | --- |
 | 契约/调度 | [video.rs](../src-tauri/src/video.rs)、[video_commands.rs](../src-tauri/src/video_commands.rs)、[任务数据](../src-tauri/src/database/video.rs) | 单一VideoWork，预览阶段不能进入正式finish事务 |
 | 绘图/编译 | [illustrations.js](../src-tauri/video/illustrations.js)、[render.mjs](../src-tauri/video/render.mjs) | 同一可信draw；时窗不改源计划；真实第0帧避免引擎默认“未来封面” |
-| Prompt | [video-storyboard-v3.md](../prompts/video-storyboard-v3.md) | 替换v2入口；旧计划仍可读，不保留第二套渲染器 |
+| Prompt | [当前video-storyboard-v4.md](../prompts/video-storyboard-v4.md) | 本轮P0曾使用v3替换v2；后续P1替换为v4，历史版本可经Git查看，不并留生成入口 |
 | 页面 | [VideoPage.vue](../src/modules/video/VideoPage.vue)、[进度](../src/modules/video/VideoJobProgress.vue)、[提醒](../src/modules/video/storyboard.ts) | 复用同一编辑状态/现有墨绿浅色控件，无新增字体或UI依赖 |
 | IPC/媒体 | [服务](../src/services/video.ts)、[类型](../src/types/video.ts)、[权限](../src-tauri/permissions/video.toml)、[配置](../src-tauri/tauri.conf.json) | 本书/当前代次/固定文件与有限镜号授权，img-src支持受限asset缩略图 |
 | 回归 | [Node](../tests/video-render.test.mjs)、[页面](../tests/video.test.ts)、[进度](../tests/video-progress.test.ts)、[提醒](../tests/video-storyboard.test.ts) | 时窗、动作、主次、失效、确认与错误保留 |

@@ -1,6 +1,7 @@
 /* Reference reading-film drawings. Geometry is preserved; all motion uses the source SRT clock. */
 (function () {
   const { K } = PV;
+  const ROUTE_PATH = 'M230 751 Q579 775 820 650 T1280 601 T1680 589';
 
   function sketch(P, name, at, tone = 'ink') {
     const Q = P.layer();
@@ -284,32 +285,96 @@
       case 'toy':
         circle(0, -45, 122, { fill: 'yellowF', color: 'orange' }); circle(-66, -101, 53, { color: 'orange' }); circle(66, -101, 53, { color: 'orange' }); ellipse(0, 75, 143, 170, { fill: 'faint' });
         break;
+      // P1 objects share the reference primitives and motion contract.
+      case 'brain':
+        path('M0 -121 C-43 -161 -99 -130 -97 -88 C-161 -79 -156 -9 -127 8 C-154 74 -96 121 -55 106 C-44 151 -4 134 0 111 C4 134 44 151 55 106 C96 121 154 74 127 8 C156 -9 161 -79 97 -88 C99 -130 43 -161 0 -121 Z', { fill: 'faint' });
+        path('M0 -121 V111 M-97 -88 Q-48 -100 -45 -53 Q-86 -46 -80 -7 M97 -88 Q48 -100 45 -53 Q86 -46 80 -7', { color: 'soft' });
+        path('M-127 8 Q-67 -7 -48 41 Q-16 32 -19 79 M127 8 Q67 -7 48 41 Q16 32 19 79 M-55 106 Q-96 64 -72 40 M55 106 Q96 64 72 40', { color: 'soft' });
+        break;
+      case 'compass':
+        circle(0, 0, 254, { color: 'orange', fill: 'paper' }); circle(0, 0, 210, { color: 'muted', sw: 2 });
+        for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; line(86 * Math.cos(a), 86 * Math.sin(a), 99 * Math.cos(a), 99 * Math.sin(a), { color: 'soft', sw: 2 }); }
+        path('M0 -81 L28 0 L0 22 L-28 0 Z', { color: 'red', fill: 'redF' });
+        path('M0 81 L-28 0 L0 -22 L28 0 Z', { color: 'green', fill: 'greenF' }); circle(0, 0, 16, { fill: 'paper' });
+        break;
+      case 'road_fork':
+        path('M-43 146 V46 Q-45 10 -139 -73 L-93 -125 Q-33 -82 0 -34 Q33 -82 93 -125 L139 -73 Q45 10 43 46 V146', { color: 'green', fill: 'greenF' });
+        path('M0 132 V59 M0 3 Q-33 -43 -112 -98 M0 3 Q33 -43 112 -98', { color: 'muted', sw: 2 });
+        break;
+      case 'mountain':
+        path('M-156 132 L-64 -75 L4 33 L65 -141 L157 132 Z', { color: 'soft', fill: 'faint' });
+        path('M-91 -14 L-64 -75 L-39 -34 L-59 -43 Z M30 -49 L65 -141 L104 -25 L72 -52 L56 -30 Z', { color: 'muted', fill: 'paper' });
+        line(-167, 140, 167, 140, { color: 'green' });
+        break;
+      case 'tree':
+        path('M-52 53 C-147 78 -162 2 -119 -29 C-155 -83 -94 -133 -53 -109 C-23 -166 65 -153 76 -105 C139 -119 162 -45 128 -18 C173 34 113 91 51 54 Z', { color: 'green', fill: 'greenF' });
+        path('M-25 141 L-19 -21 L-64 -57 M19 141 L14 -19 L67 -63 M-19 33 L-77 2 M14 14 L69 -4', { color: 'orange', sw: 4 });
+        path('M-57 146 Q0 128 57 146', { color: 'green' });
+        break;
+      case 'window':
+        box(-119, -142, 238, 280, { fill: 'paper', color: 'soft' });
+        box(-99, -122, 198, 237, { fill: 'blueF', color: 'muted' });
+        line(0, -121, 0, 115, { color: 'soft', sw: 5 }); line(-98, -5, 98, -5, { color: 'soft', sw: 5 });
+        line(-139, 144, 139, 144, { color: 'orange', sw: 5 });
+        break;
+      case 'cup':
+        path('M-98 -59 V85 Q-98 134 -5 134 Q88 134 88 85 V-59', { color: 'blue', fill: 'blueF' });
+        path('M91 -31 Q167 -49 154 37 Q145 78 89 70', { color: 'blue', sw: 5 });
+        ellipse(-5, -61, 189, 46, { color: 'blue', fill: 'paper' });
+        for (const x of [-53, -5, 43]) path(`M${x} -91 Q${x - 17} -115 ${x} -142`, { color: 'muted', sw: 2 });
+        break;
+      case 'bed':
+        path('M-142 -106 V136 M142 -8 V136 M-142 102 H142', { color: 'soft', sw: 6 });
+        box(-137, -38, 274, 124, { fill: 'blueF', color: 'blue' });
+        box(-119, -61, 99, 62, { fill: 'paper', color: 'soft' });
+        line(-2, -34, -2, 83, { color: 'muted', sw: 2 });
+        break;
       default: throw new Error('Unknown episode object: ' + name);
     }
     return Q;
   }
 
   function draw(P) {
-    const pg = P.page, span = pg.drawDuration;
+    const pg = P.page, span = pg.drawDuration, H = P.hud, reference = pg.framing === 'reference';
     const times = pg.beats.map(b => b.at);
-    P.text('读懂一本书', { x: 180, y: 77, size: 28, color: 'muted', at: -1, cps: 40, pen: false });
+    environment(P, pg.environment);
+    H.text('读懂一本书', { x: 180, y: 77, size: 28, color: 'muted', at: -1, cps: 40, pen: false });
     const bookTitle = Array.from(SCRIPT.META.title);
-    P.text(bookTitle.length > 11 ? bookTitle.slice(0, 10).join('') + '…' : SCRIPT.META.title, { x: 1740, y: 77, w: 340, align: 'r', size: 28, color: 'muted', at: -1, cps: 40, pen: false });
-    P.text(pg.title, { x: 180, y: 160, size: 62, at: -.5, cps: 18 });
-    P.line(180, 261, 1740, 261, { color: 'muted', sw: 1.2, at: -.3, dur: 1 });
-    P.text(String(pg.sourceIndex + 1).padStart(2, '0'), { x: 1740, y: 817, w: 75, align: 'r', font: 'mono', size: 25, color: 'muted', at: -1, cps: 30, pen: false });
+    H.text(bookTitle.length > 11 ? bookTitle.slice(0, 10).join('') + '…' : SCRIPT.META.title, { x: 1740, y: 77, w: 340, align: 'r', size: 28, color: 'muted', at: -1, cps: 40, pen: false });
+    H.text(pg.title, { x: 180, y: 160, size: 62, at: -.5, cps: 18 });
+    H.line(180, 261, 1740, 261, { color: 'muted', sw: 1.2, at: -.3, dur: 1 });
+    H.text(String(pg.sourceIndex + 1).padStart(2, '0'), { x: 1740, y: 817, w: 75, align: 'r', font: 'mono', size: 25, color: 'muted', at: -1, cps: 30, pen: false });
     let places = [{ x: 450, y: 511, s: 1.14 }, { x: 960, y: 511, s: .98 }, { x: 1470, y: 511, s: .98 }];
     if (pg.kind === 'compare') places = places.map(pos => ({ ...pos, s: 1.02 }));
     if (['opening', 'closing', 'desk', 'focus'].includes(pg.kind)) places = [{ x: 552, y: 518, s: 1.25 }, { x: 1132, y: 433, s: .8 }, { x: 1476, y: 600, s: .78 }];
     if (['route', 'escape'].includes(pg.kind)) {
       places = [{ x: 440, y: 574, s: 1.08 }, { x: 960, y: 501, s: 1 }, { x: 1470, y: 430, s: .96 }];
-      P.path('M230 751 Q579 775 820 650 T1280 601 T1680 589', { color: 'green', at: -.3, dur: 3.2, sw: 2 });
+      if (pg.environment !== 'path') P.path(ROUTE_PATH, { color: 'green', at: -.3, dur: 3.2, sw: 2 });
     }
     if (pg.beats.length === 1) places = [{ x: 960, y: 485, s: 1.3 }];
     if (pg.beats.length === 2) places = pg.kind === 'compare'
       ? [{ x: 620, y: 500, s: 1.12 }, { x: 1300, y: 500, s: 1.12 }]
       : [{ x: 620, y: 500, s: 1.22 }, { x: 1320, y: 500, s: .98 }];
-    if (pg.kind === 'wall') P.line(1212, 303, 1212, 736, { color: 'red', sw: 3, at: 1, dur: 2 });
+    if (!reference) {
+      const wide = pg.framing === 'wide', detail = pg.framing === 'detail';
+      const main = wide ? .82 : detail ? 1.2 : 1.08, support = wide ? .7 : detail ? .76 : .91;
+      const xs = pg.beats.length === 2 ? [620, 1320] : [450, 990, 1480];
+      places = pg.beats.map((_, i) => ({ x: xs[i], y: wide ? 574 : 505, s: i === 0 ? main : support }));
+      if (pg.beats.length === 1) places = [{ x: wide && ['study', 'window'].includes(pg.environment) ? 1130 : 960, y: wide ? 574 : 500, s: main }];
+      else if (pg.kind === 'compare') places = places.map(pos => ({ ...pos, s: (wide ? .78 : detail ? 1.1 : 1) * (pg.beats.length === 3 ? .92 : 1) }));
+      else if (detail && pg.beats.length === 3) places = [{ x: 552, y: 500, s: main }, { x: 1132, y: 433, s: .76 }, { x: 1476, y: 604, s: .64 }];
+      if (detail && pg.kind === 'focus' && span - times[0] >= 3) P.cam([{ at: times[0], x: 960, y: 540, s: 1.06, dur: 3 }]);
+    }
+    if (pg.kind === 'wall') {
+      let x = 1212;
+      if (!reference) {
+        const last = places.at(-1), before = places.at(-2);
+        x = before
+          ? (before.x + 180 * before.s + last.x - 180 * last.s) / 2
+          : (last.x + 180 * last.s + 1740) / 2;
+      }
+      P.line(x, 303, x, 736, { color: 'red', sw: 3, at: 1, dur: 2 });
+    }
     if (pg.kind === 'locked') P.path('M211 778 H1709', { color: 'red', sw: 2, at: -.3, dur: 2 });
 
     pg.beats.forEach((b, i) => {
@@ -323,17 +388,59 @@
         if (b.action === 'sway') rot = 5 * Math.sin(Math.PI * K(t, at, 3));
         return { x: pos.x + dx, y: pos.y + dy, s: pos.s, rot };
       });
-      const labelY = pg.beats.length < 3 ? 754 : ['opening', 'closing', 'desk', 'focus'].includes(pg.kind) ? (i === 0 ? 746 : pos.y + 148) : ['route', 'escape'].includes(pg.kind) ? 784 : 722;
+      const labelY = !reference
+        ? (pg.framing === 'detail' && pg.beats.length === 3 && pg.kind !== 'compare' && i > 0 ? pos.y + pos.s * 200 + 40 : 766)
+        : pg.beats.length < 3 ? 754 : ['opening', 'closing', 'desk', 'focus'].includes(pg.kind) ? (i === 0 ? 746 : pos.y + 148) : ['route', 'escape'].includes(pg.kind) ? 784 : 722;
       P.text(b.label, { x: pos.x, y: labelY, w: 408, align: 'c', size: 37, color: i === 0 ? 'ink' : 'soft', at, cps: 12 });
       if (i > 0 && ['route', 'transfer'].includes(pg.kind)) {
         const prev = places[i - 1];
-        P.arrow(prev.x + 180, prev.y, pos.x - 180, pos.y, { color: 'green', at, dur: 1.2, sw: 2.5 });
+        const from = reference ? 180 : 180 * prev.s, to = reference ? 180 : 180 * pos.s;
+        P.arrow(prev.x + from, prev.y, pos.x - to, pos.y, { color: 'green', at, dur: 1.2, sw: 2.5 });
       }
       if (b.action === 'check') Q.check(0, 0, 140, { color: 'green', at, dur: .9 });
       if (b.action === 'cross') Q.cross(0, 0, 140, { color: 'red', at, dur: .9 });
     });
-    P.line(180, 873, 1630, 873, { color: 'faint', sw: 2, at: -1, dur: .1 });
-    P.liveRough((t, rough) => [rough.line(180, 873, 180 + 1450 * Math.max(0, Math.min(1, t / span)), 873, { color: 'orange', sw: 2.5 })]);
+    H.line(180, 873, 1630, 873, { color: 'faint', sw: 2, at: -1, dur: .1 });
+    H.liveRough((t, rough) => [rough.line(180, 873, 180 + 1450 * Math.max(0, Math.min(1, t / span)), 873, { color: 'orange', sw: 2.5 })]);
+  }
+
+  function environment(P, name) {
+    if (name === 'plain') return;
+    const E = P.layer();
+    E.wrap.style.opacity = '.38';
+    const o = { color: 'muted', sw: 2, at: -1, dur: .6, pen: false };
+    switch (name) {
+      case 'study':
+        E.path('M260 683 H1660 L1540 746 H340 Z M350 749 V807 M1530 749 V807', { ...o, fill: 'faint' });
+        E.box(320, 320, 316, 244, { ...o, fill: 'paper' });
+        E.path('M478 322 V562 M322 442 H634 M300 573 H656', o);
+        break;
+      case 'courtyard':
+        E.path('M250 752 V376 H426 V752 M1494 752 V376 H1670 V752 M230 376 L338 316 H1582 L1690 376 Z', { ...o, fill: 'faint' });
+        E.path('M428 456 H750 M1170 456 H1492 M428 587 H750 M1170 587 H1492', o);
+        E.path('M236 790 H1684 M428 752 L740 697 M1492 752 L1180 697', o);
+        break;
+      case 'street':
+        E.path('M250 570 V377 H386 V570 M388 520 V326 H527 V520 M529 480 V394 H650 V480', { ...o, fill: 'faint' });
+        E.path('M1270 480 V360 H1408 V520 M1410 520 V407 H1543 V570 M1545 570 V332 H1670 V570', { ...o, fill: 'faint' });
+        E.path('M838 493 L310 790 M1082 493 L1610 790 M960 529 V587 M960 672 V764', o);
+        break;
+      case 'riverbank':
+        E.path('M240 460 L416 331 L574 439 L774 355 L960 457 M985 456 L1175 334 L1357 420 L1500 367 L1680 459', o);
+        E.path('M240 659 Q500 627 770 677 T1310 677 T1680 665 M240 708 Q500 676 770 726 T1310 726 T1680 714', { ...o, color: 'blue' });
+        E.path('M230 782 Q650 757 1000 793 T1690 779', o);
+        break;
+      case 'window':
+        E.box(270, 316, 394, 326, { ...o, fill: 'paper' });
+        E.path('M286 332 H648 V626 H286 Z M467 333 V625 M287 474 H647 M245 656 H689', o);
+        E.path('M669 479 L1580 746 L1460 790 L669 645', { ...o, color: 'faint', fill: 'faint' });
+        break;
+      case 'path':
+        E.path('M250 454 Q476 371 696 451 T1117 433 T1670 441', o);
+        E.path(ROUTE_PATH, { ...o, color: 'green' });
+        E.path('M240 793 Q638 805 947 767 T1660 731', o);
+        break;
+    }
   }
   window.EPISODE = { draw };
   const style = document.createElement('style');

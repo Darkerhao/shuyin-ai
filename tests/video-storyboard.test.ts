@@ -11,6 +11,13 @@ it('points to repeated scenes without rewriting the storyboard or flagging a del
   const original = structuredClone(plan)
   expect(inspectStoryboard(plan).map(n => [n.sceneIndex, n.code])).toEqual([[2, 'repetition']])
   expect(plan).toEqual(original)
+  plan.scenes[2]!.environment = 'study'
+  expect(inspectStoryboard(plan)).toEqual([])
+  plan.scenes[2]!.environment = 'plain'
+  expect(inspectStoryboard(plan).map(n => n.code)).toEqual(['repetition'])
+  plan.scenes[2]!.framing = 'detail'
+  expect(inspectStoryboard(plan)).toEqual([])
+  plan.scenes[2]!.framing = 'reference'
   plan.scenes[2]!.beats![0]!.action = 'check'
   expect(inspectStoryboard(plan)).toEqual([])
 })

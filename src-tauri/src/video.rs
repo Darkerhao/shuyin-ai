@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::OnceLock};
 
-pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v3.md");
+pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v4.md");
 pub const BATCH_SIZE: usize = 24;
 
 #[derive(Deserialize)]
@@ -17,6 +17,8 @@ struct VisualLimits {
 struct VisualCatalog {
     limits: VisualLimits,
     kinds: BTreeMap<String, String>,
+    environments: BTreeMap<String, String>,
+    framings: BTreeMap<String, String>,
     actions: BTreeMap<String, String>,
     objects: BTreeMap<String, String>,
 }
@@ -104,10 +106,22 @@ pub struct Scene {
     pub last: usize,
     pub kind: String,
     pub title: String,
+    #[serde(default = "plain_environment")]
+    pub environment: String,
+    #[serde(default = "reference_framing")]
+    pub framing: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
     #[serde(default)]
     pub beats: Vec<Beat>,
+}
+
+fn plain_environment() -> String {
+    "plain".into()
+}
+
+fn reference_framing() -> String {
+    "reference".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,12 +240,14 @@ pub fn validate_scenes(scenes: &[Scene], first: usize, end: usize) -> Result<(),
             || scene.last >= end
             || scene.last - scene.first >= catalog.limits.max_scene_cues
             || !catalog.kinds.contains_key(&scene.kind)
+            || !catalog.environments.contains_key(&scene.environment)
+            || !catalog.framings.contains_key(&scene.framing)
             || !scene.labels.is_empty()
             || scene.beats.len() > catalog.limits.max_beats
             || !short_text(&scene.title, catalog.limits.title_chars)
         {
             return Err(
-                "分镜无效：须连续覆盖字幕，每镜最多16条、1—3个具体物体，使用支持的构图和短标题。"
+                "分镜无效：须连续覆盖字幕，每镜最多16条、1—3个具体物体，使用目录内的构图、场景、景别和短标题。"
                     .into(),
             );
         }
@@ -445,6 +461,8 @@ mod tests {
             last: 27,
             kind: "route".into(),
             title: "变化".into(),
+            environment: "plain".into(),
+            framing: "reference".into(),
             labels: vec![],
             beats: vec![
                 Beat {
@@ -504,6 +522,48 @@ mod tests {
     }
 
     #[test]
+    fn scene_layers_default_only_when_absent_and_validate_against_the_shared_catalog() {
+        let raw = serde_json::json!({"first":0,"last":0,"kind":"focus","title":"方向","beats":[{"cue":0,"object":"book","action":"draw","label":"阅读"}]});
+        let old: Scene = serde_json::from_value(raw.clone()).unwrap();
+        let decoded = serde_json::to_value(&old).unwrap();
+        assert_eq!(decoded["environment"], "plain");
+        assert_eq!(decoded["framing"], "reference");
+        for environment in [
+            "plain",
+            "study",
+            "courtyard",
+            "street",
+            "riverbank",
+            "window",
+            "path",
+        ] {
+            for framing in ["reference", "wide", "medium", "detail"] {
+                let mut value = raw.clone();
+                value["environment"] = environment.into();
+                value["framing"] = framing.into();
+                value["beats"][0]["object"] = "compass".into();
+                let scene: Scene = serde_json::from_value(value).unwrap();
+                assert!(validate_scenes(&[scene], 0, 1).is_ok());
+            }
+        }
+        for (field, invalid) in [
+            ("environment", "forest"),
+            ("environment", "../scene.svg"),
+            ("framing", "zoom"),
+        ] {
+            let mut value = raw.clone();
+            value[field] = invalid.into();
+            let scene: Scene = serde_json::from_value(value).unwrap();
+            assert!(validate_scenes(&[scene], 0, 1).is_err());
+        }
+        for field in ["environment", "framing", "camera"] {
+            let mut value = raw.clone();
+            value[field] = serde_json::Value::Null;
+            assert!(serde_json::from_value::<Scene>(value).is_err());
+        }
+    }
+
+    #[test]
     fn storyboard_requests_share_the_catalog_and_keep_context_outside_batch_coverage() {
         let plan = VideoPlan {
             title: "原书".into(),
@@ -523,7 +583,10 @@ mod tests {
         assert_eq!(input["cues"][0]["index"], 24);
         assert_eq!(input["opening"][0]["index"], 0);
         assert_eq!(input["ending"][5]["index"], 29);
-        assert_eq!(visual_catalog().objects.len(), 85);
+        assert_eq!(visual_catalog().objects.len(), 93);
+        assert_eq!(visual_catalog().environments.len(), 7);
+        assert_eq!(visual_catalog().framings.len(), 4);
         assert!(storyboard_prompt().contains("certificate"));
+        assert!(storyboard_prompt().contains("compass"));
     }
 }

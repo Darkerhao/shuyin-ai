@@ -418,6 +418,55 @@ mod tests {
     }
 
     #[test]
+    fn scene_layers_round_trip_and_backup_without_rewriting_old_plan_json() {
+        let (dir, db, input) = fixture();
+        let job = db.create_video_job(input).unwrap();
+        let old = serde_json::json!({"title":"原书", "audioSha256":"source", "duration":5.0, "cues":[{"start":0.5,"end":4.0,"text":"寻找方向"}], "scenes":[{"first":0,"last":0,"kind":"focus","title":"方向","beats":[{"cue":0,"object":"book","action":"draw","label":"方向"}]}]}).to_string();
+        db.with_connection(|c| {
+            c.execute(
+                "UPDATE video_jobs SET plan_json=?1,status='awaiting_confirmation' WHERE id=?2",
+                params![old, job.id],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        let saved = db.video_job(&job.id).unwrap();
+        let decoded = serde_json::to_value(&saved.plan).unwrap();
+        assert_eq!(decoded["scenes"][0]["environment"], "plain");
+        assert_eq!(decoded["scenes"][0]["framing"], "reference");
+        db.with_connection(|c| {
+            let json: String = c
+                .query_row(
+                    "SELECT plan_json FROM video_jobs WHERE id=?1",
+                    [&job.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                json, old,
+                "Reading defaults must not rewrite historical JSON."
+            );
+            Ok(())
+        })
+        .unwrap();
+        let scenes: Vec<Scene> = serde_json::from_value(serde_json::json!([{"first":0,"last":0,"kind":"focus","title":"方向","environment":"path","framing":"detail","beats":[{"cue":0,"object":"compass","action":"draw","label":"方向"}]}])).unwrap();
+        db.edit_video_plan(&job.id, saved.plan.cues.clone(), scenes)
+            .unwrap();
+        let expected = serde_json::to_value(db.video_job(&job.id).unwrap().plan).unwrap();
+        let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+        db.edit_video_plan(&job.id, saved.plan.cues, vec![])
+            .unwrap();
+        db.restore_backup(&backup).unwrap();
+        let recovered = serde_json::to_value(db.video_job(&job.id).unwrap().plan).unwrap();
+        assert_eq!(recovered, expected);
+        assert_eq!(recovered["audioSha256"], "source");
+        assert_eq!(recovered["scenes"][0]["environment"], "path");
+        assert_eq!(recovered["scenes"][0]["framing"], "detail");
+        assert_eq!(recovered["scenes"][0]["beats"][0]["object"], "compass");
+    }
+
+    #[test]
     fn preview_returns_to_confirmation_without_registering_assets_and_edits_invalidate_it() {
         use crate::video::{PreviewRequest, VideoWork};
         let (dir, db, input) = fixture();

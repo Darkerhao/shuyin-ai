@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 场景与景别 JSON 扩展（2026-11-02，仍为v14）
+
+`video_jobs.plan_json.scenes[]`新增`environment`与`framing`，值来自唯一绘图目录；不增加表、列、迁移、素材用途或第二份状态。缺字段的旧物体计划读取为plain/reference，不执行UPDATE；显式空值/非法枚举和任意镜头字段不能保存或渲染。旧文字图解仍需原来的明确升级入口，已完成记录不能编辑。
+
+只有用户保存校对或新生成分镜时才写入完整新计划，保存后撤销旧试片资格。数据库备份/恢复原样保留新字段、物体键、音频摘要及原字幕，不依赖预览缓存。回归覆盖旧JSON读取不变、新选择保存回读、备份恢复和失败保稿。新程序可读旧记录；旧程序的严格反序列化不保证读取新字段，回退须使用升级前备份，不能静默丢字段。证据见 [P1验收](VIDEO-SCENES-VERIFICATION.md)。
+
 ## 派生试片生命周期（2026-11-02，仍为v14）
 
 无表/列或SQL迁移变更，`plan_json`形状也不变。同一video_jobs通过stage=previewing执行试片，run_id递增，状态仍使用running/awaiting_confirmation/failed/cancelled。预览成功返回确认；`finish_video_job`仅接受validating阶段，合法MP4也不能在预览阶段登记为正式成片。
