@@ -6,6 +6,8 @@ import * as api from '../src/services/video'
 import * as projects from '../src/services/projects'
 import * as ai from '../src/services/ai'
 import { emptyProject } from '../src/types/project'
+import { emptyProvider } from '../src/types/ai'
+import { chooseSelect } from './ui'
 import type { VideoJob } from '../src/types/video'
 vi.mock('../src/services/video', () => ({ settings: vi.fn(), saveSettings: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), mediaSource: vi.fn(), chooseRuntimePath: vi.fn(), chooseImage: vi.fn(), importImage: vi.fn(), readImage: vi.fn(), startIllustration: vi.fn(), executeIllustration: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: () => true, getProject: vi.fn(), listAssets: vi.fn(), openAsset: vi.fn(), openProjectDirectory: vi.fn() }))
@@ -38,7 +40,7 @@ it('requires an explicit confirmation before rendering a prepared storyboard', a
   vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'rendering' })
   await wrapper.get('[data-test="render-video"]').trigger('click'); await flushPromises()
   expect(api.savePlan).toHaveBeenCalledWith('j1', expect.stringContaining('原声字幕'), job.plan.scenes)
-  expect(api.continueJob).toHaveBeenCalledWith('j1', true)
+  expect(api.continueJob).toHaveBeenCalledWith('j1', true, null)
   expect(wrapper.get('[aria-label="选择视频历史任务"]').text()).toContain('制作中')
   expect(scroll).toHaveBeenCalledWith({ block: 'start' })
 })
@@ -115,7 +117,7 @@ it('edits environment and framing in the same plan, invalidates the preview and 
   vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'rendering' })
   await wrapper.get('[data-test="render-video"]').trigger('click'); await flushPromises()
   expect(api.savePlan).toHaveBeenCalledWith('j1', expect.stringContaining('原声字幕'), [expect.objectContaining({ environment: 'study', framing: 'detail' })])
-  expect(api.continueJob).toHaveBeenCalledWith('j1', true)
+  expect(api.continueJob).toHaveBeenCalledWith('j1', true, null)
   expect(job.plan.scenes[0]?.environment).toBeUndefined()
 })
 
@@ -129,7 +131,7 @@ it('retries a failed render with the saved subtitles and storyboard instead of s
   vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'rendering', runId: 2 })
   await wrapper.get('[data-test="render-video"]').trigger('click'); await flushPromises()
   expect(api.savePlan).toHaveBeenCalledExactlyOnceWith('j1', subtitles, job.plan.scenes)
-  expect(api.continueJob).toHaveBeenCalledExactlyOnceWith('j1', true)
+  expect(api.continueJob).toHaveBeenCalledExactlyOnceWith('j1', true, null)
   expect(api.startJob).not.toHaveBeenCalled()
   vi.mocked(api.listJobs).mockResolvedValue([{ ...job, status: 'cancelled', stage: 'rendering', runId: 2 }])
   await vi.advanceTimersByTimeAsync(1500)
@@ -174,7 +176,7 @@ it('does not render legacy text cards and upgrades only the storyboard while pre
   const upgrade = wrapper.findAll('button').find(button => button.text().includes('保留字幕并升级手绘分镜'))!
   await upgrade.trigger('click'); await flushPromises()
   expect(api.savePlan).toHaveBeenCalledWith('j1', expect.stringContaining('原声字幕'), [])
-  expect(api.continueJob).toHaveBeenCalledWith('j1', false)
+  expect(api.continueJob).toHaveBeenCalledWith('j1', false, 'm1')
   expect(api.startJob).not.toHaveBeenCalled()
 })
 
@@ -211,5 +213,46 @@ it('saves an image scene as a complete plan without treating it as a legacy text
   vi.mocked(api.continueJob).mockResolvedValue({ ...current, status: 'running', stage: 'rendering' })
   await wrapper.get('[data-test="render-video"]').trigger('click'); await flushPromises()
   expect(api.savePlan).toHaveBeenCalledWith('j1', expect.any(String), [expect.objectContaining({ beats: [], image: expect.objectContaining({ assetId: 'img1', rights: '本人拍摄，允许本次视频使用', x: .25, y: .75 }) })])
-  expect(api.continueJob).toHaveBeenCalledWith('j1', true)
+  expect(api.continueJob).toHaveBeenCalledWith('j1', true, null)
+})
+
+
+it.each(['继续准备字幕与分镜', '保存字幕并重新生成分镜'])('uses the newly selected model for %s on an existing task', async action => {
+  const oldModel = { ...emptyProvider(), id: 'm1', name: '旧文本模型', modelName: 'old-model', baseUrl: 'http://localhost:1111/v1', isDefault: true, credentialStatus: 'available' as const }
+  const newModel = { ...oldModel, id: 'm2', name: '新文本模型', modelName: 'new-model', baseUrl: 'http://localhost:2222/v1', isDefault: false }
+  vi.mocked(ai.listProviders).mockResolvedValue([oldModel, newModel])
+  const failedJob = structuredClone(job)
+  failedJob.status = 'failed'; failedJob.error = 'HTTP 524'
+  failedJob.plan.duration = 12
+  failedJob.plan.cues.push({ start: 8, end: 11, text: '尚未生成分镜的字幕' })
+  vi.mocked(api.listJobs).mockResolvedValue([failedJob])
+  const wrapper = await render()
+  wrapper.get('.video-job').element.scrollIntoView = vi.fn()
+  const subtitles = (wrapper.get('#video-subtitles').element as HTMLTextAreaElement).value
+  await chooseSelect(wrapper, '#video-provider', '新文本模型')
+  expect(wrapper.get('#video-provider').text()).toContain('新文本模型')
+  vi.mocked(api.continueJob).mockResolvedValue({ ...failedJob, providerId: 'm2', status: 'running', error: '', runId: 2, plan: { ...failedJob.plan, scenes: action === '继续准备字幕与分镜' ? failedJob.plan.scenes : [] } })
+  await wrapper.findAll('button').find(button => button.text() === action)!.trigger('click')
+  await flushPromises()
+  expect(api.continueJob).toHaveBeenCalledExactlyOnceWith('j1', false, 'm2')
+  expect(api.startJob).not.toHaveBeenCalled()
+  expect(wrapper.get('.output-summary').text()).toMatch(/2\s*条/)
+  if (action === '继续准备字幕与分镜') {
+    expect(api.savePlan).not.toHaveBeenCalled()
+    expect(wrapper.get('.output-preview').text()).toContain('观点')
+  } else {
+    expect(api.savePlan).toHaveBeenCalledExactlyOnceWith('j1', subtitles, [])
+  }
+})
+
+
+it('blocks both storyboard retry actions when no enabled text model is available', async () => {
+  vi.mocked(ai.listProviders).mockResolvedValue([])
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...structuredClone(job), status: 'failed' }])
+  const wrapper = await render()
+  for (const label of ['继续准备字幕与分镜', '保存字幕并重新生成分镜']) {
+    expect(wrapper.findAll('button').find(button => button.text() === label)!.attributes('disabled')).toBeDefined()
+  }
+  expect(api.continueJob).not.toHaveBeenCalled()
+  expect(api.savePlan).not.toHaveBeenCalled()
 })

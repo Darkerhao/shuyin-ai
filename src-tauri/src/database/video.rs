@@ -257,12 +257,22 @@ impl Database {
         })
     }
 
-    pub fn claim_video_job(&self, id: &str, work: VideoWork) -> Result<VideoJob, String> {
+    pub fn claim_video_job(
+        &self,
+        id: &str,
+        work: VideoWork,
+        provider_id: Option<&str>,
+    ) -> Result<VideoJob, String> {
         self.with_connection(|c| {
             let job = get(c, id)?;
             if matches!(job.status.as_str(), "running" | "succeeded") { return Err("该视频已完成或正在执行。".into()); }
             work.window(&job.plan)?;
-            c.execute(&format!("UPDATE video_jobs SET status='running',stage=?1,run_id=run_id+1,error='',updated_at={NOW} WHERE id=?2"), params![work.stage(), id]).map_err(|_| "已有视频任务正在执行，请等待或停止后重试。")?;
+            if let Some(id) = provider_id {
+                if !matches!(work, VideoWork::Prepare) { return Err("仅生成分镜时可更换文本模型。".into()); }
+                let provider = super::ai::provider(c, id)?;
+                if provider.input.model_kind != "text" || !provider.input.is_enabled { return Err("请选择已启用的文本模型生成分镜。".into()); }
+            }
+            c.execute(&format!("UPDATE video_jobs SET status='running',stage=?1,provider_id=COALESCE(?2,provider_id),run_id=run_id+1,error='',updated_at={NOW} WHERE id=?3"), params![work.stage(), provider_id, id]).map_err(|_| "已有视频任务正在执行，请等待或停止后重试。")?;
             get(c, id)
         })
     }
@@ -398,6 +408,93 @@ mod tests {
         )
     }
 
+    fn alternative_models(db: &Database) {
+        db.with_connection(|c| {
+            c.execute("INSERT INTO model_providers(id,name,provider_type,base_url,model_name,is_default,is_enabled,model_kind,created_at,updated_at) VALUES('replacement','new','openai-compatible','http://127.0.0.1:4321/v1','replacement-model',0,1,'text','now','now'),('disabled','disabled','openai-compatible','http://localhost/v1','disabled-model',0,0,'text','now','now'),('image','image','openai-compatible','http://localhost/v1','image-model',0,1,'image','now','now')", []).unwrap();
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn resuming_a_storyboard_uses_the_selected_model_and_preserves_saved_work() {
+        let (_dir, db, input) = fixture();
+        alternative_models(&db);
+        let job = db.create_video_job(input).unwrap();
+        let running = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        let plan: VideoPlan = serde_json::from_value(serde_json::json!({
+            "title":"原书", "audioSha256":"keep-source-audio", "duration":8,
+            "cues":[{"start":0,"end":3,"text":"已经完成的原声字幕"},{"start":4,"end":7,"text":"还未生成分镜的字幕"}],
+            "scenes":[{"first":0,"last":0,"kind":"focus","title":"已保存的分镜","beats":[{"cue":0,"object":"book","action":"draw","label":"原书"}]}]
+        })).unwrap();
+        db.save_video_progress(&job.id, running.run_id, &plan, "storyboard")
+            .unwrap();
+        db.end_video_job(&job.id, running.run_id, "failed", "HTTP 524")
+            .unwrap();
+        let saved = db.video_job(&job.id).unwrap();
+        let before = serde_json::to_string(&saved).unwrap();
+        for invalid in ["missing", "disabled", "image"] {
+            assert!(db
+                .claim_video_job(&job.id, VideoWork::Prepare, Some(invalid))
+                .is_err());
+            assert_eq!(
+                serde_json::to_string(&db.video_job(&job.id).unwrap()).unwrap(),
+                before
+            );
+        }
+        let resumed = db
+            .claim_video_job(&job.id, VideoWork::Prepare, Some("replacement"))
+            .unwrap();
+        assert_eq!(resumed.provider_id.as_deref(), Some("replacement"));
+        assert_eq!(resumed.run_id, running.run_id + 1);
+        assert_eq!(resumed.status, "running");
+        assert!(resumed.error.is_empty());
+        assert_eq!(
+            serde_json::to_string(&resumed.plan).unwrap(),
+            serde_json::to_string(&plan).unwrap()
+        );
+        assert_eq!(resumed.audio_asset_id, saved.audio_asset_id);
+        assert_eq!(resumed.subtitle_asset_id, saved.subtitle_asset_id);
+        assert_eq!(resumed.plan.scenes.last().unwrap().last + 1, 1);
+        let config = db
+            .get_provider(resumed.provider_id.as_deref().unwrap())
+            .unwrap();
+        assert_eq!(config.input.base_url, "http://127.0.0.1:4321/v1");
+        assert_eq!(config.input.model_name, "replacement-model");
+        assert!(db
+            .claim_video_job(&job.id, VideoWork::Prepare, Some("model"))
+            .is_err());
+        assert_eq!(
+            db.video_job(&job.id).unwrap().provider_id,
+            resumed.provider_id
+        );
+    }
+
+    #[test]
+    fn a_running_video_prevents_rebinding_another_job() {
+        let (_dir, db, input) = fixture();
+        alternative_models(&db);
+        let second = StartVideoInput {
+            project_id: input.project_id.clone(),
+            audio_asset_id: input.audio_asset_id.clone(),
+            subtitle_asset_id: None,
+            provider_id: input.provider_id.clone(),
+        };
+        let running = db.create_video_job(input).unwrap();
+        let waiting = db.create_video_job(second).unwrap();
+        db.claim_video_job(&running.id, VideoWork::Prepare, None)
+            .unwrap();
+        let before = serde_json::to_string(&waiting).unwrap();
+        assert!(db
+            .claim_video_job(&waiting.id, VideoWork::Prepare, Some("replacement"))
+            .is_err());
+        assert_eq!(
+            serde_json::to_string(&db.video_job(&waiting.id).unwrap()).unwrap(),
+            before
+        );
+    }
+
     fn image_job(
         dir: &tempfile::TempDir,
         db: &Database,
@@ -459,7 +556,9 @@ mod tests {
             serde_json::to_string(&db.video_job(&job.id).unwrap().plan).unwrap(),
             before
         );
-        let claimed = db.claim_video_job(&job.id, VideoWork::Render).unwrap();
+        let claimed = db
+            .claim_video_job(&job.id, VideoWork::Render, None)
+            .unwrap();
         assert!(db.unlink_asset(&asset).is_err());
         assert!(db
             .link_asset(&job.project_id, path.to_str().unwrap(), Some(&asset))
@@ -540,9 +639,9 @@ mod tests {
         };
         let a = db.create_video_job(input).unwrap();
         let b = db.create_video_job(bad).unwrap();
-        let running = db.claim_video_job(&a.id, VideoWork::Prepare).unwrap();
-        assert!(db.claim_video_job(&a.id, VideoWork::Prepare).is_err());
-        assert!(db.claim_video_job(&b.id, VideoWork::Prepare).is_err());
+        let running = db.claim_video_job(&a.id, VideoWork::Prepare, None).unwrap();
+        assert!(db.claim_video_job(&a.id, VideoWork::Prepare, None).is_err());
+        assert!(db.claim_video_job(&b.id, VideoWork::Prepare, None).is_err());
         assert!(db.delete_project(&a.project_id).is_err());
         assert!(db
             .unlink_asset(a.audio_asset_id.as_deref().unwrap())
@@ -552,14 +651,16 @@ mod tests {
         assert!(db
             .save_video_progress(&a.id, running.run_id, &a.plan, "storyboard")
             .is_err());
-        assert!(db.claim_video_job(&b.id, VideoWork::Prepare).is_ok());
+        assert!(db.claim_video_job(&b.id, VideoWork::Prepare, None).is_ok());
     }
 
     #[test]
     fn video_recovery_keeps_subtitles_but_invalidates_old_workers() {
         let (dir, db, input) = fixture();
         let job = db.create_video_job(input).unwrap();
-        let job = db.claim_video_job(&job.id, VideoWork::Prepare).unwrap();
+        let job = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
         let mut plan = job.plan.clone();
         plan.duration = 5.0;
         plan.cues = vec![Cue {
@@ -601,7 +702,7 @@ mod tests {
         let saved = db.video_job(&job.id).unwrap();
         assert_eq!(saved.plan.scenes[0].labels[0], "书籍");
         assert!(db
-            .claim_video_job(&job.id, VideoWork::Render)
+            .claim_video_job(&job.id, VideoWork::Render, None)
             .unwrap_err()
             .contains("重新生成分镜"));
         assert_eq!(
@@ -614,7 +715,9 @@ mod tests {
         assert_eq!(upgraded.plan.cues[0].text, "保留的字幕");
         assert_eq!(upgraded.plan.audio_sha256, "preserved");
         assert!(upgraded.plan.scenes.is_empty());
-        assert!(db.claim_video_job(&job.id, VideoWork::Prepare).is_ok());
+        assert!(db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .is_ok());
     }
 
     #[test]
@@ -671,7 +774,9 @@ mod tests {
         use crate::video::{PreviewRequest, VideoWork};
         let (dir, db, input) = fixture();
         let job = db.create_video_job(input).unwrap();
-        let job = db.claim_video_job(&job.id, VideoWork::Prepare).unwrap();
+        let job = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
         let video = rendered_video(dir.path());
         let duration = crate::media::inspect(&video).unwrap().duration_seconds;
         let plan: VideoPlan = serde_json::from_value(serde_json::json!({
@@ -691,6 +796,7 @@ mod tests {
                     first_scene: 0,
                     seconds: 30,
                 }),
+                None,
             )
             .unwrap();
         assert_eq!(preview.stage, "previewing");
@@ -733,7 +839,9 @@ mod tests {
     fn video_completion_registers_both_files_atomically_and_is_idempotent() {
         let (dir, db, input) = fixture();
         let job = db.create_video_job(input).unwrap();
-        let job = db.claim_video_job(&job.id, VideoWork::Prepare).unwrap();
+        let job = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
         let video = rendered_video(dir.path());
         let subtitle = dir.path().join("subtitles.srt");
         let mut plan = job.plan.clone();
