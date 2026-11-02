@@ -3,7 +3,9 @@ use super::{
     projects::{self, NOW},
     Database,
 };
-use crate::video::{validate_cues, validate_scenes, Cue, Scene, VideoPlan, VideoSettings};
+use crate::video::{
+    validate_cues, validate_scenes, Cue, Scene, VideoPlan, VideoSettings, VideoWork,
+};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -186,15 +188,12 @@ impl Database {
         })
     }
 
-    pub fn claim_video_job(&self, id: &str, render: bool) -> Result<VideoJob, String> {
+    pub fn claim_video_job(&self, id: &str, work: VideoWork) -> Result<VideoJob, String> {
         self.with_connection(|c| {
             let job = get(c, id)?;
             if matches!(job.status.as_str(), "running" | "succeeded") { return Err("该视频已完成或正在执行。".into()); }
-            if render {
-                validate_cues(&job.plan.cues, job.plan.duration)?;
-                validate_scenes(&job.plan.scenes, 0, job.plan.cues.len())?;
-            }
-            c.execute(&format!("UPDATE video_jobs SET status='running',stage=?1,run_id=run_id+1,error='',updated_at={NOW} WHERE id=?2"), params![if render {"rendering"} else {"preparing"}, id]).map_err(|_| "已有视频任务正在执行，请等待或停止后重试。")?;
+            work.window(&job.plan)?;
+            c.execute(&format!("UPDATE video_jobs SET status='running',stage=?1,run_id=run_id+1,error='',updated_at={NOW} WHERE id=?2"), params![work.stage(), id]).map_err(|_| "已有视频任务正在执行，请等待或停止后重试。")?;
             get(c, id)
         })
     }
@@ -241,7 +240,7 @@ impl Database {
             validate_cues(&cues, job.plan.duration)?;
             if !scenes.is_empty() { validate_scenes(&scenes, 0, cues.len())?; }
             job.plan.cues = cues; job.plan.scenes = scenes;
-            c.execute(&format!("UPDATE video_jobs SET plan_json=?1,status='awaiting_confirmation',updated_at={NOW} WHERE id=?2"), params![serde_json::to_string(&job.plan).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
+            c.execute(&format!("UPDATE video_jobs SET plan_json=?1,status='awaiting_confirmation',stage='storyboard',updated_at={NOW} WHERE id=?2"), params![serde_json::to_string(&job.plan).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
             Ok(())
         })
     }
@@ -283,6 +282,7 @@ impl Database {
             let job = get(&tx, id)?;
             if job.status == "succeeded" { return Ok(job); }
             if job.status != "running" || job.run_id != run_id { return Err("视频任务已停止或过期。".into()); }
+            if job.stage != "validating" { return Err("只有完整成片校验阶段可以登记视频，试片不能用于发布。".into()); }
             if !metadata.has_audio || metadata.width != 1920 || metadata.height != 1080 || (metadata.duration_seconds - job.plan.duration).abs() > 0.2 { return Err("成片画面、音轨或时长未通过校验。".into()); }
             let video_id = assets::register_existing(&tx, &job.project_id, video, Some("video"), None)?;
             let subtitle_id = assets::register_existing(&tx, &job.project_id, subtitle, Some("subtitle"), None)?;
@@ -340,9 +340,9 @@ mod tests {
         };
         let a = db.create_video_job(input).unwrap();
         let b = db.create_video_job(bad).unwrap();
-        let running = db.claim_video_job(&a.id, false).unwrap();
-        assert!(db.claim_video_job(&a.id, false).is_err());
-        assert!(db.claim_video_job(&b.id, false).is_err());
+        let running = db.claim_video_job(&a.id, VideoWork::Prepare).unwrap();
+        assert!(db.claim_video_job(&a.id, VideoWork::Prepare).is_err());
+        assert!(db.claim_video_job(&b.id, VideoWork::Prepare).is_err());
         assert!(db.delete_project(&a.project_id).is_err());
         assert!(db
             .unlink_asset(a.audio_asset_id.as_deref().unwrap())
@@ -352,14 +352,14 @@ mod tests {
         assert!(db
             .save_video_progress(&a.id, running.run_id, &a.plan, "storyboard")
             .is_err());
-        assert!(db.claim_video_job(&b.id, false).is_ok());
+        assert!(db.claim_video_job(&b.id, VideoWork::Prepare).is_ok());
     }
 
     #[test]
     fn video_recovery_keeps_subtitles_but_invalidates_old_workers() {
         let (dir, db, input) = fixture();
         let job = db.create_video_job(input).unwrap();
-        let job = db.claim_video_job(&job.id, false).unwrap();
+        let job = db.claim_video_job(&job.id, VideoWork::Prepare).unwrap();
         let mut plan = job.plan.clone();
         plan.duration = 5.0;
         plan.cues = vec![Cue {
@@ -401,7 +401,7 @@ mod tests {
         let saved = db.video_job(&job.id).unwrap();
         assert_eq!(saved.plan.scenes[0].labels[0], "书籍");
         assert!(db
-            .claim_video_job(&job.id, true)
+            .claim_video_job(&job.id, VideoWork::Render)
             .unwrap_err()
             .contains("重新生成分镜"));
         assert_eq!(
@@ -414,22 +414,78 @@ mod tests {
         assert_eq!(upgraded.plan.cues[0].text, "保留的字幕");
         assert_eq!(upgraded.plan.audio_sha256, "preserved");
         assert!(upgraded.plan.scenes.is_empty());
-        assert!(db.claim_video_job(&job.id, false).is_ok());
+        assert!(db.claim_video_job(&job.id, VideoWork::Prepare).is_ok());
+    }
+
+    #[test]
+    fn preview_returns_to_confirmation_without_registering_assets_and_edits_invalidate_it() {
+        use crate::video::{PreviewRequest, VideoWork};
+        let (dir, db, input) = fixture();
+        let job = db.create_video_job(input).unwrap();
+        let job = db.claim_video_job(&job.id, VideoWork::Prepare).unwrap();
+        let video = rendered_video(dir.path());
+        let duration = crate::media::inspect(&video).unwrap().duration_seconds;
+        let plan: VideoPlan = serde_json::from_value(serde_json::json!({
+            "title":"原书", "audioSha256":"preserved", "duration":duration,
+            "cues":[{"start":0,"end":duration,"text":"原声"}],
+            "scenes":[{"first":0,"last":0,"kind":"focus","title":"书籍","beats":[{"cue":0,"object":"book","action":"draw","label":"原书"}]}]
+        })).unwrap();
+        db.save_video_progress(&job.id, job.run_id, &plan, "storyboard")
+            .unwrap();
+        db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")
+            .unwrap();
+        let original = serde_json::to_string(&db.video_job(&job.id).unwrap().plan).unwrap();
+        let preview = db
+            .claim_video_job(
+                &job.id,
+                VideoWork::Preview(PreviewRequest {
+                    first_scene: 0,
+                    seconds: 30,
+                }),
+            )
+            .unwrap();
+        assert_eq!(preview.stage, "previewing");
+        assert_eq!(preview.status, "running");
+        assert!(db
+            .unlink_asset(preview.audio_asset_id.as_deref().unwrap())
+            .is_err());
+        let srt = dir.path().join("preview.srt");
+        std::fs::write(&srt, crate::video::to_srt(&plan.cues)).unwrap();
+        assert!(
+            db.finish_video_job(&job.id, preview.run_id, &video, &srt)
+                .is_err(),
+            "A valid preview MP4 still must not be accepted as a completed film."
+        );
+        db.end_video_job(&job.id, preview.run_id, "awaiting_confirmation", "")
+            .unwrap();
+        let done = db.video_job(&job.id).unwrap();
+        assert_eq!(done.stage, "previewing");
+        assert_eq!(done.status, "awaiting_confirmation");
+        assert_eq!(serde_json::to_string(&done.plan).unwrap(), original);
+        assert!(done.video_asset_id.is_none());
+        assert_eq!(db.list_assets(&job.project_id).unwrap().len(), 1);
+        db.edit_video_plan(&job.id, done.plan.cues, done.plan.scenes)
+            .unwrap();
+        assert_eq!(db.video_job(&job.id).unwrap().stage, "storyboard");
+    }
+
+    fn rendered_video(directory: &Path) -> PathBuf {
+        let mut bytes = include_bytes!("../../tests/fixtures/portrait.mp4").to_vec();
+        let start = bytes.windows(4).position(|w| w == b"tkhd").unwrap() - 4;
+        let size = u32::from_be_bytes(bytes[start..start + 4].try_into().unwrap()) as usize;
+        bytes[start + size - 8..start + size - 4].copy_from_slice(&(1920u32 << 16).to_be_bytes());
+        bytes[start + size - 4..start + size].copy_from_slice(&(1080u32 << 16).to_be_bytes());
+        let video = directory.join("rendered.mp4");
+        std::fs::write(&video, bytes).unwrap();
+        video
     }
 
     #[test]
     fn video_completion_registers_both_files_atomically_and_is_idempotent() {
         let (dir, db, input) = fixture();
         let job = db.create_video_job(input).unwrap();
-        let job = db.claim_video_job(&job.id, false).unwrap();
-        let mut bytes = include_bytes!("../../tests/fixtures/portrait.mp4").to_vec();
-        let marker = bytes.windows(4).position(|w| w == b"tkhd").unwrap();
-        let start = marker - 4;
-        let size = u32::from_be_bytes(bytes[start..start + 4].try_into().unwrap()) as usize;
-        bytes[start + size - 8..start + size - 4].copy_from_slice(&(1920u32 << 16).to_be_bytes());
-        bytes[start + size - 4..start + size].copy_from_slice(&(1080u32 << 16).to_be_bytes());
-        let video = dir.path().join("rendered.mp4");
-        std::fs::write(&video, bytes).unwrap();
+        let job = db.claim_video_job(&job.id, VideoWork::Prepare).unwrap();
+        let video = rendered_video(dir.path());
         let subtitle = dir.path().join("subtitles.srt");
         let mut plan = job.plan.clone();
         plan.duration = crate::media::inspect(&video).unwrap().duration_seconds;

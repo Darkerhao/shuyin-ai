@@ -142,7 +142,9 @@ pub fn run() {
             video_commands::save_video_plan,
             video_commands::video_subtitles,
             video_commands::export_video_subtitles,
-            video_commands::media_asset_path
+            video_commands::media_asset_path,
+            video_commands::preview_video_job,
+            video_commands::video_preview_media
         ])
         .run(tauri::generate_context!())
         .expect("书引 AI 桌面容器启动失败");

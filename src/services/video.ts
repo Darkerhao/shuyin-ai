@@ -7,6 +7,8 @@ export const saveSettings = (settings: VideoSettings) => invoke<void>('save_vide
 export const listJobs = (projectId: string) => invoke<VideoJob[]>('list_video_jobs', { projectId })
 export const startJob = (projectId: string, audioAssetId: string, providerId: string, subtitleAssetId: string | null) => invoke<VideoJob>('start_video_job', { input: { projectId, audioAssetId, providerId, subtitleAssetId } })
 export const continueJob = (id: string, render: boolean) => invoke<VideoJob>('continue_video_job', { id, render })
+export const previewJob = (id: string, firstScene: number, seconds: number) => invoke<VideoJob>('preview_video_job', { id, request: { firstScene, seconds } })
+export const previewSource = async (projectId: string, id: string, runId: number, scene?: number) => convertFileSrc(await invoke<string>('video_preview_media', { projectId, id, runId, scene: scene ?? null }))
 export const cancelJob = (id: string) => invoke<void>('cancel_video_job', { id })
 export const savePlan = (id: string, subtitles: string, scenes: VideoScene[]) => invoke<void>('save_video_plan', { id, subtitles, scenes })
 export const subtitles = (id: string) => invoke<string>('video_subtitles', { id })

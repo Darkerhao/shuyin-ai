@@ -68,6 +68,8 @@ fn main() {
             "video_subtitles",
             "export_video_subtitles",
             "media_asset_path",
+            "preview_video_job",
+            "video_preview_media",
         ]),
     ))
     .expect("Tauri build configuration failed");

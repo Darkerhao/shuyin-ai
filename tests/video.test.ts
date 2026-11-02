@@ -7,7 +7,7 @@ import * as projects from '../src/services/projects'
 import * as ai from '../src/services/ai'
 import { emptyProject } from '../src/types/project'
 import type { VideoJob } from '../src/types/video'
-vi.mock('../src/services/video', () => ({ settings: vi.fn(), saveSettings: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), mediaSource: vi.fn(), chooseRuntimePath: vi.fn() }))
+vi.mock('../src/services/video', () => ({ settings: vi.fn(), saveSettings: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), mediaSource: vi.fn(), chooseRuntimePath: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: () => true, getProject: vi.fn(), listAssets: vi.fn(), openAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn() }))
 const job: VideoJob = { id: 'j1', projectId: 'p1', audioAssetId: 'a1', sourceSubtitleId: null, providerId: 'm1', status: 'awaiting_confirmation', stage: 'storyboard', runId: 1, plan: { title: '原书', audioSha256: 'hash', duration: 8, cues: [{ start: 0, end: 7, text: '原声字幕' }], scenes: [{ first: 0, last: 0, kind: 'opening', title: '观点', beats: [{ cue: 0, object: 'book', action: 'draw', label: '一本书' }] }] }, error: '', subtitleAssetId: 's1', videoAssetId: null, createdAt: '', updatedAt: '' }
@@ -49,6 +49,53 @@ it('a failed save keeps the edited subtitles and never starts a render', async (
   await wrapper.get('[data-test="render-video"]').trigger('click'); await flushPromises()
   expect((wrapper.get('#video-subtitles').element as HTMLTextAreaElement).value).toBe('未保存的校对')
   expect(api.continueJob).not.toHaveBeenCalled()
+})
+
+it('saves the same storyboard before a preview and never starts final rendering', async () => {
+  const wrapper = await render()
+  wrapper.get('.video-job').element.scrollIntoView = vi.fn()
+  await wrapper.get('[aria-label="第1镜物体1标签"]').setValue('校对后')
+  vi.mocked(api.previewJob).mockResolvedValue({ ...job, status: 'running', stage: 'previewing', runId: 2 })
+  await wrapper.get('[data-test="preview-video"]').trigger('click'); await flushPromises()
+  expect(api.savePlan).toHaveBeenCalledWith('j1', expect.any(String), [expect.objectContaining({ beats: [expect.objectContaining({ label: '校对后' })] })])
+  expect(api.previewJob).toHaveBeenCalledWith('j1', 0, 30)
+  expect(api.continueJob).not.toHaveBeenCalled()
+  expect(api.startJob).not.toHaveBeenCalled()
+  expect(wrapper.text()).toContain('试片')
+})
+
+it('shows renderer thumbnails and a clearly marked preview, then hides them as soon as edits are made', async () => {
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...job, stage: 'previewing', runId: 2, preview: { start: 0, end: 8, signature: 'saved', scenes: [0] } }])
+  vi.mocked(api.previewSource).mockImplementation(async (_project, _id, _run, scene) => scene === undefined ? 'http://asset.localhost/preview.mp4' : 'http://asset.localhost/scene-0.png')
+  const wrapper = await render()
+  expect(wrapper.get('video[aria-label="原声试片（非正式成片）"]').attributes('src')).toContain('preview.mp4')
+  expect(wrapper.get('img[alt="第1镜渲染缩略图"]').attributes('src')).toContain('scene-0.png')
+  expect(wrapper.text()).toContain('试片不是正式成片')
+  expect(wrapper.find('video[aria-label="原声 MG 视频成片"]').exists()).toBe(false)
+  await wrapper.get('[aria-label="第1镜标题"]').setValue('已改变')
+  await flushPromises()
+  expect(wrapper.find('video[aria-label="原声试片（非正式成片）"]').exists()).toBe(false)
+  expect(api.previewJob).not.toHaveBeenCalled()
+  expect(api.continueJob).not.toHaveBeenCalled()
+})
+
+it('does not revive the previous preview after saving edits when the next preview cannot start', async () => {
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...job, stage: 'previewing', runId: 2, preview: { start: 0, end: 8, signature: 'saved', scenes: [] } }])
+  vi.mocked(api.previewSource).mockResolvedValue('http://asset.localhost/old-preview.mp4')
+  vi.mocked(api.previewJob).mockRejectedValue(new Error('正在停止上次进程'))
+  const wrapper = await render()
+  expect(wrapper.find('video[aria-label="原声试片（非正式成片）"]').exists()).toBe(true)
+  await wrapper.get('[aria-label="第1镜标题"]').setValue('修改后')
+  await wrapper.get('[data-test="preview-video"]').trigger('click'); await flushPromises()
+  expect(api.previewJob).toHaveBeenCalledWith('j1', 0, 30)
+  expect(wrapper.find('video[aria-label="原声试片（非正式成片）"]').exists()).toBe(false)
+  expect(api.continueJob).not.toHaveBeenCalled()
+})
+
+it('keeps the selected preview scene title in sync with the existing editor state', async () => {
+  const wrapper = await render()
+  await wrapper.get('[aria-label="第1镜标题"]').setValue('新的镜头主题')
+  expect(wrapper.get('#preview-first-scene').text()).toContain('新的镜头主题')
 })
 it('retries a failed render with the saved subtitles and storyboard instead of starting over', async () => {
   vi.useFakeTimers()

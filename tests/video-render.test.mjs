@@ -39,6 +39,87 @@ test('model text remains data and does not become JavaScript', () => {
   assert.equal(result.pages.length, 2);
 });
 
+test('a preview keeps global cue identity and original drawing time while clipping only its viewing window', () => {
+  const original = JSON.stringify(plan);
+  const result = buildEpisode(plan, { start: 5, end: 8 });
+  const context = { TIMING: {} };
+  vm.runInNewContext(result.script, context);
+  const layout = context.TIMING.layout();
+  assert.equal(layout.duration, 3);
+  assert.equal(layout.pages.length, 1);
+  const page = layout.pages[0];
+  assert.equal(page.id, 'p0002');
+  assert.equal(page.index, 0, 'Engine indices stay local to the generated episode.');
+  assert.equal(page.sourceIndex, 1);
+  assert.equal(page.start, 0);
+  assert.equal(page.end, 3);
+  assert.equal(page.drawDuration, 7, 'A shortened preview must not speed up the source scene.');
+  assert.equal(page.cues[0].id, 1);
+  assert.equal(page.cues[0].start, 0);
+  assert.equal(page.cues[0].end, 3);
+  assert.equal(page.beats[0].cue, 1);
+  assert.equal(page.beats[0].at, 0);
+  assert.equal(JSON.stringify(plan), original, 'Previewing must not rewrite the saved plan.');
+});
+
+test('preview windows reject invalid times, mid-scene starts and durations over one minute', () => {
+  for (const range of [{ start: 2, end: 8 }, { start: -1, end: 8 }, { start: 5, end: 5 }, { start: 5, end: 13 }, { start: NaN, end: 8 }, { end: 8 }]) {
+    assert.throws(() => buildEpisode(plan, range), /preview/i);
+  }
+  assert.throws(() => buildEpisode({ ...plan, duration: 90 }, { start: 0, end: 61 }), /preview/i);
+});
+
+function drawing(input, index = 0, range) {
+  const result = buildEpisode(input, range);
+  const page = result.pages.find(p => p.sourceIndex === index);
+  const calls = [], moves = [], live = [];
+  let layers = 0;
+  const builder = (layer = 0) => new Proxy({ page, c: i => page.cues[i].start - page.start, layer: () => builder(++layers), move: (_, fn) => moves.push(fn), liveRough: fn => live.push(fn) }, {
+    get(target, key) { return key in target ? target[key] : (...args) => { calls.push({ layer, method: key, args }); }; },
+  });
+  const context = { SCRIPT: { META: { title: input.title } }, PV: { K: (t, at, duration) => Math.max(0, Math.min(1, (t - at) / duration)), col: () => '#FBF8F1' }, window: {}, document: { createElement: () => ({}), head: { appendChild() {} } } };
+  vm.runInNewContext(result.visuals, context);
+  context.window.EPISODE.draw(builder());
+  return { calls: JSON.parse(JSON.stringify(calls)), at: t => JSON.parse(JSON.stringify([...moves.map(fn => fn(t)), ...live.map(fn => fn(t, { line: (...args) => args }))])) };
+}
+
+test('the first object and its semantic motion start at the actual cue, not before the page', () => {
+  const delayed = { ...plan, scenes: [{ first: 0, last: 1, kind: 'collapse', title: '改变', beats: [{ cue: 1, object: 'crown', action: 'tilt', label: '身份' }] }] };
+  const output = drawing(delayed);
+  assert.equal(output.calls.find(c => c.layer === 1 && c.method === 'path').args.at(-1).at, 5);
+  assert.equal(output.at(5)[0].rot, 0);
+  assert(output.at(5 + 1 / 24)[0].rot > 0, 'Motion must begin without an extra 1.3 second delay.');
+  const marked = drawing({ ...delayed, scenes: [{ ...delayed.scenes[0], beats: [{ cue: 1, object: 'certificate', action: 'check', label: '确认' }] }] });
+  assert.equal(marked.calls.find(c => c.method === 'check').args.at(-1).at, 5);
+});
+
+test('one subject is centered and paired narration has a clear lead without biasing a comparison', () => {
+  const scene = { first: 0, last: 1, kind: 'focus', title: '阅读', beats: [{ cue: 0, object: 'book', action: 'draw', label: '书籍' }] };
+  assert.equal(drawing({ ...plan, scenes: [scene] }).at(4)[0].x, 960);
+  scene.beats.push({ cue: 1, object: 'pen', action: 'draw', label: '书写' });
+  const paired = drawing({ ...plan, scenes: [scene] }).at(8);
+  assert(paired[0].s > paired[1].s);
+  assert(paired[0].x < 960 && paired[1].x > 960);
+  const compared = drawing({ ...plan, scenes: [{ ...scene, kind: 'compare' }] }).at(8);
+  assert.equal(compared[0].s, compared[1].s);
+  scene.beats.push({ cue: 1, object: 'crown', action: 'draw', label: '象征' });
+  const sequence = drawing({ ...plan, scenes: [{ ...scene, kind: 'route' }] }).at(8);
+  assert(sequence[0].s > sequence[1].s && sequence[0].s > sequence[2].s);
+});
+
+test('a truncated preview has the exact full-scene drawing even when later beats fall outside it', () => {
+  const input = { ...plan, scenes: [{ first: 0, last: 1, kind: 'focus', title: '阅读', beats: [{ cue: 0, object: 'book', action: 'sway', label: '书籍' }, { cue: 1, object: 'pen', action: 'draw', label: '书写' }] }] };
+  const full = drawing(input), preview = drawing(input, 0, { start: 0, end: 3 });
+  assert.deepEqual(preview.calls, full.calls);
+  assert.deepEqual(preview.at(2), full.at(2));
+  assert(Math.abs(full.at(8)[0].rot) < 0.001, 'A semantic sway settles instead of looping for the whole scene.');
+  const silent = buildEpisode({ ...plan, cues: plan.cues.map(c => ({ ...c, start: c.start + 30, end: c.end + 30 })), duration: 45 }, { start: 0, end: 30 });
+  const context = { TIMING: {} };
+  vm.runInNewContext(silent.script, context);
+  assert.equal(context.TIMING.layout().pages[0].cues.length, 0);
+  assert.equal(context.TIMING.layout().duration, 30);
+});
+
 test('object storyboards compile the reference composition and exact subtitle anchors', () => {
   const illustrated = {
     ...plan,
@@ -83,7 +164,7 @@ test('every catalog object has the reference drawing and every action is finite 
   for (const object of Object.keys(catalog.objects)) {
     for (const action of Object.keys(catalog.actions)) {
       const transforms = [], live = [], calls = [];
-      const page = { id: 'p01', index: 0, title: '手绘物体', kind: 'focus', start: 0, end: 12, cues: [{ id: 0, start: 0 }], beats: [{ cue: 0, object, action, label: '物体' }] };
+      const page = { id: 'p01', index: 0, sourceIndex: 0, title: '手绘物体', kind: 'focus', start: 0, end: 12, drawDuration: 12, cues: [{ id: 0, start: 0 }], beats: [{ cue: 0, object, action, label: '物体', at: 0 }] };
       const builder = () => new Proxy({ page, c: () => 0, layer: () => builder(), move: (_, fn) => transforms.push(fn), liveRough: fn => live.push(fn) }, {
         get(target, key) { return key in target ? target[key] : (...args) => { calls.push([key, ...args]); }; },
       });
@@ -170,7 +251,7 @@ test('a new run ignores finalized temporary fragments left by a cancelled worker
   ], directory, Date.now()), { completed: 24, total: 96 });
 });
 
-function failedStageEpisode(t) {
+function failedStageEpisode(t, extraInput = {}) {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-stage-error-')));
   assert.equal(path.dirname(directory), fs.realpathSync(os.tmpdir()));
   t.after(() => fs.rmSync(directory, { recursive: true }));
@@ -184,12 +265,21 @@ function failedStageEpisode(t) {
   fs.writeFileSync(path.join(engine, 'tools/lib.mjs'), `export async function openStage() { setInterval(() => {}, 1000); throw new Error('fixture stage initialization failed'); } export const closeStage = async () => {}; export const loadEpisode = () => ({});`);
   fs.writeFileSync(path.join(engine, 'tools/checks.mjs'), 'export const lintPages = async () => [];');
   const input = path.join(directory, 'input.json');
-  fs.writeFileSync(input, JSON.stringify({ action: 'render', engineRoot: engine, audioPath: 'fixture.mp3', plan }));
+  fs.writeFileSync(input, JSON.stringify({ action: 'render', engineRoot: engine, audioPath: 'fixture.mp3', plan, ...extraInput }));
   const script = fileURLToPath(new URL('../src-tauri/video/render.mjs', import.meta.url));
   const result = spawnSync(process.execPath, [script, input, path.join(directory, 'output.json')], { encoding: 'utf8', windowsHide: true, timeout: 4000 });
   const html = fs.readFileSync(path.join(directory, 'episode/index.html'), 'utf8');
-  return { result, html, modules, engine };
+  return { result, html, modules, engine, script: fs.readFileSync(path.join(directory, 'episode/script.js'), 'utf8'), progress: JSON.parse(fs.readFileSync(path.join(directory, 'progress.json'), 'utf8')) };
 }
+
+test('the render entry point routes a preview through the same compiler and reports preview progress', t => {
+  const { script, progress } = failedStageEpisode(t, { action: 'preview', window: { start: 5, end: 8 }, signature: 'fixture' });
+  const context = { TIMING: {} };
+  vm.runInNewContext(script, context);
+  assert.equal(context.TIMING.layout().duration, 3);
+  assert.equal(context.TIMING.layout().pages[0].cues[0].id, 1);
+  assert.equal(progress.stage, 'previewing');
+});
 
 test('stage initialization errors exit promptly and browser dependencies use canonical file URLs', t => {
   const { result, html, modules, engine } = failedStageEpisode(t);
