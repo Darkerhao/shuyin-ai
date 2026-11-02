@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { setImmediate } from 'node:timers/promises';
 import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 import * as renderer from '../src-tauri/video/render.mjs';
@@ -417,6 +418,76 @@ test('a new run ignores finalized temporary fragments left by a cancelled worker
     { a: 0, b: 24, file: 'seg-cached.mp4' },
     { a: 24, b: 96, file: 'seg-stale.mp4' },
   ], directory, Date.now()), { completed: 24, total: 96 });
+});
+
+test('subtitle preparation counts only this run\'s actual cue images', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-subtitle-progress-'));
+  t.after(() => {
+    for (const file of fs.readdirSync(directory)) fs.unlinkSync(path.join(directory, file));
+    fs.rmdirSync(directory);
+  });
+  const startedAt = Date.now() - 1000;
+  fs.writeFileSync(path.join(directory, 'blank.png'), 'blank');
+  fs.writeFileSync(path.join(directory, 'cue-0000.png'), 'current');
+  const stale = path.join(directory, 'cue-0001.png');
+  fs.writeFileSync(stale, 'previous run');
+  fs.utimesSync(stale, 1, 1);
+  assert.deepEqual(renderer.measureSubtitleProgress(directory, 4, startedAt), { completed: 1, total: 4 });
+  assert.deepEqual(renderer.measureSubtitleProgress(path.join(directory, 'not-created'), 4, startedAt), { completed: 0, total: 4 });
+});
+
+test('encoding progress publishes complete FFmpeg blocks in seconds with real speed', () => {
+  const updates = [];
+  const line = renderer.encodingProgress(12, value => updates.push(value));
+  for (const value of ['frame=72', 'out_time_us=3000000', 'speed= 1.25x']) line(value);
+  assert.equal(updates.length, 0, 'Incomplete progress blocks must not mix old and new measurements.');
+  line('progress=continue');
+  assert.deepEqual(updates, [{ completed: 3, total: 12, unit: 'seconds', speed: 1.25 }]);
+  for (const value of ['out_time_us=8500000', 'speed=2.5x', 'progress=continue']) line(value);
+  assert.equal(updates[1].completed, 8.5);
+  assert.equal(updates[1].speed, 2.5);
+  for (const value of ['out_time_us=12100000', 'speed=2.6x', 'progress=end']) line(value);
+  assert.equal(updates[2].completed, 12, 'Encoder padding must not exceed the phase duration.');
+});
+
+test('encoding progress does not invent time or speed from unavailable measurements', () => {
+  const updates = [];
+  const line = renderer.encodingProgress(12, value => updates.push(value));
+  for (const value of ['out_time_us=N/A', 'speed=N/A', 'progress=continue']) line(value);
+  assert.equal(updates[0].completed, 0);
+  assert.equal(updates[0].speed, undefined);
+  for (const value of ['out_time_us=4000000', 'speed=0x', 'progress=continue', 'out_time_us=-1000', 'speed=Infinityx', 'progress=continue']) line(value);
+  assert.equal(updates[2].completed, 4, 'A late or invalid timestamp must not move progress backwards.');
+  assert.equal(updates[2].speed, undefined);
+});
+
+test('reading live progress cannot abort the render on Windows snapshot replacement', async t => {
+  assert.equal(typeof renderer.writeProgress, 'function');
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-progress-race-')));
+  t.after(() => fs.rmSync(directory, { recursive: true }));
+  const file = path.join(directory, 'progress.json');
+  renderer.writeProgress(file, { completed: 0, total: 400 });
+  const script = path.join(directory, 'writer.mjs');
+  fs.writeFileSync(script, `import { writeProgress } from ${JSON.stringify(new URL('../src-tauri/video/render.mjs', import.meta.url).href)};
+for (let i = 1; i <= 400; i++) writeProgress(process.argv[2], { completed: i, total: 400 });`);
+  const child = spawn(process.execPath, [script, file], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+  let error = '', running = true, reads = 0;
+  child.stderr.on('data', value => { error += value; });
+  const done = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', code => { running = false; resolve(code); });
+  });
+  while (running) {
+    const progress = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(progress.total, 400, 'Every observed snapshot must remain complete JSON.');
+    reads++;
+    await setImmediate();
+  }
+  assert.equal(await done, 0, error);
+  assert(reads > 0);
+  renderer.writeProgress(file, { completed: 400, total: 400 });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).completed, 400, 'Regular updates continue once the reader releases the snapshot.');
+  assert.throws(() => renderer.writeProgress(path.join(directory, 'missing/child/progress.json'), {}), { code: 'ENOENT' });
 });
 
 function renderEpisodeFixture(t, extraInput = {}, engineFiles = {}) {

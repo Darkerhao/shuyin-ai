@@ -20,6 +20,7 @@ export interface VideoPlan { title: string; audioSha256: string; duration: numbe
 export interface VideoProgress {
   startedAt: number; stage: string; phase: string; completed: number; total: number
   cueCount: number; preview: VideoCue[]
+  unit?: 'frames' | 'seconds' | 'cues' | null; speed?: number | null; updatedAt?: number
 }
 export interface VideoPreview { start: number; end: number; signature: string; scenes: number[] }
 export interface VideoJob {

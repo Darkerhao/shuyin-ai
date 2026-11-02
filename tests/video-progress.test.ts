@@ -119,6 +119,44 @@ it('does not carry frame percentages into subtitle compositing or audio muxing',
   }
 })
 
+it('shows actual subtitle encoding time, percentage, speed and feedback age', () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(startedAt + 62000)
+  const wrapper = render({ ...job, stage: 'rendering', progress: { ...progress, stage: 'rendering', phase: 'rendering_subtitles', unit: 'seconds', completed: 41.5, total: 100, speed: 1.25, updatedAt: startedAt + 60000 } })
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('41')
+  expect(wrapper.text()).toContain('已合成 00:41 / 01:40')
+  expect(wrapper.text()).toContain('1.25×')
+  expect(wrapper.text()).toContain('2 秒前')
+  expect(wrapper.get('[aria-label="渲染步骤"] [aria-current="step"]').text()).toContain('合成字幕')
+  expect(wrapper.text()).not.toContain('成片和字幕已保存')
+})
+
+it('reports subtitle preparation and audio muxing in their own units and resets phase numbers', async () => {
+  const wrapper = render({ ...job, stage: 'rendering', progress: { ...progress, stage: 'rendering', phase: 'preparing_subtitles', unit: 'cues', completed: 25, total: 100 } })
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('25')
+  expect(wrapper.text()).toContain('已准备 25 / 100 条字幕')
+  await wrapper.setProps({ job: { ...job, stage: 'rendering', progress: { ...progress, stage: 'rendering', phase: 'muxing_audio', unit: 'seconds', completed: 50, total: 100, speed: 2 } } })
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('50')
+  expect(wrapper.text()).toContain('已合入 00:50 / 01:40')
+  expect(wrapper.get('[aria-label="渲染步骤"] [aria-current="step"]').text()).toContain('合入原声')
+  await wrapper.setProps({ job: { ...job, stage: 'validating' } })
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBeUndefined()
+  expect(wrapper.find('.render-speed').exists()).toBe(false)
+})
+
+it('keeps a stalled snapshot honest and suspends decorative motion on sync errors', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(startedAt + 60000)
+  const wrapper = render({ ...job, stage: 'rendering', progress: { ...progress, stage: 'rendering', phase: 'rendering_subtitles', unit: 'seconds', completed: 20, total: 100, updatedAt: startedAt + 59000 } })
+  await vi.advanceTimersByTimeAsync(20000)
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('20')
+  expect(wrapper.text()).toContain('21 秒前')
+  expect(wrapper.text()).toContain('等待新的进度反馈')
+  await wrapper.setProps({ syncError: 'disconnected' })
+  expect(wrapper.get('.creation-progress').classes()).not.toContain('is-animating')
+  expect(wrapper.text()).toContain('当前展示上次读取的进度')
+})
+
 it('clears the elapsed timer when the panel unmounts', () => {
   vi.useFakeTimers()
   const wrapper = render()

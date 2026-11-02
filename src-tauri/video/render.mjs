@@ -108,6 +108,40 @@ export function measureRenderProgress(segments, directory, startedAt) {
   return { completed, total };
 }
 
+export function measureSubtitleProgress(directory, total, startedAt) {
+  try {
+    const completed = fs.readdirSync(directory).filter(file => /^cue-\d+\.png$/.test(file) && fs.statSync(path.join(directory, file)).mtimeMs >= startedAt).length;
+    return { completed: Math.min(completed, total), total };
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return { completed: 0, total };
+  }
+}
+
+export function encodingProgress(total, report) {
+  let completed = 0, speed;
+  return line => {
+    const [key, raw] = line.split('=');
+    const value = raw?.trim();
+    if (key === 'out_time_us' && Number.isFinite(Number(value))) completed = Math.min(total, Math.max(completed, Number(value) / 1e6));
+    if (key === 'speed') {
+      const measured = /^(\d+(?:\.\d+)?)x$/.exec(value ?? '');
+      speed = measured && Number(measured[1]) > 0 ? Number(measured[1]) : undefined;
+    }
+    if (key === 'progress') report({ completed, total, unit: 'seconds', speed });
+  };
+}
+
+export function writeProgress(file, progress) {
+  const temporary = file + '.tmp';
+  fs.writeFileSync(temporary, JSON.stringify(progress));
+  try { fs.renameSync(temporary, file); }
+  catch (error) {
+    // A Windows sharing conflict may hold the previous snapshot; let the next report replace it.
+    if (process.platform !== 'win32' || !['EPERM', 'EBUSY'].includes(error.code)) throw error;
+  }
+}
+
 function run(executable, args, cwd, onLine) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { cwd, stdio: onLine ? ['ignore', 'pipe', 'inherit'] : 'inherit', windowsHide: true });
@@ -145,11 +179,15 @@ async function main(inputFile, outputFile) {
   const plan = input.plan;
   const range = input.action === 'preview' ? input.window : undefined;
   if (input.action === 'preview' && (!range || typeof input.signature !== 'string')) throw new Error('A preview requires its source window and snapshot signature.');
+  const duration = range ? range.end - range.start : plan.duration;
   const progressFile = path.join(path.dirname(inputFile), 'progress.json');
   const report = (phase, counts = {}) => {
-    const temporary = progressFile + '.tmp';
-    fs.writeFileSync(temporary, JSON.stringify({ stage: range ? 'previewing' : 'rendering', phase, ...counts }));
-    fs.renameSync(temporary, progressFile);
+    writeProgress(progressFile, { stage: range ? 'previewing' : 'rendering', phase, updatedAt: Date.now(), ...counts });
+  };
+  const encode = async (phase, args) => {
+    report(phase, { completed: 0, total: duration, unit: 'seconds' });
+    await run(FFMPEG, ['-progress', 'pipe:1', '-stats_period', '1', '-nostats', ...args], episode, encodingProgress(duration, counts => report(phase, counts)));
+    report(phase, { completed: duration, total: duration, unit: 'seconds' });
   };
   report('checking_layout');
   if (Math.abs(metadata.duration - plan.duration) > 0.15) throw new Error('The audio duration changed. Create a new video task.');
@@ -206,20 +244,28 @@ async function main(inputFile, outputFile) {
   });
   const { segments } = JSON.parse(planJson);
   const startedAt = Date.now();
-  const updateFrames = () => report('rendering_frames', measureRenderProgress(segments, path.join(episode, 'out/chunks'), startedAt));
+  const updateFrames = () => report('rendering_frames', { ...measureRenderProgress(segments, path.join(episode, 'out/chunks'), startedAt), unit: 'frames' });
   updateFrames();
   const clock = setInterval(updateFrames, 1000);
   try { await run(process.execPath, [...renderArgs, '--skip-subs'], episode); }
   finally { clearInterval(clock); }
-  report('rendering_subtitles');
-  await run(process.execPath, [...renderArgs, '--skip-video'], episode);
+  const subtitleDirectory = path.join(episode, 'out/subs');
+  const cueCount = result.pages.reduce((total, page) => total + page.cues.length, 0);
+  const subtitleStartedAt = Date.now();
+  report('preparing_subtitles', { completed: 0, total: cueCount, unit: 'cues' });
+  const subtitleClock = setInterval(() => report('preparing_subtitles', { ...measureSubtitleProgress(subtitleDirectory, cueCount, subtitleStartedAt), unit: 'cues' }), 1000);
+  // Reuse the engine's exact subtitle images; own the encode invocation to read FFmpeg's progress stream.
+  try { await run(process.execPath, [path.join(engine, 'tools/subs.mjs'), '0', String(duration)], episode); }
+  finally { clearInterval(subtitleClock); }
+  const subtitled = path.join(episode, 'out/film-有字幕.mp4');
+  await encode('rendering_subtitles', ['-nostdin', '-y', '-loglevel', 'error', '-i', path.join(episode, 'out/film-无字幕.mp4'), '-f', 'concat', '-safe', '0', '-i', path.join(subtitleDirectory, 'list.txt'),
+    '-filter_complex', '[1:v]fps=24,format=rgba[s];[0:v][s]overlay=0:0:format=auto:shortest=1,format=yuv420p[v]',
+    '-map', '[v]', '-map', '0:a?', '-c:a', 'copy', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-r', '24', '-movflags', '+faststart', subtitled]);
   const video = path.join(path.dirname(inputFile), 'video.mp4');
   // Render without the engine's voice track: its mixer normalizes speech. Keep the user's original track instead.
-  report('muxing_audio');
-  await run(FFMPEG, ['-nostdin', '-n', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', path.join(episode, 'out/film-有字幕.mp4'), ...(range ? ['-ss', String(range.start), '-t', String(range.end - range.start)] : []), '-protocol_whitelist', 'file,pipe', '-i', input.audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', video], episode);
+  await encode('muxing_audio', ['-nostdin', '-n', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', subtitled, ...(range ? ['-ss', String(range.start), '-t', String(duration)] : []), '-protocol_whitelist', 'file,pipe', '-i', input.audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', video]);
   report('checking_video');
   const output = probe(video);
-  const duration = range ? range.end - range.start : plan.duration;
   if (output.width !== 1920 || output.height !== 1080 || Math.abs(output.duration - duration) > 0.2) throw new Error('Rendered video metadata does not match the audio.');
   if (range) output.preview = { ...range, signature: input.signature, scenes: thumbnailScenes };
   fs.writeFileSync(outputFile, JSON.stringify(output), { flag: 'wx' });

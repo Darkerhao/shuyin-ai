@@ -689,4 +689,22 @@ mod tests {
         assert_eq!(view["progress"]["total"], 480.0);
         assert_eq!(view["progress"]["preview"], serde_json::json!([]));
     }
+
+    #[test]
+    fn subtitle_encoding_telemetry_keeps_its_units_speed_and_timestamp() {
+        let directory = tempfile::tempdir().unwrap();
+        let (active, mut job) = fixture(directory.path());
+        job.stage = "rendering".into();
+        std::fs::write(
+            directory.path().join("progress.json"),
+            r#"{"stage":"rendering","phase":"rendering_subtitles","completed":41.5,"total":100,"unit":"seconds","speed":1.25,"updatedAt":60000}"#,
+        )
+        .unwrap();
+        let progress = serde_json::to_value(active_progress(&active, &job).unwrap()).unwrap();
+        assert_eq!(progress["startedAt"], 1234);
+        assert_eq!(progress["completed"], 41.5);
+        assert_eq!(progress["unit"], "seconds");
+        assert_eq!(progress["speed"], 1.25);
+        assert_eq!(progress["updatedAt"], 60000);
+    }
 }
