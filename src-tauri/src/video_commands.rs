@@ -6,7 +6,7 @@ use crate::{
         video::{StartVideoInput, VideoJob},
         Database,
     },
-    video::{self, Cue, Scene, VideoProgress, VideoSettings},
+    video::{self, Cue, PreviewRequest, Scene, VideoProgress, VideoSettings, VideoWork},
     video_process as process,
 };
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,65 @@ pub struct VideoJobView {
     #[serde(flatten)]
     job: VideoJob,
     progress: Option<VideoProgress>,
+    preview: Option<VideoPreview>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoPreview {
+    start: f64,
+    end: f64,
+    signature: String,
+    scenes: Vec<usize>,
+}
+
+fn preview_signature(plan: &video::VideoPlan) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(serde_json::to_vec(plan).map_err(|e| e.to_string())?);
+    hash.update(include_bytes!("../video/render.mjs"));
+    hash.update(include_bytes!("../video/illustrations.js"));
+    hash.update(include_bytes!("../video/visual-catalog.json"));
+    Ok(hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn preview_directory(database: &Database, job: &VideoJob) -> Result<PathBuf, String> {
+    Ok(
+        Path::new(&database.get_project(&job.project_id)?.workspace_path)
+            .join("video")
+            .join(&job.id)
+            .join(format!("preview-{}", job.run_id)),
+    )
+}
+
+fn cached_preview(database: &Database, job: &VideoJob) -> Option<VideoPreview> {
+    if job.status != "awaiting_confirmation" || job.stage != "previewing" {
+        return None;
+    }
+    let directory = preview_directory(database, job).ok()?;
+    let output: serde_json::Value =
+        serde_json::from_str(&process::read_small(&directory.join("render-output.json")).ok()?)
+            .ok()?;
+    let preview: VideoPreview = serde_json::from_value(output.get("preview")?.clone()).ok()?;
+    if preview.signature != preview_signature(&job.plan).ok()?
+        || !preview.start.is_finite()
+        || !preview.end.is_finite()
+        || preview.start < 0.0
+        || preview.end > job.plan.duration
+        || preview.end <= preview.start
+        || preview.end - preview.start > 60.0
+        || preview.scenes.len() > 12
+        || !directory.join("video.mp4").is_file()
+        || preview.scenes.iter().any(|i| {
+            *i >= job.plan.scenes.len() || !directory.join(format!("scene-{i}.png")).is_file()
+        })
+    {
+        return None;
+    }
+    Some(preview)
 }
 
 fn active_progress(active: &ActiveVideo, job: &VideoJob) -> Option<VideoProgress> {
@@ -86,6 +145,7 @@ pub fn list_video_jobs(
     Ok(jobs
         .into_iter()
         .map(|job| VideoJobView {
+            preview: cached_preview(&database, &job),
             progress: active
                 .as_ref()
                 .and_then(|active| active_progress(active, &job)),
@@ -106,8 +166,8 @@ pub fn start_video_job(app: AppHandle, input: StartVideoInput) -> Result<VideoJo
     }
     let db = app.state::<Database>();
     let job = db.create_video_job(input)?;
-    let job = db.claim_video_job(&job.id, false)?;
-    spawn(&app, &mut active, &job, false);
+    let job = db.claim_video_job(&job.id, VideoWork::Prepare)?;
+    spawn(&app, &mut active, &job, VideoWork::Prepare);
     Ok(job)
 }
 
@@ -121,8 +181,33 @@ pub fn continue_video_job(app: AppHandle, id: String, render: bool) -> Result<Vi
     if active.is_some() {
         return Err("已有视频任务正在执行或停止中。".into());
     }
-    let job = app.state::<Database>().claim_video_job(&id, render)?;
-    spawn(&app, &mut active, &job, render);
+    let work = if render {
+        VideoWork::Render
+    } else {
+        VideoWork::Prepare
+    };
+    let job = app.state::<Database>().claim_video_job(&id, work)?;
+    spawn(&app, &mut active, &job, work);
+    Ok(job)
+}
+
+#[tauri::command]
+pub fn preview_video_job(
+    app: AppHandle,
+    id: String,
+    request: PreviewRequest,
+) -> Result<VideoJob, String> {
+    if !cfg!(target_os = "windows") {
+        return Err("MG 视频首版暂仅支持 Windows。".into());
+    }
+    let runtime = app.state::<VideoRuntime>();
+    let mut active = runtime.0.lock().map_err(|e| e.to_string())?;
+    if active.is_some() {
+        return Err("已有视频任务正在执行或停止中。".into());
+    }
+    let work = VideoWork::Preview(request);
+    let job = app.state::<Database>().claim_video_job(&id, work)?;
+    spawn(&app, &mut active, &job, work);
     Ok(job)
 }
 
@@ -188,7 +273,38 @@ pub fn media_asset_path(
     Ok(path.to_string_lossy().into_owned())
 }
 
-fn spawn(app: &AppHandle, active: &mut Option<ActiveVideo>, job: &VideoJob, render: bool) {
+#[tauri::command]
+pub fn video_preview_media(
+    app: AppHandle,
+    project_id: String,
+    id: String,
+    run_id: i64,
+    scene: Option<usize>,
+) -> Result<String, String> {
+    let db = app.state::<Database>();
+    let job = db.video_job(&id)?;
+    if job.project_id != project_id || job.run_id != run_id {
+        return Err("试片不属于本书或已失效，请重新预览。".into());
+    }
+    let preview = cached_preview(&db, &job).ok_or("试片已失效或文件缺失，请重新预览。")?;
+    let name = match scene {
+        Some(index) if preview.scenes.contains(&index) => format!("scene-{index}.png"),
+        Some(_) => return Err("该分镜没有可用的试片缩略图。".into()),
+        None => "video.mp4".into(),
+    };
+    let directory =
+        std::fs::canonicalize(preview_directory(&db, &job)?).map_err(|e| e.to_string())?;
+    let path = std::fs::canonicalize(directory.join(name)).map_err(|e| e.to_string())?;
+    if !path.starts_with(&directory) {
+        return Err("试片文件不在本次渲染目录中。".into());
+    }
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn spawn(app: &AppHandle, active: &mut Option<ActiveVideo>, job: &VideoJob, work: VideoWork) {
     let flag = Arc::new(AtomicBool::new(false));
     *active = Some(ActiveVideo {
         id: job.id.clone(),
@@ -203,7 +319,7 @@ fn spawn(app: &AppHandle, active: &mut Option<ActiveVideo>, job: &VideoJob, rend
     let app = app.clone();
     let job = job.clone();
     tauri::async_runtime::spawn(async move {
-        let result = execute(&app, job.clone(), render, flag.clone()).await;
+        let result = execute(&app, job.clone(), work, flag.clone()).await;
         if let Err(error) = result {
             let status = if flag.load(Ordering::SeqCst) {
                 "cancelled"
@@ -275,7 +391,7 @@ async fn digest(path: PathBuf) -> Result<String, String> {
 async fn execute(
     app: &AppHandle,
     mut job: VideoJob,
-    render: bool,
+    work: VideoWork,
     flag: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let db = app.state::<Database>();
@@ -299,14 +415,18 @@ async fn execute(
         .join("video")
         .join(&job.id);
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    let directory = root.join(format!(
-        "run-{}-{}",
-        job.run_id,
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_nanos()
-    ));
+    let directory = if matches!(work, VideoWork::Preview(_)) {
+        root.join(format!("preview-{}", job.run_id))
+    } else {
+        root.join(format!(
+            "run-{}-{}",
+            job.run_id,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_nanos()
+        ))
+    };
     std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
     if let Some(active) = app
         .state::<VideoRuntime>()
@@ -357,11 +477,10 @@ async fn execute(
     if (probe.duration - job.plan.duration).abs() > 0.15 {
         return Err("音频时长与任务不一致。".into());
     }
-    if render {
-        db.save_video_progress(&job.id, job.run_id, &job.plan, "rendering")?;
-        video::validate_cues(&job.plan.cues, job.plan.duration)?;
-        video::validate_scenes(&job.plan.scenes, 0, job.plan.cues.len())?;
-        let input = serde_json::json!({"action":"render", "audioPath":audio_external, "engineRoot":engine_external, "cacheRoot":process::external_path(&root.join("cache")), "plan":job.plan});
+    if !matches!(work, VideoWork::Prepare) {
+        let window = work.window(&job.plan)?;
+        db.save_video_progress(&job.id, job.run_id, &job.plan, work.stage())?;
+        let input = serde_json::json!({"action":if window.is_some() {"preview"} else {"render"}, "window":window, "signature":preview_signature(&job.plan)?, "audioPath":audio_external, "engineRoot":engine_external, "cacheRoot":process::external_path(&root.join("cache")), "plan":job.plan});
         stage(
             &settings,
             &directory,
@@ -377,6 +496,18 @@ async fn execute(
         }
         if digest(audio).await? != job.plan.audio_sha256 {
             return Err("渲染期间源音频发生变化，未登记成片。".into());
+        }
+        if let Some(window) = window {
+            let metadata = crate::media::inspect(&directory.join("video.mp4"))?;
+            if !metadata.has_audio
+                || metadata.width != 1920
+                || metadata.height != 1080
+                || (metadata.duration_seconds - (window.end - window.start)).abs() > 0.2
+            {
+                return Err("试片尺寸、时长或音轨未通过校验。".into());
+            }
+            db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")?;
+            return Ok(());
         }
         db.save_video_progress(&job.id, job.run_id, &job.plan, "validating")?;
         let subtitle = directory.join("subtitles.srt");
@@ -442,7 +573,7 @@ async fn execute(
         if flag.load(Ordering::SeqCst) {
             return Err("视频任务已停止。".into());
         }
-        let end = (first + video::BATCH_SIZE).min(job.plan.cues.len());
+        let end = video::storyboard_batch_end(&job.plan.cues, first);
         let user = video::storyboard_input(&job.plan, first, end);
         let request = ai_commands::request(
             config.clone(),
@@ -547,6 +678,7 @@ mod tests {
         .unwrap();
         let view = serde_json::to_value(VideoJobView {
             progress: active_progress(&active, &job),
+            preview: None,
             job,
         })
         .unwrap();

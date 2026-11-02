@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## 导演与派生试片（2026-11-02，P0）
+
+现有JSON分镜形状不变，生成入口统一替换为`video-storyboard-v3`，有界24条上限内优先在末6条的完整句尾切批；不增加模型调用层或任意脚本。`storyboard.ts`从当前scenes派生观看提醒，Vue复用一份编辑状态；物体/动作/构图按唯一目录选择，锚点选择当前镜内字幕，保存仍由Rust严格校验。
+
+Node的`buildEpisode(plan, range?)`生成同一绘图工程：源cue ID、原场景序号、`beat.at`及`drawDuration`保持，窗口只平移显示字幕、截断输出时长；引擎index使用窗口内连续索引。原声按相同窗口裁取合入AAC，不重新ASR/TTS、不调整响度。单物体居中、叙事主次和动作显式触发共用同一draw，85项sketch几何不变；不保留旧版渲染器。第0帧使用真实时间0的cover，避免引擎默认插入后续“封面帧”泄露结果。布局/确定性检查继续严格执行。
+
+`VideoWork`在原调度器中区分准备、完整渲染和预览；`preview_video_job`只接受起始镜号与30/60秒，复用视频运行锁、run_id、Job Object及进度。预览运行写入`preview-{run_id}`，结束回到awaiting_confirmation/stage=previewing，禁止进入正式素材finish事务。`list_video_jobs`仅在当前阶段/代次、计划+源码签名和文件都一致时派生preview；输出清单及缩略图属于可重建缓存，不成为第二份权威业务状态。
+
+`video_preview_media`校验本书任务、run_id及清单中的有限镜号，只授权该运行目录的MP4/PNG单文件；默认asset scope仍为空。主窗口原allow-video增加这两个受限命令，CSP的img-src允许受限asset协议以显示缩略图，不向远端页面增加权限。保存成功立即清空前端预览视图，避免下一次启动失败时重新显示旧结果。预览缓存不跟随备份；恢复后按缺失处理，不承诺旧程序读取previewing新阶段。实现与证据见 [P0验收](VIDEO-DIRECTOR-VERIFICATION.md)。
+
 ## 同款物体分镜与绘图（2026-11-01）
 
 使用单一 `video/visual-catalog.json` 定义物体、构图、动作及长度限制，Rust、版本化 `video-storyboard-v2` Prompt、Node和Vue共用。Scene保留first/last/title/kind，增加beats（cue/object/action/label）；Rust验证连续覆盖、1—3物体、锚点在本镜且有序、目录白名单和短文本。每批24条字幕附首尾台词、最近3镜和后续3条上下文，不能将上下文纳入本批覆盖。

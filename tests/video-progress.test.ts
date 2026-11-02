@@ -19,6 +19,16 @@ function render(value = job) {
 }
 afterEach(() => { mounted.splice(0).forEach(w => w.unmount()); vi.useRealTimers() })
 
+it('reports preview frames without marking final rendering or archiving as completed', async () => {
+  const wrapper = render({ ...job, stage: 'previewing', progress: { ...progress, stage: 'previewing', phase: 'rendering_frames', completed: 360, total: 720 } })
+  expect(wrapper.text()).toContain('试片')
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('50')
+  expect(wrapper.findAll('.is-done')).toHaveLength(2)
+  await wrapper.setProps({ job: { ...job, stage: 'previewing', status: 'awaiting_confirmation', preview: { start: 0, end: 30, signature: 'snapshot', scenes: [0] } } })
+  expect(wrapper.text()).toContain('完整视频尚未生成')
+  expect(wrapper.findAll('.is-done')).toHaveLength(2)
+})
+
 it('explains model loading without claiming a percentage and ticks only the current run', async () => {
   vi.useFakeTimers()
   vi.setSystemTime(startedAt + 5000)

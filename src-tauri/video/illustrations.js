@@ -290,45 +290,47 @@
   }
 
   function draw(P) {
-    const pg = P.page, span = pg.end - pg.start;
-    const times = pg.beats.map(b => P.c(pg.cues.findIndex(c => c.id === b.cue)));
+    const pg = P.page, span = pg.drawDuration;
+    const times = pg.beats.map(b => b.at);
     P.text('读懂一本书', { x: 180, y: 77, size: 28, color: 'muted', at: -1, cps: 40, pen: false });
     const bookTitle = Array.from(SCRIPT.META.title);
     P.text(bookTitle.length > 11 ? bookTitle.slice(0, 10).join('') + '…' : SCRIPT.META.title, { x: 1740, y: 77, w: 340, align: 'r', size: 28, color: 'muted', at: -1, cps: 40, pen: false });
     P.text(pg.title, { x: 180, y: 160, size: 62, at: -.5, cps: 18 });
     P.line(180, 261, 1740, 261, { color: 'muted', sw: 1.2, at: -.3, dur: 1 });
-    P.text(String(pg.index + 1).padStart(2, '0'), { x: 1740, y: 817, w: 75, align: 'r', font: 'mono', size: 25, color: 'muted', at: -1, cps: 30, pen: false });
-    let places = [{ x: 450, y: 511, s: 1.02 }, { x: 960, y: 511, s: 1.02 }, { x: 1470, y: 511, s: 1.02 }];
+    P.text(String(pg.sourceIndex + 1).padStart(2, '0'), { x: 1740, y: 817, w: 75, align: 'r', font: 'mono', size: 25, color: 'muted', at: -1, cps: 30, pen: false });
+    let places = [{ x: 450, y: 511, s: 1.14 }, { x: 960, y: 511, s: .98 }, { x: 1470, y: 511, s: .98 }];
+    if (pg.kind === 'compare') places = places.map(pos => ({ ...pos, s: 1.02 }));
     if (['opening', 'closing', 'desk', 'focus'].includes(pg.kind)) places = [{ x: 552, y: 518, s: 1.25 }, { x: 1132, y: 433, s: .8 }, { x: 1476, y: 600, s: .78 }];
     if (['route', 'escape'].includes(pg.kind)) {
-      places = [{ x: 440, y: 574, s: .92 }, { x: 960, y: 501, s: 1 }, { x: 1470, y: 430, s: .96 }];
+      places = [{ x: 440, y: 574, s: 1.08 }, { x: 960, y: 501, s: 1 }, { x: 1470, y: 430, s: .96 }];
       P.path('M230 751 Q579 775 820 650 T1280 601 T1680 589', { color: 'green', at: -.3, dur: 3.2, sw: 2 });
     }
+    if (pg.beats.length === 1) places = [{ x: 960, y: 485, s: 1.3 }];
+    if (pg.beats.length === 2) places = pg.kind === 'compare'
+      ? [{ x: 620, y: 500, s: 1.12 }, { x: 1300, y: 500, s: 1.12 }]
+      : [{ x: 620, y: 500, s: 1.22 }, { x: 1320, y: 500, s: .98 }];
     if (pg.kind === 'wall') P.line(1212, 303, 1212, 736, { color: 'red', sw: 3, at: 1, dur: 2 });
     if (pg.kind === 'locked') P.path('M211 778 H1709', { color: 'red', sw: 2, at: -.3, dur: 2 });
 
     pg.beats.forEach((b, i) => {
-      const pos = places[i], at = i === 0 ? -.6 : times[i], next = times[i + 1] ?? span;
+      const pos = places[i], at = times[i];
       const Q = sketch(P, b.object, at, b.object === 'pen' ? 'orange' : 'ink');
       P.move(Q, t => {
-        const u = K(t, at + 1.3, Math.max(1.4, Math.min(4, next - at - 1)));
+        const u = K(t, at, 1.8);
         let dx = 0, dy = 0, rot = 0;
-        if (b.action === 'slide' || ['route', 'escape', 'transfer'].includes(pg.kind)) dx = -48 * (1 - u);
-        if (b.action === 'tilt' || pg.kind === 'collapse' && ['crown', 'hierarchy'].includes(b.object)) { dy = 22 * u; rot = 12 * u; }
-        if (b.action === 'sway') rot = 5 * Math.sin(Math.max(0, t - at - 1.3) * 1.4) * u;
-        if (pg.kind === 'closing' && b.object === 'book') rot = -6 * K(t, span - 2, 1.5);
+        if (b.action === 'slide') dx = -48 * (1 - u);
+        if (b.action === 'tilt') { dy = 22 * u; rot = 12 * u; }
+        if (b.action === 'sway') rot = 5 * Math.sin(Math.PI * K(t, at, 3));
         return { x: pos.x + dx, y: pos.y + dy, s: pos.s, rot };
       });
-      const labelY = ['opening', 'closing', 'desk', 'focus'].includes(pg.kind) ? (i === 0 ? 746 : pos.y + 148) : ['route', 'escape'].includes(pg.kind) ? 784 : 722;
-      P.text(b.label, { x: pos.x, y: labelY, w: 408, align: 'c', size: 37, color: i === 2 ? 'green' : 'soft', at: Math.max(0, at) + .55, cps: 12 });
-      const emphasis = Math.min(span - .8, Math.max(at + 2.5, (at + next) / 2));
-      if (emphasis > at + 1.4) P.underline(pos.x - b.label.length * 18, labelY + 50, b.label.length * 36, { color: i === 2 ? 'green' : 'orange', at: emphasis, dur: .8 });
+      const labelY = pg.beats.length < 3 ? 754 : ['opening', 'closing', 'desk', 'focus'].includes(pg.kind) ? (i === 0 ? 746 : pos.y + 148) : ['route', 'escape'].includes(pg.kind) ? 784 : 722;
+      P.text(b.label, { x: pos.x, y: labelY, w: 408, align: 'c', size: 37, color: i === 0 ? 'ink' : 'soft', at, cps: 12 });
       if (i > 0 && ['route', 'transfer'].includes(pg.kind)) {
         const prev = places[i - 1];
-        P.arrow(prev.x + 180, prev.y, pos.x - 180, pos.y, { color: 'green', at: at + .5, dur: 1.2, sw: 2.5 });
+        P.arrow(prev.x + 180, prev.y, pos.x - 180, pos.y, { color: 'green', at, dur: 1.2, sw: 2.5 });
       }
-      if (b.action === 'check') Q.check(0, 0, 140, { color: 'green', at: at + 2.7, dur: .9 });
-      if (b.action === 'cross' || pg.kind === 'locked' && b.object === 'trap') Q.cross(0, 0, 140, { color: 'red', at: at + 2.7, dur: .9 });
+      if (b.action === 'check') Q.check(0, 0, 140, { color: 'green', at, dur: .9 });
+      if (b.action === 'cross') Q.cross(0, 0, 140, { color: 'red', at, dur: .9 });
     });
     P.line(180, 873, 1630, 873, { color: 'faint', sw: 2, at: -1, dur: .1 });
     P.liveRough((t, rough) => [rough.line(180, 873, 180 + 1450 * Math.max(0, Math.min(1, t / span)), 873, { color: 'orange', sw: 2.5 })]);

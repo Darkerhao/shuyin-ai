@@ -8,9 +8,11 @@ independently installed and is not bundled with the app.
 
 The 85 object drawings are unchanged. The normalized `sketch` function has SHA-256
 `96a6bc4e09c4440682d68e97f417b1357cf38c7a0a327482084d8f590b36fe9b`.
-The reference composition, source-audio clock, handwritten labels, emphasis,
-progress stroke, and subtitle styling are retained. Only book/series headers are
-generalized; six bounded per-object actions extend the same movement code.
+The source-audio clock, handwritten labels, progress stroke, and subtitle style
+are retained. P0 centers a lone subject, gives narrative scenes a visual lead,
+and keeps comparisons balanced. Objects and explicit semantic actions now start
+at their selected subtitle, without pre-drawing the first object or adding a
+fixed action delay. This no longer promises pixel parity with the old layout.
 
 `visual-catalog.json` is the single source of allowed objects, scenes, actions,
 and limits for Rust validation, the model prompt, Node compilation, and Vue.
@@ -20,5 +22,10 @@ storyboard from saved subtitles, or create a separate version of a completed fil
 
 All three runtime files are embedded by Rust and written to the task directory.
 The render cache key includes the compiler, drawing source, catalog, and plan.
+Optional preview windows share this compiler and renderer. They retain source
+cue IDs, scene numbers, object times, and full drawing durations, while clipping
+only the viewing/audio window. Preview results and up to 12 renderer screenshots
+are derived cache files, not registered video assets. The host validates the
+current run and plan/source signature before exposing individual output files.
 Run `npm run test:video` for timing, reference geometry, the complete catalog,
 action determinism, old-plan rejection, and rendering lifecycle checks.

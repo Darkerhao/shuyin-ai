@@ -12,12 +12,12 @@ const steps = ['原声字幕', '动画分镜', '确认分镜', '画面渲染', '
 const step = computed(() => {
   if (props.job.status === 'succeeded') return steps.length
   if (props.job.status === 'awaiting_confirmation') return 2
-  return { preparing: 0, transcribing: 0, storyboard: 1, rendering: 3, validating: 4, complete: 4 }[props.job.stage] ?? 0
+  return { preparing: 0, transcribing: 0, storyboard: 1, previewing: 2, rendering: 3, validating: 4, complete: 4 }[props.job.stage] ?? 0
 })
 const covered = computed(() => (props.job.plan.scenes.at(-1)?.last ?? -1) + 1)
 const percent = computed(() => {
   const p = progress.value
-  if (p && p.total > 0 && (props.job.stage === 'transcribing' || (props.job.stage === 'rendering' && p.phase === 'rendering_frames'))) return Math.min(100, Math.max(0, Math.floor(p.completed / p.total * 100)))
+  if (p && p.total > 0 && (props.job.stage === 'transcribing' || (['rendering', 'previewing'].includes(props.job.stage) && p.phase === 'rendering_frames'))) return Math.min(100, Math.max(0, Math.floor(p.completed / p.total * 100)))
   if (props.job.stage === 'storyboard' && props.job.plan.cues.length) return Math.min(100, Math.floor(covered.value / props.job.plan.cues.length * 100))
   return null
 })
@@ -27,6 +27,7 @@ const phaseCopy: Record<string, [string, string]> = {
   recognizing: ['正在听懂你的原声', '按原声时间轴逐段识别，字幕预览会随识别进展更新。'],
   finalizing_subtitles: ['正在整理字幕时间轴', '原声识别已结束，正在核对字幕，随后开始编排动画分镜。'],
   checking_layout: ['正在检查每一镜的排版', '逐镜检查文字与图形，检查通过后开始绘制视频画面。'],
+  rendering_thumbnails: ['正在生成分镜缩略图', '从本次真实绘图中截取，不使用另一套预览画面。'],
   rendering_frames: ['正在让分镜动起来', '按已完成的视频片段更新真实帧数，复用的缓存也会计入。画面就绪后，再合成字幕与原声。'],
   rendering_subtitles: ['正在把字幕放入画面', '画面已绘制完成，正在按原声时间轴合成字幕。这一步仍需编码，请保持应用开启。'],
   muxing_audio: ['正在把原声合入画面', '画面已绘制完成，正在合入原声音轨并写入视频文件。'],
@@ -34,6 +35,7 @@ const phaseCopy: Record<string, [string, string]> = {
 }
 const copy = computed<[string, string]>(() => {
   const job = props.job
+  if (job.status === 'awaiting_confirmation' && job.preview) return ['试片已就绪，完整视频尚未生成', '请播放片段并检查分镜；修改后重新试片，最后再确认完整视频。']
   if (job.status === 'awaiting_confirmation') return ['分镜已就绪，等你过目', '字幕与动画分镜已保存。向下校对，确认后再开始制作视频。']
   if (job.status === 'succeeded') return ['你的原声，已有了画面', '成片和字幕已保存，可在下方播放，或选用到发布准备。']
   if (job.status === 'failed') return ['这一步没有完成', `停在「${videoStages[job.stage] || job.stage}」。已保存的字幕与分镜保留，可检查原因后继续。`]
@@ -41,6 +43,7 @@ const copy = computed<[string, string]>(() => {
   if (job.status === 'draft') return ['准备好，再开始', '选好音频和字幕来源，即可开始制作。']
   if (job.stage === 'transcribing' && job.sourceSubtitleId) return ['正在读取已有字幕', '校验字幕内容与时间码后，将直接进入动画分镜编排。']
   const phase = progress.value?.phase
+  if (job.stage === 'previewing') return ['正在制作原声试片', `${phase === 'checking_video' ? '正在核对试片' : phaseCopy[phase ?? '']?.[0] || '正在准备绘制环境'}。仅预览所选片段，不重新识别字幕，不登记为正式成片。`]
   if (phase && phaseCopy[phase]) return phaseCopy[phase]
   if (job.stage === 'transcribing') return ['正在准备原声识别', '本地语音模型正在准备，首段字幕返回后会在这里实时显示。']
   if (job.stage === 'storyboard') return ['正在把文字编排成画面', '按批次生成动画分镜，完成的分镜会持续保存。全部就绪后交给你确认。']
@@ -58,7 +61,7 @@ const previewCues = computed(() => progress.value?.preview.length ? progress.val
 const previewScenes = computed(() => props.job.plan.scenes.slice(-2))
 const measure = computed(() => {
   if (props.job.stage === 'transcribing' && progress.value?.total) return `已识别 ${time(progress.value.completed)} / ${time(progress.value.total)}`
-  if (props.job.stage === 'rendering' && progress.value?.phase === 'rendering_frames' && progress.value.total) return `已绘制 ${progress.value.completed.toLocaleString('zh-CN')} / ${progress.value.total.toLocaleString('zh-CN')} 帧`
+  if (['rendering', 'previewing'].includes(props.job.stage) && progress.value?.phase === 'rendering_frames' && progress.value.total) return `已绘制 ${progress.value.completed.toLocaleString('zh-CN')} / ${progress.value.total.toLocaleString('zh-CN')} 帧`
   if (props.job.stage === 'storyboard' && props.job.plan.cues.length) return `已编排 ${covered.value} / ${props.job.plan.cues.length} 条字幕`
   return phaseCopy[progress.value?.phase ?? '']?.[0] ?? videoStages[props.job.stage] ?? props.job.stage
 })
@@ -107,7 +110,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
         >{{ percent }}<small>%</small></strong>
         <AppIcon
           v-else
-          :name="job.status === 'succeeded' ? 'check' : job.status === 'failed' ? 'info' : job.status === 'awaiting_confirmation' ? 'pen' : job.stage === 'rendering' ? 'video' : 'headphones'"
+          :name="job.status === 'succeeded' ? 'check' : job.status === 'failed' ? 'info' : job.status === 'awaiting_confirmation' ? 'pen' : ['rendering', 'previewing'].includes(job.stage) ? 'video' : 'headphones'"
         />
       </div>
       <div class="progress-intro">

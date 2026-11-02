@@ -9,7 +9,7 @@ const catalog = JSON.parse(fs.readFileSync(new URL('./visual-catalog.json', impo
 const visuals = fs.readFileSync(new URL('./illustrations.js', import.meta.url), 'utf8');
 
 // The model selects trusted drawings and subtitle anchors; it never supplies code.
-export function buildEpisode(plan) {
+export function buildEpisode(plan, range) {
   const shortText = (value, limit) => typeof value === 'string' && value.trim() && [...value].length <= limit && !/[\p{Cc}{}*`]/u.test(value);
   let next = 0;
   for (const scene of plan.scenes) {
@@ -29,19 +29,26 @@ export function buildEpisode(plan) {
     next = scene.last + 1;
   }
   if (!plan.scenes.length || next !== plan.cues.length) throw new Error('Incomplete scene cue coverage.');
-  const pages = plan.scenes.map((scene, index) => ({
-    id: `p${String(index + 1).padStart(4, '0')}`, title: scene.title, kind: scene.kind, beats: scene.beats,
-    start: index === 0 ? 0 : plan.cues[scene.first].start,
-    end: index + 1 === plan.scenes.length ? plan.duration : plan.cues[plan.scenes[index + 1].first].start,
-    cues: plan.cues.slice(scene.first, scene.last + 1).map((c, offset) => ({ id: scene.first + offset, t: c.text, start: c.start, end: c.end })),
-  }));
-  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style: 'study', extras: ['timeline.js', 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, duration: plan.duration };
+  if (range && (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.start < 0 || range.end <= range.start || range.end > plan.duration || range.end - range.start > 60 || !plan.scenes.some((s, i) => (i === 0 ? 0 : plan.cues[s.first].start) === range.start))) throw new Error('Invalid preview window: choose a scene boundary and at most 60 seconds.');
+  const from = range?.start ?? 0, to = range?.end ?? plan.duration;
+  const pages = plan.scenes.map((scene, index) => {
+    const start = index === 0 ? 0 : plan.cues[scene.first].start;
+    const end = index + 1 === plan.scenes.length ? plan.duration : plan.cues[plan.scenes[index + 1].first].start;
+    return {
+      id: `p${String(index + 1).padStart(4, '0')}`, index, title: scene.title, kind: scene.kind,
+      // Keep the full drawing clock even when the preview ends before this scene does.
+      drawDuration: end - start, beats: scene.beats.map(b => ({ ...b, at: plan.cues[b.cue].start - start })),
+      start: start - from, end: Math.min(end, to) - from,
+      cues: plan.cues.slice(scene.first, scene.last + 1).map((c, offset) => ({ id: scene.first + offset, t: c.text, start: c.start - from, end: (range ? Math.min(c.end, to) : c.end) - from })).filter(c => c.start < to - from && c.end > 0),
+    };
+  }).filter(p => p.start >= 0 && p.start < to - from).map((p, index) => ({ ...p, sourceIndex: p.index, index }));
+  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style: 'study', extras: ['timeline.js', 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, duration: to - from };
   const script = `(function(root) {
 root.SCRIPT = ${JSON.stringify(data)};
 root.applyVideoTimeline = function() {
   root.TIMING.layout = function() {
     return { duration: root.SCRIPT.duration, gap: 0,
-      pages: root.SCRIPT.PAGES.map((p, index) => ({ ...p, index, speechEnd: p.cues.at(-1).end,
+      pages: root.SCRIPT.PAGES.map(p => ({ ...p, speechEnd: p.cues.at(-1)?.end ?? p.end,
         cues: p.cues.map(c => ({ id: c.id, text: c.t, sub: c.t, start: c.start, end: c.end, dur: c.end-c.start, hold: 0 })) })) };
   };
 };
@@ -123,22 +130,24 @@ async function main(inputFile, outputFile) {
     return;
   }
   const plan = input.plan;
+  const range = input.action === 'preview' ? input.window : undefined;
+  if (input.action === 'preview' && (!range || typeof input.signature !== 'string')) throw new Error('A preview requires its source window and snapshot signature.');
   const progressFile = path.join(path.dirname(inputFile), 'progress.json');
   const report = (phase, counts = {}) => {
     const temporary = progressFile + '.tmp';
-    fs.writeFileSync(temporary, JSON.stringify({ stage: 'rendering', phase, ...counts }));
+    fs.writeFileSync(temporary, JSON.stringify({ stage: range ? 'previewing' : 'rendering', phase, ...counts }));
     fs.renameSync(temporary, progressFile);
   };
   report('checking_layout');
   if (Math.abs(metadata.duration - plan.duration) > 0.15) throw new Error('The audio duration changed. Create a new video task.');
-  const key = createHash('sha256').update(JSON.stringify(plan)).update(engine).update(fs.readFileSync(fileURLToPath(import.meta.url))).update(visuals).update(JSON.stringify(catalog)).digest('hex').slice(0, 24);
+  const key = createHash('sha256').update(JSON.stringify({ plan, range })).update(engine).update(fs.readFileSync(fileURLToPath(import.meta.url))).update(visuals).update(JSON.stringify(catalog)).digest('hex').slice(0, 24);
   const episode = input.cacheRoot ? path.join(path.resolve(input.cacheRoot), key) : path.join(path.dirname(inputFile), 'episode');
   const fresh = !fs.existsSync(episode);
   if (fresh) fs.mkdirSync(path.join(episode, 'pages'), { recursive: true });
   const { linkProject } = await import(pathToFileURL(path.join(engine, 'tools/project.mjs')));
   if (fresh) linkProject(episode);
   else if (fs.realpathSync(path.join(episode, 'engine')) !== fs.realpathSync(engine)) throw new Error('The render cache belongs to a different engine.');
-  const result = buildEpisode(plan);
+  const result = buildEpisode(plan, range);
   fs.writeFileSync(path.join(episode, 'script.js'), result.script);
   fs.writeFileSync(path.join(episode, 'timeline.js'), 'window.applyVideoTimeline();');
   fs.writeFileSync(path.join(episode, 'illustrations.js'), result.visuals);
@@ -154,6 +163,7 @@ async function main(inputFile, outputFile) {
   const { openStage, loadEpisode, closeStage } = await import(pathToFileURL(path.join(engine, 'tools/lib.mjs')));
   const { lintPages } = await import(pathToFileURL(path.join(engine, 'tools/checks.mjs')));
   const stage = await openStage('render');
+  const thumbnailScenes = [];
   try {
     const { L, META } = loadEpisode();
     L.meta = META;
@@ -161,6 +171,19 @@ async function main(inputFile, outputFile) {
     fs.writeFileSync(path.join(path.dirname(inputFile), 'layout-check.json'), JSON.stringify(issues));
     const errors = issues.filter(issue => issue.level === 'error');
     if (errors.length) throw new Error(`Layout check failed: ${errors.slice(0, 3).map(issue => issue.msg).join('; ')}`);
+    // The engine otherwise inserts a future "cover" frame at t=0. Use the actual first frame.
+    await stage.page.evaluate(() => globalThis.ENGINE.renderAt(0));
+    const cover = `cover-${key.slice(0, 12)}.png`;
+    await stage.page.screenshot({ path: path.join(episode, cover) });
+    fs.writeFileSync(path.join(episode, 'cover.json'), JSON.stringify({ image: cover }));
+    if (range) {
+      report('rendering_thumbnails');
+      for (const page of result.pages.slice(0, 12)) {
+        await stage.page.evaluate(time => globalThis.ENGINE.renderAt(time), Math.max(page.start, page.end - 1 / 24));
+        await stage.page.screenshot({ path: path.join(path.dirname(inputFile), `scene-${page.sourceIndex}.png`) });
+        thumbnailScenes.push(page.sourceIndex);
+      }
+    }
   } finally { await closeStage(stage.browser); }
   const renderArgs = [path.join(engine, 'tools/render.mjs'), '--fps', '24', '--workers', '2', '--name', 'film'];
   let planJson = '';
@@ -177,10 +200,12 @@ async function main(inputFile, outputFile) {
   const video = path.join(path.dirname(inputFile), 'video.mp4');
   // Render without the engine's voice track: its mixer normalizes speech. Keep the user's original track instead.
   report('muxing_audio');
-  await run(FFMPEG, ['-nostdin', '-n', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', path.join(episode, 'out/film-有字幕.mp4'), '-protocol_whitelist', 'file,pipe', '-i', input.audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', video], episode);
+  await run(FFMPEG, ['-nostdin', '-n', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', path.join(episode, 'out/film-有字幕.mp4'), ...(range ? ['-ss', String(range.start), '-t', String(range.end - range.start)] : []), '-protocol_whitelist', 'file,pipe', '-i', input.audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', video], episode);
   report('checking_video');
   const output = probe(video);
-  if (output.width !== 1920 || output.height !== 1080 || Math.abs(output.duration - plan.duration) > 0.2) throw new Error('Rendered video metadata does not match the audio.');
+  const duration = range ? range.end - range.start : plan.duration;
+  if (output.width !== 1920 || output.height !== 1080 || Math.abs(output.duration - duration) > 0.2) throw new Error('Rendered video metadata does not match the audio.');
+  if (range) output.preview = { ...range, signature: input.signature, scenes: thumbnailScenes };
   fs.writeFileSync(outputFile, JSON.stringify(output), { flag: 'wx' });
 }
 

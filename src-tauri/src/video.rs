@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::OnceLock};
 
-pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v2.md");
+pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v3.md");
 pub const BATCH_SIZE: usize = 24;
 
 #[derive(Deserialize)]
@@ -50,6 +50,22 @@ pub fn storyboard_input(plan: &VideoPlan, first: usize, end: usize) -> String {
         "cues": cues(first, end),
     })
     .to_string()
+}
+
+pub fn storyboard_batch_end(cues: &[Cue], first: usize) -> usize {
+    let end = (first + BATCH_SIZE).min(cues.len());
+    if end == cues.len() {
+        return end;
+    }
+    ((first + BATCH_SIZE - 6)..end)
+        .rev()
+        .find(|&i| {
+            matches!(
+                cues[i].text.trim().chars().last(),
+                Some('。' | '！' | '？' | '!' | '?' | '；' | ';')
+            )
+        })
+        .map_or(end, |i| i + 1)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -111,6 +127,63 @@ pub struct VideoPlan {
     pub duration: f64,
     pub cues: Vec<Cue>,
     pub scenes: Vec<Scene>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreviewRequest {
+    pub first_scene: usize,
+    pub seconds: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PreviewWindow {
+    pub start: f64,
+    pub end: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum VideoWork {
+    Prepare,
+    Render,
+    Preview(PreviewRequest),
+}
+
+impl VideoWork {
+    pub fn stage(self) -> &'static str {
+        match self {
+            Self::Prepare => "preparing",
+            Self::Render => "rendering",
+            Self::Preview(_) => "previewing",
+        }
+    }
+
+    pub fn window(self, plan: &VideoPlan) -> Result<Option<PreviewWindow>, String> {
+        if matches!(self, Self::Prepare) {
+            return Ok(None);
+        }
+        validate_cues(&plan.cues, plan.duration)?;
+        validate_scenes(&plan.scenes, 0, plan.cues.len())?;
+        if let Self::Preview(request) = self {
+            if !matches!(request.seconds, 30 | 60) {
+                return Err("试片请选择30秒或60秒。".into());
+            }
+            let scene = plan
+                .scenes
+                .get(request.first_scene)
+                .ok_or("试片起始分镜不存在。")?;
+            let start = if request.first_scene == 0 {
+                0.0
+            } else {
+                plan.cues[scene.first].start
+            };
+            return Ok(Some(PreviewWindow {
+                start,
+                end: (start + f64::from(request.seconds)).min(plan.duration),
+            }));
+        }
+        Ok(None)
+    }
 }
 
 pub fn validate_cues(cues: &[Cue], duration: f64) -> Result<(), String> {
@@ -266,6 +339,69 @@ pub fn to_srt(cues: &[Cue]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn storyboard_batches_prefer_sentence_endings_without_losing_the_hard_limit() {
+        let mut cues = (0..50)
+            .map(|i| Cue {
+                start: i as f64,
+                end: i as f64 + 0.9,
+                text: "继续讲述".into(),
+            })
+            .collect::<Vec<_>>();
+        cues[18].text = "第一个完整观点。".into();
+        cues[20].text = "接下来如何选择？".into();
+        assert_eq!(storyboard_batch_end(&cues, 0), 21);
+        assert_eq!(storyboard_batch_end(&cues, 21), 45);
+        assert_eq!(storyboard_batch_end(&cues, 45), 50);
+    }
+
+    #[test]
+    fn preview_window_uses_saved_scene_boundaries_and_never_changes_the_source_plan() {
+        let plan: VideoPlan = serde_json::from_value(serde_json::json!({
+            "title":"原声", "audioSha256":"unchanged", "duration":90,
+            "cues":[{"start":0.5,"end":2,"text":"开场"},{"start":35.125,"end":50,"text":"正文"},{"start":75,"end":85,"text":"结尾"}],
+            "scenes":[
+                {"first":0,"last":0,"kind":"opening","title":"开场","beats":[{"cue":0,"object":"book","action":"draw","label":"书籍"}]},
+                {"first":1,"last":1,"kind":"focus","title":"正文","beats":[{"cue":1,"object":"pen","action":"draw","label":"书写"}]},
+                {"first":2,"last":2,"kind":"closing","title":"结尾","beats":[{"cue":2,"object":"book","action":"draw","label":"回扣"}]}
+            ]
+        })).unwrap();
+        let original = serde_json::to_string(&plan).unwrap();
+        let work = VideoWork::Preview(PreviewRequest {
+            first_scene: 1,
+            seconds: 30,
+        });
+        let window = work.window(&plan).unwrap().unwrap();
+        assert_eq!((window.start, window.end), (35.125, 65.125));
+        let tail = VideoWork::Preview(PreviewRequest {
+            first_scene: 2,
+            seconds: 30,
+        })
+        .window(&plan)
+        .unwrap()
+        .unwrap();
+        assert_eq!((tail.start, tail.end), (75.0, 90.0));
+        for request in [
+            PreviewRequest {
+                first_scene: 3,
+                seconds: 30,
+            },
+            PreviewRequest {
+                first_scene: 0,
+                seconds: 90,
+            },
+        ] {
+            assert!(VideoWork::Preview(request).window(&plan).is_err());
+        }
+        assert_eq!(serde_json::to_string(&plan).unwrap(), original);
+        assert!(VideoWork::Preview(PreviewRequest {
+            first_scene: 0,
+            seconds: 30
+        })
+        .window(&VideoPlan::default())
+        .is_err());
+    }
+
     #[test]
     fn subtitles_preserve_measured_silence_and_round_trip() {
         let srt = "\u{feff}1\r\n00:00:00,500 --> 00:00:02,000\r\n第一句\r\n\r\n2\r\n00:00:05,125 --> 00:00:08,000\r\n第二句\r\n";

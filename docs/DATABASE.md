@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 派生试片生命周期（2026-11-02，仍为v14）
+
+无表/列或SQL迁移变更，`plan_json`形状也不变。同一video_jobs通过stage=previewing执行试片，run_id递增，状态仍使用running/awaiting_confirmation/failed/cancelled。预览成功返回确认；`finish_video_job`仅接受validating阶段，合法MP4也不能在预览阶段登记为正式成片。
+
+保存字幕/分镜回到storyboard阶段，撤销旧试片展示资格；失败、取消和重启仍按原代次隔离，不覆盖旧音视频。预览清单/MP4/PNG保存在项目的当前运行缓存目录，不登记assets、不写业务表，运行结果的计划+源码签名和文件完整性决定是否可用。SQLite备份保留计划和任务；预览缓存不备份，恢复后缺失即重新试片。完整确认后仍在一个事务追加正式MP4/SRT。迁移、备份、停止和正式归档回归见 [P0验收](VIDEO-DIRECTOR-VERIFICATION.md)。
+
 ## 物体分镜 JSON 迭代（2026-11-01，仍为v14）
 
 无表/列或迁移变更。`video_jobs.plan_json.scenes[].beats`保存`cue`（全局零基字幕索引）、`object`、`action`、`label`；目录由受控源码定义，不存模型代码或文件路径。旧场景的labels仍可解码，缺beats默认为空，仅用于历史读取；不能把旧文字图解当作新版绘图输入。升级由用户明确保存字幕并清空分镜，保留duration/audioSha256/cues，随后复用原任务准备流程。已完成任务不可改写，制作新版使用原音频和已登记SRT新建任务。历史素材、发布快照、备份和恢复不重写。

@@ -5,6 +5,7 @@ import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import VideoJobProgress from './VideoJobProgress.vue'
+import { inspectStoryboard } from './storyboard'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -38,6 +39,10 @@ const scenes = ref<VideoScene[]>([])
 const savedEditor = ref('')
 const audioUrl = ref('')
 const videoUrl = ref('')
+const previewUrl = ref('')
+const previewFrames = ref<{ sceneIndex: number; src: string }[]>([])
+const previewFirstScene = ref('0')
+const previewSeconds = ref('30')
 const mediaError = ref('')
 const progressError = ref('')
 const jobPanel = ref<globalThis.HTMLElement>()
@@ -48,11 +53,13 @@ const subtitles = computed(() => assets.value.filter(a => a.assetType === 'subti
 const editable = computed(() => selected.value && !['running', 'succeeded'].includes(selected.value.status))
 const legacyPlan = computed(() => scenes.value.some(scene => !scene.beats?.length))
 const completePlan = computed(() => scenes.value.length > 0 && !legacyPlan.value && scenes.value.at(-1)!.last + 1 === selected.value?.plan.cues.length)
+const storyboardNotes = computed(() => selected.value ? inspectStoryboard({ ...selected.value.plan, scenes: scenes.value }) : [])
 const sceneKindLabel = (kind: VideoScene['kind']) => Object.hasOwn(visualCatalog.kinds, kind) ? visualCatalog.kinds[kind as keyof typeof visualCatalog.kinds] : '旧版文字图解'
 const editorValue = () => JSON.stringify([subtitleText.value, scenes.value])
 const jobLabel = (job: VideoJob) => `${videoStatuses[job.status]} · ${job.createdAt ? new Date(job.createdAt).toLocaleString() : job.id}`
 const dirty = computed(() => loaded.value && editable.value && savedEditor.value !== editorValue())
 const configDirty = computed(() => loaded.value && savedConfig.value !== JSON.stringify(config.value))
+const previewKey = computed(() => selected.value?.preview && !dirty.value ? `${props.id}:${selected.value.id}:${selected.value.runId}:${selected.value.preview.signature}` : '')
 const runtimeFields: { key: keyof VideoSettings; label: string; directory: boolean; hint: string }[] = [
   { key: 'engineRoot', label: 'Frametell 引擎目录', directory: true, hint: '选择 whiteboard-teacher-video 内的 engine，当前适配 0.7.3。' },
   { key: 'nodePath', label: 'Node 程序', directory: false, hint: '选择 Node 22.19 或更新版本的 node.exe。' },
@@ -108,6 +115,7 @@ async function poll() {
       if (disposed || projectId !== props.id) return
       assets.value = files
       if (selected.value?.status === 'succeeded') message.value = '原声 MG 视频已保存，可直接播放或用于发布。'
+      else if (selected.value?.preview) message.value = '试片已就绪，未登记为正式成片。请播放检查，再确认完整视频。'
     }
   } catch (cause) { if (!disposed && projectId === props.id) progressError.value = String(cause) }
   finally { polling = false }
@@ -129,17 +137,33 @@ const remake = () => { const job = selected.value; if (job?.audioAssetId && job.
 const resume = (render: boolean) => run(async () => {
   if (!selected.value) return
   if (configDirty.value) throw new Error('请先保存运行环境配置。')
-  if (render) await api.savePlan(selected.value.id, subtitleText.value, scenes.value)
+  if (render) { await api.savePlan(selected.value.id, subtitleText.value, scenes.value); selected.value.preview = null }
   else if (dirty.value) throw new Error('字幕已修改，请使用“保存字幕并重新生成分镜”。')
   savedEditor.value = editorValue()
   put(await api.continueJob(selected.value.id, render))
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
+const preview = () => run(async () => {
+  if (!selected.value) return
+  if (configDirty.value) throw new Error('请先保存运行环境配置。')
+  await api.savePlan(selected.value.id, subtitleText.value, scenes.value)
+  selected.value.preview = null
+  savedEditor.value = editorValue()
+  put(await api.previewJob(selected.value.id, Number(previewFirstScene.value), Number(previewSeconds.value)))
+  await nextTick()
+  jobPanel.value?.scrollIntoView({ block: 'start' })
+})
+function focusScene(index: number) {
+  const card = jobPanel.value?.querySelector<globalThis.HTMLElement>(`#video-scene-${index}`)
+  card?.scrollIntoView({ block: 'nearest' })
+  card?.querySelector('input')?.focus({ preventScroll: true })
+}
 const regenerate = () => run(async () => {
   if (!selected.value) return
   if (configDirty.value) throw new Error('请先保存运行环境配置。')
   await api.savePlan(selected.value.id, subtitleText.value, [])
+  selected.value.preview = null
   scenes.value = []; savedEditor.value = editorValue()
   put(await api.continueJob(selected.value.id, false))
 })
@@ -149,6 +173,7 @@ const resetEditor = () => run(async () => { await adopt(selected.value) })
 const saveEditor = () => run(async () => {
   if (!selected.value) return
   await api.savePlan(selected.value.id, subtitleText.value, scenes.value)
+  selected.value.preview = null
   savedEditor.value = editorValue()
   jobs.value = await api.listJobs(props.id)
   message.value = '字幕和分镜校对已保存，尚未启动渲染。'
@@ -175,6 +200,21 @@ watch(() => selected.value?.videoAssetId, async id => {
   if (!id || !desktop) return
   try { const url = await api.mediaSource(props.id, id); if (!disposed && id === selected.value?.videoAssetId) videoUrl.value = url }
   catch (cause) { mediaError.value = `视频无法预览：${String(cause)}` }
+})
+watch(selectedId, () => { previewFirstScene.value = '0' })
+watch(previewKey, async (key, _previous, onCleanup) => {
+  previewUrl.value = ''; previewFrames.value = []
+  const job = selected.value
+  if (!key || !job?.preview || !desktop) return
+  let current = true
+  onCleanup(() => { current = false })
+  try {
+    const [url, ...frames] = await Promise.all([
+      api.previewSource(props.id, job.id, job.runId),
+      ...job.preview.scenes.map(async sceneIndex => ({ sceneIndex, src: await api.previewSource(props.id, job.id, job.runId, sceneIndex) })),
+    ])
+    if (current && !disposed) { previewUrl.value = url; previewFrames.value = frames }
+  } catch (cause) { if (current && !disposed) mediaError.value = `试片无法读取，请重新生成：${String(cause)}` }
 })
 watch(() => props.id, () => { if (desktop) void load() })
 onMounted(() => { if (desktop) { void load(); timer = globalThis.setInterval(() => { void poll() }, 1500) } })
@@ -522,9 +562,137 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               还原未保存修改
             </Button>
           </div>
+          <section
+            v-if="completePlan"
+            class="video-preview"
+            aria-label="原声试片"
+          >
+            <div class="video-editor-heading">
+              <h3>先看一小段，再做整片</h3>
+              <p class="muted">
+                使用当前校对和同一绘图流程。试片不是正式成片，不会登记到发布素材。
+              </p>
+            </div>
+            <div class="video-preview-controls">
+              <div class="video-field">
+                <label for="preview-first-scene">从哪一镜开始</label>
+                <Select
+                  v-model="previewFirstScene"
+                  :disabled="busy || running"
+                >
+                  <SelectTrigger id="preview-first-scene">
+                    <SelectValue>第 {{ Number(previewFirstScene) + 1 }} 镜 · {{ scenes[Number(previewFirstScene)]?.title }}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem
+                      v-for="(scene, index) in scenes"
+                      :key="index"
+                      :value="String(index)"
+                    >
+                      第 {{ index + 1 }} 镜 · {{ scene.title }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div class="video-field">
+                <label for="preview-seconds">片段时长</label>
+                <Select
+                  v-model="previewSeconds"
+                  :disabled="busy || running"
+                >
+                  <SelectTrigger id="preview-seconds">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="30">
+                      30秒
+                    </SelectItem><SelectItem value="60">
+                      60秒
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                data-test="preview-video"
+                variant="outline"
+                :disabled="busy || running"
+                @click="preview"
+              >
+                <AppIcon name="video" />生成{{ previewSeconds }}秒试片
+              </Button>
+            </div>
+            <p class="muted">
+              从所选分镜的原声位置截取，片尾不足时使用剩余时长；原音频、字幕和已有成片保持不变。
+            </p>
+            <template v-if="previewKey && selected.preview">
+              <p class="video-preview-caption">
+                本次试片：原声 {{ selected.preview.start.toFixed(2) }}—{{ selected.preview.end.toFixed(2) }} 秒。检查完仍需确认完整视频。
+              </p>
+              <video
+                v-if="previewUrl"
+                :src="previewUrl"
+                controls
+                preload="metadata"
+                aria-label="原声试片（非正式成片）"
+                @error="mediaError = '试片无法播放，请重新生成试片。'"
+              />
+              <p
+                v-else
+                class="muted"
+                role="status"
+              >
+                正在读取本次试片…
+              </p>
+              <div class="video-thumbnails">
+                <button
+                  v-for="frame in previewFrames"
+                  :key="frame.sceneIndex"
+                  type="button"
+                  class="video-thumbnail"
+                  :aria-label="`查看第${frame.sceneIndex + 1}镜校对`"
+                  @click="focusScene(frame.sceneIndex)"
+                >
+                  <img
+                    :src="frame.src"
+                    :alt="`第${frame.sceneIndex + 1}镜渲染缩略图`"
+                    loading="lazy"
+                    width="1920"
+                    height="1080"
+                  >
+                  <span>第 {{ frame.sceneIndex + 1 }} 镜 · {{ scenes[frame.sceneIndex]?.title }}</span>
+                </button>
+              </div>
+              <p class="muted">
+                缩略图来自本次试片，最多展示12镜。点击可定位校对；修改后需重新生成试片。
+              </p>
+            </template>
+          </section>
+          <aside
+            v-if="storyboardNotes.length"
+            class="video-storyboard-notes"
+            aria-label="分镜观看提醒"
+          >
+            <h3>观看提醒</h3><p class="muted">
+              不是格式错误，也不会自动改稿。请结合原声判断，必要的停留和回扣可以保留。
+            </p>
+            <ul>
+              <li
+                v-for="note in storyboardNotes"
+                :key="`${note.sceneIndex}-${note.code}`"
+              >
+                <Button
+                  variant="link"
+                  @click="focusScene(note.sceneIndex)"
+                >
+                  第{{ note.sceneIndex + 1 }}镜
+                </Button><span>{{ note.message }}</span>
+              </li>
+            </ul>
+          </aside>
           <div class="video-scenes">
             <article
               v-for="(scene, index) in scenes"
+              :id="`video-scene-${index}`"
               :key="index"
               class="video-scene"
             >
@@ -548,6 +716,81 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   :aria-label="`第${index + 1}镜物体${i + 1}标签`"
                   maxlength="8"
                 />
+                <details class="video-beat-settings">
+                  <summary>调整物体、动作与字幕锚点</summary>
+                  <div class="video-beat-controls">
+                    <div class="video-field">
+                      <label :for="`scene-${index}-object-${i}`">具体物体</label>
+                      <Select
+                        v-model="beat.object"
+                        :disabled="busy"
+                      >
+                        <SelectTrigger
+                          :id="`scene-${index}-object-${i}`"
+                          :aria-label="`第${index + 1}镜物体${i + 1}`"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem
+                            v-for="(name, key) in visualCatalog.objects"
+                            :key="key"
+                            :value="key"
+                          >
+                            {{ name }}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div class="video-field">
+                      <label :for="`scene-${index}-action-${i}`">语义动作</label>
+                      <Select
+                        v-model="beat.action"
+                        :disabled="busy"
+                      >
+                        <SelectTrigger
+                          :id="`scene-${index}-action-${i}`"
+                          :aria-label="`第${index + 1}镜物体${i + 1}动作`"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem
+                            v-for="(name, key) in visualCatalog.actions"
+                            :key="key"
+                            :value="key"
+                          >
+                            {{ name }}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div class="video-field video-anchor">
+                      <label :for="`scene-${index}-cue-${i}`">在哪句开始出现</label>
+                      <Select
+                        :model-value="String(beat.cue)"
+                        :disabled="busy"
+                        @update:model-value="beat.cue = Number($event)"
+                      >
+                        <SelectTrigger
+                          :id="`scene-${index}-cue-${i}`"
+                          :aria-label="`第${index + 1}镜物体${i + 1}字幕锚点`"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem
+                            v-for="(cue, offset) in selected.plan.cues.slice(scene.first, scene.last + 1)"
+                            :key="offset"
+                            :value="String(scene.first + offset)"
+                          >
+                            {{ scene.first + offset + 1 }} · {{ cue.text }}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </details>
               </div>
               <p
                 v-if="!scene.beats?.length"
@@ -555,11 +798,37 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               >
                 {{ scene.labels?.join(' · ') }}
               </p>
+              <div
+                v-if="scene.beats?.length"
+                class="video-field"
+              >
+                <label :for="`scene-${index}-kind`">叙事构图</label>
+                <Select
+                  v-model="scene.kind"
+                  :disabled="busy"
+                >
+                  <SelectTrigger
+                    :id="`scene-${index}-kind`"
+                    :aria-label="`第${index + 1}镜构图`"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem
+                      v-for="(name, key) in visualCatalog.kinds"
+                      :key="key"
+                      :value="key"
+                    >
+                      {{ name }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </article>
           </div>
           <div class="video-render-action">
             <p class="muted">
-              使用 whiteboard-teacher-video 读书成片同款物体绘图、构图和动作。请核对物体与台词的含义及触发字幕，确认后制作；原音频和旧成片保留。
+              使用原有85种手绘物体；按所选字幕触发并突出主体。请核对物体含义与动作时机，确认后生成完整视频；试片和观看提醒不会替你确认，原音频与旧成片保留。
             </p><Button
               data-test="render-video"
               :disabled="busy || running || !completePlan"
@@ -584,6 +853,21 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-path input { min-width: 0; }
 .video-beat { display: grid; gap: 6px; min-width: 0; }
 .video-beat label { color: var(--muted-foreground); font-size: 12px; overflow-wrap: anywhere; }
+.video-beat-settings summary { cursor: pointer; color: var(--primary); font-size: 13px; padding-block: 6px; }
+.video-beat-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-block: 10px; }
+.video-anchor { grid-column: 1 / -1; }
+.video-preview { display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
+.video-preview .video-editor-heading { margin-top: 0; }
+.video-preview-controls { display: grid; grid-template-columns: minmax(0, 2fr) minmax(100px, 1fr) auto; gap: 16px; align-items: end; }
+.video-preview-caption { color: var(--primary); font-size: 14px; }
+.video-thumbnails { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.video-thumbnail { display: grid; gap: 8px; text-align: left; border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--card); min-width: 0; }
+.video-thumbnail img { width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 4px; }
+.video-thumbnail span { font-size: 13px; overflow-wrap: anywhere; }
+.video-storyboard-notes { padding: 16px; border-left: 3px solid var(--primary); background: var(--accent); border-radius: 6px; }
+.video-storyboard-notes ul { padding: 0; margin: 8px 0 0; max-height: 220px; overflow-y: auto; }
+.video-storyboard-notes li { display: flex; gap: 10px; align-items: baseline; margin-top: 6px; font-size: 13px; }
+.video-storyboard-notes button { padding: 0; height: auto; }
 .video-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .video-job-heading [role='combobox'] { max-width: 360px; }
 .video-job { scroll-margin-top: calc(var(--workspace-sticky-top) + 20px); }
@@ -592,6 +876,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-runtime > :not(summary) { margin-top: 18px; }
 .video-scenes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-height: 560px; overflow: auto; padding: 2px; }
 .video-scene { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; }
+.video-scene { scroll-margin-block: 16px; min-width: 0; }
 .video-editor-heading { margin-top: 12px; }
 .video-render-action { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
 .video-render-action .muted { max-width: 600px; }
@@ -600,4 +885,5 @@ audio { width: 100%; align-self: center; }
 video { display: block; width: 100%; max-height: 640px; background: #151d18; border-radius: 10px; }
 @media (max-width: 980px) { .video-form-grid, .video-scenes { grid-template-columns: minmax(0, 1fr); } .video-render-action, .video-job-heading { align-items: stretch; flex-direction: column; } .video-job-heading [role='combobox'] { max-width: none; } }
 @media (max-width: 520px) { .video-inputs, .video-job, .video-runtime { padding: 16px; } }
+@media (max-width: 720px) { .video-preview-controls, .video-thumbnails { grid-template-columns: minmax(0, 1fr); } .video-preview { padding: 14px; } }
 </style>
