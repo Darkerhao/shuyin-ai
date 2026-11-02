@@ -9,6 +9,14 @@ const now = ref(Date.now())
 let clock: ReturnType<typeof globalThis.setInterval> | undefined
 const active = computed(() => props.job.status === 'running')
 const progress = computed(() => active.value && props.job.progress?.stage === props.job.stage ? props.job.progress : null)
+const rendering = computed(() => active.value && ['rendering', 'previewing'].includes(props.job.stage))
+const renderSteps = [
+  { phase: 'rendering_frames', label: '绘制画面', unit: 'frames' },
+  { phase: 'preparing_subtitles', label: '准备字幕', unit: 'cues' },
+  { phase: 'rendering_subtitles', label: '合成字幕', unit: 'seconds' },
+  { phase: 'muxing_audio', label: '合入原声', unit: 'seconds' },
+]
+const renderStep = computed(() => progress.value?.phase === 'checking_video' ? renderSteps.length : renderSteps.findIndex(item => item.phase === progress.value?.phase))
 const steps = ['原声字幕', '动画分镜', '确认分镜', '画面渲染', '成片归档']
 const step = computed(() => {
   if (props.job.status === 'succeeded') return steps.length
@@ -18,7 +26,8 @@ const step = computed(() => {
 const covered = computed(() => (props.job.plan.scenes.at(-1)?.last ?? -1) + 1)
 const percent = computed(() => {
   const p = progress.value
-  if (p && p.total > 0 && (props.job.stage === 'transcribing' || (['rendering', 'previewing'].includes(props.job.stage) && p.phase === 'rendering_frames'))) return Math.min(100, Math.max(0, Math.floor(p.completed / p.total * 100)))
+  const measured = p && rendering.value && renderSteps.some(item => item.phase === p.phase && (p.phase === 'rendering_frames' || item.unit === p.unit))
+  if (p && p.total > 0 && (props.job.stage === 'transcribing' || measured)) return Math.min(100, Math.max(0, Math.floor(p.completed / p.total * 100)))
   if (props.job.stage === 'storyboard' && props.job.plan.cues.length) return Math.min(100, Math.floor(covered.value / props.job.plan.cues.length * 100))
   return null
 })
@@ -30,8 +39,9 @@ const phaseCopy: Record<string, [string, string]> = {
   checking_layout: ['正在检查每一镜的排版', '逐镜检查文字与图形，检查通过后开始绘制视频画面。'],
   rendering_thumbnails: ['正在生成分镜缩略图', '从本次真实绘图中截取，不使用另一套预览画面。'],
   rendering_frames: ['正在让分镜动起来', '按已完成的视频片段更新真实帧数，复用的缓存也会计入。画面就绪后，再合成字幕与原声。'],
-  rendering_subtitles: ['正在把字幕放入画面', '画面已绘制完成，正在按原声时间轴合成字幕。这一步仍需编码，请保持应用开启。'],
-  muxing_audio: ['正在把原声合入画面', '画面已绘制完成，正在合入原声音轨并写入视频文件。'],
+  preparing_subtitles: ['正在准备每一句字幕', '画面已绘制完成，正在按原声时间轴生成字幕图层。下方显示已准备好的字幕数量。'],
+  rendering_subtitles: ['正在把字幕放入画面', '正在逐帧合成字幕，进度跟随实际处理的视频位置更新。长视频需要一些时间，可在下方查看处理速度。'],
+  muxing_audio: ['正在把原声合入画面', '字幕已合成，正在合入原声音轨并写入视频文件。完成后还会检查并归档成片。'],
   checking_video: ['正在核对成片', '检查视频尺寸、时长与音轨，准备保存成片。'],
 }
 const copy = computed<[string, string]>(() => {
@@ -57,12 +67,24 @@ function time(seconds: number) {
   return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`
 }
 const elapsed = computed(() => progress.value?.startedAt ? time((now.value - progress.value.startedAt) / 1000) : '')
+const feedbackAge = computed(() => progress.value?.updatedAt ? Math.max(0, Math.floor((now.value - progress.value.updatedAt) / 1000)) : null)
+const feedbackTime = computed(() => feedbackAge.value === null ? '' : feedbackAge.value < 2 ? '刚刚更新' : feedbackAge.value < 60 ? `${feedbackAge.value} 秒前` : `${Math.floor(feedbackAge.value / 60)} 分钟前`)
+const fresh = computed(() => !props.syncError && (feedbackAge.value === null || feedbackAge.value < 15))
+const speed = computed(() => {
+  const p = progress.value
+  return fresh.value && p?.unit === 'seconds' && p.speed && Number.isFinite(p.speed) && p.speed > 0 ? `${p.speed.toFixed(2)}×` : ''
+})
 const cueCount = computed(() => progress.value?.cueCount || props.job.plan.cues.length)
 const previewCues = computed(() => progress.value?.preview.length ? progress.value.preview : props.job.plan.cues.slice(-3))
 const previewScenes = computed(() => props.job.plan.scenes.slice(-2))
 const measure = computed(() => {
   if (props.job.stage === 'transcribing' && progress.value?.total) return `已识别 ${time(progress.value.completed)} / ${time(progress.value.total)}`
   if (['rendering', 'previewing'].includes(props.job.stage) && progress.value?.phase === 'rendering_frames' && progress.value.total) return `已绘制 ${progress.value.completed.toLocaleString('zh-CN')} / ${progress.value.total.toLocaleString('zh-CN')} 帧`
+  if (rendering.value && progress.value?.total) {
+    const p = progress.value
+    if (p.phase === 'preparing_subtitles' && p.unit === 'cues') return `已准备 ${p.completed} / ${p.total} 条字幕`
+    if (p.unit === 'seconds' && ['rendering_subtitles', 'muxing_audio'].includes(p.phase)) return `已${p.phase === 'rendering_subtitles' ? '合成' : '合入'} ${time(p.completed)} / ${time(p.total)}`
+  }
   if (props.job.stage === 'storyboard' && props.job.plan.cues.length) return `已编排 ${covered.value} / ${props.job.plan.cues.length} 条字幕`
   return phaseCopy[progress.value?.phase ?? '']?.[0] ?? videoStages[props.job.stage] ?? props.job.stage
 })
@@ -77,6 +99,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 <template>
   <div
     class="creation-progress"
+    :class="{ 'is-animating': active && fresh }"
     :data-status="job.status"
   >
     <div class="progress-hero">
@@ -94,6 +117,15 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
             cx="44"
             cy="44"
             r="39"
+          />
+          <circle
+            v-if="rendering"
+            class="emblem-ticks"
+            cx="44"
+            cy="44"
+            r="32"
+            pathLength="100"
+            stroke-dasharray=".5 4.5"
           />
           <circle
             v-if="active"
@@ -153,16 +185,52 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
     <div
       v-if="active"
       class="stage-progress"
+      :class="{ 'render-monitor': rendering }"
     >
       <div class="stage-progress-label">
         <span>{{ measure }}</span><strong>{{ percent === null ? '正在进行' : `本阶段 ${percent}%` }}</strong>
       </div>
       <Progress
+        :key="progress?.phase || job.stage"
         :model-value="percent"
         class="stage-progress-track"
         :aria-label="videoStages[job.stage] || '视频制作'"
         :aria-valuetext="percent === null ? '正在进行，暂无可量化进度' : measure"
       />
+      <template v-if="rendering">
+        <div class="render-telemetry">
+          <span
+            v-if="speed"
+            class="render-speed"
+          ><AppIcon name="video" />处理速度 <strong>{{ speed }}</strong><small>倍速</small></span>
+          <span v-if="feedbackTime"><span
+            class="telemetry-dot"
+            :class="{ 'is-fresh': fresh }"
+          />进度更新 <strong>{{ feedbackTime }}</strong></span>
+          <span
+            v-if="feedbackAge !== null && feedbackAge >= 15 && !syncError"
+            class="render-wait"
+          >等待新的进度反馈</span>
+          <span v-if="!speed && !feedbackTime">进度随实际处理更新</span>
+        </div>
+        <ol
+          class="render-phases"
+          aria-label="渲染步骤"
+        >
+          <li
+            v-for="(item, index) in renderSteps"
+            :key="item.phase"
+            :data-state="index < renderStep ? 'done' : index === renderStep ? 'current' : 'pending'"
+            :aria-current="index === renderStep ? 'step' : undefined"
+          >
+            <span class="render-phase-marker"><AppIcon
+              v-if="index < renderStep"
+              name="check"
+            /><span v-else>{{ index + 1 }}</span></span>
+            <span>{{ item.label }}<small>{{ index < renderStep ? '已完成' : index === renderStep ? '进行中' : '待进行' }}</small></span>
+          </li>
+        </ol>
+      </template>
     </div>
 
     <div class="creation-output">
@@ -232,15 +300,17 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 </template>
 
 <style scoped>
-.creation-progress { --progress-tone: var(--primary); overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: radial-gradient(ellipse at 0 0, var(--accent), transparent 68%), var(--card); }
+.creation-progress { --progress-tone: var(--primary); --render-surface: var(--sidebar); --render-ink: #f4f7f1; --render-light: #d7e8ca; --render-muted: #c1d5ca; overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: radial-gradient(ellipse at 0 0, var(--accent), transparent 68%), var(--card); }
 .creation-progress[data-status='failed'] { --progress-tone: var(--color-destructive); }
 .creation-progress[data-status='cancelled'], .creation-progress[data-status='draft'] { --progress-tone: var(--muted-foreground); }
 .progress-hero { display: flex; align-items: center; gap: 20px; padding: 28px 28px 24px; }
-.progress-emblem { position: relative; display: grid; place-items: center; width: 80px; height: 80px; color: var(--progress-tone); flex-shrink: 0; }
+.progress-emblem { position: relative; display: grid; place-items: center; width: 96px; height: 96px; color: var(--progress-tone); flex-shrink: 0; }
 .progress-emblem > .emblem-ring { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke-width: 2.5; transform: rotate(-90deg); }
 .emblem-track { stroke: color-mix(in srgb, var(--progress-tone) 12%, transparent); }
+.emblem-ticks { stroke: color-mix(in srgb, var(--progress-tone) 25%, transparent); stroke-width: 2; }
 .emblem-arc { stroke: var(--progress-tone); stroke-linecap: round; transition: stroke-dasharray .5s ease; }
-.is-active.is-indeterminate > .emblem-ring { animation: orbit 3s linear infinite; }
+.is-animating .is-active.is-indeterminate > .emblem-ring { animation: orbit 3s linear infinite; }
+.is-animating .emblem-arc { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--progress-tone) 40%, transparent)); }
 .progress-emblem > .app-icon { width: 28px; height: 28px; }
 .emblem-value { font-size: 25px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
 .emblem-value small { margin-left: 2px; font-size: 12px; font-weight: 500; letter-spacing: 0; }
@@ -265,6 +335,31 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .stage-progress-label strong { color: var(--progress-tone); font-weight: 600; white-space: nowrap; }
 .stage-progress-track { height: 4px; background: var(--secondary); }
 .stage-progress-track :deep([data-slot='progress-indicator']) { background: var(--progress-tone); }
+.creation-progress:not(.is-animating) .stage-progress-track :deep([data-state='indeterminate']) { animation-play-state: paused; }
+.render-monitor { position: relative; margin: 20px 28px 0; padding: 22px 24px 20px; border: 1px solid color-mix(in srgb, var(--render-light) 20%, var(--render-surface)); border-radius: 12px; background: radial-gradient(ellipse at 100% 0, #3c6858 0, transparent 72%), var(--render-surface); color: var(--render-ink); }
+.render-monitor .stage-progress-label { align-items: baseline; margin-bottom: 14px; color: var(--render-muted); font-size: 13px; }
+.render-monitor .stage-progress-label strong { color: var(--render-light); font-size: 20px; letter-spacing: -.02em; }
+.render-monitor .stage-progress-track { height: 10px; background: #ffffff1a; box-shadow: inset 0 1px 3px #00000012; }
+.render-monitor .stage-progress-track :deep([data-slot='progress-indicator']) { position: relative; background: linear-gradient(90deg, #81af93, var(--render-light)); box-shadow: 0 0 16px #d7e8ca40; }
+.render-monitor .stage-progress-track :deep([data-slot='progress-indicator'])::after { content: ''; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 20%, #ffffff75 50%, transparent 80%); transform: translateX(-100%); }
+.is-animating .render-monitor .stage-progress-track :deep([data-slot='progress-indicator'][data-state='loading'])::after { animation: render-scan 2.8s ease-in-out infinite; }
+.render-telemetry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; min-height: 22px; margin-top: 14px; color: var(--render-muted); font-size: 11px; }
+.render-telemetry > span { display: inline-flex; align-items: center; gap: 7px; }
+.render-telemetry .app-icon { width: 14px; height: 14px; }
+.render-telemetry strong { color: var(--render-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.render-telemetry small { font-size: inherit; }
+.telemetry-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--render-muted); }
+.telemetry-dot.is-fresh { background: var(--render-light); box-shadow: 0 0 0 3px #d7e8ca15; }
+.render-wait { color: var(--render-light); }
+.render-phases { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 18px 0 0; padding: 18px 0 0; border-top: 1px solid #ffffff1f; list-style: none; }
+.render-phases li { display: flex; align-items: center; gap: 9px; min-width: 0; color: var(--render-muted); font-size: 12px; }
+.render-phase-marker { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 24px; border: 1px solid #ffffff40; border-radius: 50%; font-size: 10px; font-variant-numeric: tabular-nums; }
+.render-phase-marker .app-icon { width: 13px; height: 13px; }
+.render-phases small { display: block; margin-top: 2px; font-size: 10px; }
+.render-phases [data-state='done'] .render-phase-marker { color: var(--render-light); border-color: transparent; background: #d7e8ca18; }
+.render-phases [data-state='current'] { color: var(--render-ink); }
+.render-phases [data-state='current'] .render-phase-marker { color: var(--render-surface); border-color: var(--render-light); background: var(--render-light); box-shadow: 0 0 0 4px #d7e8ca14; }
+.render-phases [data-state='current'] small { color: var(--render-light); }
 .creation-output { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 2fr); gap: 24px; margin: 22px 28px 24px; }
 .output-summary { display: grid; grid-template-columns: 1fr; align-content: start; gap: 12px; }
 .output-label { font-size: 11px; color: var(--muted-foreground); letter-spacing: .1em; }
@@ -293,7 +388,8 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .progress-note .app-icon { flex-shrink: 0; width: 14px; height: 14px; margin-top: 3px; }
 .sync-warning { color: var(--color-destructive); }
 @keyframes orbit { to { transform: rotate(270deg); } }
-@media (max-width: 1100px) { .progress-hero { flex-wrap: wrap; gap: 14px; } .elapsed-time { margin-left: 94px; margin-top: -6px; } .creation-steps li { grid-template-columns: 1fr; gap: 5px; justify-items: center; } .step-marker { grid-row: auto; } .creation-output { grid-template-columns: minmax(130px, .65fr) minmax(0, 2fr); gap: 16px; } }
+@keyframes render-scan { to { transform: translateX(100%); } }
+@media (max-width: 1100px) { .progress-hero { flex-wrap: wrap; gap: 14px; } .elapsed-time { margin-left: 110px; margin-top: -6px; } .creation-steps li { grid-template-columns: 1fr; gap: 5px; justify-items: center; } .step-marker { grid-row: auto; } .creation-output { grid-template-columns: minmax(130px, .65fr) minmax(0, 2fr); gap: 16px; } }
 @media (max-width: 640px) {
   .progress-hero { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 12px 14px; padding: 20px; }
   .progress-emblem { width: 52px; height: 52px; grid-column: 1; grid-row: 1; }
@@ -311,6 +407,11 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
   .stage-progress { padding-inline: 20px; }
   .stage-progress-label { flex-wrap: wrap; gap: 4px 12px; }
   .stage-progress-label strong { margin-left: auto; }
+  .render-monitor { margin-inline: 20px; padding: 18px 16px; }
+  .render-monitor .stage-progress-label { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .render-monitor .stage-progress-label strong { margin-left: 0; font-size: 19px; }
+  .render-telemetry { gap: 8px 16px; }
+  .render-phases { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; }
   .creation-output { grid-template-columns: minmax(0, 1fr); margin: 20px; }
   .output-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
   .output-label { grid-column: 1 / -1; }
@@ -319,5 +420,5 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
   .output-preview { padding: 15px; }
   .progress-note { padding-inline: 20px; }
 }
-@media (prefers-reduced-motion: reduce) { .progress-emblem > .emblem-ring { animation: none !important; transition: none; } }
+@media (prefers-reduced-motion: reduce) { .progress-emblem > .emblem-ring, .emblem-arc, .render-monitor :deep([data-slot='progress-indicator']), .render-monitor :deep([data-slot='progress-indicator'])::after { animation: none !important; transition: none; } }
 </style>

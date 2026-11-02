@@ -91,10 +91,13 @@ pub struct Cue {
 #[serde(default, rename_all = "camelCase")]
 pub struct VideoProgress {
     pub started_at: u64,
+    pub updated_at: u64,
     pub stage: String,
     pub phase: String,
     pub completed: f64,
     pub total: f64,
+    pub unit: Option<String>,
+    pub speed: Option<f64>,
     pub cue_count: usize,
     pub preview: Vec<Cue>,
 }

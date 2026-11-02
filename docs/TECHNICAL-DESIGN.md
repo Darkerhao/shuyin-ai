@@ -1,5 +1,17 @@
 # 书引 AI 技术设计文档
 
+## 视频编码实时进度（2026-11-02）
+
+根因：原`rendering_subtitles`只在启动Frametell `--skip-video`前写一次快照，锁定引擎0.7.3内部用`-loglevel error`启动FFmpeg，没有返回编码位置。因此已有帧进度到字幕阶段便退回不定进度。
+
+书引调用层继续使用原`--skip-subs`绘制与引擎`tools/subs.mjs`生成字幕图层，随后只保留一个由书引启动的字幕合成FFmpeg调用；滤镜、libx264/veryfast/CRF16、24fps、yuv420p和faststart与该版本源码一致。原`--skip-video`调用被替换，不修改独立引擎，不新增绘图/字幕实现。依据为本机0.7.3的`tools/render.mjs`、`tools/subs.mjs`、README及FFmpeg `-h full`的`-progress`/`-stats_period`接口。
+
+字幕合成和原声合入均使用`-progress pipe:1 -stats_period 1 -nostats`，按完整`progress`块发布`out_time_us`转换的秒数及有效`speed`。位置单调且不超过当前时窗，成功退出后该阶段计满，失败保留原错误。准备字幕每秒统计本轮时间戳内的`cue-*.png`，排除空图及旧运行文件；原画面片段统计不变。试片使用局部字幕时窗及相同原声裁取。
+
+实跑同时复现Windows原子替换进度文件偶发`EPERM`：即使无额外轮询，密集替换也可触发；未推测具体占用进程。`writeProgress`只对Windows替换快照时的EPERM/EBUSY保留上次完整快照，等待下一次正常上报，不循环重试、不生成另一份任务状态；其他写入错误、编码错误和非零退出照常失败。并发读写测试校验每次读取均为完整JSON且释放占用后更新继续，避免辅助进度错误中止有效视频。
+
+既有`VideoProgress`侧车快照和任务视图增加可选`unit`、`speed`及`updatedAt`，不写SQLite，不新增IPC、权限、依赖或任务状态。前端只在阶段与单位一致时计算百分比，从原快照派生步骤、速度与反馈年龄，复用Progress组件与现有计时器。15秒无反馈或同步失败时隐藏速度、停止装饰动效；减少动态效果关闭流光与过渡。最终完成仍由原校验/归档事务决定。命令、实测数据及验收边界见 [渲染反馈验收](VIDEO-RENDER-FEEDBACK-VERIFICATION.md)。
+
 ## 基础交互组件收敛（2026-11-02）
 
 - 在现有 `components/ui` 增加 AlertDialog 与 Progress，沿用 shadcn-vue 源码分发模式和已锁定的 Reka UI 2.11.0。参考当前官方 [AlertDialog registry](https://www.shadcn-vue.com/r/styles/new-york-v4/alert-dialog.json)、[Progress registry](https://www.shadcn-vue.com/r/styles/new-york-v4/progress.json) 及本地依赖源码；只保留实际使用的导出，不增加依赖。
@@ -60,9 +72,9 @@ Node的`buildEpisode(plan, range?)`生成同一绘图工程：源cue ID、原场
 
 前端增加 VideoPage 和音频入口，沿用原素材/发布流程；新草稿按明确的 videoJob 选择对应视频及原音频，历史任务不变。Tauri protocol-asset 默认空 scope，主窗口经同项目素材ID校验后只允许单个媒体文件，复用其Range实现。运行时是独立安装工具，不捆绑AGPL源码。具体目录、源码/许可依据、版本锁定、迁移与实跑边界见 [实施与验收](MG-VIDEO-VERIFICATION.md)。
 
-进度仍由同一调度器管理：`VideoRuntime` 记录当前任务ID、run_id、启动时间与本轮目录，`list_video_jobs` 将匹配的 `progress.json` 合入现有任务视图。Python 每个已识别语段原子替换快照，最多附三条字幕；Node 使用锁定引擎的 `--plan` 取得真实帧区间，每秒统计正式缓存及本轮已封口的临时MP4，只读取顶层盒头、不扫描视频数据。临时片段须有完整moov且写入时间不早于本轮启动，取消遗留片段不冒充新进度。通过原引擎 `--skip-subs` / `--skip-video` 分开报告画面与字幕合成，随后合入原声并校验；未复制渲染算法。
+进度仍由同一调度器管理：`VideoRuntime` 记录当前任务ID、run_id、启动时间与本轮目录，`list_video_jobs` 将匹配的 `progress.json` 合入现有任务视图。Python 每个已识别语段原子替换快照，最多附三条字幕；Node 使用锁定引擎的 `--plan` 取得真实帧区间，每秒统计正式缓存及本轮已封口的临时MP4，只读取顶层盒头、不扫描视频数据。临时片段须有完整moov且写入时间不早于本轮启动，取消遗留片段不冒充新进度。原引擎 `--skip-subs` 负责绘图，`tools/subs.mjs`生成相同字幕图层，书引用原滤镜合成并读取FFmpeg进度，随后合入原声并校验；未复制渲染算法。细节见本文「视频编码实时进度」。
 
-`VideoJobProgress` 仅从当前任务/进度派生状态，不建立第二份任务缓存；沿用1.5秒轮询并提示临时同步失败，组件销毁或任务结束时清理计时器。转写的 completed/total 单位为秒，rendering_frames 为已完成片段的帧数，分镜比例来自已保存字幕覆盖；其他阶段保持不定进度。侧车快照不进入SQLite、素材或备份，不改变v14、Tauri权限或依赖；原声和已保存成果仍由原流程管理。
+`VideoJobProgress` 仅从当前任务/进度派生状态，不建立第二份任务缓存；沿用1.5秒轮询并提示临时同步失败，组件销毁或任务结束时清理计时器。转写的 completed/total 单位为秒，rendering_frames 为已完成片段的帧数，分镜比例来自已保存字幕覆盖；准备字幕以条数计，字幕合成及原声合入以编码视频秒数计，其他无法量化的阶段保持不定进度。侧车快照不进入SQLite、素材或备份，不新增迁移、Tauri权限或依赖；原声和已保存成果仍由原流程管理。
 
 浏览器的引擎脚本和依赖入口使用规范 file URL，并转义HTML属性，不经深层缓存junction访问字体；解决本机262字符字体别名在Chrome中报ERR_FILE_NOT_FOUND、真实路径可读的问题。若openStage初始化抛错，独立Node入口明确退出1，避免仅设置exitCode后遗留浏览器连接让任务一直running；Rust沿用原Job Object回收进程树并记录失败，不增加重试或另一套调度。
 
