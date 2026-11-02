@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Progress } from '@/components/ui/progress'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import AppIcon from '../../components/AppIcon.vue'
 import { videoStages, videoStatuses, type VideoJob } from '../../types/video'
@@ -156,18 +157,12 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
       <div class="stage-progress-label">
         <span>{{ measure }}</span><strong>{{ percent === null ? '正在进行' : `本阶段 ${percent}%` }}</strong>
       </div>
-      <div
+      <Progress
+        :model-value="percent"
         class="stage-progress-track"
-        :class="{ 'is-indeterminate': percent === null }"
-        role="progressbar"
         :aria-label="videoStages[job.stage] || '视频制作'"
-        :aria-valuenow="percent === null ? undefined : percent"
         :aria-valuetext="percent === null ? '正在进行，暂无可量化进度' : measure"
-        aria-valuemin="0"
-        aria-valuemax="100"
-      >
-        <span :style="percent === null ? undefined : { width: `${percent}%` }" />
-      </div>
+      />
     </div>
 
     <div class="creation-output">
@@ -268,9 +263,8 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .stage-progress { padding: 18px 28px 0; }
 .stage-progress-label { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 9px; font-size: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .stage-progress-label strong { color: var(--progress-tone); font-weight: 600; white-space: nowrap; }
-.stage-progress-track { height: 4px; overflow: hidden; border-radius: 4px; background: var(--secondary); }
-.stage-progress-track > span { display: block; height: 100%; background: var(--progress-tone); border-radius: inherit; transition: width .5s ease; }
-.stage-progress-track.is-indeterminate > span { width: 30%; animation: processing 2.4s ease-in-out infinite; }
+.stage-progress-track { height: 4px; background: var(--secondary); }
+.stage-progress-track :deep([data-slot='progress-indicator']) { background: var(--progress-tone); }
 .creation-output { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 2fr); gap: 24px; margin: 22px 28px 24px; }
 .output-summary { display: grid; grid-template-columns: 1fr; align-content: start; gap: 12px; }
 .output-label { font-size: 11px; color: var(--muted-foreground); letter-spacing: .1em; }
@@ -299,7 +293,6 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .progress-note .app-icon { flex-shrink: 0; width: 14px; height: 14px; margin-top: 3px; }
 .sync-warning { color: var(--color-destructive); }
 @keyframes orbit { to { transform: rotate(270deg); } }
-@keyframes processing { 0% { transform: translateX(-100%); } 100% { transform: translateX(440%); } }
 @media (max-width: 1100px) { .progress-hero { flex-wrap: wrap; gap: 14px; } .elapsed-time { margin-left: 94px; margin-top: -6px; } .creation-steps li { grid-template-columns: 1fr; gap: 5px; justify-items: center; } .step-marker { grid-row: auto; } .creation-output { grid-template-columns: minmax(130px, .65fr) minmax(0, 2fr); gap: 16px; } }
 @media (max-width: 640px) {
   .progress-hero { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 12px 14px; padding: 20px; }
@@ -326,5 +319,5 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
   .output-preview { padding: 15px; }
   .progress-note { padding-inline: 20px; }
 }
-@media (prefers-reduced-motion: reduce) { .progress-emblem > .emblem-ring, .stage-progress-track > span { animation: none !important; transition: none; } }
+@media (prefers-reduced-motion: reduce) { .progress-emblem > .emblem-ring { animation: none !important; transition: none; } }
 </style>

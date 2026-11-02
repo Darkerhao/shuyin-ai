@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Progress } from '@/components/ui/progress'
 import AppIcon from '../../components/AppIcon.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import appLogo from '../../../assets/app-icon.svg'
@@ -121,11 +122,9 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
       v-if="status === 'downloading'"
       class="my-4"
     >
-      <progress
-        :value="progress"
-        max="100"
+      <Progress
+        :model-value="progress"
         aria-label="更新下载进度"
-        class="h-2 w-full accent-primary"
       />
       <p class="muted">
         {{ progress === undefined ? '已下载' : `${progress}% · 已下载` }} {{ (downloaded / 1024 / 1024).toFixed(1) }} MB

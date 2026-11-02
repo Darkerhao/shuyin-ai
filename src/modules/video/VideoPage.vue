@@ -7,6 +7,7 @@ import OperationFeedback from '../../components/OperationFeedback.vue'
 import VideoJobProgress from './VideoJobProgress.vue'
 import { inspectStoryboard } from './storyboard'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -366,60 +367,65 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
       </Button>
     </section>
 
-    <details
+    <Collapsible
       class="panel video-runtime"
-      :open="!config.engineRoot || !config.nodePath"
+      :default-open="!config.engineRoot || !config.nodePath"
+      :unmount-on-hide="false"
     >
-      <summary>视频运行环境 <span class="muted">首次使用时配置</span></summary>
-      <p class="muted">
-        独立安装的引擎还需要 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘；不自动下载，不向模型服务发送音频，仅将字幕发给所选文本模型生成分镜。
-      </p>
-      <div class="video-form-grid">
-        <div
-          v-for="field in runtimeFields"
-          :key="field.key"
-          class="video-field"
-        >
-          <label :for="`video-${field.key}`">{{ field.label }}</label><div class="video-path">
-            <Input
-              :id="`video-${field.key}`"
-              v-model="config[field.key]"
-              :disabled="busy || running"
-              :aria-describedby="`hint-${field.key}`"
-            /><Button
-              variant="outline"
-              :disabled="busy || running"
-              :aria-label="`选择${field.label}`"
-              @click="choosePath(field.key, field.directory)"
-            >
-              选择
-            </Button>
-          </div><p
-            :id="`hint-${field.key}`"
-            class="muted"
+      <CollapsibleTrigger class="disclosure-trigger">
+        视频运行环境 <span class="muted">首次使用时配置</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent class="video-runtime-content">
+        <p class="muted">
+          独立安装的引擎还需要 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘；不自动下载，不向模型服务发送音频，仅将字幕发给所选文本模型生成分镜。
+        </p>
+        <div class="video-form-grid">
+          <div
+            v-for="field in runtimeFields"
+            :key="field.key"
+            class="video-field"
           >
-            {{ field.hint }}
-          </p>
+            <label :for="`video-${field.key}`">{{ field.label }}</label><div class="video-path">
+              <Input
+                :id="`video-${field.key}`"
+                v-model="config[field.key]"
+                :disabled="busy || running"
+                :aria-describedby="`hint-${field.key}`"
+              /><Button
+                variant="outline"
+                :disabled="busy || running"
+                :aria-label="`选择${field.label}`"
+                @click="choosePath(field.key, field.directory)"
+              >
+                选择
+              </Button>
+            </div><p
+              :id="`hint-${field.key}`"
+              class="muted"
+            >
+              {{ field.hint }}
+            </p>
+          </div>
         </div>
-      </div>
-      <div class="actions">
-        <Button
-          :disabled="busy || running"
-          @click="saveConfig"
-        >
-          保存运行环境
-        </Button><Button
-          variant="ghost"
-          :disabled="busy || !configDirty"
-          @click="config = JSON.parse(savedConfig)"
-        >
-          还原配置
-        </Button>
-      </div>
-      <p class="muted">
-        Frametell 为 AGPL-3.0 引擎，当前不随书引捆绑分发；首次准备步骤见 MG 视频使用文档。
-      </p>
-    </details>
+        <div class="actions">
+          <Button
+            :disabled="busy || running"
+            @click="saveConfig"
+          >
+            保存运行环境
+          </Button><Button
+            variant="ghost"
+            :disabled="busy || !configDirty"
+            @click="config = JSON.parse(savedConfig)"
+          >
+            还原配置
+          </Button>
+        </div>
+        <p class="muted">
+          Frametell 为 AGPL-3.0 引擎，当前不随书引捆绑分发；首次准备步骤见 MG 视频使用文档。
+        </p>
+      </CollapsibleContent>
+    </Collapsible>
 
     <section
       v-if="jobs.length"
@@ -644,11 +650,12 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                 正在读取本次试片…
               </p>
               <div class="video-thumbnails">
-                <button
+                <Button
                   v-for="frame in previewFrames"
                   :key="frame.sceneIndex"
                   type="button"
-                  class="video-thumbnail"
+                  variant="outline"
+                  class="video-thumbnail h-auto whitespace-normal"
                   :aria-label="`查看第${frame.sceneIndex + 1}镜校对`"
                   @click="focusScene(frame.sceneIndex)"
                 >
@@ -660,7 +667,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                     height="1080"
                   >
                   <span>第 {{ frame.sceneIndex + 1 }} 镜 · {{ scenes[frame.sceneIndex]?.title }}</span>
-                </button>
+                </Button>
               </div>
               <p class="muted">
                 缩略图来自本次试片，最多展示12镜。点击可定位校对；修改后需重新生成试片。
@@ -716,81 +723,88 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   :aria-label="`第${index + 1}镜物体${i + 1}标签`"
                   maxlength="8"
                 />
-                <details class="video-beat-settings">
-                  <summary>调整物体、动作与字幕锚点</summary>
-                  <div class="video-beat-controls">
-                    <div class="video-field">
-                      <label :for="`scene-${index}-object-${i}`">具体物体</label>
-                      <Select
-                        v-model="beat.object"
-                        :disabled="busy"
-                      >
-                        <SelectTrigger
-                          :id="`scene-${index}-object-${i}`"
-                          :aria-label="`第${index + 1}镜物体${i + 1}`"
+                <Collapsible
+                  class="video-beat-settings"
+                  :unmount-on-hide="false"
+                >
+                  <CollapsibleTrigger class="disclosure-trigger py-1.5">
+                    调整物体、动作与字幕锚点
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div class="video-beat-controls">
+                      <div class="video-field">
+                        <label :for="`scene-${index}-object-${i}`">具体物体</label>
+                        <Select
+                          v-model="beat.object"
+                          :disabled="busy"
                         >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem
-                            v-for="(name, key) in visualCatalog.objects"
-                            :key="key"
-                            :value="key"
+                          <SelectTrigger
+                            :id="`scene-${index}-object-${i}`"
+                            :aria-label="`第${index + 1}镜物体${i + 1}`"
                           >
-                            {{ name }}
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div class="video-field">
-                      <label :for="`scene-${index}-action-${i}`">语义动作</label>
-                      <Select
-                        v-model="beat.action"
-                        :disabled="busy"
-                      >
-                        <SelectTrigger
-                          :id="`scene-${index}-action-${i}`"
-                          :aria-label="`第${index + 1}镜物体${i + 1}动作`"
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem
+                              v-for="(name, key) in visualCatalog.objects"
+                              :key="key"
+                              :value="key"
+                            >
+                              {{ name }}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div class="video-field">
+                        <label :for="`scene-${index}-action-${i}`">语义动作</label>
+                        <Select
+                          v-model="beat.action"
+                          :disabled="busy"
                         >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem
-                            v-for="(name, key) in visualCatalog.actions"
-                            :key="key"
-                            :value="key"
+                          <SelectTrigger
+                            :id="`scene-${index}-action-${i}`"
+                            :aria-label="`第${index + 1}镜物体${i + 1}动作`"
                           >
-                            {{ name }}
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div class="video-field video-anchor">
-                      <label :for="`scene-${index}-cue-${i}`">在哪句开始出现</label>
-                      <Select
-                        :model-value="String(beat.cue)"
-                        :disabled="busy"
-                        @update:model-value="beat.cue = Number($event)"
-                      >
-                        <SelectTrigger
-                          :id="`scene-${index}-cue-${i}`"
-                          :aria-label="`第${index + 1}镜物体${i + 1}字幕锚点`"
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem
+                              v-for="(name, key) in visualCatalog.actions"
+                              :key="key"
+                              :value="key"
+                            >
+                              {{ name }}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div class="video-field video-anchor">
+                        <label :for="`scene-${index}-cue-${i}`">在哪句开始出现</label>
+                        <Select
+                          :model-value="String(beat.cue)"
+                          :disabled="busy"
+                          @update:model-value="beat.cue = Number($event)"
                         >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem
-                            v-for="(cue, offset) in selected.plan.cues.slice(scene.first, scene.last + 1)"
-                            :key="offset"
-                            :value="String(scene.first + offset)"
+                          <SelectTrigger
+                            :id="`scene-${index}-cue-${i}`"
+                            :aria-label="`第${index + 1}镜物体${i + 1}字幕锚点`"
                           >
-                            {{ scene.first + offset + 1 }} · {{ cue.text }}
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem
+                              v-for="(cue, offset) in selected.plan.cues.slice(scene.first, scene.last + 1)"
+                              :key="offset"
+                              :value="String(scene.first + offset)"
+                            >
+                              {{ scene.first + offset + 1 }} · {{ cue.text }}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
-                  </div>
-                </details>
+                  </CollapsibleContent>
+                </Collapsible>
               </div>
               <p
                 v-if="!scene.beats?.length"
@@ -908,7 +922,6 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-path input { min-width: 0; }
 .video-beat { display: grid; gap: 6px; min-width: 0; }
 .video-beat label { color: var(--muted-foreground); font-size: 12px; overflow-wrap: anywhere; }
-.video-beat-settings summary { cursor: pointer; color: var(--primary); font-size: 13px; padding-block: 6px; }
 .video-beat-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-block: 10px; }
 .video-anchor { grid-column: 1 / -1; }
 .video-preview { display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
@@ -926,9 +939,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .video-job-heading [role='combobox'] { width: 100%; min-width: 0; max-width: 360px; }
 .video-job { scroll-margin-top: calc(var(--workspace-sticky-top) + 20px); }
-.video-runtime summary { cursor: pointer; font-weight: 600; }
-.video-runtime summary span { font-weight: 400; margin-left: 12px; }
-.video-runtime > :not(summary) { margin-top: 18px; }
+.video-runtime-content { display: grid; gap: 18px; }
 .video-scenes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-height: 560px; overflow: auto; padding: 2px; }
 .video-scene { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; }
 .video-scene { scroll-margin-block: 16px; min-width: 0; }

@@ -1,5 +1,38 @@
 # shadcn-vue 全页面接入验收
 
+## 2026-11-02 业务交互补齐
+
+本次根据当前源码重新盘点后补齐后续新增业务中的控件：
+
+| 范围 | 统一结果 |
+| --- | --- |
+| 书籍、创作、封面、发布、模型设置 | 7 处原生确认改用异步应用内弹窗，全部调用方等待结果 |
+| 删除、备份恢复、音频任务、应用更新等现有确认 | 共享 ConfirmAction 改用同一 AlertDialog，保留各业务内容、处理状态和失败重试 |
+| 发布成功记录 | 删除独立确认面板，共用弹窗；真实 form 保留时间/链接/备注、表单校验及下一篇选择 |
+| 视频运行环境、物体动作校对、抖音人工合集 | 3 处 details/summary 改用 Collapsible，收起保留输入 |
+| 推荐封面样式、比例预览、试片缩略图 | 3 处 button 改用 Button，保留原业务展示 |
+| 更新下载、视频阶段进度 | 共用 Progress，确定值/未知值、ARIA 和减少动画规则一致 |
+
+验收命令与结果：
+
+- `npm run lint`：通过。
+- `npm run build`（含 `vue-tsc --noEmit`）：通过；Vite 提示单个主包超过500 kB，不影响构建。
+- `npm test`：使用现有 `D:/MyWork/software/shuyin-video-node/v24.22.2` 作为本次进程 PATH 首项后通过。前端290通过；视频脚本29通过；发布/音频脚本78通过、1个macOS专属项跳过；队列脚本19通过。没有安装或修改全局 Node。默认终端的 Node 24.11.0 首跑视频夹具时被现有运行时检查拒绝，导致4项缺失 episode/index.html，换用已安装且符合项目要求的版本后全部通过，视频实现未改动。
+- 确认组件新增4项行为测试，覆盖显式等待、并发请求隔离、Escape/初始取消焦点/恢复焦点、忙碌禁用和应用卸载取消；业务测试改为操作真实的 Portal 弹窗，验证历史/模型/文案切换取消保留、失败重试以及发布字段。另补历史下拉取消后的焦点返回回归。
+- `npx --yes --package @playwright/cli playwright-cli -s=shuyin-ui-unification run-code --filename output/playwright/ui-unification/verify.js --raw`：Edge浏览器隔离夹具验收通过。检查1440px/360px弹窗、Tab/Shift+Tab循环、Escape和外部点击、取消保留及历史下拉焦点返回、跨比例封面复制、按钮选择、折叠保值、发布记录失败后重试、下载未知/50%进度；页面错误0、原生确认弹窗0。证据为 `output/playwright/ui-unification/result.log` 与同目录截图。
+
+源码核查确认业务 Vue 中不再直接出现 button、details、summary、progress 或 globalThis.confirm；Input/Textarea 内部的原生元素和音视频/Canvas等平台能力保留。移除已替代的确认面板颜色及视频进度动画、原生 summary、卡片重复焦点样式。无SQL迁移、依赖或版本号变更。
+
+修改文件：
+
+- 应用与基础组件：`src/App.vue`、`src/components/{ConfirmAction,AppConfirmation}.vue`、`src/composables/useConfirmation.ts`、`src/components/ui/alert-dialog/{index.ts,AlertDialogContent.vue}`、`src/components/ui/progress/{index.ts,Progress.vue}`、`src/style.css`。
+- 业务页面：`src/modules/projects/ProjectPage.vue`、`writing/WritingPage.vue`、`covers/CoversPage.vue`、`settings/{ModelsPage,AboutPage}.vue`、`publishing/{PublishingPage,DouyinVerification}.vue`、`video/{VideoPage,VideoJobProgress}.vue`（后续简写路径均相对于 `src/modules/`）。
+- 测试：`tests/{confirmation,ai,covers,projects,publishing,updates}.test.ts`、`tests/ui.ts`；文档：`docs/{PRD,TECHNICAL-DESIGN,DEVELOPMENT-PLAN,UI-COMPONENTS-VERIFICATION}.md`。
+
+本轮未执行Tauri/WebView2桌面人工验收、安装升级或真实平台发布。浏览器夹具只保存内存中的模拟记录，不写正式数据库、不代表真实抖音发布或真实更新下载。桌面后续核对：脏书籍关闭窗口时取消仍留在原窗口、确认可正常关闭；从下拉框触发确认后取消返回下拉框；发布记录失败可继续编辑。
+
+## 2026-10-25 原始接入记录
+
 日期：2026-10-25。
 
 ## 全页面补齐结果

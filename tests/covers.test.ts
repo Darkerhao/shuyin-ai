@@ -1,4 +1,4 @@
-import { chooseSelect, openSelect } from './ui'
+import { chooseSelect, openSelect, button, dialog, answerConfirmation } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -36,9 +36,8 @@ async function render(path = '/projects/p1/covers') {
   const wrapper = mount(App, { attachTo: document.body, global: { plugins: [router] } }); wrappers.push(wrapper)
   await flushPromises(); return { wrapper, router }
 }
-function button(wrapper: ReturnType<typeof mount>, name: string) { return wrapper.findAll('button').find(b => b.text() === name)! }
 beforeEach(() => {
-  vi.resetAllMocks(); vi.stubGlobal('confirm', vi.fn(() => false))
+  vi.resetAllMocks()
   vi.mocked(drafts.readDraft).mockResolvedValue(null)
   vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   vi.mocked(api.listPresets).mockResolvedValue([])
@@ -77,11 +76,12 @@ describe('M3 cover workflow', () => {
     const { wrapper } = await render()
     await wrapper.get('#cover-title').setValue('共用的封面')
     await button(wrapper, '将当前封面应用到全部尺寸').trigger('click')
+    await answerConfirmation(false)
     await chooseSelect(wrapper, '#cover-size', '竖版 3:4 · 1080 × 1440')
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe(initial.config.title)
     await chooseSelect(wrapper, '#cover-size', '横版 4:3 · 1440 × 1080')
-    vi.mocked(globalThis.confirm).mockReturnValue(true)
     await button(wrapper, '将当前封面应用到全部尺寸').trigger('click')
+    await answerConfirmation(true)
     await chooseSelect(wrapper, '#cover-size', '竖版 3:4 · 1080 × 1440')
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('共用的封面')
     await wrapper.get('#cover-title').setValue('竖版继续独立调整')
@@ -157,11 +157,12 @@ describe('M3 cover workflow', () => {
     await wrapper.get('#cover-title').setValue('不要丢失的草稿')
     await wrapper.get('.history-panel [data-slot=collapsible-trigger]').trigger('click')
     await chooseSelect(wrapper, '#cover-history', /^v1 ·/)
-    expect(globalThis.confirm).toHaveBeenCalled()
+    expect(dialog().text()).toContain('请确认操作'); await answerConfirmation(false)
     expect(wrapper.get('#cover-history').text()).toContain('v2')
+    await vi.waitFor(() => expect(document.activeElement).toBe(wrapper.get('#cover-history').element))
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('不要丢失的草稿')
-    vi.mocked(globalThis.confirm).mockReturnValue(true)
     await chooseSelect(wrapper, '#cover-history', /^v1 ·/)
+    await answerConfirmation(true)
     expect(wrapper.get('#cover-history').text()).toContain('v1')
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe(initial.config.title)
   })
@@ -313,8 +314,8 @@ describe('M3 cover workflow', () => {
     expect(calls[0]).toEqual([landscape, decoded[0]])
     expect(calls[1]).toEqual([portrait, decoded[1]])
     await chooseSelect(wrapper, '#cover-size', '横版 4:3 · 1440 × 1080')
-    vi.mocked(globalThis.confirm).mockReturnValue(true)
     await button(wrapper, '仅共用当前背景').trigger('click')
+    await answerConfirmation(true)
     await chooseSelect(wrapper, '#cover-size', '竖版 3:4 · 1080 × 1440')
     await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
     expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '竖版标题', backgroundPrompt: '竖版提示词', backgroundAssetId: 'landscape', backgroundX: 0.5, backgroundZoom: 1 }), null)
@@ -331,8 +332,8 @@ describe('M3 cover workflow', () => {
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('手动修改标题')
     expect(wrapper.get('#cover-background').text()).toBe('ai.png')
     expect(api.saveCover).not.toHaveBeenCalled()
-    vi.mocked(globalThis.confirm).mockReturnValue(true)
     await button(wrapper, '仅共用当前背景').trigger('click')
+    await answerConfirmation(true)
     await button(wrapper, '导出 3 张封面').trigger('click'); await flushPromises()
     expect(api.saveCover).toHaveBeenNthCalledWith(1, 'p1', expect.objectContaining({ backgroundAssetId: 'a1', width: 1440, height: 1080 }), expect.any(Array))
     expect(api.saveCover).toHaveBeenNthCalledWith(2, 'p1', expect.objectContaining({ backgroundAssetId: 'a1', width: 1080, height: 1440 }), expect.any(Array))
@@ -516,7 +517,7 @@ describe('M3 cover workflow', () => {
     opener.element.focus()
     await opener.trigger('click'); await flushPromises()
     expect(api.deletePreset).not.toHaveBeenCalled()
-    expect(wrapper.get('[role="alertdialog"]').text()).toContain('我的品牌')
+    expect(dialog().text()).toContain('我的品牌')
     expect(document.activeElement).toBe(button(wrapper, '取消').element)
     await button(wrapper, '取消').trigger('keydown', { key: 'Escape' }); await flushPromises()
     expect(api.deletePreset).not.toHaveBeenCalled()
@@ -556,8 +557,8 @@ describe('M3 cover workflow', () => {
     await chooseSelect(wrapper, '#cover-background', '纯色背景'); await flushPromises()
     expect(button(wrapper, '导出当前封面').element.disabled).toBe(false)
     expect(button(wrapper, '导出 3 张封面').element.disabled).toBe(true)
-    vi.mocked(globalThis.confirm).mockReturnValue(true)
     await button(wrapper, '仅共用当前背景').trigger('click')
+    await answerConfirmation(true)
     expect(button(wrapper, '导出 3 张封面').element.disabled).toBe(false)
   })
   it('disables editing while a version is being saved', async () => {

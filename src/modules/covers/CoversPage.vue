@@ -24,6 +24,7 @@ import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
+import { requestConfirmation } from '../../composables/useConfirmation'
 import { useQueryState } from '../../composables/useQueryState'
 import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
 
@@ -71,7 +72,7 @@ const taskId = ref('')
 const cancelling = ref(false)
 let disposed = false
 let fontsReady = false
-const canDiscard = () => !dirty.value || globalThis.confirm('封面尚未保存，确定放弃修改？')
+const canDiscard = () => !dirty.value || requestConfirmation('封面尚未保存，确定放弃修改？', 'cover-history')
 // A saved version contains one size; retain the workspace to recover all sizes and the active selection.
 const autosave = useEditorDraft(() => props.id, 'cover', editor, () => selected.value?.id ?? null, dirty, ready, () => !busy.value, true)
 const canLeave = async () => {
@@ -229,16 +230,16 @@ function changeSize(index: number) {
   presetId.value = null
   drag = null
 }
-function shareCover(backgroundOnly: boolean) {
-  if (!globalThis.confirm(backgroundOnly ? '将当前背景和裁切应用到其他尺寸？其他尺寸的文字、排版和提示词保持不变。' : '将当前封面的文字、排版、背景、裁切和画面描述应用到其他尺寸？将替换其他尺寸的编辑，可继续分别调整；历史版本保留。')) return
+async function shareCover(backgroundOnly: boolean) {
+  if (!await requestConfirmation(backgroundOnly ? '将当前背景和裁切应用到其他尺寸？其他尺寸的文字、排版和提示词保持不变。' : '将当前封面的文字、排版、背景、裁切和画面描述应用到其他尺寸？将替换其他尺寸的编辑，可继续分别调整；历史版本保留。')) return
   const source = { ...draft.value }
   editor.value.covers = editor.value.covers.map((config, index) => normalizeCover(backgroundOnly
     ? { ...config, backgroundAssetId: source.backgroundAssetId, backgroundColor: source.backgroundColor, overlayOpacity: source.overlayOpacity, backgroundX: source.backgroundX, backgroundY: source.backgroundY, backgroundZoom: source.backgroundZoom }
     : source, index))
   message.value = backgroundOnly ? '全部尺寸已共用当前背景，仍可分别调整。' : '已应用到全部尺寸，仍可分别调整；导出时按各自尺寸裁切排版。'
 }
-function switchVersion(id: string | null) {
-  if (canDiscard()) accept(versions.value.find(v => v.id === id) ?? null)
+async function switchVersion(id: string | null) {
+  if (await canDiscard()) accept(versions.value.find(v => v.id === id) ?? null)
 }
 const chooseImage = () => run(async () => {
   const path = await api.chooseBackground()
@@ -646,11 +647,12 @@ onMounted(async () => {
                   class="grid grid-cols-2 gap-3"
                   aria-label="默认封面样式"
                 >
-                  <button
+                  <Button
                     v-for="(template, key) in coverTemplates"
                     :key="key"
                     type="button"
-                    class="style-card rounded-xl border p-3 text-left"
+                    variant="outline"
+                    class="style-card block h-auto whitespace-normal rounded-xl p-3 text-left"
                     :aria-label="template.label"
                     :aria-pressed="isTemplateApplied(key)"
                     :disabled="busy"
@@ -676,7 +678,7 @@ onMounted(async () => {
                     </span>
                     <strong class="mt-2 block text-sm">{{ template.label }}</strong>
                     <span class="muted text-xs">{{ template.description }}</span>
-                  </button>
+                  </Button>
                 </div>
                 <p class="muted">
                   一键应用字号、主副标题配色、点缀色、蒙层与布局，保留本书文字和背景。
@@ -1095,9 +1097,10 @@ onMounted(async () => {
             :key="size.label"
             class="min-w-0 space-y-2"
           >
-            <button
+            <Button
               type="button"
-              class="size-preview"
+              variant="ghost"
+              class="size-preview h-auto"
               :aria-label="`编辑${size.label}`"
               :aria-pressed="editor.activeSize === index"
               :disabled="busy"
@@ -1110,7 +1113,7 @@ onMounted(async () => {
                 :aria-label="size.label"
                 role="img"
               />
-            </button>
+            </Button>
             <figcaption class="text-center text-xs text-muted-foreground">
               {{ size.width }} × {{ size.height }}
               <span
@@ -1233,12 +1236,10 @@ onMounted(async () => {
 .cover-colors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
 .size-preview { display: block; width: 100%; padding: 4px; border: 2px solid transparent; border-radius: 6px; cursor: pointer; }
 .size-preview[aria-pressed="true"] { border-color: var(--primary); }
-.size-preview:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .size-preview:disabled { cursor: wait; }
 .style-card { min-width: 0; transition: border-color .15s; }
 .style-card:hover, .style-card[aria-pressed="true"] { border-color: var(--primary); }
 .style-card[aria-pressed="true"] { box-shadow: 0 0 0 1px var(--primary); }
-.style-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
 .cover-preview { position: sticky; top: var(--workspace-sticky-top); max-height: calc(100dvh - var(--workspace-sticky-top) - 108px); overflow: auto; scroll-margin-top: var(--workspace-sticky-top); }
 .cover-jump { display: none; }
 .cover-preview h2 { font-size: 13px; }

@@ -1,3 +1,4 @@
+import { button as uiButton } from './ui'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -169,11 +170,11 @@ describe('application updates', () => {
       expect(wrapper.text()).toContain('v0.11.0')
       expect(wrapper.text()).toContain('自动更新')
       expect(wrapper.find('script').exists()).toBe(false)
-      const button = (label: string) => wrapper.findAll('button').find(item => item.text() === label)!
+      const button = (label: string) => uiButton(wrapper, label)
       await button('安装并重启').trigger('click')
       expect(update.install).not.toHaveBeenCalled()
       await button('稍后再说').trigger('click')
-      expect(wrapper.find('[role="alertdialog"]').exists()).toBe(false)
+      expect(!!document.querySelector('[role="alertdialog"]')).toBe(false)
       await button('安装并重启').trigger('click')
       await button('确认并重启').trigger('click'); await flushPromises()
       expect(update.install).toHaveBeenCalledTimes(1)

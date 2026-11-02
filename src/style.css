@@ -108,6 +108,7 @@ a { color: var(--green); text-underline-offset: 4px; }
 .app-main:has(.sticky-actions) .sticky-actions { bottom: 12px; }
 .disclosure-trigger { display: flex; width: 100%; align-items: center; gap: 8px; text-align: left; color: var(--muted-foreground); font-size: 13px; border-radius: 4px; }
 .disclosure-trigger:hover { color: var(--primary); }
+.disclosure-trigger:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
 .disclosure-trigger::after { content: ""; width: 6px; height: 6px; flex-shrink: 0; margin-left: auto; border-top: 1px solid currentColor; border-right: 1px solid currentColor; transform: rotate(45deg); }
 .disclosure-trigger[data-state="open"]::after { transform: rotate(135deg); }
 label { display: block; font-size: 14px; font-weight: 550; margin: 18px 0 7px; }
@@ -160,7 +161,6 @@ dl { display: grid; grid-template-columns: 115px minmax(0, 1fr); gap: 10px; font
 dt { color: var(--muted); }
 dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .check-label { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 400; cursor: pointer; }
-.confirmation { border-color: #e7c4ba; background: #fffaf8; scroll-margin-block: var(--workspace-sticky-top) 120px; }
 .backup-primary, .workspace-result { border-inline-start: 3px solid var(--primary); }
 .asset-row, .task-row { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; }
 .asset-row h3 { overflow-wrap: anywhere; }

@@ -25,6 +25,8 @@ import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import CoverThumbnail from '../../components/CoverThumbnail.vue'
 import DouyinVerification from './DouyinVerification.vue'
+import ConfirmAction from '../../components/ConfirmAction.vue'
+import { requestConfirmation } from '../../composables/useConfirmation'
 
 const props = defineProps<{ id: string; taskId?: string }>()
 const router = useRouter()
@@ -65,10 +67,10 @@ const assetLabel = (asset: Asset) => `${asset.originalName}${asset.existsStatus 
 function defaults(): PublishInput {
   return { projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: videos.value.find(v => v.existsStatus === 'available')?.id ?? null, audioAssetId: audios.value.find(v => v.existsStatus === 'available')?.id ?? null, landscapeCoverId: landscape.value[0]?.id ?? null, portraitCoverId: portrait.value[0]?.id ?? null, titleConfirmed: false, coversConfirmed: false }
 }
-function selectWriting(id: string | null) {
+async function selectWriting(id: string | null) {
   if (id === draft.value.writingVersionId) return
   const version = writing.value.find(v => v.id === id)
-  if (version && (draft.value.title || draft.value.description) && !globalThis.confirm('使用此版本将替换当前发布标题和内容，确定继续？')) return
+  if (version && (draft.value.title || draft.value.description) && !await requestConfirmation('使用此版本将替换当前发布标题和内容，确定继续？', 'publish-writing-version')) return
   draft.value.writingVersionId = id
   if (version) { draft.value.title = version.content.title; draft.value.description = version.content.description }
   draft.value.titleConfirmed = false
@@ -82,7 +84,7 @@ function update(task: PublishTask) {
   tasks.value = [task, ...tasks.value.filter(t => t.id !== task.id)]
   accept(task)
 }
-function canDiscard() { return (!dirty.value && !recordOpen.value) || globalThis.confirm('发布准备尚未保存，确定放弃修改？') }
+function canDiscard(returnFocusId?: string) { return (!dirty.value && !recordOpen.value) || requestConfirmation('发布准备尚未保存，确定放弃修改？', returnFocusId) }
 const canLeave = () => !busy.value && canDiscard()
 onBeforeRouteLeave(canLeave)
 let syncingTask = false
@@ -140,8 +142,8 @@ async function syncTaskUrl(id: string | null) {
   finally { syncingTask = false }
 }
 function newTask() { void switchTask(null) }
-async function switchTask(id: string | null) {
-  if (busy.value || !canDiscard()) return
+async function switchTask(id: string | null, returnFocusId?: string) {
+  if (busy.value || !await canDiscard(returnFocusId)) return
   accept(tasks.value.find(t => t.id === id) ?? null); recordOpen.value = false; error.value = ''; message.value = ''
   await syncTaskUrl(id)
 }
@@ -285,7 +287,7 @@ onMounted(() => { if (desktop) void loadTask() })
         v-if="tasks.length"
         :model-value="selected?.id ?? null"
         :disabled="busy || recordOpen"
-        @update:model-value="switchTask"
+        @update:model-value="switchTask($event, 'publish-task')"
       >
         <SelectTrigger
           id="publish-task"
@@ -739,77 +741,70 @@ onMounted(() => { if (desktop) void loadTask() })
         </p>
       </div>
     </section>
-    <form
+    <ConfirmAction
       v-if="recordOpen"
-      class="panel confirmation"
-      role="alertdialog"
-      aria-labelledby="publish-confirm-title"
-      @submit.prevent="recordSuccess()"
+      title="确认作品已在抖音发布成功？"
+      confirm-label="确认已发布并保存"
+      form="publish-record-form"
+      :destructive="false"
+      :busy="busy"
+      @cancel="recordOpen = false"
     >
-      <h2 id="publish-confirm-title">
-        确认作品已在抖音发布成功？
-      </h2>
       <p>请在平台看到作品发布成功后再确认。这里仅记录结果。</p>
-      <fieldset :disabled="busy">
-        <label for="published-at">实际发布时间</label><Input
-          id="published-at"
-          v-model="record.publishedAt"
-          type="datetime-local"
-          required
-        />
-        <label for="post-url">作品链接（选填）</label><Input
-          id="post-url"
-          v-model="record.postUrl"
-          type="url"
-          maxlength="2048"
-          placeholder="https://…"
-        />
-        <label for="publish-notes">备注（选填）</label><Textarea
-          id="publish-notes"
-          v-model="record.notes"
-          rows="3"
-          maxlength="2000"
-        />
-        <div class="actions">
-          <Button type="submit">
-            确认已发布并保存
-          </Button><Button
-            type="button"
-            variant="outline"
-            @click="recordOpen = false"
-          >
-            取消
-          </Button>
-        </div>
-        <template v-if="nextTasks.length">
-          <label for="publish-next-task">接下来处理的作品（选填）</label>
-          <Select
-            v-model="nextTaskId"
-            :disabled="busy"
-          >
-            <SelectTrigger id="publish-next-task">
-              <SelectValue placeholder="请选择下一篇，不会自动选择" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem
-                v-for="task in nextTasks"
-                :key="task.id"
-                :value="task.id"
-              >
-                {{ task.projectTitle }} · {{ task.title }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            :disabled="busy || !nextTaskId"
-            @click="recordSuccess(true)"
-          >
-            确认记录并准备下一篇
-          </Button>
-        </template>
-      </fieldset>
-    </form>
+      <form
+        id="publish-record-form"
+        @submit.prevent="recordSuccess()"
+      >
+        <fieldset :disabled="busy">
+          <label for="published-at">实际发布时间</label><Input
+            id="published-at"
+            v-model="record.publishedAt"
+            type="datetime-local"
+            required
+          />
+          <label for="post-url">作品链接（选填）</label><Input
+            id="post-url"
+            v-model="record.postUrl"
+            type="url"
+            maxlength="2048"
+            placeholder="https://…"
+          />
+          <label for="publish-notes">备注（选填）</label><Textarea
+            id="publish-notes"
+            v-model="record.notes"
+            rows="3"
+            maxlength="2000"
+          />
+          <template v-if="nextTasks.length">
+            <label for="publish-next-task">接下来处理的作品（选填）</label>
+            <Select
+              v-model="nextTaskId"
+              :disabled="busy"
+            >
+              <SelectTrigger id="publish-next-task">
+                <SelectValue placeholder="请选择下一篇，不会自动选择" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="task in nextTasks"
+                  :key="task.id"
+                  :value="task.id"
+                >
+                  {{ task.projectTitle }} · {{ task.title }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              :disabled="busy || !nextTaskId"
+              @click="recordSuccess(true)"
+            >
+              确认记录并准备下一篇
+            </Button>
+          </template>
+        </fieldset>
+      </form>
+    </ConfirmAction>
   </template>
 </template>
 

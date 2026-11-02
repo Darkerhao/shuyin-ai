@@ -1,4 +1,4 @@
-import { chooseSelect, openSelect, tab, tabPanel } from './ui'
+import { chooseSelect, openSelect, tab, tabPanel, button, dialog, answerConfirmation } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
@@ -52,9 +52,8 @@ async function render(path = '/projects/p1/writing') {
   const wrapper = mount(App, { attachTo: document.body, global: { plugins: [router] } }); wrappers.push(wrapper); await flushPromises()
   return { wrapper, router }
 }
-function button(w: ReturnType<typeof mount>, text: string) { return w.findAll('button').find(b => b.text() === text)! }
 beforeEach(() => {
-  vi.resetAllMocks(); vi.stubGlobal('confirm', vi.fn(() => false))
+  vi.resetAllMocks()
   vi.mocked(drafts.readDraft).mockResolvedValue(null)
   vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   vi.mocked(projects.isDesktop).mockReturnValue(true)
@@ -213,7 +212,8 @@ describe('publishing workflow', () => {
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('原有标题')
     expect((wrapper.get('#revision-after-title').element as HTMLTextAreaElement).value).toBe(candidate.title)
     expect(wrapper.get('#result-description').attributes('disabled')).toBeDefined()
-    await router.push('/projects'); expect(router.currentRoute.value.path).toContain('/writing')
+    const navigation = router.push('/projects'); await answerConfirmation(false); await navigation
+    expect(router.currentRoute.value.path).toContain('/writing')
     vi.mocked(api.applyGeneration).mockRejectedValueOnce('保存失败')
     await button(wrapper, '采用并保存新版本').trigger('click'); await flushPromises()
     expect(wrapper.find('#revision-after-title').exists()).toBe(true)
@@ -349,7 +349,7 @@ describe('publishing workflow', () => {
     expect(history.text()).toContain('v2')
     await history.trigger('keydown', { key: 'Escape' }); await flushPromises()
     await chooseSelect(wrapper, '#writing-version', /^v2 ·/)
-    expect(globalThis.confirm).toHaveBeenCalled()
+    expect(dialog().text()).toContain('请确认操作'); await answerConfirmation(false)
     expect(wrapper.get('#writing-version').text()).toContain('v1')
     expect(wrapper.text()).toContain('当前修改已保留')
     expect((wrapper.get('#result-coverSubtitle').element as HTMLTextAreaElement).value).toBe('生成中的副标题修改')
@@ -703,7 +703,7 @@ describe('audio automation', () => {
     const { wrapper } = await render('/projects/p1/writing?tab=audio')
     await button(wrapper, '继续跟进').trigger('click'); await flushPromises()
     expect(audio.controlAudioJob).not.toHaveBeenCalled()
-    expect(wrapper.get('[role="alertdialog"]').text()).toContain(url)
+    expect(dialog().text()).toContain(url)
     await button(wrapper, '确认关联并继续').trigger('click'); await flushPromises()
     expect(audio.controlAudioJob).toHaveBeenCalledExactlyOnceWith('job-1', 'confirm_notebook', url)
   })
@@ -723,10 +723,10 @@ describe('audio automation', () => {
     const { wrapper } = await render('/projects/p1/writing?tab=audio')
     await button(wrapper, action === 'resume' ? '继续跟进' : '停止跟进').trigger('click'); await flushPromises()
     expect(audio.controlAudioJob).not.toHaveBeenCalled()
-    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(true)
-    await wrapper.get('[role="alertdialog"]').trigger('keydown', { key: 'Escape' }); await flushPromises()
+    expect(!!document.querySelector('[role="alertdialog"]')).toBe(true)
+    await dialog().trigger('keydown', { key: 'Escape' }); await flushPromises()
     expect(audio.controlAudioJob).not.toHaveBeenCalled()
-    expect(globalThis.confirm).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull()
     expect(button(wrapper, '继续跟进').element.matches(':disabled')).toBe(false)
   })
 
@@ -760,7 +760,6 @@ describe('audio automation', () => {
     vi.mocked(audio.controlAudioJob)
       .mockResolvedValueOnce(audioView({ ...original, status: 'cancelled' }))
       .mockResolvedValueOnce(audioView(original))
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const { wrapper } = await render('/projects/p1/writing?tab=audio')
     await button(wrapper, '停止跟进').trigger('click'); await flushPromises()
     await button(wrapper, '确认停止跟进').trigger('click'); await flushPromises()
@@ -822,7 +821,6 @@ describe('audio automation', () => {
     const failed = makeAudioJob('failed', { stage: 'error', errorMessage: 'Gemini Notebook 明确返回生成失败。' })
     vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(failed))
     vi.mocked(audio.controlAudioJob).mockResolvedValue(audioView(makeAudioJob('cancelled')))
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const { wrapper } = await render()
     await tab(wrapper, '音频制作').trigger('click')
     expect(wrapper.text()).toContain('Gemini Notebook 明确返回生成失败')
@@ -923,7 +921,7 @@ describe('model configuration', () => {
     expect(document.activeElement).toBe(button(wrapper, '取消').element)
     await button(wrapper, '取消').trigger('keydown', { key: 'Escape' }); await flushPromises()
     expect(api.deleteProvider).not.toHaveBeenCalled()
-    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(false)
+    expect(!!document.querySelector('[role="alertdialog"]')).toBe(false)
     expect(document.activeElement).toBe(opener.element)
   })
   it('restores the chosen model instead of replacing it with the default on return', async () => {
@@ -996,10 +994,10 @@ describe('model configuration', () => {
     expect(wrapper.get('[aria-label="编辑模型 本机模型"]').attributes('aria-pressed')).toBe('true')
     await wrapper.get('#provider-name').setValue('未保存的模型名称')
     await wrapper.get('[aria-label="编辑模型 图片模型"]').trigger('click')
-    expect(globalThis.confirm).toHaveBeenCalled()
+    expect(dialog().text()).toContain('请确认操作'); await answerConfirmation(false)
     expect((wrapper.get('#provider-name').element as HTMLInputElement).value).toBe('未保存的模型名称')
-    vi.mocked(globalThis.confirm).mockReturnValue(true)
     await wrapper.get('[aria-label="编辑模型 图片模型"]').trigger('click')
+    await answerConfirmation(true)
     expect(wrapper.get('#model-kind').text()).toBe('图片 · AI 封面背景')
     expect(wrapper.get('[aria-label="编辑模型 图片模型"]').attributes('aria-pressed')).toBe('true')
   })
