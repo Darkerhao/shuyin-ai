@@ -62,6 +62,8 @@ async fn image_errors_timeout_and_unusable_content_never_return_an_asset() {
         (429, "rate_limit"),
         (302, "redirect"),
         (503, "http"),
+        (504, "timeout"),
+        (524, "timeout"),
     ] {
         let (url, h) = server(status, "contract-only-secret", Duration::ZERO);
         let error = OpenAiCompatible::new(TIMEOUT, &url)
@@ -260,6 +262,29 @@ async fn provider_errors_are_sanitized_and_redirects_are_rejected() {
         h.join().unwrap();
     }
 }
+#[tokio::test(flavor = "current_thread")]
+async fn gateway_timeouts_are_reported_as_timeouts_without_retrying_or_exposing_secrets() {
+    for status in [524, 504] {
+        let (url, handle) = server(
+            status,
+            "contract-only-secret echoed by gateway",
+            Duration::ZERO,
+        );
+        let error = OpenAiCompatible::new(TIMEOUT, &url)
+            .unwrap()
+            .generate(request(url))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "timeout", "HTTP {status}");
+        assert!(error.message.contains(&status.to_string()));
+        assert!(error.message.contains("网关"));
+        assert!(!error.message.contains("检查地址与模型配置"));
+        assert!(!error.message.contains("contract-only-secret"));
+        let received = handle.join().unwrap();
+        assert_eq!(received.matches("POST /v1/chat/completions").count(), 1);
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn malformed_incomplete_empty_and_timeout_responses_fail() {
     for body in [

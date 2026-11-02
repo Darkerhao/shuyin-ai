@@ -249,6 +249,10 @@ impl OpenAiCompatible {
                     "模型服务拒绝认证，请检查 API Key 和模型权限。",
                 ),
                 429 => AiError::new("rate_limit", "模型服务限流或额度不足，请稍后重试。"),
+                504 | 524 => AiError::new(
+                    "timeout",
+                    &format!("模型服务网关等待响应超时（HTTP {status}）。请稍后手动重试；若持续出现，请联系服务商检查上游耗时和网关超时限制。"),
+                ),
                 300..=399 => AiError::new(
                     "redirect",
                     "服务返回重定向，请直接配置最终可信的 API 地址。",

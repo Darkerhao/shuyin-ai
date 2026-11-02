@@ -430,7 +430,7 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 - Rust：`ai.rs` 的统一 `TextProvider::generate(TextRequest)` 接口与 `OpenAiCompatible` 适配器，`ai_commands.rs` 编排任务，`credentials.rs` 访问系统凭据，`database/ai.rs` 负责模型、任务与版本持久化。未新增 npm、UI 或全局状态依赖。
 - 适配器调用 `{base_url}/chat/completions`，只发送 model/messages/stream=false，不假设模型支持 temperature、max_tokens 或 response_format。版本化系统 Prompt 位于 `prompts/writing-v1.md`，用户资料按独立用户消息中的 JSON 数据传入。
 - reqwest 0.13.5 使用 Rustls 证书校验；300 秒总超时、15 秒连接超时、显式禁止自动重试和重定向。回环服务绕过环境代理，远程服务保留 reqwest 的环境代理行为；HTTP 仅允许 localhost/127.0.0.1/::1，其他服务必须 HTTPS，URL 不允许账号、查询或片段。
-- HTTP 状态错误只返回本地固定文案，不向界面或日志返回服务响应体、授权头和底层网络错误。响应最多 2 MB，必须完整结束（finish_reason=stop）、有非空文本，再严格解析带 format 的 JSON 并核验内容类型、数量和长度才入库。连接测试验证文本通信，不代表生成 JSON 能力已验收。
+- HTTP 状态错误只返回本地固定文案，不向界面或日志返回服务响应体、授权头和底层网络错误。HTTP 504/524 统一归类为 timeout，提示服务网关等待上游响应超时并保留状态码；本地300秒上限不能延长远端网关的等待限制。连接测试只要求回复OK，不能证明较长的分镜请求也会及时完成。响应最多 2 MB，必须完整结束（finish_reason=stop）、有非空文本，再严格解析带 format 的 JSON 并核验内容类型、数量和长度才入库。连接测试验证文本通信，不代表生成 JSON 能力已验收。
 - keyring 4.2.0 默认 v1 API 选择 Windows Credential Manager、macOS Keychain、Linux Secret Service。service 使用实际应用 identifier，凭据引用随机生成，验证产品与正式产品隔离；WebView 没有凭据回读命令。更换服务地址需重新输入已有密钥，避免把旧密钥送到新地址。
 - start_generation 创建 pending；execute_generation 转 running 并调用 Provider；取消使用瞬时 watch 信号，同时 SQLite 把任务转 cancelled。网络等待期间不持有数据库锁；版本与成功状态事务提交，并在数据库锁下检查任务仍为 running。重启和恢复将未完成任务标记 interrupted。
 - 历史内容共用 writing_versions，按项目和内容类型分别编号，人工修订保留模型/Prompt 来源。生成期间的手动编辑保留，新生成内容留在历史；手动保存期间禁用编辑，避免保存响应覆盖同时输入。路由离开和窗口关闭前提示未保存状态。
