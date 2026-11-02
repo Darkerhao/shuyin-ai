@@ -28,11 +28,25 @@ pub async fn execute_cover_generation(
     active: State<'_, ActiveTasks>,
     id: String,
 ) -> Result<Asset, AiError> {
-    let database = database.inner();
-    let vault = vault.inner();
-    let id = id.as_str();
-    run_task(database, active.inner(), id, |mut receiver| async move {
-        let prepared = database.prepare_cover_generation(id).map_err(AiError::database)?;
+    execute_image_task(
+        database.inner(),
+        vault.inner(),
+        active.inner(),
+        &id,
+        "cover",
+    )
+    .await
+}
+
+pub(crate) async fn execute_image_task(
+    database: &Database,
+    vault: &SystemCredentials,
+    active: &ActiveTasks,
+    id: &str,
+    kind: &str,
+) -> Result<Asset, AiError> {
+    run_task(database, active, id, |mut receiver| async move {
+        let prepared = database.prepare_image_generation(id, kind).map_err(AiError::database)?;
         let request = ImageRequest {
             key: provider_key(&prepared.provider, vault)?,
             base_url: crate::ai::normalize_base_url(&prepared.provider.input.base_url).map_err(|e|AiError::new("configuration", &e))?,
@@ -44,10 +58,10 @@ pub async fn execute_cover_generation(
         let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?;
         let bytes = tokio::select! {
             biased;
-            _ = receiver.changed() => return Err(AiError::new("cancelled", "生成已取消，当前封面保留。")),
+            _ = receiver.changed() => return Err(AiError::new("cancelled", "生成已取消，已保存内容保留。")),
             response = provider.generate_image(request) => response?,
         };
-        database.finish_cover_generation(id, &bytes).map_err(AiError::database)
+        database.finish_image_generation(id, &bytes, kind).map_err(AiError::database)
     }).await
 }
 

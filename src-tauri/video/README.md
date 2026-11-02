@@ -42,3 +42,16 @@ Run `npm run test:video` for timing, reference geometry, the complete catalog,
 action determinism, scene/framing validation, camera/preview parity, old-plan
 rejection, and rendering lifecycle checks. Current implementation and runtime
 evidence are documented in `docs/VIDEO-SCENES-VERIFICATION.md`.
+
+
+P2 adds optional scene.image usage snapshots. Static images and object beats are
+exclusive visual subjects. Only the host resolves book-owned asset IDs, fully
+decodes bounded PNG/JPEG/WebP files, and freezes SHA-256 into the saved plan.
+Runtime copies use the digest and actual extension; crop and usage metadata
+participate in the existing plan/cache signature. The same draw function uses
+Frametell 0.7.3 P.img with contain/cover and normalized focal positions. Image
+scenes use a fixed frame, cue-anchored reveal, fixed HUD attribution, and the same
+subtitle layer. The generated readiness promise rejects image decode failures
+before lint or capture. Missing or changed source images invalidate previews
+and block archiving. Video illustrations use the existing image provider and an
+independent task purpose/Prompt, never auto-adopt. See docs/VIDEO-IMAGES-VERIFICATION.md.

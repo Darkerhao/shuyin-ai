@@ -337,13 +337,19 @@
   function draw(P) {
     const pg = P.page, span = pg.drawDuration, H = P.hud, reference = pg.framing === 'reference';
     const times = pg.beats.map(b => b.at);
-    environment(P, pg.environment);
+    environment(P, pg.image ? 'plain' : pg.environment);
     H.text('读懂一本书', { x: 180, y: 77, size: 28, color: 'muted', at: -1, cps: 40, pen: false });
     const bookTitle = Array.from(SCRIPT.META.title);
     H.text(bookTitle.length > 11 ? bookTitle.slice(0, 10).join('') + '…' : SCRIPT.META.title, { x: 1740, y: 77, w: 340, align: 'r', size: 28, color: 'muted', at: -1, cps: 40, pen: false });
     H.text(pg.title, { x: 180, y: 160, size: 62, at: -.5, cps: 18 });
     H.line(180, 261, 1740, 261, { color: 'muted', sw: 1.2, at: -.3, dur: 1 });
     H.text(String(pg.sourceIndex + 1).padStart(2, '0'), { x: 1740, y: 817, w: 75, align: 'r', font: 'mono', size: 25, color: 'muted', at: -1, cps: 30, pen: false });
+    if (pg.image) {
+      const im = pg.image;
+      P.img(im.src, 480, 282, 960, 540, { fit: im.fit, pos: `${im.x * 100}% ${im.y * 100}%`, r: 12, shadow: false, border: 'faint', at: im.at, dur: .4, pop: 0 });
+      const source = Array.from(im.creator ? `${im.source} · ${im.creator}` : im.source);
+      H.text('图片：' + (source.length > 40 ? source.slice(0, 39).join('') + '…' : source.join('')), { x: 240, y: 834, w: 1400, size: 26, color: 'muted', at: im.at, cps: 80, pen: false, raw: true });
+    } else {
     let places = [{ x: 450, y: 511, s: 1.14 }, { x: 960, y: 511, s: .98 }, { x: 1470, y: 511, s: .98 }];
     if (pg.kind === 'compare') places = places.map(pos => ({ ...pos, s: 1.02 }));
     if (['opening', 'closing', 'desk', 'focus'].includes(pg.kind)) places = [{ x: 552, y: 518, s: 1.25 }, { x: 1132, y: 433, s: .8 }, { x: 1476, y: 600, s: .78 }];
@@ -400,6 +406,7 @@
       if (b.action === 'check') Q.check(0, 0, 140, { color: 'green', at, dur: .9 });
       if (b.action === 'cross') Q.cross(0, 0, 140, { color: 'red', at, dur: .9 });
     });
+    }
     H.line(180, 873, 1630, 873, { color: 'faint', sw: 2, at: -1, dur: .1 });
     H.liveRough((t, rough) => [rough.line(180, 873, 180 + 1450 * Math.max(0, Math.min(1, t / span)), 873, { color: 'orange', sw: 2.5 })]);
   }

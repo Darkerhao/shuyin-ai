@@ -1,3 +1,4 @@
+import type { Asset } from '../types/project'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import type { VideoJob, VideoScene, VideoSettings } from '../types/video'
@@ -15,3 +16,9 @@ export const subtitles = (id: string) => invoke<string>('video_subtitles', { id 
 export const exportSubtitles = (id: string) => invoke<string>('export_video_subtitles', { id })
 export const mediaSource = async (projectId: string, assetId: string) => convertFileSrc(await invoke<string>('media_asset_path', { projectId, assetId }))
 export const chooseRuntimePath = (directory: boolean) => open({ title: directory ? '选择独立引擎或本地模型目录' : '选择 Node / Python 可执行文件', directory, multiple: false, ...(directory ? {} : { filters: [{ name: 'Windows 程序', extensions: ['exe'] }] }) })
+
+export const chooseImage = () => open({ title: '导入本书视频图片', multiple: false, filters: [{ name: '静态图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
+export const importImage = (projectId: string, path: string) => invoke<string>('import_video_image', { projectId, path })
+export const readImage = (projectId: string, assetId: string) => invoke<ArrayBuffer>('read_video_image', { projectId, assetId })
+export const startIllustration = (projectId: string, providerId: string, description: string) => invoke<string>('start_video_illustration', { input: { projectId, providerId, description, width: 1920, height: 1080 } })
+export const executeIllustration = (id: string) => invoke<Asset>('execute_video_illustration', { id })

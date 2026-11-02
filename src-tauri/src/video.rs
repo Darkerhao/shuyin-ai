@@ -117,6 +117,48 @@ pub struct Scene {
     pub labels: Vec<String>,
     #[serde(default)]
     pub beats: Vec<Beat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<SceneImage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SceneImage {
+    pub asset_id: String,
+    pub source: String,
+    pub rights: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub creator: String,
+    pub fit: String,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub sha256: String,
+}
+impl SceneImage {
+    pub fn validate(&self) -> Result<(), String> {
+        let text = |value: &str, limit| {
+            !value.trim().is_empty()
+                && value.chars().count() <= limit
+                && !value.chars().any(|ch| ch.is_control() && ch != '\n')
+        };
+        if !text(&self.asset_id, 128)
+            || !text(&self.source, 1000)
+            || !text(&self.rights, 1000)
+            || (!self.creator.is_empty() && !text(&self.creator, 200))
+            || !matches!(self.fit.as_str(), "contain" | "cover")
+            || !self.x.is_finite()
+            || !self.y.is_finite()
+            || !(0.0..=1.0).contains(&self.x)
+            || !(0.0..=1.0).contains(&self.y)
+        {
+            return Err(
+                "图片镜头须选择本书素材、填写来源和授权说明，并使用有效的显示方式和裁切位置。"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
 }
 
 fn plain_environment() -> String {
@@ -235,7 +277,7 @@ pub fn validate_scenes(scenes: &[Scene], first: usize, end: usize) -> Result<(),
     let catalog = visual_catalog();
     let mut next = first;
     for scene in scenes {
-        if scene.beats.is_empty() {
+        if scene.beats.is_empty() && scene.image.is_none() {
             return Err("旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。".into());
         }
         if scene.first != next
@@ -253,6 +295,12 @@ pub fn validate_scenes(scenes: &[Scene], first: usize, end: usize) -> Result<(),
                 "分镜无效：须连续覆盖字幕，每镜最多16条、1—3个具体物体，使用目录内的构图、场景、景别和短标题。"
                     .into(),
             );
+        }
+        if let Some(image) = &scene.image {
+            image.validate()?;
+            if !scene.beats.is_empty() {
+                return Err("图片与手绘物体请选择一种画面主体。".into());
+            }
         }
         let mut previous = scene.first;
         for beat in &scene.beats {
@@ -460,6 +508,7 @@ mod tests {
     #[test]
     fn storyboard_must_cover_exact_batch_and_use_allowed_components() {
         let mut scenes = vec![Scene {
+            image: None,
             first: 24,
             last: 27,
             kind: "route".into(),

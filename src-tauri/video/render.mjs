@@ -17,21 +17,30 @@ export function assertNodeRuntime(version = process.versions.node, platform = pr
 }
 
 // The model selects trusted drawings and subtitle anchors; it never supplies code.
-export function buildEpisode(plan, range) {
+export function buildEpisode(plan, range, images = {}) {
   const shortText = (value, limit) => typeof value === 'string' && value.trim() && [...value].length <= limit && !/[\p{Cc}{}*`]/u.test(value);
   let next = 0;
   for (const scene of plan.scenes) {
     const { environment = 'plain', framing = 'reference' } = scene;
-    if (Object.keys(scene).some(key => !['first', 'last', 'title', 'kind', 'labels', 'beats', 'environment', 'framing'].includes(key))) throw new Error('Unknown scene field.');
+    if (Object.keys(scene).some(key => !['first', 'last', 'title', 'kind', 'labels', 'beats', 'environment', 'framing', 'image'].includes(key))) throw new Error('Unknown scene field.');
     if (!Object.hasOwn(catalog.environments, environment)) throw new Error('Unknown scene environment.');
     if (!Object.hasOwn(catalog.framings, framing)) throw new Error('Unknown scene framing.');
-    if (!scene.beats?.length) throw new Error('旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。');
+    if (!scene.beats?.length && !scene.image) throw new Error('旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。');
     if (!Object.hasOwn(catalog.kinds, scene.kind)) throw new Error('Unknown scene kind.');
     if (!shortText(scene.title, catalog.limits.titleChars) || scene.labels?.length) throw new Error('Invalid scene title or legacy labels.');
     if (!Number.isInteger(scene.first) || scene.first !== next || !Number.isInteger(scene.last) || scene.last < scene.first || scene.last >= plan.cues.length || scene.last - scene.first >= catalog.limits.maxSceneCues) throw new Error('Invalid scene cue coverage.');
-    if (scene.beats.length > catalog.limits.maxBeats) throw new Error('A scene supports at most three objects.');
+    if ((scene.beats?.length ?? 0) > catalog.limits.maxBeats) throw new Error('A scene supports at most three objects.');
+    if (scene.image) {
+      const im = scene.image, frozen = images[im.assetId];
+      const text = (v, n) => typeof v === 'string' && v.trim() && [...v].length <= n && !/[\p{Cc}]/u.test(v.replaceAll('\n', ''));
+      if (Object.keys(im).some(k => !['assetId', 'source', 'rights', 'creator', 'fit', 'x', 'y', 'sha256'].includes(k))
+        || !text(im.assetId, 128) || !text(im.source, 1000) || !text(im.rights, 1000) || (im.creator && !text(im.creator, 200))
+        || !['contain', 'cover'].includes(im.fit) || !Number.isFinite(im.x) || !Number.isFinite(im.y) || im.x < 0 || im.x > 1 || im.y < 0 || im.y > 1
+        || scene.beats?.length || !frozen || !/^[a-f0-9]{64}$/.test(im.sha256) || im.sha256 !== frozen.sha256
+        || !new RegExp('^assets/' + im.sha256 + '\\.(png|jpg|webp)$').test(frozen.src)) throw new Error('Invalid or missing frozen scene image.');
+    }
     let previous = scene.first;
-    for (const beat of scene.beats) {
+    for (const beat of scene.beats ?? []) {
       if (!Object.hasOwn(catalog.objects, beat.object)) throw new Error('Unknown drawing object.');
       if (!Object.hasOwn(catalog.actions, beat.action ?? 'draw')) throw new Error('Unknown drawing action.');
       if (!shortText(beat.label, catalog.limits.labelChars)) throw new Error('Invalid object label.');
@@ -50,7 +59,7 @@ export function buildEpisode(plan, range) {
       id: `p${String(index + 1).padStart(4, '0')}`, index, title: scene.title, kind: scene.kind,
       environment: scene.environment ?? 'plain', framing: scene.framing ?? 'reference',
       // Keep the full drawing clock even when the preview ends before this scene does.
-      drawDuration: end - start, beats: scene.beats.map(b => ({ ...b, at: plan.cues[b.cue].start - start })),
+      drawDuration: end - start, ...(scene.image ? { image: { ...scene.image, src: images[scene.image.assetId].src, at: plan.cues[scene.first].start - start } } : {}), beats: (scene.beats ?? []).map(b => ({ ...b, at: plan.cues[b.cue].start - start })),
       start: start - from, end: Math.min(end, to) - from,
       cues: plan.cues.slice(scene.first, scene.last + 1).map((c, offset) => ({ id: scene.first + offset, t: c.text, start: c.start - from, end: (range ? Math.min(c.end, to) : c.end) - from })).filter(c => c.start < to - from && c.end > 0),
     };
@@ -68,6 +77,29 @@ root.applyVideoTimeline = function() {
 if (root.TIMING) root.applyVideoTimeline();
 })(typeof window === 'undefined' ? globalThis : window);`;
   return { script, pages, visuals };
+}
+
+// Only the host resolves asset IDs to bounded, frozen local files. No path comes from the plan.
+export function freezeImages(plan, files, episode) {
+  const images = {};
+  for (const scene of plan.scenes) {
+    if (!scene.image || Object.hasOwn(images, scene.image.assetId)) continue;
+    const image = scene.image, file = files?.[image.assetId];
+    if (!file || !path.isAbsolute(file.path ?? '') || !['png', 'jpg', 'webp'].includes(file.extension)) throw new Error('Missing frozen scene image.');
+    const input = fs.openSync(file.path, 'r');
+    let bytes;
+    try {
+      if (fs.fstatSync(input).size > 15 * 1024 * 1024) throw new Error('Scene image exceeds 15 MB.');
+      bytes = fs.readFileSync(input);
+    } finally { fs.closeSync(input); }
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    if (hash !== image.sha256 || hash !== file.sha256) throw new Error('Scene image changed after confirmation.');
+    const src = `assets/${hash}.${file.extension}`;
+    fs.mkdirSync(path.join(episode, 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(episode, src), bytes);
+    images[image.assetId] = { src, sha256: hash };
+  }
+  return images;
 }
 
 // FFmpeg seals mdat and appends moov when a fragment finishes. The engine only
@@ -198,7 +230,8 @@ async function main(inputFile, outputFile) {
   const { linkProject } = await import(pathToFileURL(path.join(engine, 'tools/project.mjs')));
   if (fresh) linkProject(episode);
   else if (fs.realpathSync(path.join(episode, 'engine')) !== fs.realpathSync(engine)) throw new Error('The render cache belongs to a different engine.');
-  const result = buildEpisode(plan, range);
+  const images = freezeImages(plan, input.images, episode);
+  const result = buildEpisode(plan, range, images);
   fs.writeFileSync(path.join(episode, 'script.js'), result.script);
   fs.writeFileSync(path.join(episode, 'timeline.js'), 'window.applyVideoTimeline();');
   fs.writeFileSync(path.join(episode, 'illustrations.js'), result.visuals);
@@ -207,7 +240,14 @@ async function main(inputFile, outputFile) {
   const bootUrl = pathToFileURL(path.join(engine, 'boot.js')).href.replaceAll('&', '&amp;');
   // Engine readiness covers DOM/fonts, not paint. All capture workers must await the initial paint too.
   fs.writeFileSync(path.join(episode, 'index.html'), `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="engine-modules" content="${modulesUrl}"><script src="script.js"></script><script src="${bootUrl}"></script>
-<script>window.__ready = window.__ready.then(duration => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(duration)))));</script>
+<script>window.__ready = window.__ready.then(async duration => {
+  await Promise.all([...new Set(SCRIPT.PAGES.filter(p => p.image).map(p => p.image.src))].map(async src => {
+    const image = new Image(); image.src = src;
+    try { await image.decode(); } catch { throw new Error('Scene image failed to decode: ' + src); }
+    if (!image.naturalWidth || !image.naturalHeight) throw new Error('Scene image is empty: ' + src);
+  }));
+  return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(duration))));
+});</script>
 </head><body></body></html>`);
   for (const page of result.pages) fs.writeFileSync(path.join(episode, 'pages', `${page.id}.js`), `ENGINE.visual(${JSON.stringify(page.id)}, P => EPISODE.draw(P));`);
   process.chdir(episode);

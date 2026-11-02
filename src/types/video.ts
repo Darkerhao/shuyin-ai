@@ -9,12 +9,17 @@ export interface VideoBeat {
 }
 export interface VideoSettings { engineRoot: string; nodePath: string; pythonPath: string; modelPath: string }
 export interface VideoCue { start: number; end: number; text: string }
+export interface VideoSceneImage {
+  assetId: string; source: string; rights: string; creator?: string
+  fit: 'contain' | 'cover'; x: number; y: number; sha256?: string
+}
 export interface VideoScene {
   first: number; last: number; kind: keyof typeof visualCatalog.kinds | 'book' | 'quote' | 'flow' | 'timeline'; title: string
   environment?: keyof typeof visualCatalog.environments
   framing?: keyof typeof visualCatalog.framings
   beats?: VideoBeat[]
   labels?: string[]
+  image?: VideoSceneImage
 }
 export interface VideoPlan { title: string; audioSha256: string; duration: number; cues: VideoCue[]; scenes: VideoScene[] }
 export interface VideoProgress {
