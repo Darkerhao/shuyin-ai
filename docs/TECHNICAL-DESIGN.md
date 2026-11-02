@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## 文本流式响应与分镜失败阶段（2026-11-02）
+
+排查确认：TextProvider原先固定stream=false；视频已有cues时跳过转写分支，也跳过其中唯一的首次storyboard状态更新，导致首批模型失败被记为preparing。截图524只能证明网关超时，当前本机无对应644条字幕任务及当时模型配置，未确认真实上游耗时或推理强度。
+
+统一OpenAiCompatible发送stream=true，公共post_response保留认证、禁止重定向、禁自动重试及HTTP错误脱敏；图片继续原JSON协议。文本按Content-Type解析SSE或服务实际返回的完整JSON，不发送第二次请求。ai/stream.rs按完整SSE行/事件读取，支持跨HTTP分块的UTF-8、LF/CRLF、多行data、心跳及usage；仅收集index=0的delta.content，忽略推理字段。finish_reason=stop且收到[DONE]、正文非空才返回，断流、length、服务内嵌错误及非法数据不交给保存层。流总量限制16MB（含逐token信封及推理），正文2MB，整个请求300秒截止时间不随心跳延长；取消仍通过现有调用方丢弃请求future实现。
+
+register_video_subtitle在登记本轮字幕的原事务中同步stage=storyboard，使首次生成和字幕续作在调用模型前具有一致阶段，无需新增状态、迁移或重复存储计划。现有分批及保存规则保持。
+
+协议依据：[OpenAI Chat流式事件](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events.md)；当前锁定reqwest 0.13.5源码async_impl/response.rs的chunk实现及client.rs的timeout文档确认可逐块读取，且timeout覆盖连接至响应体完成。没有新增库、自动重试、模型降档或付费调用。流式不能保证消除首包超时及服务商缓冲造成的524，真实服务仍需复测。
+
 ## 视频关键图片与插画（2026-11-02，P2）
 
 `Scene.image`为可选的本次使用快照：`assetId/source/rights/creator?/fit/x/y/sha256`。fit只允许contain/cover，x/y为0—1；图片存在时beats必须为空。缺字段的旧物体分镜仍走原绘图，旧文字分镜仍需明确升级；文本模型继续只生成目录物体，图片由用户选用。`VideoImageEditor`直接编辑现有Scene，不增加第二份视频计划；生成候选在主动采用前保持独立。
@@ -428,7 +438,7 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 
 - 页面：`/settings/models` 模型配置与测试，`/projects/:id/writing` 创作。业务组件只依赖 `services/ai.ts` 和 `types/ai.ts`，没有供应商请求、密钥读取或 SQL。
 - Rust：`ai.rs` 的统一 `TextProvider::generate(TextRequest)` 接口与 `OpenAiCompatible` 适配器，`ai_commands.rs` 编排任务，`credentials.rs` 访问系统凭据，`database/ai.rs` 负责模型、任务与版本持久化。未新增 npm、UI 或全局状态依赖。
-- 适配器调用 `{base_url}/chat/completions`，只发送 model/messages/stream=false，不假设模型支持 temperature、max_tokens 或 response_format。版本化系统 Prompt 位于 `prompts/writing-v1.md`，用户资料按独立用户消息中的 JSON 数据传入。
+- 适配器调用 `{base_url}/chat/completions`，发送 model/messages/stream=true；显式配置时附加 reasoning_effort，不假设模型支持 temperature、max_tokens 或 response_format。版本化系统 Prompt 位于 `prompts/writing-v1.md`，用户资料按独立用户消息中的 JSON 数据传入。
 - reqwest 0.13.5 使用 Rustls 证书校验；300 秒总超时、15 秒连接超时、显式禁止自动重试和重定向。回环服务绕过环境代理，远程服务保留 reqwest 的环境代理行为；HTTP 仅允许 localhost/127.0.0.1/::1，其他服务必须 HTTPS，URL 不允许账号、查询或片段。
 - HTTP 状态错误只返回本地固定文案，不向界面或日志返回服务响应体、授权头和底层网络错误。HTTP 504/524 统一归类为 timeout，提示服务网关等待上游响应超时并保留状态码；本地300秒上限不能延长远端网关的等待限制。连接测试只要求回复OK，不能证明较长的分镜请求也会及时完成。响应最多 2 MB，必须完整结束（finish_reason=stop）、有非空文本，再严格解析带 format 的 JSON 并核验内容类型、数量和长度才入库。连接测试验证文本通信，不代表生成 JSON 能力已验收。
 - keyring 4.2.0 默认 v1 API 选择 Windows Credential Manager、macOS Keychain、Linux Secret Service。service 使用实际应用 identifier，凭据引用随机生成，验证产品与正式产品隔离；WebView 没有凭据回读命令。更换服务地址需重新输入已有密钥，避免把旧密钥送到新地址。

@@ -1,5 +1,29 @@
 # 书引 AI 开发计划与验收标准
 
+## 文本流式接收与视频524排查（2026-11-02）
+
+确认了客户端固定非流式请求，以及复用字幕时首批分镜请求失败仍显示preparing两个问题。截图的524属于网关响应；本机未找到截图对应644条字幕的任务，不掌握当次推理档位、服务商日志或首包耗时，不能认定是推理参数不兼容。
+
+实现：统一文本Provider请求stream=true，严格有界SSE接收，仅完整正文进入原有校验/保存；保留配置的推理强度和300秒总上限，不自动降档或重试。服务实际回完整JSON时读取同一次响应。字幕登记事务同步进入storyboard，续作错误定位准确且已有内容保留。无数据库迁移、依赖、权限或版本号变化，属于fix/patch。
+
+回归先红后绿：`cargo test --manifest-path src-tauri/Cargo.toml --locked ai::tests::streaming -- --nocapture`在旧实现下2项失败，分别得到524和SSE不是JSON；本机契约网关明确模拟非流式等待全文超时，不代表复现真实服务商根因。`cargo test --manifest-path src-tauri/Cargo.toml --locked resumed_subtitles_enter_storyboard -- --nocapture`在旧实现下失败，实际阶段preparing，修复后为storyboard。
+
+实际检查（Rust命令先`. ./.tools/env.ps1`）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 176通过、2项按原设置忽略；覆盖流式UTF-8分块、推理与正文分离、结束标记、断流/异常/超长、总超时、524/504脱敏及续作保稿 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `npm run lint` | 通过 |
+| `npm run build` | TypeScript及生产构建通过；既有大包提示、npm用户配置提示保留 |
+| `cargo build --manifest-path src-tauri/Cargo.toml --locked` | 本地开发可执行文件编译通过 |
+| `git diff --check` | 通过 |
+
+验收：请求流式、默认不发送推理参数、显式档位原样发送、错误不自动重试、完整结束前不交付正文、续作失败阶段与字幕保留均通过本地测试。未调用真实外部模型、未跑用户的20分钟视频、未安装/发布构建或修改用户任务。流式仍可能被上游首包慢或网关缓冲阻断，不能承诺彻底消除524；需要在包含修复的构建中继续原任务做真实服务验收。
+
+修改文件：`src-tauri/src/ai.rs`、`src-tauri/src/ai/stream.rs`、`src-tauri/src/ai/tests.rs`、`src-tauri/src/database/video.rs`及`docs/{PRD,TECHNICAL-DESIGN,DEVELOPMENT-PLAN,USER-GUIDE}.md`。
+
 ## 分镜重试模型切换修复（2026-11-02）
 
 根因：模型选择只传给新建任务，继续及重新生成入口未传当前providerId，后端复用了旧绑定。修复贯穿VideoPage、services/video、continue_video_job和claim_video_job，复用既有字段并原子更新，不新增依赖、权限或迁移，影响为fix/patch，不手动升版本。

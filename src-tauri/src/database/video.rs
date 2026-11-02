@@ -346,7 +346,7 @@ impl Database {
             let asset =
                 assets::register_existing(&tx, &job.project_id, path, Some("subtitle"), None)?;
             tx.execute(
-                "UPDATE video_jobs SET subtitle_asset_id=?1 WHERE id=?2",
+                "UPDATE video_jobs SET subtitle_asset_id=?1,stage='storyboard' WHERE id=?2",
                 params![asset, id],
             )
             .map_err(|e| e.to_string())?;
@@ -652,6 +652,44 @@ mod tests {
             .save_video_progress(&a.id, running.run_id, &a.plan, "storyboard")
             .is_err());
         assert!(db.claim_video_job(&b.id, VideoWork::Prepare, None).is_ok());
+    }
+
+    #[test]
+    fn resumed_subtitles_enter_storyboard_before_a_model_failure() {
+        let (dir, db, input) = fixture();
+        let job = db.create_video_job(input).unwrap();
+        let job = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        let mut plan = job.plan.clone();
+        plan.duration = 5.0;
+        plan.cues = vec![Cue {
+            start: 0.5,
+            end: 2.0,
+            text: "已保存字幕".into(),
+        }];
+        db.save_video_progress(&job.id, job.run_id, &plan, "storyboard")
+            .unwrap();
+        db.end_video_job(&job.id, job.run_id, "failed", "HTTP 524")
+            .unwrap();
+        let resumed = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        assert_eq!(resumed.stage, "preparing");
+        let subtitle = dir.path().join("resumed.srt");
+        std::fs::write(&subtitle, crate::video::to_srt(&resumed.plan.cues)).unwrap();
+        // Both fresh transcription and resume use this boundary before the first model call.
+        db.register_video_subtitle(&resumed.id, resumed.run_id, &subtitle)
+            .unwrap();
+        db.end_video_job(&resumed.id, resumed.run_id, "failed", "HTTP 524")
+            .unwrap();
+        let failed = db.video_job(&resumed.id).unwrap();
+        assert_eq!(failed.stage, "storyboard");
+        assert_eq!(
+            serde_json::to_string(&failed.plan).unwrap(),
+            serde_json::to_string(&plan).unwrap()
+        );
+        assert!(failed.subtitle_asset_id.is_some());
     }
 
     #[test]
