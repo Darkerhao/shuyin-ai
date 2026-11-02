@@ -21,6 +21,10 @@ export function buildEpisode(plan, range) {
   const shortText = (value, limit) => typeof value === 'string' && value.trim() && [...value].length <= limit && !/[\p{Cc}{}*`]/u.test(value);
   let next = 0;
   for (const scene of plan.scenes) {
+    const { environment = 'plain', framing = 'reference' } = scene;
+    if (Object.keys(scene).some(key => !['first', 'last', 'title', 'kind', 'labels', 'beats', 'environment', 'framing'].includes(key))) throw new Error('Unknown scene field.');
+    if (!Object.hasOwn(catalog.environments, environment)) throw new Error('Unknown scene environment.');
+    if (!Object.hasOwn(catalog.framings, framing)) throw new Error('Unknown scene framing.');
     if (!scene.beats?.length) throw new Error('旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。');
     if (!Object.hasOwn(catalog.kinds, scene.kind)) throw new Error('Unknown scene kind.');
     if (!shortText(scene.title, catalog.limits.titleChars) || scene.labels?.length) throw new Error('Invalid scene title or legacy labels.');
@@ -44,6 +48,7 @@ export function buildEpisode(plan, range) {
     const end = index + 1 === plan.scenes.length ? plan.duration : plan.cues[plan.scenes[index + 1].first].start;
     return {
       id: `p${String(index + 1).padStart(4, '0')}`, index, title: scene.title, kind: scene.kind,
+      environment: scene.environment ?? 'plain', framing: scene.framing ?? 'reference',
       // Keep the full drawing clock even when the preview ends before this scene does.
       drawDuration: end - start, beats: scene.beats.map(b => ({ ...b, at: plan.cues[b.cue].start - start })),
       start: start - from, end: Math.min(end, to) - from,

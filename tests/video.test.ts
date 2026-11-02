@@ -97,6 +97,28 @@ it('keeps the selected preview scene title in sync with the existing editor stat
   await wrapper.get('[aria-label="第1镜标题"]').setValue('新的镜头主题')
   expect(wrapper.get('#preview-first-scene').text()).toContain('新的镜头主题')
 })
+it('edits environment and framing in the same plan, invalidates the preview and saves both before rendering', async () => {
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...structuredClone(job), stage: 'previewing', runId: 2, preview: { start: 0, end: 8, signature: 'saved', scenes: [0] } }])
+  vi.mocked(api.previewSource).mockResolvedValue('http://asset.localhost/preview.mp4')
+  const wrapper = await render()
+  expect(wrapper.get('[aria-label="第1镜场景"]').text()).toContain('空纸')
+  expect(wrapper.get('[aria-label="第1镜景别"]').text()).toContain('原布局')
+  const environment = wrapper.findAllComponents({ name: 'UiSelect' }).find(select => select.find('[aria-label="第1镜场景"]').exists())!
+  environment.vm.$emit('update:modelValue', 'study')
+  await flushPromises()
+  const framing = wrapper.findAllComponents({ name: 'UiSelect' }).find(select => select.find('[aria-label="第1镜景别"]').exists())!
+  framing.vm.$emit('update:modelValue', 'detail')
+  await flushPromises()
+  expect(wrapper.get('[aria-label="第1镜场景"]').text()).toContain('书房案头')
+  expect(wrapper.get('[aria-label="第1镜景别"]').text()).toContain('特写')
+  expect(wrapper.find('video[aria-label="原声试片（非正式成片）"]').exists()).toBe(false)
+  vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'rendering' })
+  await wrapper.get('[data-test="render-video"]').trigger('click'); await flushPromises()
+  expect(api.savePlan).toHaveBeenCalledWith('j1', expect.stringContaining('原声字幕'), [expect.objectContaining({ environment: 'study', framing: 'detail' })])
+  expect(api.continueJob).toHaveBeenCalledWith('j1', true)
+  expect(job.plan.scenes[0]?.environment).toBeUndefined()
+})
+
 it('retries a failed render with the saved subtitles and storyboard instead of starting over', async () => {
   vi.useFakeTimers()
   vi.mocked(api.listJobs).mockResolvedValue([{ ...structuredClone(job), status: 'failed', stage: 'rendering', error: 'Layout check failed: not deterministic' }])

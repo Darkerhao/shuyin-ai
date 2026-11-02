@@ -11,6 +11,8 @@ export interface VideoSettings { engineRoot: string; nodePath: string; pythonPat
 export interface VideoCue { start: number; end: number; text: string }
 export interface VideoScene {
   first: number; last: number; kind: keyof typeof visualCatalog.kinds | 'book' | 'quote' | 'flow' | 'timeline'; title: string
+  environment?: keyof typeof visualCatalog.environments
+  framing?: keyof typeof visualCatalog.framings
   beats?: VideoBeat[]
   labels?: string[]
 }

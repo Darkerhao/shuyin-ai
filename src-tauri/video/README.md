@@ -6,13 +6,24 @@
 It is not a copy of Frametell engine code. The external AGPL engine remains
 independently installed and is not bundled with the app.
 
-The 85 object drawings are unchanged. The normalized `sketch` function has SHA-256
+The original 85 object drawings are unchanged. Removing only the appended P1
+cases from the normalized `sketch` function preserves SHA-256
 `96a6bc4e09c4440682d68e97f417b1357cf38c7a0a327482084d8f590b36fe9b`.
 The source-audio clock, handwritten labels, progress stroke, and subtitle style
 are retained. P0 centers a lone subject, gives narrative scenes a visual lead,
 and keeps comparisons balanced. Objects and explicit semantic actions now start
 at their selected subtitle, without pre-drawing the first object or adding a
 fixed action delay. This no longer promises pixel parity with the old layout.
+
+P1 adds eight objects (brain, compass, road_fork, mountain, tree, window, cup,
+bed), six light environments plus plain, and wide/medium/detail framing plus
+reference. All use the same primitives, catalog, and draw function. Backgrounds
+contain spatial structure only; narrative props still count towards three beats.
+Old object plans default to plain/reference without rewriting stored JSON.
+The reference layout keeps P0 geometry; new framings reserve space for labels
+and rotated objects. Only focus/detail with at least three seconds after the
+first cue gets one 1.06x, three-second camera move. Titles and the progress
+stroke use the engine HUD, while subtitles stay on its independent fixed layer.
 
 `visual-catalog.json` is the single source of allowed objects, scenes, actions,
 and limits for Rust validation, the model prompt, Node compilation, and Vue.
@@ -28,4 +39,6 @@ only the viewing/audio window. Preview results and up to 12 renderer screenshots
 are derived cache files, not registered video assets. The host validates the
 current run and plan/source signature before exposing individual output files.
 Run `npm run test:video` for timing, reference geometry, the complete catalog,
-action determinism, old-plan rejection, and rendering lifecycle checks.
+action determinism, scene/framing validation, camera/preview parity, old-plan
+rejection, and rendering lifecycle checks. Current implementation and runtime
+evidence are documented in `docs/VIDEO-SCENES-VERIFICATION.md`.

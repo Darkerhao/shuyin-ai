@@ -100,16 +100,153 @@ test('preview windows reject invalid times, mid-scene starts and durations over 
 function drawing(input, index = 0, range) {
   const result = buildEpisode(input, range);
   const page = result.pages.find(p => p.sourceIndex === index);
-  const calls = [], moves = [], live = [];
+  const calls = [], moves = [], live = [], cameras = [];
   let layers = 0;
-  const builder = (layer = 0) => new Proxy({ page, c: i => page.cues[i].start - page.start, layer: () => builder(++layers), move: (_, fn) => moves.push(fn), liveRough: fn => live.push(fn) }, {
+  const builder = (layer = 0) => new Proxy({ page, wrap: { style: {} }, c: i => page.cues[i].start - page.start, layer: () => builder(++layers), move: (_, fn) => moves.push(fn), liveRough: fn => live.push(fn), cam: keys => cameras.push(keys) }, {
     get(target, key) { return key in target ? target[key] : (...args) => { calls.push({ layer, method: key, args }); }; },
   });
   const context = { SCRIPT: { META: { title: input.title } }, PV: { K: (t, at, duration) => Math.max(0, Math.min(1, (t - at) / duration)), col: () => '#FBF8F1' }, window: {}, document: { createElement: () => ({}), head: { appendChild() {} } } };
   vm.runInNewContext(result.visuals, context);
-  context.window.EPISODE.draw(builder());
-  return { calls: JSON.parse(JSON.stringify(calls)), at: t => JSON.parse(JSON.stringify([...moves.map(fn => fn(t)), ...live.map(fn => fn(t, { line: (...args) => args }))])) };
+  const root = builder();
+  root.hud = builder(-1);
+  context.window.EPISODE.draw(root);
+  return { calls: JSON.parse(JSON.stringify(calls)), cameras: JSON.parse(JSON.stringify(cameras)), at: t => JSON.parse(JSON.stringify([...moves.map(fn => fn(t)), ...live.map(fn => fn(t, { line: (...args) => args }))])) };
 }
+
+test('P1 compiles controlled environments and framings while old plans keep plain/reference without being rewritten', () => {
+  const original = JSON.stringify(plan);
+  const old = buildEpisode(plan);
+  assert.equal(old.pages[0].environment, 'plain');
+  assert.equal(old.pages[0].framing, 'reference');
+  const scene = { ...plan.scenes[0], environment: 'study', framing: 'wide' };
+  const expanded = { ...plan, scenes: [scene, plan.scenes[1]] };
+  assert.equal(buildEpisode(expanded).pages[0].environment, 'study');
+  assert.equal(buildEpisode(expanded).pages[0].framing, 'wide');
+  assert.equal(JSON.stringify(plan), original);
+  const explicit = drawing({ ...plan, scenes: plan.scenes.map(s => ({ ...s, environment: 'plain', framing: 'reference' })) });
+  const legacy = drawing(plan);
+  assert.deepEqual(explicit.calls, legacy.calls);
+  assert.deepEqual(explicit.at(4), legacy.at(4));
+});
+
+test('P1 rejects unknown, null and path-like scene choices rather than silently using a default', () => {
+  for (const [key, value] of [['environment', 'forest'], ['environment', '../scene.svg'], ['environment', null], ['framing', 'zoom'], ['framing', null], ['camera', { s: 5 }]]) {
+    assert.throws(() => buildEpisode({ ...plan, scenes: [{ ...plan.scenes[0], [key]: value }, plan.scenes[1]] }), /environment|framing|field/i);
+  }
+});
+
+test('all six light environments have distinct structural drawings and a route background is drawn only once', () => {
+  const signatures = new Set();
+  for (const environment of ['study', 'courtyard', 'street', 'riverbank', 'window', 'path']) {
+    const output = drawing({ ...plan, scenes: [{ ...plan.scenes[0], environment }, plan.scenes[1]] });
+    const background = output.calls.filter(c => c.layer === 1 && ['path', 'box', 'line'].includes(c.method));
+    assert(background.length >= 2 && background.length <= 14, `${environment} needs a restrained, real environment`);
+    assert(background.every(c => c.args.at(-1).at < 0), 'Non-narrative scenery may precede the first cue.');
+    signatures.add(JSON.stringify(background));
+  }
+  assert.equal(signatures.size, 6);
+  const output = drawing({ ...plan, scenes: [{ ...plan.scenes[0], kind: 'route', environment: 'path' }, plan.scenes[1]] });
+  assert.equal(output.calls.filter(c => c.method === 'path' && c.args[0] === 'M230 751 Q579 775 820 650 T1280 601 T1680 589').length, 1);
+});
+
+test('wide, medium and detail change the subject scale, retain comparison balance, and keep titles on the HUD', () => {
+  const scene = { first: 0, last: 1, kind: 'focus', title: '阅读', environment: 'study', beats: [{ cue: 0, object: 'book', action: 'draw', label: '书籍' }] };
+  const frames = ['wide', 'medium', 'detail'].map(framing => drawing({ ...plan, scenes: [{ ...scene, framing }] }));
+  assert(frames[0].at(4)[0].s < frames[1].at(4)[0].s);
+  assert(frames[1].at(4)[0].s < frames[2].at(4)[0].s);
+  for (const frame of frames) {
+    assert(frame.calls.filter(c => c.method === 'text' && ['阅读', '读懂一本书', plan.title].includes(c.args[0])).every(c => c.layer === -1));
+  }
+  for (const framing of ['wide', 'medium', 'detail']) {
+    const compared = drawing({ ...plan, scenes: [{ ...scene, kind: 'compare', framing, beats: [...scene.beats, { cue: 1, object: 'pen', action: 'draw', label: '书写' }] }] }).at(8);
+    assert.equal(compared[0].s, compared[1].s, framing);
+  }
+});
+
+test('only an explicit detail/focus scene gets one gentle cue-anchored camera move shared by preview and full render', () => {
+  const scene = { first: 0, last: 1, kind: 'focus', title: '阅读', environment: 'study', framing: 'detail', beats: [{ cue: 1, object: 'book', action: 'draw', label: '书籍' }] };
+  const input = { ...plan, scenes: [scene] };
+  const full = drawing(input), preview = drawing(input, 0, { start: 0, end: 8 });
+  assert.equal(full.cameras.length, 1);
+  assert.equal(full.cameras[0].length, 1);
+  assert.equal(full.cameras[0][0].at, 5);
+  assert(full.cameras[0][0].s >= 1.05 && full.cameras[0][0].s <= 1.08);
+  assert(full.cameras[0][0].dur >= 2 && full.cameras[0][0].dur <= 4);
+  assert.deepEqual(full.cameras, preview.cameras);
+  assert.deepEqual(full.calls, preview.calls);
+  assert.deepEqual(full.at(7), preview.at(7));
+  for (const change of [{ framing: 'medium' }, { kind: 'desk' }, { framing: 'reference' }]) {
+    assert.deepEqual(drawing({ ...input, scenes: [{ ...scene, ...change }] }).cameras, []);
+  }
+});
+
+test('detail framing leaves room for tall rotating objects and their supporting labels', () => {
+  const scene = { first: 0, last: 1, kind: 'focus', title: 'Details', environment: 'plain', framing: 'detail', beats: ['palace', 'cradle', 'pen'].map(object => ({ cue: 0, object, action: 'tilt', label: object })) };
+  const output = drawing({ ...plan, scenes: [scene] });
+  const positions = output.at(8);
+  const vertical = (pos, bounds) => {
+    const rad = pos.rot * Math.PI / 180;
+    return bounds.flatMap(x => [-160, 150].map(y => pos.y + pos.s * (x * Math.sin(rad) + y * Math.cos(rad))));
+  };
+  const top = Math.min(...vertical(positions[0], [-168, 168]));
+  assert(540 + (top - 540) * 1.06 >= 275, 'The camera and tilt must not push a palace into the fixed title.');
+  const cradle = positions[1], rad = cradle.rot * Math.PI / 180;
+  const bottom = cradle.y + cradle.s * (140 * Math.sin(rad) + 160 * Math.cos(rad));
+  const label = output.calls.find(c => c.method === 'text' && c.args[0] === 'cradle');
+  assert(label.args[1].y - bottom >= 12, 'Supporting labels need space for the completed drawing and tilt.');
+});
+
+test('reframed route and transfer arrows connect successive subjects in their actual direction', () => {
+  for (const kind of ['route', 'transfer']) for (const framing of ['wide', 'medium', 'detail']) for (const count of [2, 3]) {
+    const scene = { first: 0, last: 1, kind, framing, title: '身份转换', beats: ['crown', 'palace', 'certificate'].slice(0, count).map((object, i) => ({ cue: i ? 1 : 0, object, action: 'draw', label: ['皇帝', '离宫', '公民'][i] })) };
+    const output = drawing({ ...plan, scenes: [scene] });
+    const positions = output.at(8);
+    const arrows = output.calls.filter(c => c.method === 'arrow');
+    assert.equal(arrows.length, count - 1);
+    arrows.forEach(({ args: [x1, y1, x2, y2, options] }, i) => {
+      const from = positions[i], to = positions[i + 1];
+      assert(x1 < x2, `${kind}/${framing}/${count}: arrows must advance towards the next subject`);
+      assert(x1 > from.x && x2 < to.x, 'Both endpoints belong in the gap between subjects.');
+      assert.equal(y1, from.y);
+      assert.equal(y2, to.y);
+      assert.equal(options.at, 5, 'The arrow still starts at the destination subtitle.');
+    });
+    const preview = drawing({ ...plan, scenes: [scene] }, 0, { start: 0, end: 8 });
+    assert.deepEqual(preview.calls, output.calls);
+  }
+});
+
+test('reframed walls stay outside subjects and divide the final pair', () => {
+  for (const framing of ['wide', 'medium', 'detail']) for (const count of [1, 2, 3]) {
+    const scene = { first: 0, last: 1, kind: 'wall', environment: 'study', framing, title: '墙内墙外', beats: Array.from({ length: count }, () => ({ cue: 0, object: 'palace', action: 'draw', label: '宫殿' })) };
+    const output = drawing({ ...plan, scenes: [scene] });
+    const positions = output.at(8).slice(0, count);
+    const wall = output.calls.find(c => c.layer === 0 && c.method === 'line' && c.args.at(-1).color === 'red');
+    const [x1, , x2] = wall.args;
+    assert.equal(x1, x2, 'The wall remains vertical.');
+    assert(x1 < 1740, 'The wall stays within the drawing area.');
+    const left = positions.at(count > 1 ? -2 : -1);
+    assert(x1 > left.x + 168 * left.s, `${framing}/${count}: the wall must clear the left palace`);
+    if (count > 1) {
+      const right = positions.at(-1);
+      assert(x1 < right.x - 168 * right.s, `${framing}/${count}: the wall must clear the right palace`);
+    }
+  }
+});
+
+test('reference framing retains the original route, transfer and wall guides', () => {
+  const scene = { first: 0, last: 1, framing: 'reference', title: '原布局', beats: ['crown', 'palace', 'certificate'].map(object => ({ cue: 0, object, action: 'draw', label: '主体' })) };
+  for (const [kind, expected] of [
+    ['route', [[620, 574, 780, 501], [1140, 501, 1290, 430]]],
+    ['transfer', [[630, 511, 780, 511], [1140, 511, 1290, 511]]],
+  ]) {
+    const output = drawing({ ...plan, scenes: [{ ...scene, kind }] });
+    assert.deepEqual(output.calls.filter(c => c.method === 'arrow').map(c => c.args.slice(0, 4)), expected);
+  }
+  const output = drawing({ ...plan, scenes: [{ ...scene, kind: 'wall' }] });
+  const wall = output.calls.find(c => c.layer === 0 && c.method === 'line' && c.args.at(-1).color === 'red');
+  assert.deepEqual(wall.args.slice(0, 4), [1212, 303, 1212, 736]);
+});
 
 test('the first object and its semantic motion start at the actual cue, not before the page', () => {
   const delayed = { ...plan, scenes: [{ first: 0, last: 1, kind: 'collapse', title: '改变', beats: [{ cue: 1, object: 'crown', action: 'tilt', label: '身份' }] }] };
@@ -186,19 +323,22 @@ test('every catalog object has the reference drawing and every action is finite 
   const source = fs.readFileSync(new URL('../src-tauri/video/illustrations.js', import.meta.url), 'utf8');
   const normalized = source.replaceAll('\r\n', '\n');
   const geometry = normalized.slice(normalized.indexOf('  function sketch('), normalized.indexOf('  function draw('));
-  assert.equal(createHash('sha256').update(geometry).digest('hex'), '96a6bc4e09c4440682d68e97f417b1357cf38c7a0a327482084d8f590b36fe9b', 'Keep all reference object geometry, not approximate replacements.');
-  assert.deepEqual(new Set([...source.matchAll(/case '([^']+)'/g)].map(match => match[1])), new Set(Object.keys(catalog.objects)));
-  assert.equal(Object.keys(catalog.objects).length, 85);
+  const reference = geometry.replace(/ {6}\/\/ P1 objects[^\n]*\n[\s\S]*?(?= {6}default: throw)/, '');
+  assert.equal(createHash('sha256').update(reference).digest('hex'), '96a6bc4e09c4440682d68e97f417b1357cf38c7a0a327482084d8f590b36fe9b', 'Keep all 85 reference cases and primitives byte-for-byte, excluding only the appended P1 cases.');
+  assert.deepEqual(new Set([...geometry.matchAll(/case '([^']+)'/g)].map(match => match[1])), new Set(Object.keys(catalog.objects)));
+  assert.equal(Object.keys(catalog.objects).length, 93);
   for (const object of Object.keys(catalog.objects)) {
     for (const action of Object.keys(catalog.actions)) {
       const transforms = [], live = [], calls = [];
-      const page = { id: 'p01', index: 0, sourceIndex: 0, title: '手绘物体', kind: 'focus', start: 0, end: 12, drawDuration: 12, cues: [{ id: 0, start: 0 }], beats: [{ cue: 0, object, action, label: '物体', at: 0 }] };
+      const page = { id: 'p01', index: 0, sourceIndex: 0, title: '手绘物体', kind: 'focus', environment: 'plain', framing: 'reference', start: 0, end: 12, drawDuration: 12, cues: [{ id: 0, start: 0 }], beats: [{ cue: 0, object, action, label: '物体', at: 0 }] };
       const builder = () => new Proxy({ page, c: () => 0, layer: () => builder(), move: (_, fn) => transforms.push(fn), liveRough: fn => live.push(fn) }, {
         get(target, key) { return key in target ? target[key] : (...args) => { calls.push([key, ...args]); }; },
       });
       const context = { SCRIPT: { META: { title: '原书' } }, PV: { K: (t, at, duration) => Math.max(0, Math.min(1, (t - at) / duration)), col: () => '#FBF8F1' }, window: {}, document: { createElement: () => ({}), head: { appendChild() {} } } };
       vm.runInNewContext(source, context);
-      context.window.EPISODE.draw(builder());
+      const root = builder();
+      root.hud = builder();
+      context.window.EPISODE.draw(root);
       const drawAt = t => [...transforms.map(fn => fn(t)), ...live.map(fn => fn(t, { line: (...args) => args }))];
       const first = JSON.stringify(drawAt(5));
       drawAt(11); drawAt(0);

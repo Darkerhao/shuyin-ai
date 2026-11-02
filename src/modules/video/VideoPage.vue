@@ -800,35 +800,85 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               </p>
               <div
                 v-if="scene.beats?.length"
-                class="video-field"
+                class="video-scene-controls"
               >
-                <label :for="`scene-${index}-kind`">叙事构图</label>
-                <Select
-                  v-model="scene.kind"
-                  :disabled="busy"
-                >
-                  <SelectTrigger
-                    :id="`scene-${index}-kind`"
-                    :aria-label="`第${index + 1}镜构图`"
+                <div class="video-field video-scene-kind">
+                  <label :for="`scene-${index}-kind`">叙事构图</label>
+                  <Select
+                    v-model="scene.kind"
+                    :disabled="busy"
                   >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem
-                      v-for="(name, key) in visualCatalog.kinds"
-                      :key="key"
-                      :value="key"
+                    <SelectTrigger
+                      :id="`scene-${index}-kind`"
+                      :aria-label="`第${index + 1}镜构图`"
                     >
-                      {{ name }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="(name, key) in visualCatalog.kinds"
+                        :key="key"
+                        :value="key"
+                      >
+                        {{ name }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div class="video-field">
+                  <label :for="`scene-${index}-environment`">环境场景</label>
+                  <Select
+                    :model-value="scene.environment ?? 'plain'"
+                    :disabled="busy"
+                    @update:model-value="scene.environment = $event as NonNullable<VideoScene['environment']>"
+                  >
+                    <SelectTrigger
+                      :id="`scene-${index}-environment`"
+                      :aria-label="`第${index + 1}镜场景`"
+                    >
+                      <SelectValue>{{ visualCatalog.environments[scene.environment ?? 'plain'] }}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="(name, key) in visualCatalog.environments"
+                        :key="key"
+                        :value="key"
+                      >
+                        {{ name }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div class="video-field">
+                  <label :for="`scene-${index}-framing`">画面景别</label>
+                  <Select
+                    :model-value="scene.framing ?? 'reference'"
+                    :disabled="busy"
+                    @update:model-value="scene.framing = $event as NonNullable<VideoScene['framing']>"
+                  >
+                    <SelectTrigger
+                      :id="`scene-${index}-framing`"
+                      :aria-label="`第${index + 1}镜景别`"
+                    >
+                      <SelectValue>{{ visualCatalog.framings[scene.framing ?? 'reference'] }}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="(name, key) in visualCatalog.framings"
+                        :key="key"
+                        :value="key"
+                      >
+                        {{ name }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </article>
           </div>
           <div class="video-render-action">
             <p class="muted">
-              使用原有85种手绘物体；按所选字幕触发并突出主体。请核对物体含义与动作时机，确认后生成完整视频；试片和观看提醒不会替你确认，原音频与旧成片保留。
+              共{{ Object.keys(visualCatalog.objects).length }}种手绘物体，每镜最多3个主体。场景只作环境示意，特写突出首个主体，对照保持等权；“重点物体＋特写”在时长允许时轻推近一次。请先看试片，确认后再生成整片，原音频与旧成片保留。
             </p><Button
               data-test="render-video"
               :disabled="busy || running || !completePlan"
@@ -849,6 +899,8 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .video-field { display: grid; align-content: start; gap: 8px; min-width: 0; }
 .video-field .muted { margin: 4px 0 0; }
+.video-scene-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.video-scene-kind { grid-column: 1 / -1; }
 .video-path { display: flex; gap: 8px; min-width: 0; }
 .video-path input { min-width: 0; }
 .video-beat { display: grid; gap: 6px; min-width: 0; }

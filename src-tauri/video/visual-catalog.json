@@ -1,5 +1,20 @@
 {
   "limits": { "maxSceneCues": 16, "maxBeats": 3, "labelChars": 8, "titleChars": 20 },
+  "environments": {
+    "plain": "空纸",
+    "study": "书房案头",
+    "courtyard": "庭院门墙",
+    "street": "城市街道",
+    "riverbank": "河岸远山",
+    "window": "窗边独处",
+    "path": "路径地形"
+  },
+  "framings": {
+    "reference": "原布局",
+    "wide": "远景",
+    "medium": "中景",
+    "detail": "特写"
+  },
   "kinds": {
     "opening": "书本开场",
     "closing": "回扣收束",
@@ -108,6 +123,14 @@
     "person": "人物剪影",
     "level": "平衡秤",
     "river": "河流",
-    "bridge": "桥梁"
+    "bridge": "桥梁",
+    "brain": "大脑",
+    "compass": "指南针",
+    "road_fork": "岔路",
+    "mountain": "山峰",
+    "tree": "树木",
+    "window": "窗户",
+    "cup": "杯子",
+    "bed": "床"
   }
 }

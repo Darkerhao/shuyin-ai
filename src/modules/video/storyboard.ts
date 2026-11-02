@@ -8,13 +8,13 @@ export interface StoryboardNote {
 
 export function inspectStoryboard(plan: VideoPlan): StoryboardNote[] {
   const notes: StoryboardNote[] = []
-  const signatures = plan.scenes.map(s => JSON.stringify([s.kind, s.beats?.map(b => [b.object, b.action, b.label])]))
+  const signatures = plan.scenes.map(s => JSON.stringify([s.kind, s.environment ?? 'plain', s.framing ?? 'reference', s.beats?.map(b => [b.object, b.action, b.label])]))
   plan.scenes.forEach((scene, sceneIndex) => {
     if (!scene.beats?.length) return
     const add = (code: StoryboardNote['code'], message: string) => notes.push({ sceneIndex, code, message })
     const times = scene.beats.map(b => plan.cues[b.cue]?.start).filter((t): t is number => t !== undefined)
     if (sceneIndex >= 2 && signatures[sceneIndex] === signatures[sceneIndex - 1] && signatures[sceneIndex] === signatures[sceneIndex - 2] && signatures[sceneIndex] !== signatures[sceneIndex - 3]) {
-      add('repetition', '连续三镜使用相同构图、物体与动作。请检查是否有叙事进展；有意回扣可以保留。')
+      add('repetition', '连续三镜使用相同场景、景别、构图、物体与动作。请检查是否有叙事进展；有意回扣可以保留。')
     }
     if (times.some((time, i) => i > 0 && time > times[i - 1]! && time - times[i - 1]! < 1.2)) {
       add('crowding', '两次物体出场相隔不足1.2秒，可能来不及看清。并列对照可使用同一字幕锚点。')
