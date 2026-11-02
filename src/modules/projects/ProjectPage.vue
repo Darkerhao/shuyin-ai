@@ -2,6 +2,7 @@
 import { displayPath } from '@/lib/displayPath'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
+import { requestConfirmation } from '../../composables/useConfirmation'
 import { useWindowCloseGuard } from '../../composables/useWindowCloseGuard'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -68,7 +69,7 @@ const remove = () => run(async () => {
   leaving = true
   await router.push('/projects')
 }, '正在删除项目…')
-const canLeave = () => leaving || (!busy.value && (!dirty.value || globalThis.confirm('项目资料尚未保存，确定离开并放弃修改？')))
+const canLeave = () => leaving || (!busy.value && (!dirty.value || requestConfirmation('项目资料尚未保存，确定离开并放弃修改？')))
 const closeGuard = useWindowCloseGuard(() => dirty.value || busy.value, canLeave)
 onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate(canLeave)

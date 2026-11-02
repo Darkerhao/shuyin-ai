@@ -26,6 +26,7 @@ import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
+import { requestConfirmation } from '../../composables/useConfirmation'
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const desktop = isDesktop()
@@ -108,9 +109,9 @@ function accept(version: WritingVersion | null) {
   draft.value = { ...emptyPublishing(), ...version?.content }
   original.value = JSON.stringify(draft.value)
 }
-function canDiscard() { return (!dirty.value && !preview.value) || globalThis.confirm(preview.value ? '候选结果尚未采用，确定放弃？' : '当前内容尚未保存，确定放弃修改？') }
+function canDiscard(returnFocusId?: string) { return (!dirty.value && !preview.value) || requestConfirmation(preview.value ? '候选结果尚未采用，确定放弃？' : '当前内容尚未保存，确定放弃修改？', returnFocusId) }
 async function prepareLeave() {
-  if (busy.value || (preview.value && !canDiscard())) return false
+  if (busy.value || (preview.value && !await canDiscard())) return false
   try { if (ready.value && durationDirty.value) await persistDuration(); return true }
   catch (cause) { error.value = errorMessage(cause); return false }
 }
@@ -187,8 +188,8 @@ const load = () => run(async () => {
   if (recovery) { draft.value = { ...emptyPublishing(), ...recovery.content }; message.value = '已恢复自动暂存的草稿，保存修改后才会新增历史版本。' }
   ready.value = true
 })
-function switchVersion(id: string | null) {
-  if (canDiscard()) accept(versions.value.find(v => v.id === id) ?? null)
+async function switchVersion(id: string | null) {
+  if (await canDiscard('writing-version')) accept(versions.value.find(v => v.id === id) ?? null)
 }
 async function persistWriting() {
   await autosave.flush()

@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import ConfirmAction from '../../components/ConfirmAction.vue'
+import { requestConfirmation } from '../../composables/useConfirmation'
 import * as api from '../../services/ai'
 import { isDesktop } from '../../services/projects'
 import { emptyProvider, type ModelProvider, type ProviderInput, type ReasoningEffort } from '../../types/ai'
@@ -36,13 +37,13 @@ const deleting = ref(false)
 const loaded = ref(false)
 let initialized = false
 const { busy, error, message, operation, run } = useOperation()
-const canLeave = () => !busy.value && (!dirty.value || globalThis.confirm('模型配置尚未保存，确定放弃修改？'))
+const canLeave = () => !busy.value && (!dirty.value || requestConfirmation('模型配置尚未保存，确定放弃修改？'))
 onBeforeRouteLeave(canLeave)
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { apiKey.value = ''; globalThis.removeEventListener('beforeunload', beforeUnload) })
-function edit(provider?: ModelProvider) {
-  if (!canLeave()) return
+async function edit(provider?: ModelProvider) {
+  if (!await canLeave()) return
   selectProvider(provider)
   void router.replace({ query: { ...route.query, model: provider?.id ?? 'new' } })
 }

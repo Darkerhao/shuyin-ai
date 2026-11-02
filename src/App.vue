@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, START_LOCATION, useRoute, useRouter } from 'vue-router'
 import AppIcon from './components/AppIcon.vue'
 import AppNotifications from './components/AppNotifications.vue'
+import AppConfirmation from './components/AppConfirmation.vue'
 import OperationFeedback from './components/OperationFeedback.vue'
 import appLogo from '../assets/app-icon.svg'
 import { buttonVariants } from '@/components/ui/button'
@@ -39,6 +40,7 @@ watch(router.currentRoute, async (to, from) => {
 
 <template>
   <AppNotifications />
+  <AppConfirmation />
   <OperationFeedback
     :error="updateError || settingsError"
     :message="['current', 'available', 'ready', 'restart'].includes(updateStatus) ? updateMessage : ''"

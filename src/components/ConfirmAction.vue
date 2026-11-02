@@ -1,59 +1,63 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import { Button } from '@/components/ui/button'
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogTitle } from '@/components/ui/alert-dialog'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   title: string
   confirmLabel?: string
   cancelLabel?: string
   busy?: boolean
   disabled?: boolean
   destructive?: boolean
-}>(), { confirmLabel: '确认删除', cancelLabel: '取消', destructive: true })
+  form?: string
+  returnFocus?: globalThis.HTMLElement | null
+}>(), { confirmLabel: '确认删除', cancelLabel: '取消', destructive: true, form: undefined, returnFocus: null })
 const emit = defineEmits<{ confirm: []; cancel: [] }>()
-const titleId = useId()
-const panel = ref<globalThis.HTMLElement | null>(null)
 const opener = globalThis.document.activeElement instanceof globalThis.HTMLElement ? globalThis.document.activeElement : null
-onMounted(async () => {
-  await nextTick()
-  panel.value?.querySelector<globalThis.HTMLButtonElement>('[data-cancel]')?.focus()
-})
-onBeforeUnmount(() => { if (opener?.isConnected) opener.focus({ preventScroll: true }) })
+function restoreFocus(event: globalThis.Event) {
+  event.preventDefault()
+  const target = props.returnFocus ?? opener
+  if (target?.isConnected) target.focus({ preventScroll: true })
+}
 </script>
 
 <template>
-  <section
-    ref="panel"
-    class="panel confirmation"
-    role="alertdialog"
-    aria-modal="false"
-    :aria-labelledby="titleId"
-    :aria-busy="busy"
-    @keydown.esc.stop.prevent="!busy && emit('cancel')"
+  <AlertDialog
+    :open="true"
+    @update:open="!$event && !busy && emit('cancel')"
   >
-    <h2 :id="titleId">
-      {{ title }}
-    </h2>
-    <slot />
-    <div class="actions wrap">
-      <slot name="actions" />
-      <Button
-        type="button"
-        :variant="destructive ? 'destructive' : 'default'"
-        :disabled="busy || disabled"
-        @click="emit('confirm')"
-      >
-        {{ busy ? '处理中…' : confirmLabel }}
-      </Button>
-      <Button
-        data-cancel
-        type="button"
-        variant="outline"
-        :disabled="busy"
-        @click="emit('cancel')"
-      >
-        {{ cancelLabel }}
-      </Button>
-    </div>
-  </section>
+    <AlertDialogContent
+      :aria-describedby="undefined"
+      :aria-busy="busy"
+      @escape-key-down="busy && $event.preventDefault()"
+      @close-auto-focus="restoreFocus"
+    >
+      <AlertDialogTitle class="text-lg font-semibold">
+        {{ title }}
+      </AlertDialogTitle>
+      <slot />
+      <div class="actions wrap">
+        <slot name="actions" />
+        <Button
+          :type="form ? 'submit' : 'button'"
+          :form="form"
+          :variant="destructive ? 'destructive' : 'default'"
+          :disabled="busy || disabled"
+          @click="!form && emit('confirm')"
+        >
+          {{ busy ? '处理中…' : confirmLabel }}
+        </Button>
+        <AlertDialogCancel as-child>
+          <Button
+            data-cancel
+            type="button"
+            variant="outline"
+            :disabled="busy"
+          >
+            {{ cancelLabel }}
+          </Button>
+        </AlertDialogCancel>
+      </div>
+    </AlertDialogContent>
+  </AlertDialog>
 </template>

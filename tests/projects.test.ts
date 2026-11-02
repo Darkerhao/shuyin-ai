@@ -1,3 +1,4 @@
+import { button, dialog, answerConfirmation } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -36,7 +37,6 @@ async function render(path: string, { pendingNavigation = false } = {}) {
   wrappers.push(wrapper); await router.isReady(); await flushPromises()
   return { wrapper, router }
 }
-function button(wrapper: ReturnType<typeof mount>, text: string) { return wrapper.findAll('button').find(b => b.text() === text)! }
 beforeEach(() => {
   vi.resetAllMocks()
   workspaceOperation.error.value = ''; workspaceOperation.message.value = ''
@@ -45,7 +45,6 @@ beforeEach(() => {
   vi.mocked(api.getProject).mockResolvedValue(saved)
   vi.mocked(api.listAssets).mockResolvedValue([])
   vi.mocked(api.workspaceSettings).mockResolvedValue({ root: 'D:/books', databasePath: 'D:/data.sqlite3' })
-  vi.stubGlobal('confirm', vi.fn(() => false))
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M1 projects and materials', () => {
@@ -109,7 +108,7 @@ describe('M1 projects and materials', () => {
     vi.mocked(api.chooseSourceDocument).mockResolvedValueOnce('D:\\书籍\\原书.epub')
     await button(wrapper, '选择本地文件').trigger('click'); await flushPromises()
     expect(wrapper.find('[aria-label="取消绑定 原书.epub"]').exists()).toBe(true)
-    await router.push('/projects')
+    const navigation = router.push('/projects'); await answerConfirmation(false); await navigation
     expect(router.currentRoute.value.path).toBe('/projects/p1')
     await wrapper.get('[aria-label="取消绑定 原书.epub"]').trigger('click')
     await router.push('/projects'); await flushPromises()
@@ -135,10 +134,11 @@ describe('M1 projects and materials', () => {
     await wrapper.get('#title').setValue('尚未保存的书')
     const event = new Event('beforeunload', { cancelable: true }); globalThis.dispatchEvent(event)
     expect(event.defaultPrevented).toBe(true)
-    await router.push('/projects')
+    const cancelled = router.push('/projects')
+    await answerConfirmation(false); await cancelled
     expect(router.currentRoute.value.path).toBe('/projects/new')
-    vi.mocked(globalThis.confirm).mockReturnValue(true)
-    await router.push('/projects'); await flushPromises()
+    const accepted = router.push('/projects')
+    await answerConfirmation(true); await accepted; await flushPromises()
     const clean = new Event('beforeunload', { cancelable: true }); globalThis.dispatchEvent(clean)
     expect(clean.defaultPrevented).toBe(false)
   })
@@ -225,11 +225,11 @@ describe('M1 projects and materials', () => {
     await button(wrapper, '选择恢复目录').trigger('click'); await flushPromises()
     vi.mocked(fullBackup.restoreFullBackup).mockRejectedValueOnce('备份文件校验失败')
     await button(wrapper, '确认完整恢复').trigger('click'); await flushPromises()
-    expect(wrapper.get('[role=alertdialog]').text()).toContain(preview.manifestPath)
+    expect(dialog().text()).toContain(preview.manifestPath)
     vi.mocked(fullBackup.restoreFullBackup).mockResolvedValue({ previousDatabase: 'D:/恢复前.sqlite3', workspacePath: 'D:/新位置' })
     await button(wrapper, '确认完整恢复').trigger('click'); await flushPromises()
     expect(fullBackup.restoreFullBackup).toHaveBeenCalledWith(preview.manifestPath, 'D:/恢复目录')
-    expect(wrapper.find('[role=alertdialog]').exists()).toBe(false)
+    expect(!!document.querySelector('[role="alertdialog"]')).toBe(false)
     expect(wrapper.get('[data-sonner-toast][data-type=success]:not([data-removed=true])').text()).toContain('D:/恢复前.sqlite3')
   })
   it('creates a full backup without videos by default and supports opting in', async () => {
@@ -352,8 +352,10 @@ describe('M1 projects and materials', () => {
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect((wrapper.get('#notes').element as HTMLTextAreaElement).value).toBe('未保存的读书笔记')
     expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('database is locked')
-    await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects/p1')
-    await router.push('/projects/p2'); expect(router.currentRoute.value.path).toBe('/projects/p1')
+    const leave = router.push('/projects'); await answerConfirmation(false); await leave
+    expect(router.currentRoute.value.path).toBe('/projects/p1')
+    const changeBook = router.push('/projects/p2'); await answerConfirmation(false); await changeBook
+    expect(router.currentRoute.value.path).toBe('/projects/p1')
   })
   it('keeps existing metadata while the book form only asks for title, author and optional notes', async () => {
     const { wrapper } = await render('/projects/p1')
@@ -369,7 +371,7 @@ describe('M1 projects and materials', () => {
     const { wrapper, router } = await render('/projects/p1')
     await button(wrapper, '删除项目').trigger('click')
     expect(api.deleteProject).not.toHaveBeenCalled()
-    expect(wrapper.get('[role="alertdialog"]').text()).toContain('原始视频、素材文件和工作目录都会保留')
+    expect(dialog().text()).toContain('原始视频、素材文件和工作目录都会保留')
     await button(wrapper, '取消').trigger('click'); expect(api.deleteProject).not.toHaveBeenCalled()
     await button(wrapper, '删除项目').trigger('click'); await button(wrapper, '确认删除').trigger('click'); await flushPromises()
     expect(api.deleteProject).toHaveBeenCalledWith('p1')
@@ -401,14 +403,14 @@ describe('M1 projects and materials', () => {
     vi.mocked(api.chooseBackup).mockResolvedValueOnce('D:/backup.sqlite3')
     await button(wrapper, '选择备份恢复').trigger('click'); await flushPromises()
     expect(api.restoreBackup).not.toHaveBeenCalled()
-    expect(wrapper.get('[role="alertdialog"]').text()).toContain('D:/backup.sqlite3')
+    expect(dialog().text()).toContain('D:/backup.sqlite3')
     vi.mocked(api.restoreBackup).mockRejectedValueOnce('备份数据库结构不匹配')
     await button(wrapper, '确认恢复').trigger('click'); await flushPromises()
-    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(true)
+    expect(!!document.querySelector('[role="alertdialog"]')).toBe(true)
     expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('结构不匹配')
     vi.mocked(api.restoreBackup).mockResolvedValueOnce('D:/previous.sqlite3')
     await button(wrapper, '确认恢复').trigger('click'); await flushPromises()
-    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(false)
+    expect(!!document.querySelector('[role="alertdialog"]')).toBe(false)
     expect(wrapper.get('[data-sonner-toast][data-type="success"]:not([data-removed="true"])').text()).toContain('D:/previous.sqlite3')
   })
   it('does not create a backup when the directory picker is cancelled', async () => {

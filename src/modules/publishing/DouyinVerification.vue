@@ -2,6 +2,7 @@
 import { displayPath } from '@/lib/displayPath'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -234,24 +235,28 @@ defineExpose({ start })
             重新读取合集
           </Button>
         </div>
-        <details>
-          <summary>在官方页人工设置合集</summary>
-          <label for="douyin-manual-collection">已在官方页设置的合集名称（留空表示不加入）</label>
-          <Input
-            id="douyin-manual-collection"
-            v-model="manualCollection"
-            :disabled="pending || stopping"
-            maxlength="200"
-          />
-          <Button
-            type="button"
-            variant="outline"
-            :disabled="pending || stopping"
-            @click="decide({ kind: 'collection', name: manualCollection.trim() || null, remember: false, manual: true })"
-          >
-            已核对官方页合集，人工确认
-          </Button>
-        </details>
+        <Collapsible :unmount-on-hide="false">
+          <CollapsibleTrigger class="disclosure-trigger">
+            在官方页人工设置合集
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <label for="douyin-manual-collection">已在官方页设置的合集名称（留空表示不加入）</label>
+            <Input
+              id="douyin-manual-collection"
+              v-model="manualCollection"
+              :disabled="pending || stopping"
+              maxlength="200"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              :disabled="pending || stopping"
+              @click="decide({ kind: 'collection', name: manualCollection.trim() || null, remember: false, manual: true })"
+            >
+              已核对官方页合集，人工确认
+            </Button>
+          </CollapsibleContent>
+        </Collapsible>
       </template>
       <Button
         v-else

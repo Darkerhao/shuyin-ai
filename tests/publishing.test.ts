@@ -1,4 +1,4 @@
-import { chooseSelect } from './ui'
+import { chooseSelect, button, dialog, answerConfirmation } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -48,9 +48,8 @@ async function render(path = '/projects/p1/publishing') {
   const wrapper = mount(App, { attachTo: document.body, global: { plugins: [router] } }); wrappers.push(wrapper); await flushPromises()
   return { wrapper, router }
 }
-function button(w: ReturnType<typeof mount>, label: string) { return w.findAll('button').find(b => b.text() === label)! }
 beforeEach(() => {
-  vi.resetAllMocks(); vi.stubGlobal('confirm', vi.fn(() => false))
+  vi.resetAllMocks()
   vi.mocked(douyin.onDouyinProgress).mockResolvedValue(vi.fn())
   vi.mocked(api.listPublishQueue).mockResolvedValue([])
   vi.mocked(covers.readCoverExport).mockResolvedValue(new ArrayBuffer(0))
@@ -181,11 +180,11 @@ describe('M4 publish preparation', () => {
     const { wrapper } = await render()
     await wrapper.get('#publish-title').setValue('未保存的任务标题')
     await chooseSelect(wrapper, '#publish-task', /^另一个任务 ·/)
-    expect(globalThis.confirm).toHaveBeenCalled()
+    expect(dialog().text()).toContain('请确认操作'); await answerConfirmation(false)
     expect(wrapper.get('#publish-task').text()).toContain('中文标题')
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('未保存的任务标题')
-    vi.mocked(globalThis.confirm).mockReturnValue(true)
     await chooseSelect(wrapper, '#publish-task', '新任务')
+    await answerConfirmation(true)
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.savePublishTask).toHaveBeenCalledWith(null, expect.any(Object))
@@ -211,9 +210,10 @@ describe('M4 publish preparation', () => {
     vi.mocked(ai.listVersions).mockResolvedValue([{ id: 'old', projectId: 'p1', kind: 'publishing', content: { ...emptyPublishing(), title: '历史标题', description: '历史内容' }, versionNo: 1, sourceType: 'manual', modelName: '', promptVersion: '', isConfirmed: false, createdAt: '' }])
     const { wrapper } = await render()
     await chooseSelect(wrapper, '#publish-writing-version', /^v1 · 历史标题/)
+    await answerConfirmation(false)
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe(task.title)
-    vi.mocked(globalThis.confirm).mockReturnValue(true)
     await chooseSelect(wrapper, '#publish-writing-version', /^v1 · 历史标题/)
+    await answerConfirmation(true)
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('历史标题')
     expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
     await wrapper.get('form').trigger('submit'); await flushPromises()
@@ -227,7 +227,8 @@ describe('M4 publish preparation', () => {
     await button(wrapper, '生成完整任务包').trigger('click'); await flushPromises()
     expect(api.preparePublishTask).not.toHaveBeenCalled(); expect(wrapper.text()).toContain('保存失败')
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('新标题')
-    await router.push('/projects'); expect(router.currentRoute.value.path).toContain('/publishing')
+    const navigation = router.push('/projects'); await answerConfirmation(false); await navigation
+    expect(router.currentRoute.value.path).toContain('/publishing')
   })
   it('saves before preparing and retains persisted draft after package failure', async () => {
     const { wrapper } = await render()
@@ -259,25 +260,25 @@ describe('M4 publish preparation', () => {
     const { wrapper } = await render(); await button(wrapper, '打开抖音创作者中心').trigger('click'); await flushPromises()
     expect(api.openPublishItem).toHaveBeenCalledWith('t1', 'portal'); expect(api.recordPublishSuccess).not.toHaveBeenCalled()
     await button(wrapper, '记录发布成功').trigger('click'); await button(wrapper, '取消').trigger('click'); expect(api.recordPublishSuccess).not.toHaveBeenCalled()
-    await button(wrapper, '记录发布成功').trigger('click'); await wrapper.get('#publish-notes').setValue('真实发布备注')
+    await button(wrapper, '记录发布成功').trigger('click'); await dialog().get('#publish-notes').setValue('真实发布备注')
     vi.mocked(api.recordPublishSuccess).mockRejectedValueOnce('写入失败')
-    await wrapper.get('[role="alertdialog"]').trigger('submit'); await flushPromises()
-    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(true); expect((wrapper.get('#publish-notes').element as HTMLTextAreaElement).value).toBe('真实发布备注')
+    await dialog().get('form').trigger('submit'); await flushPromises()
+    expect(!!document.querySelector('[role="alertdialog"]')).toBe(true); expect((dialog().get('#publish-notes').element as HTMLTextAreaElement).value).toBe('真实发布备注')
     vi.mocked(api.recordPublishSuccess).mockResolvedValue({ ...task, status: 'published', record: { publishedAt: task.createdAt, postUrl: '', notes: '真实发布备注' } })
-    await wrapper.get('[role="alertdialog"]').trigger('submit'); await flushPromises()
+    await dialog().get('form').trigger('submit'); await flushPromises()
     expect(api.recordPublishSuccess).toHaveBeenLastCalledWith('t1', expect.objectContaining({ confirmed: true, notes: '真实发布备注' }))
-    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(false); expect(wrapper.text()).toContain('已记录发布成功')
+    expect(!!document.querySelector('[role="alertdialog"]')).toBe(false); expect(wrapper.text()).toContain('已记录发布成功')
     expect(wrapper.findAll('fieldset')[0]!.element.disabled).toBe(true)
   })
   it('locks task editing and repeated confirmation while entering the publication result', async () => {
     const { wrapper } = await render()
     await button(wrapper, '记录发布成功').trigger('click')
-    await wrapper.get('#publish-notes').setValue('正在填写的备注')
+    await dialog().get('#publish-notes').setValue('正在填写的备注')
     expect(wrapper.get('#publish-title').element.matches(':disabled')).toBe(true)
     expect(wrapper.get('#publish-video').element.matches(':disabled')).toBe(true)
     expect(button(wrapper, '关联素材').element.matches(':disabled')).toBe(true)
     expect(button(wrapper, '记录发布成功').element.disabled).toBe(true)
-    expect(wrapper.get('#publish-notes').element.matches(':disabled')).toBe(false)
+    expect(dialog().get('#publish-notes').element.matches(':disabled')).toBe(false)
     await button(wrapper, '取消').trigger('click')
     expect(wrapper.get('#publish-title').element.matches(':disabled')).toBe(false)
     expect(api.recordPublishSuccess).not.toHaveBeenCalled()
