@@ -8,7 +8,41 @@ use crate::video::{
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    io::Read,
+    path::{Path, PathBuf},
+};
+
+#[derive(Debug)]
+pub struct VideoImageSnapshot {
+    pub bytes: Vec<u8>,
+    pub extension: &'static str,
+    pub sha256: String,
+}
+fn read_image(c: &Connection, project: &str, id: &str) -> Result<VideoImageSnapshot, String> {
+    let path = asset_path(c, project, id, "image")?;
+    read_image_file(&path)
+}
+fn read_image_file(path: &Path) -> Result<VideoImageSnapshot, String> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|e| e.to_string())?
+        .take((crate::ai::images::MAX_IMAGE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let (extension, _, _) = crate::ai::images::validate_image(&bytes).map_err(|e| e.message)?;
+    let sha256 = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Ok(VideoImageSnapshot {
+        bytes,
+        extension,
+        sha256,
+    })
+}
 
 const COLUMNS: &str = "id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,run_id,plan_json,error,subtitle_asset_id,video_asset_id,created_at,updated_at";
 
@@ -93,6 +127,41 @@ fn asset_path(c: &Connection, project: &str, id: &str, kind: &str) -> Result<Pat
 }
 
 impl Database {
+    pub fn import_video_image(&self, project: &str, path: &str) -> Result<String, String> {
+        let path = Path::new(path);
+        if assets::asset_type(path)? != "image" {
+            return Err("请选择静态PNG、JPEG或WebP图片。".into());
+        }
+        read_image_file(path)?;
+        self.with_connection(|c| assets::register_existing(c, project, path, Some("image"), None))
+    }
+    pub fn read_video_image(&self, project: &str, id: &str) -> Result<Vec<u8>, String> {
+        self.with_connection(|c| Ok(read_image(c, project, id)?.bytes))
+    }
+    pub fn video_image_snapshots(
+        &self,
+        project: &str,
+        scenes: &[Scene],
+    ) -> Result<BTreeMap<String, VideoImageSnapshot>, String> {
+        self.with_connection(|c| {
+            let mut snapshots = BTreeMap::new();
+            for image in scenes.iter().filter_map(|s| s.image.as_ref()) {
+                image.validate()?;
+                if !snapshots.contains_key(&image.asset_id) {
+                    snapshots.insert(
+                        image.asset_id.clone(),
+                        read_image(c, project, &image.asset_id)?,
+                    );
+                }
+                if image.sha256 != snapshots[&image.asset_id].sha256 {
+                    return Err(
+                        "图片内容已变化，请重新核对来源和裁切并保存校对，再生成试片或整片。".into(),
+                    );
+                }
+            }
+            Ok(snapshots)
+        })
+    }
     pub fn video_settings(&self) -> Result<VideoSettings, String> {
         self.with_connection(|c| {
             let raw: Option<String> = c
@@ -232,13 +301,20 @@ impl Database {
         &self,
         id: &str,
         cues: Vec<Cue>,
-        scenes: Vec<Scene>,
+        mut scenes: Vec<Scene>,
     ) -> Result<(), String> {
         self.with_connection(|c| {
             let mut job = get(c, id)?;
             if matches!(job.status.as_str(), "running" | "succeeded") { return Err("执行中或已完成的视频不能改写。".into()); }
             validate_cues(&cues, job.plan.duration)?;
             if !scenes.is_empty() { validate_scenes(&scenes, 0, cues.len())?; }
+            let mut snapshots = BTreeMap::new();
+            for image in scenes.iter_mut().filter_map(|s| s.image.as_mut()) {
+                if !snapshots.contains_key(&image.asset_id) {
+                    snapshots.insert(image.asset_id.clone(), read_image(c, &job.project_id, &image.asset_id)?);
+                }
+                image.sha256.clone_from(&snapshots[&image.asset_id].sha256);
+            }
             job.plan.cues = cues; job.plan.scenes = scenes;
             c.execute(&format!("UPDATE video_jobs SET plan_json=?1,status='awaiting_confirmation',stage='storyboard',updated_at={NOW} WHERE id=?2"), params![serde_json::to_string(&job.plan).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
             Ok(())
@@ -320,6 +396,130 @@ mod tests {
                 provider_id: "model".into(),
             },
         )
+    }
+
+    fn image_job(
+        dir: &tempfile::TempDir,
+        db: &Database,
+        input: StartVideoInput,
+    ) -> (VideoJob, String, PathBuf) {
+        let path = dir.path().join("中文 原图.png");
+        std::fs::write(&path, crate::ai::images::test_png()).unwrap();
+        let asset = db
+            .import_video_image(&input.project_id, path.to_str().unwrap())
+            .unwrap();
+        let job = db.create_video_job(input).unwrap();
+        let raw = serde_json::json!({"title":"原声", "audioSha256":"keep-audio", "duration":5, "cues":[{"start":0.5,"end":4,"text":"原声不变"}], "scenes":[]});
+        db.with_connection(|c| {
+            c.execute(
+                "UPDATE video_jobs SET plan_json=?1 WHERE id=?2",
+                params![raw.to_string(), job.id],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        (db.video_job(&job.id).unwrap(), asset, path)
+    }
+    fn image_scene(asset: &str) -> Scene {
+        serde_json::from_value(serde_json::json!({"first":0,"last":0,"kind":"focus","title":"关键图片","beats":[],"image":{"assetId":asset,"source":"本人创作","rights":"自有图片，允许本次视频使用","fit":"cover","x":0.2,"y":0.7}})).unwrap()
+    }
+    #[test]
+    fn video_images_freeze_content_and_reject_invalid_inputs_without_losing_the_plan() {
+        let (dir, db, input) = fixture();
+        let (job, asset, path) = image_job(&dir, &db, input);
+        db.edit_video_plan(&job.id, job.plan.cues.clone(), vec![image_scene(&asset)])
+            .unwrap();
+        let saved = db.video_job(&job.id).unwrap();
+        let image = saved.plan.scenes[0].image.as_ref().unwrap();
+        assert_eq!(image.sha256.len(), 64);
+        assert!(image.creator.is_empty());
+        assert_eq!(
+            db.video_image_snapshots(&saved.project_id, &saved.plan.scenes)
+                .unwrap()[&asset]
+                .bytes,
+            crate::ai::images::test_png()
+        );
+        let before = serde_json::to_string(&saved.plan).unwrap();
+        for invalid in [
+            "foreign",
+            "https://example.com/image.png",
+            path.to_str().unwrap(),
+        ] {
+            assert!(db
+                .edit_video_plan(&job.id, job.plan.cues.clone(), vec![image_scene(invalid)])
+                .is_err());
+        }
+        let mut missing_rights = image_scene(&asset);
+        missing_rights.image.as_mut().unwrap().rights.clear();
+        assert!(db
+            .edit_video_plan(&job.id, job.plan.cues.clone(), vec![missing_rights])
+            .is_err());
+        assert_eq!(
+            serde_json::to_string(&db.video_job(&job.id).unwrap().plan).unwrap(),
+            before
+        );
+        let claimed = db.claim_video_job(&job.id, VideoWork::Render).unwrap();
+        assert!(db.unlink_asset(&asset).is_err());
+        assert!(db
+            .link_asset(&job.project_id, path.to_str().unwrap(), Some(&asset))
+            .is_err());
+        db.end_video_job(&job.id, claimed.run_id, "cancelled", "stop")
+            .unwrap();
+        std::fs::write(&path, crate::ai::images::test_jpeg()).unwrap();
+        assert!(db
+            .video_image_snapshots(&saved.project_id, &saved.plan.scenes)
+            .unwrap_err()
+            .contains("变化"));
+        std::fs::rename(&path, path.with_extension("moved.png")).unwrap();
+        assert!(db
+            .video_image_snapshots(&saved.project_id, &saved.plan.scenes)
+            .is_err());
+        assert_eq!(
+            serde_json::to_string(&db.video_job(&job.id).unwrap().plan).unwrap(),
+            before
+        );
+    }
+    #[test]
+    fn video_image_references_survive_restart_and_full_backup_with_remapped_files() {
+        let (dir, db, input) = fixture();
+        let (job, asset, source) = image_job(&dir, &db, input);
+        db.edit_video_plan(&job.id, job.plan.cues.clone(), vec![image_scene(&asset)])
+            .unwrap();
+        let expected = serde_json::to_string(&db.video_job(&job.id).unwrap().plan).unwrap();
+        let backup = db
+            .create_full_backup(dir.path().to_str().unwrap(), false)
+            .unwrap();
+        drop(db);
+        let db = Database::open(dir.path().join("data.sqlite3"));
+        assert_eq!(
+            serde_json::to_string(&db.video_job(&job.id).unwrap().plan).unwrap(),
+            expected
+        );
+        let restore = db
+            .restore_full_backup(&backup.manifest_path, dir.path().to_str().unwrap())
+            .unwrap();
+        assert!(Path::new(&restore.workspace_path).exists());
+        std::fs::rename(&source, source.with_extension("original.png")).unwrap();
+        let recovered = db.video_job(&job.id).unwrap();
+        assert_eq!(serde_json::to_string(&recovered.plan).unwrap(), expected);
+        assert_eq!(
+            db.video_image_snapshots(&job.project_id, &recovered.plan.scenes)
+                .unwrap()[&asset]
+                .bytes,
+            crate::ai::images::test_png()
+        );
+    }
+    #[test]
+    fn imported_video_images_are_fully_decoded_before_registration() {
+        let (dir, db, input) = fixture();
+        let path = dir.path().join("bad.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\ntruncated").unwrap();
+        let before = db.list_assets(&input.project_id).unwrap().len();
+        assert!(db
+            .import_video_image(&input.project_id, path.to_str().unwrap())
+            .is_err());
+        assert_eq!(db.list_assets(&input.project_id).unwrap().len(), before);
     }
 
     #[test]

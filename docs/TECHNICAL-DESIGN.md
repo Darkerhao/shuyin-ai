@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## 视频关键图片与插画（2026-11-02，P2）
+
+`Scene.image`为可选的本次使用快照：`assetId/source/rights/creator?/fit/x/y/sha256`。fit只允许contain/cover，x/y为0—1；图片存在时beats必须为空。缺字段的旧物体分镜仍走原绘图，旧文字分镜仍需明确升级；文本模型继续只生成目录物体，图片由用户选用。`VideoImageEditor`直接编辑现有Scene，不增加第二份视频计划；生成候选在主动采用前保持独立。
+
+Rust在保存校对时按本书assets解析图片，复用ImageProvider静态格式/尺寸/完整解码校验，冻结SHA-256。试片/整片启动后将已校验字节写入本次目录；Node只根据宿主映射复制到`assets/{sha256}.{真实扩展名}`，编译器不从模型或计划读取路径/URL。图片摘要、来源、裁切继续随整个plan参与原缓存键与预览签名。读取旧试片及归档前再次核对源摘要，缺失或变化即失效，不用旧缓存替代当前图片；运行中禁止移除/重新定位被引用图片。
+
+锁定Frametell0.7.3的`runtime/media.js`已提供`P.img`、fit/pos和预加载。直接使用同一绘图中的受控图片层，关闭图片镜头的场景/景别运动，HUD标题和来源、引擎字幕独立固定。书引在原`window.__ready`中明确等待每张使用图片decode成功，再等待首轮绘制；引擎原本仅记录图片加载错误后继续的行为不作为成功依据。图片与预览沿用原cue/scene时钟、严格布局/确定性检查、任务取消和正式MP4/SRT事务。
+
+视频插画使用独立`video-illustration-v1` Prompt与`ai_tasks.kind=video_illustration`，复用既有ImageProvider、系统凭据、单张请求、180秒图片超时及run_task取消；封面与视频图片共用内部生成/落盘实现，封面命令和历史用途保留。生成结果写本书`video/illustrations`并登记assets，失败补偿删除仅限本次新文件，显式采用才改变分镜。不增加供应商SDK、表或SQL迁移；四个新增主窗口命令只处理本书图片/任务，图片预览经有界二进制IPC创建blob，CSP仅img-src新增blob来源，远程窗口无这些权限。证据见 [P2验收](VIDEO-IMAGES-VERIFICATION.md)。
+
 ## 视频编码实时进度（2026-11-02）
 
 根因：原`rendering_subtitles`只在启动Frametell `--skip-video`前写一次快照，锁定引擎0.7.3内部用`-loglevel error`启动FFmpeg，没有返回编码位置。因此已有帧进度到字幕阶段便退回不定进度。

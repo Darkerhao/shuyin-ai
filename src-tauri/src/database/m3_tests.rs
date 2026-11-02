@@ -677,3 +677,67 @@ fn backgrounds_check_project_format_size_and_missing_file_without_losing_config(
     db.save_cover_version(&p.id, draft.clone(), None).unwrap();
     assert_eq!(db.list_cover_versions(&p.id).unwrap()[0].config, draft);
 }
+
+#[test]
+fn video_illustration_uses_its_own_prompt_task_and_files_without_adopting_a_cover() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let p = project(&db);
+    let provider = image_model(&db);
+    db.save_cover_version(&p.id, config(), None).unwrap();
+    let start = || {
+        db.start_video_illustration(ImageGenerationInput {
+            project_id: p.id.clone(),
+            provider_id: provider.id.clone(),
+            description: "安静的书房".into(),
+            width: 1920,
+            height: 1080,
+        })
+        .unwrap()
+    };
+    let task = start();
+    assert!(db.prepare_image_generation(&task, "cover").is_err());
+    let prepared = db
+        .prepare_image_generation(&task, "video_illustration")
+        .unwrap();
+    assert!(prepared.prompt.contains("视频关键插画 v1"));
+    assert!(!prepared.prompt.contains("本次目标封面"));
+    assert!(db
+        .finish_image_generation(&task, b"broken", "video_illustration")
+        .is_err());
+    let asset = db
+        .finish_image_generation(&task, &test_png(), "video_illustration")
+        .unwrap();
+    assert!(PathBuf::from(&asset.file_path)
+        .starts_with(PathBuf::from(&p.workspace_path).join("video/illustrations")));
+    assert_eq!(db.list_cover_versions(&p.id).unwrap().len(), 1);
+    assert!(db.video_jobs(&p.id).unwrap().is_empty());
+    let task_row = db
+        .list_ai_tasks(&p.id)
+        .unwrap()
+        .into_iter()
+        .find(|t| t.id == task)
+        .unwrap();
+    assert_eq!(task_row.kind, "video_illustration");
+    db.with_connection(|c| {
+        let version: String = c
+            .query_row(
+                "SELECT prompt_version FROM ai_tasks WHERE id=?1",
+                [&task],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "video-illustration-v1");
+        Ok(())
+    })
+    .unwrap();
+    let cancelled = start();
+    db.prepare_image_generation(&cancelled, "video_illustration")
+        .unwrap();
+    db.end_generation(&cancelled, "cancelled", "cancelled", "取消")
+        .unwrap();
+    assert!(db
+        .finish_image_generation(&cancelled, &test_png(), "video_illustration")
+        .is_err());
+    assert_eq!(db.list_assets(&p.id).unwrap().len(), 1);
+}

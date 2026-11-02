@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 视频图片引用与插画用途（2026-11-02，仍为v15）
+
+无表、列或SQL迁移。`video_jobs.plan_json.scenes[].image`保存本书图片assetId、本次source/rights、可省略的creator、contain/cover、0—1的x/y和宿主计算的sha256；有image时beats为空。没有image的旧记录不重写，未知字段和非法引用仍被拒绝；历史成片不改写，制作新版继续新建任务。
+
+保存校对先完整校验本书图片，全部成功后才更新原plan_json；失败保留旧稿。试片签名/最终归档核对图片摘要，保存仍撤销旧试片资格。运行中移除或重新定位图片被拒绝；非运行任务的缺失素材记录保留，须重新定位/选用并保存。完整备份沿用assets文件收集和路径重映射，plan只引用稳定ID，来源/授权/裁切/摘要随数据库保留；预览缓存不备份。
+
+`ai_tasks.kind`自v4起为无枚举约束TEXT，本轮新增用途`video_illustration`和Prompt版本`video-illustration-v1`，无需重建任务表。成功图片沿用asset_id引用，生成文件位于本书video/illustrations，不写cover_versions，也不自动更新video_jobs。失败、取消、重启与备份恢复沿用现有任务状态规则；原封面和历史任务保留。旧程序严格JSON读取不能保证读懂新图片字段，回退应保留升级前备份。测试与完整备份证据见 [P2验收](VIDEO-IMAGES-VERIFICATION.md)。
+
 ## 文本模型推理强度（2026-11-02，v15）
 
 新增迁移 `0015_reasoning_effort.sql`，`model_providers.reasoning_effort` 为可空TEXT：NULL表示服务默认，仅文本模型可存none/minimal/low/medium/high/xhigh/max。SQL约束拒绝非法值及图片模型的非空值；保存层将图片用途的推理强度清空。

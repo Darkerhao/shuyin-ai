@@ -5,6 +5,7 @@ import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import VideoJobProgress from './VideoJobProgress.vue'
+import VideoImageEditor from './VideoImageEditor.vue'
 import { inspectStoryboard } from './storyboard'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -18,16 +19,19 @@ import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { visualCatalog, videoStatuses, type VideoJob, type VideoScene, type VideoSettings } from '../../types/video'
+import { visualCatalog, videoStatuses, type VideoJob, type VideoScene, type VideoSceneImage, type VideoSettings } from '../../types/video'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
 const desktop = isDesktop()
-const { busy, error, message, run } = useOperation()
+const { busy: operationBusy, error, message, run } = useOperation()
+const imageWorking = ref(false)
+const busy = computed(() => operationBusy.value || imageWorking.value)
 const title = ref('')
 const loaded = ref(false)
 const assets = ref<Asset[]>([])
 const providers = ref<ModelProvider[]>([])
+const imageProviders = ref<ModelProvider[]>([])
 const jobs = ref<VideoJob[]>([])
 const selectedId = ref('')
 const audioId = ref('')
@@ -52,7 +56,7 @@ const running = computed(() => jobs.value.some(job => job.status === 'running'))
 const audios = computed(() => assets.value.filter(a => a.assetType === 'audio' && a.existsStatus === 'available'))
 const subtitles = computed(() => assets.value.filter(a => a.assetType === 'subtitle' && /\.srt$/i.test(a.originalName) && a.existsStatus === 'available'))
 const editable = computed(() => selected.value && !['running', 'succeeded'].includes(selected.value.status))
-const legacyPlan = computed(() => scenes.value.some(scene => !scene.beats?.length))
+const legacyPlan = computed(() => scenes.value.some(scene => !scene.beats?.length && !scene.image))
 const completePlan = computed(() => scenes.value.length > 0 && !legacyPlan.value && scenes.value.at(-1)!.last + 1 === selected.value?.plan.cues.length)
 const storyboardNotes = computed(() => selected.value ? inspectStoryboard({ ...selected.value.plan, scenes: scenes.value }) : [])
 const sceneKindLabel = (kind: VideoScene['kind']) => Object.hasOwn(visualCatalog.kinds, kind) ? visualCatalog.kinds[kind as keyof typeof visualCatalog.kinds] : '旧版文字图解'
@@ -92,6 +96,7 @@ const load = () => run(async () => {
   const [book, files, models, settings, history] = await Promise.all([getProject(props.id), listAssets(props.id), listProviders(), api.settings(), api.listJobs(props.id)])
   if (disposed) return
   title.value = book.title; assets.value = files; providers.value = models.filter(p => p.modelKind === 'text' && p.isEnabled)
+  imageProviders.value = models.filter(p => p.modelKind === 'image' && p.isEnabled)
   config.value = settings; savedConfig.value = JSON.stringify(settings)
   jobs.value = history
   selectedId.value = history.find(j => j.id === route.query.job)?.id ?? history[0]?.id ?? ''
@@ -155,6 +160,11 @@ const preview = () => run(async () => {
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
+function setSceneImage(scene: VideoScene, image: VideoSceneImage | undefined) {
+  if (image) { scene.image = image; scene.beats = [] }
+  else { delete scene.image; scene.beats = [{ cue: scene.first, object: 'book', action: 'draw', label: '书籍' }] }
+}
+async function refreshImages() { assets.value = await listAssets(props.id) }
 function focusScene(index: number) {
   const card = jobPanel.value?.querySelector<globalThis.HTMLElement>(`#video-scene-${index}`)
   card?.scrollIntoView({ block: 'nearest' })
@@ -707,10 +717,22 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                 第 {{ index + 1 }} 镜 · 字幕 {{ scene.first + 1 }}—{{ scene.last + 1 }} · {{ sceneKindLabel(scene.kind) }}
               </p><Input
                 v-model="scene.title"
-                :disabled="busy || !scene.beats?.length"
+                :disabled="busy || (!scene.beats?.length && !scene.image)"
                 :aria-label="`第${index + 1}镜标题`"
                 maxlength="20"
-              /><div
+              />
+              <VideoImageEditor
+                :project-id="id"
+                :scene-index="index"
+                :image="scene.image"
+                :assets="assets"
+                :providers="imageProviders"
+                :disabled="busy || running || !completePlan"
+                @update:image="setSceneImage(scene, $event)"
+                @refresh-assets="refreshImages"
+                @working="imageWorking = $event"
+              />
+              <div
                 v-for="(beat, i) in scene.beats"
                 :key="i"
                 class="video-beat"

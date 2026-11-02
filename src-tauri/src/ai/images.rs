@@ -61,7 +61,7 @@ pub fn validate_image(bytes: &[u8]) -> Result<(&'static str, u32, u32), AiError>
     let invalid = || {
         AiError::new(
             "invalid_image",
-            "图片服务未返回有效的静态 PNG、JPEG 或 WebP（最大 15 MB、4000 万像素），当前封面保留。",
+            "图片服务未返回有效的静态 PNG、JPEG 或 WebP（最大 15 MB、4000 万像素），已保存内容保留。",
         )
     };
     if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
@@ -91,7 +91,7 @@ impl ImageProvider for OpenAiCompatible {
         request: ImageRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AiError>> + Send + '_>> {
         Box::pin(async move {
-            // GPT Image exposes orientation sizes; the local renderer crops to the exact cover ratio.
+            // GPT Image exposes orientation sizes; the local renderer crops to the exact target ratio.
             let size = if request.width > request.height {
                 "1536x1024"
             } else {
@@ -111,7 +111,7 @@ impl ImageProvider for OpenAiCompatible {
                     )
                 })?;
             let bytes = STANDARD.decode(encoded).map_err(|_| {
-                AiError::new("invalid_response", "图片数据编码无效，当前封面保留。")
+                AiError::new("invalid_response", "图片数据编码无效，已保存内容保留。")
             })?;
             validate_image(&bytes)?;
             Ok(bytes)

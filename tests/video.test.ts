@@ -7,7 +7,7 @@ import * as projects from '../src/services/projects'
 import * as ai from '../src/services/ai'
 import { emptyProject } from '../src/types/project'
 import type { VideoJob } from '../src/types/video'
-vi.mock('../src/services/video', () => ({ settings: vi.fn(), saveSettings: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), mediaSource: vi.fn(), chooseRuntimePath: vi.fn() }))
+vi.mock('../src/services/video', () => ({ settings: vi.fn(), saveSettings: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), mediaSource: vi.fn(), chooseRuntimePath: vi.fn(), chooseImage: vi.fn(), importImage: vi.fn(), readImage: vi.fn(), startIllustration: vi.fn(), executeIllustration: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: () => true, getProject: vi.fn(), listAssets: vi.fn(), openAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn() }))
 const job: VideoJob = { id: 'j1', projectId: 'p1', audioAssetId: 'a1', sourceSubtitleId: null, providerId: 'm1', status: 'awaiting_confirmation', stage: 'storyboard', runId: 1, plan: { title: '原书', audioSha256: 'hash', duration: 8, cues: [{ start: 0, end: 7, text: '原声字幕' }], scenes: [{ first: 0, last: 0, kind: 'opening', title: '观点', beats: [{ cue: 0, object: 'book', action: 'draw', label: '一本书' }] }] }, error: '', subtitleAssetId: 's1', videoAssetId: null, createdAt: '', updatedAt: '' }
@@ -196,4 +196,20 @@ it('makes a separate hand-drawn version from the completed task audio and saved 
   await remake.trigger('click'); await flushPromises()
   expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1')
   expect(api.savePlan).not.toHaveBeenCalled()
+})
+
+it('saves an image scene as a complete plan without treating it as a legacy text storyboard', async () => {
+  const image = { assetId: 'img1', source: '本人拍摄', rights: '自有照片', fit: 'cover' as const, x: .25, y: .75, sha256: 'a'.repeat(64) }
+  const current = structuredClone(job)
+  current.plan.scenes[0]!.beats = []
+  current.plan.scenes[0]!.image = image
+  vi.mocked(api.listJobs).mockResolvedValue([current])
+  vi.mocked(api.readImage).mockResolvedValue(new ArrayBuffer(0))
+  const wrapper = await render()
+  expect(wrapper.text()).not.toContain('当前是旧版文字图解')
+  await wrapper.get('#video-image-0-rights').setValue('本人拍摄，允许本次视频使用')
+  vi.mocked(api.continueJob).mockResolvedValue({ ...current, status: 'running', stage: 'rendering' })
+  await wrapper.get('[data-test="render-video"]').trigger('click'); await flushPromises()
+  expect(api.savePlan).toHaveBeenCalledWith('j1', expect.any(String), [expect.objectContaining({ beats: [], image: expect.objectContaining({ assetId: 'img1', rights: '本人拍摄，允许本次视频使用', x: .25, y: .75 }) })])
+  expect(api.continueJob).toHaveBeenCalledWith('j1', true)
 })

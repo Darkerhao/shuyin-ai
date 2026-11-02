@@ -79,7 +79,10 @@ fn cached_preview(database: &Database, job: &VideoJob) -> Option<VideoPreview> {
         serde_json::from_str(&process::read_small(&directory.join("render-output.json")).ok()?)
             .ok()?;
     let preview: VideoPreview = serde_json::from_value(output.get("preview")?.clone()).ok()?;
-    if preview.signature != preview_signature(&job.plan).ok()?
+    if database
+        .video_image_snapshots(&job.project_id, &job.plan.scenes)
+        .is_err()
+        || preview.signature != preview_signature(&job.plan).ok()?
         || !preview.start.is_finite()
         || !preview.end.is_finite()
         || preview.start < 0.0
@@ -121,6 +124,49 @@ impl VideoRuntime {
             }
         }
     }
+}
+
+#[tauri::command]
+pub fn start_video_illustration(
+    database: State<'_, Database>,
+    input: crate::database::image_generation::ImageGenerationInput,
+) -> Result<String, String> {
+    database.start_video_illustration(input)
+}
+#[tauri::command]
+pub async fn execute_video_illustration(
+    database: State<'_, Database>,
+    vault: State<'_, SystemCredentials>,
+    active: State<'_, crate::ai::ActiveTasks>,
+    id: String,
+) -> Result<crate::database::Asset, crate::ai::AiError> {
+    crate::cover_commands::execute_image_task(
+        database.inner(),
+        vault.inner(),
+        active.inner(),
+        &id,
+        "video_illustration",
+    )
+    .await
+}
+#[tauri::command]
+pub fn import_video_image(
+    database: State<'_, Database>,
+    project_id: String,
+    path: String,
+) -> Result<String, String> {
+    database.import_video_image(&project_id, &path)
+}
+
+#[tauri::command]
+pub fn read_video_image(
+    database: State<'_, Database>,
+    project_id: String,
+    asset_id: String,
+) -> Result<tauri::ipc::Response, String> {
+    database
+        .read_video_image(&project_id, &asset_id)
+        .map(tauri::ipc::Response::new)
 }
 
 #[tauri::command]
@@ -479,8 +525,17 @@ async fn execute(
     }
     if !matches!(work, VideoWork::Prepare) {
         let window = work.window(&job.plan)?;
+        let snapshots = db.video_image_snapshots(&job.project_id, &job.plan.scenes)?;
+        let mut images = serde_json::Map::new();
+        for (id, snapshot) in snapshots {
+            let path = directory.join(format!("image-{}.{}", snapshot.sha256, snapshot.extension));
+            if !path.exists() {
+                process::write_new(&path, &snapshot.bytes)?;
+            }
+            images.insert(id, serde_json::json!({"path":process::external_path(&path), "sha256":snapshot.sha256, "extension":snapshot.extension}));
+        }
         db.save_video_progress(&job.id, job.run_id, &job.plan, work.stage())?;
-        let input = serde_json::json!({"action":if window.is_some() {"preview"} else {"render"}, "window":window, "signature":preview_signature(&job.plan)?, "audioPath":audio_external, "engineRoot":engine_external, "cacheRoot":process::external_path(&root.join("cache")), "plan":job.plan});
+        let input = serde_json::json!({"action":if window.is_some() {"preview"} else {"render"}, "window":window, "signature":preview_signature(&job.plan)?, "audioPath":audio_external, "engineRoot":engine_external, "cacheRoot":process::external_path(&root.join("cache")), "plan":job.plan, "images":images});
         stage(
             &settings,
             &directory,
@@ -497,6 +552,7 @@ async fn execute(
         if digest(audio).await? != job.plan.audio_sha256 {
             return Err("渲染期间源音频发生变化，未登记成片。".into());
         }
+        db.video_image_snapshots(&job.project_id, &job.plan.scenes)?;
         if let Some(window) = window {
             let metadata = crate::media::inspect(&directory.join("video.mp4"))?;
             if !metadata.has_audio
@@ -587,6 +643,9 @@ async fn execute(
         let scenes: Vec<Scene> = serde_json::from_str(&raw)
             .map_err(|_| "模型分镜不是合法 JSON，已保留字幕和此前分镜。")?;
         video::validate_scenes(&scenes, first, end)?;
+        if scenes.iter().any(|scene| scene.image.is_some()) {
+            return Err("分镜模型只能选择手绘目录；关键图片须由用户选用并确认来源。".into());
+        }
         job.plan.scenes.extend(scenes);
         db.save_video_progress(&job.id, job.run_id, &job.plan, "storyboard")?;
         first = end;

@@ -98,8 +98,8 @@ test('preview windows reject invalid times, mid-scene starts and durations over 
   assert.throws(() => buildEpisode({ ...plan, duration: 90 }, { start: 0, end: 61 }), /preview/i);
 });
 
-function drawing(input, index = 0, range) {
-  const result = buildEpisode(input, range);
+function drawing(input, index = 0, range, images) {
+  const result = buildEpisode(input, range, images);
   const page = result.pages.find(p => p.sourceIndex === index);
   const calls = [], moves = [], live = [], cameras = [];
   let layers = 0;
@@ -550,13 +550,13 @@ test('episode readiness waits for the initial paint before checks or frame captu
   const frames = [];
   const engine = Promise.withResolvers();
   const window = { __ready: engine.promise };
-  vm.runInNewContext(readyScript, { window, requestAnimationFrame: callback => frames.push(callback) });
+  vm.runInNewContext(readyScript, { window, SCRIPT: { PAGES: [] }, requestAnimationFrame: callback => frames.push(callback) });
   let ready = false;
   window.__ready.then(() => { ready = true; });
   await Promise.resolve();
   assert.equal(frames.length, 0, 'Paint must wait for the engine, including its fonts.');
   engine.resolve(12);
-  await Promise.resolve();
+  await setImmediate();
   assert.equal(ready, false);
   assert.equal(frames.length, 1);
   frames.shift()();
@@ -573,4 +573,75 @@ test('episode readiness waits for the initial paint before checks or frame captu
   const error = new Error('engine could not load its fonts');
   failedEngine.reject(error);
   await assert.rejects(failedWindow.__ready, cause => cause === error);
+});
+
+const imageScene = () => ({ first: 0, last: 1, title: '图片讲述', kind: 'focus', beats: [], image: { assetId: 'img-1', source: '自有手绘', rights: '本人创作，允许使用', fit: 'cover', x: 0.25, y: 0.75, sha256: 'a'.repeat(64) } });
+test('image scenes use only frozen host images and preserve the source clock in previews', () => {
+  const source = { ...plan, scenes: [imageScene()] };
+  const snapshots = { 'img-1': { sha256: 'a'.repeat(64), src: 'assets/' + 'a'.repeat(64) + '.png' } };
+  const result = buildEpisode(source, undefined, snapshots);
+  assert.equal(result.pages[0].image.src, snapshots['img-1'].src);
+  assert.equal(result.pages[0].image.at, plan.cues[0].start);
+  assert.equal(buildEpisode(source, { start: 0, end: 8 }, snapshots).pages[0].image.at, plan.cues[0].start);
+  assert.equal(source.scenes[0].image.src, undefined);
+  assert.throws(() => buildEpisode(source), /image|图片/i);
+  assert.throws(() => buildEpisode(source, undefined, { 'img-1': { ...snapshots['img-1'], sha256: 'b'.repeat(64) } }), /image|图片/i);
+});
+test('image scenes reject arbitrary paths, missing rights, invalid crop and duplicate visual subjects', () => {
+  const snapshots = { 'img-1': { sha256: 'a'.repeat(64), src: 'assets/' + 'a'.repeat(64) + '.png' } };
+  for (const change of [{ source: '' }, { rights: '' }, { fit: 'stretch' }, { x: -1 }, { y: 2 }, { x: null }, { src: 'https://example.com/image.png' }]) {
+    const scene = imageScene(); Object.assign(scene.image, change);
+    assert.throws(() => buildEpisode({ ...plan, scenes: [scene] }, undefined, snapshots));
+  }
+  const scene = imageScene(); scene.beats = [plan.scenes[0].beats[0]];
+  assert.throws(() => buildEpisode({ ...plan, scenes: [scene] }, undefined, snapshots));
+});
+
+test('readiness waits for every scene image to decode and rejects broken images before capture', async t => {
+  const { html } = renderEpisodeFixture(t);
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html)[1];
+  const image = Promise.withResolvers();
+  const frames = [];
+  const window = { __ready: Promise.resolve(12) };
+  class Image { naturalWidth = 100; naturalHeight = 100; decode() { return image.promise; } }
+  vm.runInNewContext(script, { window, SCRIPT: { PAGES: [{ image: { src: 'assets/one.png' } }] }, Image, requestAnimationFrame: cb => frames.push(cb) });
+  await setImmediate();
+  assert.equal(frames.length, 0);
+  image.resolve(); await setImmediate();
+  assert.equal(frames.length, 1); frames.shift()(); frames.shift()();
+  assert.equal(await window.__ready, 12);
+  const failed = { __ready: Promise.resolve(12) };
+  class BrokenImage { decode() { return Promise.reject(new Error('broken')); } }
+  vm.runInNewContext(script, { window: failed, SCRIPT: { PAGES: [{ image: { src: 'assets/missing.png' } }] }, Image: BrokenImage, requestAnimationFrame: () => assert.fail('Broken images must prevent capture.') });
+  await assert.rejects(failed.__ready, /failed to decode/);
+});
+
+test('frozen image files use their real digest and changed or missing host inputs are refused', t => {
+  const { engine } = renderEpisodeFixture(t);
+  const directory = path.dirname(engine), file = path.join(directory, '中文图片.png');
+  fs.writeFileSync(file, 'frozen bytes');
+  const sha256 = createHash('sha256').update('frozen bytes').digest('hex');
+  const scene = imageScene(); scene.image.sha256 = sha256;
+  const source = { ...plan, scenes: [scene] };
+  const mapping = { 'img-1': { path: file, extension: 'png', sha256 } };
+  const images = renderer.freezeImages(source, mapping, directory);
+  assert.equal(fs.readFileSync(path.join(directory, images['img-1'].src), 'utf8'), 'frozen bytes');
+  assert.equal(buildEpisode(source, undefined, images).pages[0].image.sha256, sha256);
+  fs.writeFileSync(file, 'changed bytes');
+  assert.throws(() => renderer.freezeImages(source, mapping, directory), /changed/);
+  assert.throws(() => renderer.freezeImages(source, {}, directory), /image/i);
+});
+
+test('image scenes use the trusted bounded image layer and readable fixed source text without camera motion', () => {
+  const scene = { ...imageScene(), environment: 'study', framing: 'detail' };
+  const source = { ...plan, scenes: [scene] };
+  const snapshots = { 'img-1': { sha256: 'a'.repeat(64), src: 'assets/' + 'a'.repeat(64) + '.png' } };
+  const output = drawing(source, 0, undefined, snapshots);
+  const image = output.calls.find(c => c.method === 'img');
+  assert.deepEqual(image.args.slice(1, 5), [480, 282, 960, 540]);
+  assert.equal(image.args[5].fit, 'cover'); assert.equal(image.args[5].pos, '25% 75%');
+  const attribution = output.calls.find(c => c.method === 'text' && c.args[0].startsWith('图片：'));
+  assert.equal(attribution.layer, -1); assert(attribution.args[1].size >= 24);
+  assert.deepEqual(output.cameras, []); assert.deepEqual(output.at(6).slice(0, -1), []);
+  assert.deepEqual(drawing(source, 0, { start: 0, end: 8 }, snapshots).calls, output.calls);
 });
