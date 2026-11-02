@@ -89,6 +89,7 @@ pub(crate) fn request(
         base_url: crate::ai::normalize_base_url(&config.input.base_url)
             .map_err(|s| AiError::new("configuration", &s))?,
         model: config.input.model_name,
+        reasoning_effort: config.input.reasoning_effort,
         key,
         system: system.into(),
         user,

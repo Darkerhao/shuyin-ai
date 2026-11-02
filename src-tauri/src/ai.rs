@@ -145,6 +145,7 @@ pub fn normalize_base_url(value: &str) -> Result<String, String> {
 pub struct TextRequest {
     pub base_url: String,
     pub model: String,
+    pub reasoning_effort: Option<String>,
     pub key: Option<String>,
     pub system: String,
     pub user: String,
@@ -191,10 +192,21 @@ impl TextProvider for OpenAiCompatible {
         request: TextRequest,
     ) -> Pin<Box<dyn Future<Output = Result<String, AiError>> + Send + '_>> {
         Box::pin(async move {
-            let data = self.post_json(&request.base_url, "chat/completions", request.key,
-                serde_json::json!({"model":request.model,"messages":[
-                    {"role":"system","content":request.system}, {"role":"user","content":request.user}
-                ],"stream":false}), 2_000_000).await?;
+            let mut body = serde_json::json!({"model":request.model,"messages":[
+                {"role":"system","content":request.system}, {"role":"user","content":request.user}
+            ],"stream":false});
+            if let Some(effort) = request.reasoning_effort {
+                body["reasoning_effort"] = effort.into();
+            }
+            let data = self
+                .post_json(
+                    &request.base_url,
+                    "chat/completions",
+                    request.key,
+                    body,
+                    2_000_000,
+                )
+                .await?;
             let choice = &data["choices"][0];
             if choice["finish_reason"].as_str() != Some("stop") {
                 return Err(AiError::new(

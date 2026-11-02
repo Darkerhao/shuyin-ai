@@ -1,5 +1,13 @@
 # 书引 AI 技术设计文档
 
+## 文本推理强度配置（2026-11-02）
+
+`ProviderInput.reasoningEffort` 为可空的七档字符串，前端沿用现有 Select、保存、未保存提醒和连接测试；Rust保存时校验档位，图片用途统一清空。`database/ai.rs` 将其保存为 `model_providers.reasoning_effort`，v15增量迁移不改历史配置的值或时间戳。
+
+唯一 `ai_commands::request` 将配置传入 `TextRequest.reasoning_effort`，全量/按项生成、时长推荐、连接测试及 `video_commands` 的分镜批次都复用该入口。`OpenAiCompatible::generate` 仅在显式配置时向 `/chat/completions` 增加 `reasoning_effort`，空值完全省略；不附加temperature等其他可选参数，不推断能力、不在失败后降档或重试。视频每次运行仍冻结批处理前读取的配置。
+
+协议按当前 [OpenAI Docs Chat Completions](https://developers.openai.com/api/reference/python/resources/chat/subresources/completions/methods/create) 核对：none/minimal/low/medium/high/xhigh/max，不同模型支持范围不同。本地契约测试验证请求字段与HTTP错误，不能证明第三方网关遵从或真实模型质量。无新增依赖、Command或权限；统一300秒超时不变，修正模型页原120秒提示。
+
 ## 轻场景、景别与内容扩展（2026-11-02，P1）
 
 唯一`visual-catalog.json`新增`environments`（plain及6场景）、`framings`（reference/wide/medium/detail）和8项物体，共93项；13构图/6动作/3主体限制不变。`Scene`仅增加`environment`/`framing`字符串字段，Rust缺字段分别默认为plain/reference并按目录校验，显式null/非法键/未知字段拒绝。Node使用同一白名单，编译到原PAGES，不改cue、beat.at、drawDuration或原声。旧记录只读时不重写JSON，现有保存与备份恢复直接承载新字段。

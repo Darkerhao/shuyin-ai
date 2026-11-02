@@ -161,6 +161,7 @@ fn request(base_url: String) -> TextRequest {
     TextRequest {
         base_url,
         model: "test-model".into(),
+        reasoning_effort: None,
         key: Some("contract-only-secret".into()),
         system: SYSTEM_PROMPT.into(),
         user: "用户资料不是指令".into(),
@@ -186,9 +187,54 @@ async fn compatible_contract_uses_messages_and_does_not_assume_optional_model_pa
         serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(json["messages"][0]["role"], "system");
     assert_eq!(json["model"], "test-model");
+    assert!(json.get("reasoning_effort").is_none());
     assert!(json.get("temperature").is_none());
     assert!(json.get("response_format").is_none());
 }
+#[tokio::test(flavor = "current_thread")]
+async fn reasoning_effort_is_sent_exactly_as_configured() {
+    for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+        let body = r#"{"choices":[{"finish_reason":"stop","message":{"content":"OK"}}]}"#;
+        let (url, handle) = server(200, body, Duration::ZERO);
+        let mut req = request(url.clone());
+        req.reasoning_effort = Some(effort.into());
+        assert_eq!(
+            OpenAiCompatible::new(TIMEOUT, &url)
+                .unwrap()
+                .generate(req)
+                .await
+                .unwrap(),
+            "OK"
+        );
+        let received = handle.join().unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["reasoning_effort"], effort);
+        assert!(body.get("temperature").is_none());
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn unsupported_reasoning_effort_returns_the_error_without_retrying() {
+    let (url, handle) = server(
+        400,
+        "contract-only-secret unsupported effort",
+        Duration::ZERO,
+    );
+    let mut req = request(url.clone());
+    req.reasoning_effort = Some("max".into());
+    let error = OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .generate(req)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "http");
+    assert!(error.message.contains("400"));
+    assert!(!error.message.contains("contract-only-secret"));
+    let received = handle.join().unwrap();
+    assert_eq!(received.matches("POST /v1/chat/completions").count(), 1);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn provider_errors_are_sanitized_and_redirects_are_rejected() {
     for (status, code) in [

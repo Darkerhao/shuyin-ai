@@ -49,6 +49,7 @@ pub(super) fn model() -> ProviderInput {
         name: "测试模型".into(),
         base_url: "https://example.com/v1".into(),
         model_name: "test".into(),
+        reasoning_effort: None,
         is_default: true,
         is_enabled: true,
     }
@@ -300,6 +301,181 @@ fn v2_upgrade_preserves_data_and_v3_failure_rolls_back() {
         0
     );
 }
+#[test]
+fn reasoning_effort_is_validated_persisted_restored_and_used_by_text_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("reasoning.sqlite3");
+    let db = Database::open(path.clone());
+    let vault = Vault::default();
+    let p = db
+        .save_provider(None, model(), None, &vault)
+        .unwrap()
+        .provider;
+    assert!(p.input.reasoning_effort.is_none());
+    let mut input = model();
+    for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+        input.reasoning_effort = Some(effort.into());
+        let saved = db
+            .save_provider(Some(&p.id), input.clone(), None, &vault)
+            .unwrap()
+            .provider;
+        assert_eq!(
+            serde_json::to_value(&saved).unwrap()["reasoningEffort"],
+            effort
+        );
+        let req = crate::ai_commands::request(
+            saved,
+            &crate::credentials::SystemCredentials("contract-only".into()),
+            "system",
+            "user".into(),
+        )
+        .unwrap();
+        assert_eq!(req.reasoning_effort.as_deref(), Some(effort));
+    }
+    for invalid in ["", "ultra", "HIGH"] {
+        input.reasoning_effort = Some(invalid.into());
+        assert!(db
+            .save_provider(Some(&p.id), input.clone(), None, &vault)
+            .is_err());
+        assert_eq!(
+            db.get_provider(&p.id)
+                .unwrap()
+                .input
+                .reasoning_effort
+                .as_deref(),
+            Some("max")
+        );
+    }
+    let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    db.save_provider(Some(&p.id), model(), None, &vault)
+        .unwrap();
+    assert!(db
+        .get_provider(&p.id)
+        .unwrap()
+        .input
+        .reasoning_effort
+        .is_none());
+    db.restore_backup(&backup).unwrap();
+    drop(db);
+    let db = Database::open(path);
+    let saved = db.list_providers(&vault).unwrap().remove(0);
+    assert_eq!(saved.input.reasoning_effort.as_deref(), Some("max"));
+    input.model_kind = "image".into();
+    input.reasoning_effort = Some("high".into());
+    let image = db
+        .save_provider(Some(&p.id), input, None, &vault)
+        .unwrap()
+        .provider;
+    assert!(image.input.reasoning_effort.is_none());
+    let text = db
+        .save_provider(Some(&p.id), model(), None, &vault)
+        .unwrap()
+        .provider;
+    let req = crate::ai_commands::request(
+        text,
+        &crate::credentials::SystemCredentials("contract-only".into()),
+        "system",
+        "user".into(),
+    )
+    .unwrap();
+    assert!(req.reasoning_effort.is_none());
+    let mut legacy = serde_json::to_value(model()).unwrap();
+    legacy.as_object_mut().unwrap().remove("reasoningEffort");
+    assert!(serde_json::from_value::<ProviderInput>(legacy)
+        .unwrap()
+        .reasoning_effort
+        .is_none());
+}
+
+#[test]
+fn v15_reasoning_migration_preserves_v14_models_and_rolls_back_conflicts() {
+    let dir = tempfile::tempdir().unwrap();
+    for conflict in [false, true] {
+        let path = dir.path().join(format!("v14-{conflict}.sqlite3"));
+        let c = Connection::open(&path).unwrap();
+        for sql in MIGRATIONS.iter().take(14) {
+            c.execute_batch(sql).unwrap();
+        }
+        c.execute_batch("PRAGMA user_version=14; INSERT INTO model_providers(id,name,provider_type,base_url,model_name,is_default,is_enabled,credential_ref,created_at,updated_at,model_kind) VALUES('text','原文本模型','openai-compatible','https://example.com/v1','original-model',1,1,'original-ref','original','original','text'),('image','原图片模型','openai-compatible','https://example.com/v1','original-image',1,1,NULL,'original','original','image');").unwrap();
+        let old_backup = dir.path().join(format!("backup-v14-{conflict}.sqlite3"));
+        if !conflict {
+            c.execute("VACUUM INTO ?1", [old_backup.to_str().unwrap()])
+                .unwrap();
+        }
+        if conflict {
+            c.execute_batch("ALTER TABLE model_providers ADD COLUMN reasoning_effort TEXT")
+                .unwrap();
+        }
+        drop(c);
+        let db = Database::open(path.clone());
+        if conflict {
+            assert!(db.read().is_err());
+        } else {
+            for id in ["text", "image"] {
+                let model = db.get_provider(id).unwrap();
+                assert!(model.input.reasoning_effort.is_none());
+                assert!(model.input.is_default && model.input.is_enabled);
+            }
+            assert_eq!(
+                db.get_provider("text").unwrap().credential_ref.as_deref(),
+                Some("original-ref")
+            );
+            // Restoring an old backup upgrades a snapshot without changing the source file.
+            let restored = Database::open(dir.path().join("restored.sqlite3"));
+            restored
+                .restore_backup(old_backup.to_str().unwrap())
+                .unwrap();
+            assert_eq!(
+                Connection::open(old_backup)
+                    .unwrap()
+                    .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                14
+            );
+            assert!(restored
+                .get_provider("text")
+                .unwrap()
+                .input
+                .reasoning_effort
+                .is_none());
+        }
+        drop(db);
+        let c = Connection::open(path).unwrap();
+        assert_eq!(
+            c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+                .unwrap(),
+            if conflict {
+                14
+            } else {
+                MIGRATIONS.len() as u32
+            }
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT model_name,updated_at FROM model_providers WHERE id='text'",
+                [],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            )
+            .unwrap(),
+            ("original-model".into(), "original".into())
+        );
+        if !conflict {
+            assert!(c
+                .execute(
+                    "UPDATE model_providers SET reasoning_effort='ultra' WHERE id='text'",
+                    []
+                )
+                .is_err());
+            assert!(c
+                .execute(
+                    "UPDATE model_providers SET reasoning_effort='high' WHERE id='image'",
+                    []
+                )
+                .is_err());
+        }
+    }
+}
+
 #[test]
 fn credentials_never_enter_sqlite_and_failed_saves_preserve_config() {
     let dir = tempfile::tempdir().unwrap();
