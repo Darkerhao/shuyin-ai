@@ -142,11 +142,12 @@ const create = () => begin(audioId.value, subtitleId.value === 'auto' ? null : s
 const remake = () => { const job = selected.value; if (job?.audioAssetId && job.subtitleAssetId) return begin(job.audioAssetId, job.subtitleAssetId) }
 const resume = (render: boolean) => run(async () => {
   if (!selected.value) return
+  if (!render && !providerId.value) throw new Error('请选择已启用的文本模型生成分镜。')
   if (configDirty.value) throw new Error('请先保存运行环境配置。')
   if (render) { await api.savePlan(selected.value.id, subtitleText.value, scenes.value); selected.value.preview = null }
   else if (dirty.value) throw new Error('字幕已修改，请使用“保存字幕并重新生成分镜”。')
   savedEditor.value = editorValue()
-  put(await api.continueJob(selected.value.id, render))
+  put(await api.continueJob(selected.value.id, render, render ? null : providerId.value))
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
@@ -172,11 +173,12 @@ function focusScene(index: number) {
 }
 const regenerate = () => run(async () => {
   if (!selected.value) return
+  if (!providerId.value) throw new Error('请选择已启用的文本模型生成分镜。')
   if (configDirty.value) throw new Error('请先保存运行环境配置。')
   await api.savePlan(selected.value.id, subtitleText.value, [])
   selected.value.preview = null
   scenes.value = []; savedEditor.value = editorValue()
-  put(await api.continueJob(selected.value.id, false))
+  put(await api.continueJob(selected.value.id, false, providerId.value))
 })
 const stop = () => run(async () => { if (selected.value) { await api.cancelJob(selected.value.id); message.value = '正在停止本任务的识别或渲染进程，原音频不受影响。' } })
 const switchJob = (id: unknown) => run(async () => { if (dirty.value) throw new Error('请先保存或还原当前修改。'); selectedId.value = String(id); await adopt(selected.value) })
@@ -491,7 +493,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           </Button>
           <Button
             v-if="['draft', 'failed', 'cancelled'].includes(selected.status)"
-            :disabled="busy || running || legacyPlan"
+            :disabled="busy || running || legacyPlan || !providerId"
             @click="resume(false)"
           >
             继续准备字幕与分镜
@@ -566,7 +568,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
             </Button>
             <Button
               variant="outline"
-              :disabled="busy || running"
+              :disabled="busy || running || !providerId"
               @click="regenerate"
             >
               {{ legacyPlan ? '保留字幕并升级手绘分镜' : '保存字幕并重新生成分镜' }}

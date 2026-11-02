@@ -212,13 +212,18 @@ pub fn start_video_job(app: AppHandle, input: StartVideoInput) -> Result<VideoJo
     }
     let db = app.state::<Database>();
     let job = db.create_video_job(input)?;
-    let job = db.claim_video_job(&job.id, VideoWork::Prepare)?;
+    let job = db.claim_video_job(&job.id, VideoWork::Prepare, None)?;
     spawn(&app, &mut active, &job, VideoWork::Prepare);
     Ok(job)
 }
 
 #[tauri::command]
-pub fn continue_video_job(app: AppHandle, id: String, render: bool) -> Result<VideoJob, String> {
+pub fn continue_video_job(
+    app: AppHandle,
+    id: String,
+    render: bool,
+    provider_id: Option<String>,
+) -> Result<VideoJob, String> {
     if !cfg!(target_os = "windows") {
         return Err("MG 视频首版暂仅支持 Windows。".into());
     }
@@ -227,12 +232,17 @@ pub fn continue_video_job(app: AppHandle, id: String, render: bool) -> Result<Vi
     if active.is_some() {
         return Err("已有视频任务正在执行或停止中。".into());
     }
+    if !render && provider_id.is_none() {
+        return Err("请选择已启用的文本模型生成分镜。".into());
+    }
     let work = if render {
         VideoWork::Render
     } else {
         VideoWork::Prepare
     };
-    let job = app.state::<Database>().claim_video_job(&id, work)?;
+    let job = app
+        .state::<Database>()
+        .claim_video_job(&id, work, provider_id.as_deref())?;
     spawn(&app, &mut active, &job, work);
     Ok(job)
 }
@@ -252,7 +262,7 @@ pub fn preview_video_job(
         return Err("已有视频任务正在执行或停止中。".into());
     }
     let work = VideoWork::Preview(request);
-    let job = app.state::<Database>().claim_video_job(&id, work)?;
+    let job = app.state::<Database>().claim_video_job(&id, work, None)?;
     spawn(&app, &mut active, &job, work);
     Ok(job)
 }

@@ -1,5 +1,25 @@
 # 书引 AI 开发计划与验收标准
 
+## 分镜重试模型切换修复（2026-11-02）
+
+根因：模型选择只传给新建任务，继续及重新生成入口未传当前providerId，后端复用了旧绑定。修复贯穿VideoPage、services/video、continue_video_job和claim_video_job，复用既有字段并原子更新，不新增依赖、权限或迁移，影响为fix/patch，不手动升版本。
+
+验收：切换模型后两种准备入口均使用新模型；继续保留已有字幕/分镜，重新生成维持原清空分镜语义；无效模型及并发启动失败不改原任务；渲染/试片保持原流程。已先执行 `npx vitest run tests/video.test.ts -t 'uses the newly selected model'`，旧实现两项均失败，实际只传任务ID和render，遗漏m2；修复后以下检查通过：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npx vitest run tests/video.test.ts tests/video-storyboard.test.ts tests/video-progress.test.ts tests/video-image.test.ts` | 4个文件、37项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked database::video::tests` | 12项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 169项通过、2项按原设置忽略 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `npm run lint` | 通过 |
+| `npm run build` | TypeScript及生产构建通过；保留既有大包体积提示 |
+
+Rust命令先加载`. ./.tools/env.ps1`。前端使用组件与IPC服务夹具，Rust使用隔离SQLite，覆盖新地址/模型ID、保留部分计划、无效模型拒绝及并发认领失败不改绑。未调用真实外部模型、未改正式数据、未替换安装版，未提交或发布。验收闭环为本地源码行为；升级到含修复的新构建后，在原任务选择模型并继续，核对真实服务记录。
+
+修改文件：`src/modules/video/VideoPage.vue`、`src/services/video.ts`、`src-tauri/src/video_commands.rs`、`src-tauri/src/database/video.rs`（含回归测试）、`tests/video.test.ts`及`docs/{PRD,TECHNICAL-DESIGN,DATABASE,DEVELOPMENT-PLAN,USER-GUIDE}.md`。
+
 ## 视频P2：关键图片与主动插画（2026-11-02）
 
 用户明确要求继续完成P2，基于05f14c6/v0.36.0实施本书静态图片选择/导入、受控裁切、来源/授权、摘要冻结、同源图片层和主动单张插画。全部复用现有Scene/视频任务/图片Provider/ai_tasks与完整备份；图片与物体二选一为主体，生成前确认、生成后显式采用，失败保稿。schema15不变，无新依赖；新增4个受限主窗口命令，图片CSP仅追加blob，正式安装和原数据保留。属于feat/minor兼容功能增强，不手动改版本、不提交或发布。

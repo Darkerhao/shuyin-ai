@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 分镜重试的模型绑定（2026-11-02，仍为v15）
+
+无表、列或迁移变化。继续准备或重新生成分镜时，校验当前选择是已启用的文本模型，再在同一条UPDATE中写入既有provider_id、running状态及递增run_id；模型校验或任务认领失败时保留原绑定和任务数据。继续准备不改plan_json，已保存字幕和分镜可复用；试片与完整渲染不改绑模型。
+
 ## 视频图片引用与插画用途（2026-11-02，仍为v15）
 
 无表、列或SQL迁移。`video_jobs.plan_json.scenes[].image`保存本书图片assetId、本次source/rights、可省略的creator、contain/cover、0—1的x/y和宿主计算的sha256；有image时beats为空。没有image的旧记录不重写，未知字段和非法引用仍被拒绝；历史成片不改写，制作新版继续新建任务。

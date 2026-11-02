@@ -78,7 +78,7 @@ Node的`buildEpisode(plan, range?)`生成同一绘图工程：源cue ID、原场
 
 ## 应用内 MG 视频（2026-11-01）
 
-`video.rs` 定义字幕/分镜契约，`database/video.rs` 管理 v14 任务与素材事务，`video_commands.rs` 调度独立 ASR/渲染和现有 TextProvider。`video_process.rs` 通过带启动门的 Windows Job Object 管理子进程，取消/退出不遗留渲染树；同一运行的分镜模型配置在批处理前读取，后续配置编辑不切换该轮请求端点。Python 转写只读取完整的本地模型；Node 编译受控物体分镜，不执行模型提供的代码，浏览器与Node共用绝对原声时间轴。任务保存已完成分镜批次，渲染缓存按计划、绘图源码、目录和引擎路径隔离。
+`video.rs` 定义字幕/分镜契约，`database/video.rs` 管理 v14 任务与素材事务，`video_commands.rs` 调度独立 ASR/渲染和现有 TextProvider。`video_process.rs` 通过带启动门的 Windows Job Object 管理子进程，取消/退出不遗留渲染树；继续及重新生成分镜通过IPC显式传入当前providerId，claim_video_job先校验已启用文本模型，再将provider_id与运行状态/代次在同一UPDATE中更新；校验或启动冲突失败不改旧绑定。渲染及试片传空值保留绑定，继续准备不改已保存plan。同一运行的分镜模型配置在批处理前读取，后续配置编辑不切换该轮请求端点。Python 转写只读取完整的本地模型；Node 编译受控物体分镜，不执行模型提供的代码，浏览器与Node共用绝对原声时间轴。任务保存已完成分镜批次，渲染缓存按计划、绘图源码、目录和引擎路径隔离。
 
 前端增加 VideoPage 和音频入口，沿用原素材/发布流程；新草稿按明确的 videoJob 选择对应视频及原音频，历史任务不变。Tauri protocol-asset 默认空 scope，主窗口经同项目素材ID校验后只允许单个媒体文件，复用其Range实现。运行时是独立安装工具，不捆绑AGPL源码。具体目录、源码/许可依据、版本锁定、迁移与实跑边界见 [实施与验收](MG-VIDEO-VERIFICATION.md)。
 
