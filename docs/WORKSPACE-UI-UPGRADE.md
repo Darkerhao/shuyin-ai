@@ -146,3 +146,27 @@
 获准执行权限后再次运行完整 `npm test`，仍为相同队列用例失败（18 通过 / 1 失败），前端与发布/音频脚本结果不变。最终 `npm run build` 通过，JS 主包 511.82 kB；`git diff --check` 通过。
 
 无数据库变更、迁移脚本、Rust 修改、依赖或版本号调整，未提交。剩余是实际 Windows 关闭及原生文件/备份恢复验收、独立队列问题和可选素材页内预览；备份结果只保留于当前应用会话，不承诺重启恢复操作记录。
+
+
+## 按钮间距与窄窗口排查（2026-11-02）
+
+验收目标：普通操作按钮有一致的横纵间距，音频按钮不相贴，窄窗口可换行且不撑宽页面；保留墨绿、灰白面板及现有主次按钮层级。
+
+实际根因与修改：
+
+- 音频成品的两个按钮直接放在块级 article 内；浏览器实测水平间距为0px。`WritingPage.vue` 使用现有 `.actions` 包裹后为12px，360px下换为两行。
+- `style.css` 将共享按钮组和生成操作组统一为12px，操作组与前文间隔20px；区块标题支持换行。书架/发布筛选及网格列表切换是分段控件，保留组合式布局。
+- `CoversPage.vue` 个人样式输入和按钮间距为12px，输入以160px为换行基准，避免被相邻按钮挤成过窄控件。
+- `VideoPage.vue` 网格内按钮组去掉重复顶部外边距。360px检查发现历史任务下拉框的内容最小宽度撑开网格，改为可收缩单列和受列宽约束的下拉框，避免整个校对区越出面板。
+- 同步 `TECHNICAL-DESIGN.md`。共4个源码文件、2个文档；无数据库、依赖、业务调用、版本号变更，也未提交。
+
+实际验证：
+
+- `npm run lint`：通过，0警告。
+- `npm run build`：通过，包含TypeScript检查；保留既有主包超过500kB提示。
+- `npx vitest run tests/ai.test.ts tests/covers.test.ts tests/video.test.ts`：最终3个文件、135项通过。首次与构建并行时134通过、1项视频确认状态断言失败；同一组不与构建并行重跑全通过，未修改测试或业务代码，不将首次结果写成通过。
+- `git diff --check`：通过。
+- `npm run dev -- --port 1420` + Playwright：隔离内存IPC覆盖12条路由（含创作3页签，共14个页面状态），在1440/1120/800/390/360px共70组检查中，无横向溢出、页面异常或普通按钮相贴。另打开封面排版页签检查1440/360px个人样式操作区，360px输入宽约225px、间距12px，无溢出。人工查看音频操作区桌面/窄窗口及封面桌面截图。
+- 本地证据（忽略目录）：`output/playwright/button-spacing-{setup,audit}.js`、`button-spacing-audit-results.json`、`button-spacing-before.png`、`button-spacing-after.png`、`button-spacing-audio-360.png`、`button-spacing-cover-{1440,360}.png`、`button-spacing-video-{1440,360}.png`。
+
+上述间距与响应式验收已满足。浏览器使用模拟数据，不代表Windows WebView2、原生文件选择、真实生成、安装包或线上发布验收；未运行Rust/迁移测试（本轮无对应修改）。下一步在实际桌面版检查常用窗口尺寸下的音频与视频操作区即可。

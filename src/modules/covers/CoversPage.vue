@@ -610,13 +610,13 @@ onMounted(async () => {
                     </SelectItem>
                   </SelectContent>
                 </Select>
-                <div class="mt-3 flex flex-wrap gap-2">
+                <div class="mt-3 flex flex-wrap items-center gap-3">
                   <Input
                     v-model="presetName"
                     aria-label="新样式名称"
                     placeholder="给当前样式起个名字"
                     maxlength="60"
-                    class="min-w-0 flex-1"
+                    class="min-w-0 flex-1 basis-40"
                   />
                   <Button
                     type="button"
