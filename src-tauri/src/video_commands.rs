@@ -704,12 +704,7 @@ async fn execute(
         .map_err(|e| e.message)?;
         let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url).map_err(|e| e.message)?;
         let raw = tokio::select! { biased; _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()), response = provider.generate(request) => response.map_err(|e| e.message)? };
-        let scenes: Vec<Scene> = serde_json::from_str(&raw)
-            .map_err(|_| "模型分镜不是合法 JSON，已保留字幕和此前分镜。")?;
-        video::validate_scenes(&scenes, first, end)?;
-        if scenes.iter().any(|scene| scene.image.is_some()) {
-            return Err("分镜模型只能选择手绘目录；关键图片须由用户选用并确认来源。".into());
-        }
+        let scenes = video::parse_storyboard(&raw, first, end)?;
         job.plan.scenes.extend(scenes);
         db.save_video_progress(&job.id, job.run_id, &job.plan, "storyboard")?;
         first = end;

@@ -1,5 +1,17 @@
 # 书引 AI 技术设计文档
 
+## 字幕输入性能与生成时机（2026-11-03）
+
+根因：`VideoPage`的SRT双向绑定使每次输入都重新执行全页渲染，原内联分镜循环为每镜重新创建控件和动态插槽；dirty检查还将全文SRT和全部响应式scenes一起JSON序列化。字幕数量与镜数越多，输入期间重复工作越多。64条/12镜的性能回归复现两次输入触发145次下拉更新（含试片选择器）。
+
+将原分镜卡片与其局部样式移入`VideoSceneEditor`，通过Vue `defineModel('scene')`继续编辑父页同一份Scene；字幕字符串不传给卡片，传入的cues/素材/模型引用和禁用状态保持稳定。`sceneSnapshot`作为computed仅随分镜内容变化重新序列化，dirty仍同步比较当前字幕和分镜快照。不新增草稿、定时保存、输入防抖或另一份字幕状态；保存/试片/重建/确认均读取当前值。依据当前Vue3.5.44的shouldUpdateComponent/useModel/computed源码及官方[组件更新优化](https://vuejs.org/guide/best-practices/performance.html#props-stability)、[组件v-model](https://vuejs.org/guide/components/v-model.html)。
+
+大规模验证还确认原物体折叠区的`unmountOnHide=false`始终挂载全部选择器。当前锁定RekaUI2.11.0的`CollapsibleRoot.vue`/`CollapsibleContent.vue`公开类型与实现表明默认true只在展开时创建slot；`SelectContent.vue`则会把关闭的选项挂载进DocumentFragment，因而不能靠下拉菜单未打开来省去选项成本。移除本地折叠区的强制保留配置，复用默认按需挂载；物体、动作和cue全部在同一Scene中，收起再展开从模型回显，不丢输入，也不新增挂载标记或缓存状态。
+
+首主体偏晚的生成根因是v4只要求cue语义对应且位于镜内，没有要求从开镜台词选取已成立的主体；渲染器照原cue执行，没有额外等待。唯一生成入口升级为`video-storyboard-v5`，要求每镜首beat.cue=first；先选中性主体，不能提前后文的结论/否定。将准备流程原来的JSON解析、结构/目录校验和禁止模型选图片收敛到`parse_storyboard`，在同一接收边界增加首主体锚点校验，通过整批才保存。违反时保留字幕、此前完整分镜，不自动改写或重试。一般`validate_scenes`继续用于已保存/人工分镜，不套用生成专属规则，不重写旧任务。其他物体、动作、首条字幕前原声停顿和原有渲染时钟保持。
+
+v5同步明确1.2秒相邻出场和12秒长停留的现有提示阈值，仍是语义导演建议，不作为人工分镜的硬错误。无数据库/IPC/权限/依赖变化。验证与边界见[字幕编辑与分镜时机验收](VIDEO-EDITING-VERIFICATION.md)。
+
 ## 原声字幕校对（2026-11-02）
 
 `video/subtitles.rs`与独立版本化`subtitle-proofread-v1.md`定义校对契约：每批60条，前后各6条只作上下文，输入包含全局字幕索引、原时间码与冻结首尾参考；模型只返回完整有序的`[{index,text}]`。宿主严格拒绝漏条、重复、乱序、越界、额外字段、时间码、空文本、控制符和超过32字的条目，整批通过才替换文字并推进completed。时间码和条数始终由已有cue持有，不接受模型重排或重切。

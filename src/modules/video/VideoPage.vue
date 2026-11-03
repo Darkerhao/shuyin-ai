@@ -5,7 +5,7 @@ import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import VideoJobProgress from './VideoJobProgress.vue'
-import VideoImageEditor from './VideoImageEditor.vue'
+import VideoSceneEditor from './VideoSceneEditor.vue'
 import { inspectStoryboard } from './storyboard'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -19,7 +19,7 @@ import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { visualCatalog, videoStatuses, type VideoJob, type VideoScene, type VideoSceneImage, type VideoSettings } from '../../types/video'
+import { visualCatalog, videoStatuses, type VideoJob, type VideoScene, type VideoSettings } from '../../types/video'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -59,8 +59,8 @@ const editable = computed(() => selected.value && !['running', 'succeeded'].incl
 const legacyPlan = computed(() => scenes.value.some(scene => !scene.beats?.length && !scene.image))
 const completePlan = computed(() => scenes.value.length > 0 && !legacyPlan.value && scenes.value.at(-1)!.last + 1 === selected.value?.plan.cues.length)
 const storyboardNotes = computed(() => selected.value ? inspectStoryboard({ ...selected.value.plan, scenes: scenes.value }) : [])
-const sceneKindLabel = (kind: VideoScene['kind']) => Object.hasOwn(visualCatalog.kinds, kind) ? visualCatalog.kinds[kind as keyof typeof visualCatalog.kinds] : '旧版文字图解'
-const editorValue = () => JSON.stringify([subtitleText.value, scenes.value])
+const sceneSnapshot = computed(() => JSON.stringify(scenes.value))
+const editorValue = () => JSON.stringify([subtitleText.value, sceneSnapshot.value])
 const jobLabel = (job: VideoJob) => `${videoStatuses[job.status]} · ${job.createdAt ? new Date(job.createdAt).toLocaleString() : job.id}`
 const dirty = computed(() => loaded.value && editable.value && savedEditor.value !== editorValue())
 const configDirty = computed(() => loaded.value && savedConfig.value !== JSON.stringify(config.value))
@@ -161,10 +161,6 @@ const preview = () => run(async () => {
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
-function setSceneImage(scene: VideoScene, image: VideoSceneImage | undefined) {
-  if (image) { scene.image = image; scene.beats = [] }
-  else { delete scene.image; scene.beats = [{ cue: scene.first, object: 'book', action: 'draw', label: '书籍' }] }
-}
 async function refreshImages() { assets.value = await listAssets(props.id) }
 function focusScene(index: number) {
   const card = jobPanel.value?.querySelector<globalThis.HTMLElement>(`#video-scene-${index}`)
@@ -709,210 +705,21 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
             </ul>
           </aside>
           <div class="video-scenes">
-            <article
+            <VideoSceneEditor
               v-for="(scene, index) in scenes"
-              :id="`video-scene-${index}`"
               :key="index"
-              class="video-scene"
-            >
-              <p class="muted">
-                第 {{ index + 1 }} 镜 · 字幕 {{ scene.first + 1 }}—{{ scene.last + 1 }} · {{ sceneKindLabel(scene.kind) }}
-              </p><Input
-                v-model="scene.title"
-                :disabled="busy || (!scene.beats?.length && !scene.image)"
-                :aria-label="`第${index + 1}镜标题`"
-                maxlength="20"
-              />
-              <VideoImageEditor
-                :project-id="id"
-                :scene-index="index"
-                :image="scene.image"
-                :assets="assets"
-                :providers="imageProviders"
-                :disabled="busy || running || !completePlan"
-                @update:image="setSceneImage(scene, $event)"
-                @refresh-assets="refreshImages"
-                @working="imageWorking = $event"
-              />
-              <div
-                v-for="(beat, i) in scene.beats"
-                :key="i"
-                class="video-beat"
-              >
-                <label :for="`scene-${index}-beat-${i}`">字幕 {{ beat.cue + 1 }} · {{ visualCatalog.objects[beat.object] }} · {{ visualCatalog.actions[beat.action] }}</label>
-                <Input
-                  :id="`scene-${index}-beat-${i}`"
-                  v-model="beat.label"
-                  :disabled="busy"
-                  :aria-label="`第${index + 1}镜物体${i + 1}标签`"
-                  maxlength="8"
-                />
-                <Collapsible
-                  class="video-beat-settings"
-                  :unmount-on-hide="false"
-                >
-                  <CollapsibleTrigger class="disclosure-trigger py-1.5">
-                    调整物体、动作与字幕锚点
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <div class="video-beat-controls">
-                      <div class="video-field">
-                        <label :for="`scene-${index}-object-${i}`">具体物体</label>
-                        <Select
-                          v-model="beat.object"
-                          :disabled="busy"
-                        >
-                          <SelectTrigger
-                            :id="`scene-${index}-object-${i}`"
-                            :aria-label="`第${index + 1}镜物体${i + 1}`"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem
-                              v-for="(name, key) in visualCatalog.objects"
-                              :key="key"
-                              :value="key"
-                            >
-                              {{ name }}
-                            </SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div class="video-field">
-                        <label :for="`scene-${index}-action-${i}`">语义动作</label>
-                        <Select
-                          v-model="beat.action"
-                          :disabled="busy"
-                        >
-                          <SelectTrigger
-                            :id="`scene-${index}-action-${i}`"
-                            :aria-label="`第${index + 1}镜物体${i + 1}动作`"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem
-                              v-for="(name, key) in visualCatalog.actions"
-                              :key="key"
-                              :value="key"
-                            >
-                              {{ name }}
-                            </SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div class="video-field video-anchor">
-                        <label :for="`scene-${index}-cue-${i}`">在哪句开始出现</label>
-                        <Select
-                          :model-value="String(beat.cue)"
-                          :disabled="busy"
-                          @update:model-value="beat.cue = Number($event)"
-                        >
-                          <SelectTrigger
-                            :id="`scene-${index}-cue-${i}`"
-                            :aria-label="`第${index + 1}镜物体${i + 1}字幕锚点`"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem
-                              v-for="(cue, offset) in selected.plan.cues.slice(scene.first, scene.last + 1)"
-                              :key="offset"
-                              :value="String(scene.first + offset)"
-                            >
-                              {{ scene.first + offset + 1 }} · {{ cue.text }}
-                            </SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
-              </div>
-              <p
-                v-if="!scene.beats?.length"
-                class="muted"
-              >
-                {{ scene.labels?.join(' · ') }}
-              </p>
-              <div
-                v-if="scene.beats?.length"
-                class="video-scene-controls"
-              >
-                <div class="video-field video-scene-kind">
-                  <label :for="`scene-${index}-kind`">叙事构图</label>
-                  <Select
-                    v-model="scene.kind"
-                    :disabled="busy"
-                  >
-                    <SelectTrigger
-                      :id="`scene-${index}-kind`"
-                      :aria-label="`第${index + 1}镜构图`"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem
-                        v-for="(name, key) in visualCatalog.kinds"
-                        :key="key"
-                        :value="key"
-                      >
-                        {{ name }}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div class="video-field">
-                  <label :for="`scene-${index}-environment`">环境场景</label>
-                  <Select
-                    :model-value="scene.environment ?? 'plain'"
-                    :disabled="busy"
-                    @update:model-value="scene.environment = $event as NonNullable<VideoScene['environment']>"
-                  >
-                    <SelectTrigger
-                      :id="`scene-${index}-environment`"
-                      :aria-label="`第${index + 1}镜场景`"
-                    >
-                      <SelectValue>{{ visualCatalog.environments[scene.environment ?? 'plain'] }}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem
-                        v-for="(name, key) in visualCatalog.environments"
-                        :key="key"
-                        :value="key"
-                      >
-                        {{ name }}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div class="video-field">
-                  <label :for="`scene-${index}-framing`">画面景别</label>
-                  <Select
-                    :model-value="scene.framing ?? 'reference'"
-                    :disabled="busy"
-                    @update:model-value="scene.framing = $event as NonNullable<VideoScene['framing']>"
-                  >
-                    <SelectTrigger
-                      :id="`scene-${index}-framing`"
-                      :aria-label="`第${index + 1}镜景别`"
-                    >
-                      <SelectValue>{{ visualCatalog.framings[scene.framing ?? 'reference'] }}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem
-                        v-for="(name, key) in visualCatalog.framings"
-                        :key="key"
-                        :value="key"
-                      >
-                        {{ name }}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </article>
+              :project-id="id"
+              :scene-index="index"
+              :scene="scene"
+              :cues="selected.plan.cues"
+              :assets="assets"
+              :providers="imageProviders"
+              :disabled="busy"
+              :image-disabled="busy || running || !completePlan"
+              @update:scene="scenes[index] = $event"
+              @refresh-assets="refreshImages"
+              @working="imageWorking = $event"
+            />
           </div>
           <div class="video-render-action">
             <p class="muted">
@@ -940,14 +747,8 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-field [role='combobox'] { width: 100%; min-width: 0; }
 .video-workspace :deep([data-slot='select-value']) { min-width: 0; text-align: left; }
 .video-field .muted { margin: 4px 0 0; }
-.video-scene-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.video-scene-kind { grid-column: 1 / -1; }
 .video-path { display: flex; gap: 8px; min-width: 0; }
 .video-path input { min-width: 0; }
-.video-beat { display: grid; gap: 6px; min-width: 0; }
-.video-beat label { color: var(--muted-foreground); font-size: 12px; overflow-wrap: anywhere; }
-.video-beat-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-block: 10px; }
-.video-anchor { grid-column: 1 / -1; }
 .video-preview { display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
 .video-preview .video-editor-heading { margin-top: 0; }
 .video-preview-controls { display: grid; grid-template-columns: minmax(0, 2fr) minmax(100px, 1fr) auto; gap: 16px; align-items: end; }
@@ -965,8 +766,6 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-job { scroll-margin-top: calc(var(--workspace-sticky-top) + 20px); }
 .video-runtime-content { display: grid; gap: 18px; }
 .video-scenes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-height: 560px; overflow: auto; padding: 2px; }
-.video-scene { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; }
-.video-scene { scroll-margin-block: 16px; min-width: 0; }
 .video-editor-heading { margin-top: 12px; }
 .video-render-action { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
 .video-render-action .muted { max-width: 600px; }

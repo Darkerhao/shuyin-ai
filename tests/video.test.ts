@@ -25,12 +25,36 @@ beforeEach(() => {
   vi.mocked(api.mediaSource).mockResolvedValue('http://asset.localhost/audio.m4a')
 })
 afterEach(() => { mounted.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; vi.useRealTimers() })
-async function render() {
+async function render(onStoryboardUpdate?: () => void) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/projects/:id/video', component: VideoPage, props: true }, { path: '/:pathMatch(.*)*', component: { template: '<p>其他页面</p>' } }] })
   await router.push('/projects/p1/video?audio=a1'); await router.isReady()
-  const wrapper = mount({ template: '<router-view />' }, { global: { plugins: [router] } }); mounted.push(wrapper)
+  const wrapper = mount({ template: '<router-view />' }, { global: { plugins: [router], mixins: [{ updated() { if (this.$options.name === 'UiSelect' && this.$el.parentElement?.closest('.video-scenes')) onStoryboardUpdate?.() } }] } }); mounted.push(wrapper)
   await flushPromises(); return wrapper
 }
+it('keeps storyboard controls idle while typing a long SRT and saves the latest input immediately', async () => {
+  const current = structuredClone(job)
+  current.plan.duration = 1200
+  current.plan.cues = Array.from({ length: 64 }, (_, i) => ({ start: i * 1.8, end: i * 1.8 + 1.5, text: `原声字幕${i + 1}` }))
+  current.plan.scenes = Array.from({ length: 12 }, (_, i) => {
+    const first = Math.floor(i * 64 / 12)
+    return { first, last: Math.floor((i + 1) * 64 / 12) - 1, kind: 'focus', title: `观点${i + 1}`, beats: [{ cue: first, object: 'book', action: 'draw', label: '原书' }] }
+  })
+  const clock = (seconds: number) => new Date(seconds * 1000).toISOString().slice(11, 23).replace('.', ',')
+  const srt = current.plan.cues.map((cue, i) => `${i + 1}\n${clock(cue.start)} --> ${clock(cue.end)}\n${cue.text}\n`).join('\n')
+  vi.mocked(api.listJobs).mockResolvedValue([current])
+  vi.mocked(api.subtitles).mockResolvedValue(srt)
+  const updates = vi.fn()
+  const wrapper = await render(updates)
+  updates.mockClear()
+  const stringify = vi.spyOn(JSON, 'stringify')
+  await wrapper.get('#video-subtitles').setValue(`${srt}校`)
+  await wrapper.get('#video-subtitles').setValue(`${srt}校对`)
+  expect(stringify.mock.calls.filter(([value]) => Array.isArray(value) && Array.isArray(value[1]))).toHaveLength(0)
+  expect(updates).not.toHaveBeenCalled()
+  await wrapper.findAll('button').find(button => button.text() === '保存校对')!.trigger('click')
+  await flushPromises()
+  expect(api.savePlan).toHaveBeenCalledExactlyOnceWith('j1', `${srt}校对`, current.plan.scenes)
+}, 30000)
 it('requires an explicit confirmation before rendering a prepared storyboard', async () => {
   const wrapper = await render()
   const scroll = vi.fn()
@@ -43,6 +67,20 @@ it('requires an explicit confirmation before rendering a prepared storyboard', a
   expect(api.continueJob).toHaveBeenCalledWith('j1', true, null)
   expect(wrapper.get('[aria-label="选择视频历史任务"]').text()).toContain('制作中')
   expect(scroll).toHaveBeenCalledWith({ block: 'start' })
+})
+it('mounts beat selectors only when expanded and preserves edits after closing and reopening', async () => {
+  const wrapper = await render()
+  expect(wrapper.find('#scene-0-object-0').exists()).toBe(false)
+  const toggle = wrapper.get('.video-beat-settings .disclosure-trigger')
+  await toggle.trigger('click'); await flushPromises()
+  await chooseSelect(wrapper, '#scene-0-object-0', '钢笔')
+  await toggle.trigger('click'); await flushPromises()
+  expect(wrapper.find('#scene-0-object-0').exists()).toBe(false)
+  await toggle.trigger('click'); await flushPromises()
+  expect(wrapper.get('#scene-0-object-0').text()).toContain('钢笔')
+  await wrapper.findAll('button').find(button => button.text() === '保存校对')!.trigger('click')
+  await flushPromises()
+  expect(api.savePlan).toHaveBeenCalledWith('j1', expect.any(String), [expect.objectContaining({ beats: [expect.objectContaining({ object: 'pen' })] })])
 })
 it('a failed save keeps the edited subtitles and never starts a render', async () => {
   const wrapper = await render()
