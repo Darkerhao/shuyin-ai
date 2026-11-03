@@ -1,5 +1,13 @@
 # 书引 AI 技术设计文档
 
+## 视频编辑恢复与对照（2026-11-03）
+
+- 复用`useEditorDraft`的400ms防抖和串行队列，`DraftKind=video`通过`read_video_draft/save_video_draft`以任务ID读写；存储位于`video_jobs.editor_draft_json`，不扩展文案/封面草稿的项目唯一键。字幕存字符串，分镜使用已有缓存JSON快照，位置保存section/index/onlyChanges/cursor；暂存不执行正式字幕/分镜校验，允许未完成SRT。最大4MiB。
+- 暂存的basedOn为run_id，运行中/已完成及过期代次拒绝写入。正式保存和新一轮任务认领分别在原UPDATE内清除旧草稿；页面先排空写入，再暂停自动暂存并执行正式操作。失败保留编辑，成功保存后可另存位置。加载时按draftUpdatedAt选最近编辑任务，显式job路由优先；读取失败不展示其他任务的编辑缓冲。
+- 新转写/导入结果在AI校对前冻结为`original_cues_json`，后续校对、保存和重新生成不改原文。旧任务只读取本任务已登记run目录中最早的`transcript.srt`，目录按Windows规范化路径比较；无该记录时使用任务明确的source_subtitle_id。原文件不可读时显示错误，不使用校对文补齐。
+- `VideoSubtitleEditor`共用页面SRT字符串，按正文偏移替换单句，保留原编号、时间码和换行。原文以毫秒起止时间对应，无法完整解析的SRT仅在全文入口编辑；正式保存仍以Rust校验为准。按页最多渲染20句。播放源绑定selected.audioAssetId，与新建任务的音频选择独立；以媒体currentTime在句尾暂停，切句、任务切换和卸载停止播放，不使用墙钟时长推测缓冲进度。
+- 无新依赖，不更改模型调用、音频、渲染器或发布流程。主窗口视频权限仅增加任务草稿读写与原字幕读取三条命令。验证证据见[视频草稿与字幕对照验收](VIDEO-DRAFTS-VERIFICATION.md)。
+
 ## 字幕输入性能与生成时机（2026-11-03）
 
 根因：`VideoPage`的SRT双向绑定使每次输入都重新执行全页渲染，原内联分镜循环为每镜重新创建控件和动态插槽；dirty检查还将全文SRT和全部响应式scenes一起JSON序列化。字幕数量与镜数越多，输入期间重复工作越多。64条/12镜的性能回归复现两次输入触发145次下拉更新（含试片选择器）。

@@ -15,6 +15,7 @@ export function useEditorDraft<T>(projectId: () => string, kind: DraftKind, cont
   let editRevision = 0
   function flush() {
     globalThis.clearTimeout(timer)
+    if (!ready.value) return queue
     const id = projectId()
     const revision = editRevision
     const draft = dirty.value || retainSavedDraft ? { basedOn: basedOn(), content: JSON.parse(JSON.stringify(content.value)) as T } : null
@@ -23,7 +24,7 @@ export function useEditorDraft<T>(projectId: () => string, kind: DraftKind, cont
     return queue.then(() => { if (revision === editRevision) { status.value = draft ? '草稿已自动暂存' : ''; error.value = '' } }, cause => { if (revision === editRevision) { error.value = `自动暂存失败：${errorMessage(cause)}`; status.value = '' } throw cause })
   }
   watch([content, dirty], () => {
-    if (!ready.value) return
+    if (!ready.value) { globalThis.clearTimeout(timer); return }
     editRevision++
     status.value = dirty.value ? '等待暂存…' : ''
     globalThis.clearTimeout(timer)

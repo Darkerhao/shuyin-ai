@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 视频编辑草稿与原文快照（2026-11-03，v16）
+
+`0016_video_editor.sql`为video_jobs增加两个可空TEXT列：editor_draft_json保存`{basedOn,content:{subtitles,scenes,position},updatedAt}`，original_cues_json保存首次转写/导入的原始Cue数组。原有任务、plan_json、素材、时间戳及v9文案/封面草稿不改写；无需新表或新外键。草稿与任务同行，删除任务/书籍自然删除其草稿。
+
+草稿basedOn须等于当前run_id且任务可编辑；内容允许不完整，大小上限4MiB，updatedAt由SQLite生成。暂存不改任务状态、正式plan_json或正式更新时间。正式编辑成功与清除旧草稿同一UPDATE，校验失败保留两者；新一轮认领清除上一代草稿并递增run_id。原文快照以COALESCE只写一次，且要求当前运行代次；原声时间码保持不变。
+
+重启与SQLite快照备份/恢复保留两列，旧备份在隔离快照中自动迁移；v15升级与重复打开不覆盖旧任务。旧任务原文仍通过已登记SRT读取，缺失时提示；新任务的原文快照不依赖缓存文件。低于v16的程序不能打开升级后的数据库，回退应使用升级前备份。实际命令与覆盖范围见[本次验收](VIDEO-DRAFTS-VERIFICATION.md)。
+
 ## 字幕校对进度与参考（2026-11-02，仍为v15）
 
 无表、列或SQL迁移。`video_jobs.plan_json`增加可省略的`subtitleReview: {promptVersion, completed, reference: {book, author, opening, ending}}`，记录已校对的连续字幕条数与开始校对时的参考快照。每个合法批次的cue文字、completed与stage=proofreading通过现有带run_id/status条件的UPDATE一起写入。字幕登记按是否还有未校对条目进入proofreading或storyboard；原始与校对SRT分别登记为本书素材，不覆盖源文件。

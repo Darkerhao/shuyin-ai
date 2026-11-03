@@ -15,6 +15,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod editor;
+
 #[derive(Debug)]
 pub struct VideoImageSnapshot {
     pub bytes: Vec<u8>,
@@ -44,7 +46,7 @@ fn read_image_file(path: &Path) -> Result<VideoImageSnapshot, String> {
     })
 }
 
-const COLUMNS: &str = "id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,run_id,plan_json,error,subtitle_asset_id,video_asset_id,created_at,updated_at";
+const COLUMNS: &str = "id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,run_id,plan_json,error,subtitle_asset_id,video_asset_id,created_at,updated_at,json_extract(editor_draft_json,'$.updatedAt')";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +65,7 @@ pub struct VideoJob {
     pub video_asset_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub draft_updated_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -94,6 +97,7 @@ fn row(r: &Row<'_>) -> rusqlite::Result<VideoJob> {
         video_asset_id: r.get(11)?,
         created_at: r.get(12)?,
         updated_at: r.get(13)?,
+        draft_updated_at: r.get(14)?,
     })
 }
 
@@ -293,7 +297,7 @@ impl Database {
                 let provider = super::ai::provider(c, id)?;
                 if provider.input.model_kind != "text" || !provider.input.is_enabled { return Err("请选择已启用的文本模型生成分镜。".into()); }
             }
-            c.execute(&format!("UPDATE video_jobs SET status='running',stage=?1,provider_id=COALESCE(?2,provider_id),run_id=run_id+1,error='',updated_at={NOW} WHERE id=?3"), params![work.stage(), provider_id, id]).map_err(|_| "已有视频任务正在执行，请等待或停止后重试。")?;
+            c.execute(&format!("UPDATE video_jobs SET status='running',stage=?1,provider_id=COALESCE(?2,provider_id),run_id=run_id+1,error='',editor_draft_json=NULL,updated_at={NOW} WHERE id=?3"), params![work.stage(), provider_id, id]).map_err(|_| "已有视频任务正在执行，请等待或停止后重试。")?;
             get(c, id)
         })
     }
@@ -348,7 +352,7 @@ impl Database {
             }
             if cues != job.plan.cues || scenes.is_empty() { job.plan.subtitle_review = None; }
             job.plan.cues = cues; job.plan.scenes = scenes;
-            c.execute(&format!("UPDATE video_jobs SET plan_json=?1,status='awaiting_confirmation',stage='storyboard',updated_at={NOW} WHERE id=?2"), params![serde_json::to_string(&job.plan).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
+            c.execute(&format!("UPDATE video_jobs SET plan_json=?1,editor_draft_json=NULL,status='awaiting_confirmation',stage='storyboard',updated_at={NOW} WHERE id=?2"), params![serde_json::to_string(&job.plan).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
             Ok(())
         })
     }
