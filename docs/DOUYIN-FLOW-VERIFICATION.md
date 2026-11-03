@@ -1,5 +1,44 @@
 # 智能辅助流程改版实施与本地验证
 
+## 已加入合集仍等待：名称混入作品数（2026-11-03）
+
+### 根因与最小修复
+
+`douyin_editor.js` 的 `collections` 动作直接读取 `.semi-select-selection-text.textContent`。官方组件把 `mix_name` 放在 `selected-item-title-*`，把“共24个作品”等统计信息放在相邻的 `selected-item-extra-text-*`；二者整块读取成为 `甲子读书 | 读懂一本书共24个作品`。合集列表选项已单独读取 `option-title-*`，因此提交的目标名不含统计信息，与已选值和最终回读无法精确匹配。
+
+公开源码依据为与留存官方页面对应的[合集页面构建](https://lf-fe-creator.douyinstatic.com/obj/douyn-creator-scm-cdn/douyin-creator-content-new/micro/static/js/async/2430.8abda73a.js)：`renderSelectedItem` 分别渲染 `mix_name` 与作品数，实际类名为 `selected-item-title-ebAmMX`、`selected-item-extra-text-M2lci5`。本轮仅下载公开静态脚本，没有调用私有接口、读取登录信息或连接用户正在运行的窗口；不将留存页面构建写为当前现场 DOM。
+
+新增回归使用该真实结构，修复前读出的名称包含“共24个作品”。隔离 Windows 运行进一步复现截图同句提示：当前任务已经保存目标合集，官方页显示同名合集与作品数，`continue_douyin_task` 后仍返回 `waitingFor=collection`、`step=collection`，消息为“请选择目标合集或明确不加入；入口无法读取时可在官方页设置并人工确认。”
+
+最小修复只在页面适配器内统一名称提取，已选值读取 `selected-item-title-*`，列表选项读取 `option-title-*`；仍支持官方仅显示文本标签的状态，不通过删字正则猜测名称。现有宿主精确比较、唯一选项、最终回读和人工决定不变，已选目标匹配时不重新选择或要求保持下拉展开。
+
+修改文件：`src-tauri/src/douyin_editor.js`、`tests/douyin-editor.test.ts`、`docs/TECHNICAL-DESIGN.md`、`docs/DEVELOPMENT-PLAN.md`、`docs/USER-GUIDE.md`、本记录。无 Rust 业务代码、依赖、IPC、权限、数据库或迁移变更，SQLite 保持 v17，归类 fix/patch；未提交、改版本号或发布。
+
+### 实际命令与结果
+
+| 命令 | 结果 |
+| --- | --- |
+| `npx vitest run tests/douyin-editor.test.ts -t 'selected value also shows its work count'`（修复前） | 1项失败，期望只有合集名，实际拼入“共24个作品” |
+| `node output/playwright/douyin-collection/native.cjs`（修复前） | 1项场景失败，期望 review，实际等待合集确认，复现截图同句提示 |
+| `npx vitest run tests/douyin-editor.test.ts tests/douyin.test.ts tests/publishing.test.ts` | 54项通过 |
+| `npm run lint` | 通过 |
+| 加载 `. ./.tools/env.ps1` 后执行 `npx tauri build --debug --no-bundle --config output/playwright/douyin-collection/tauri-test.json` | 隔离桌面构建通过，包含实际执行的 `npm run build`、TypeScript 检查与 Vite 构建 |
+| `node output/playwright/douyin-collection/native.cjs`（修复后） | 8项隔离 Windows WebView2/真实 IPC 场景通过，合集通过真实前端按钮确认 |
+| `git diff --check` | 通过 |
+
+构建保留既有约630kB分块提示。未运行全量 npm/Rust 测试；本次只修改被 Rust 内嵌的页面 JavaScript，隔离桌面构建已重新编译嵌入该脚本。
+
+### 验收对应与当前使用
+
+1. 官方页已选同名合集且带“共24个作品”，下拉框已关闭；实际在主窗口选定目标并点击一次“确认本次合集”，进入 review，第5步显示等待检查并发布，原等待提示消失，官方合集选择点击为0。
+2. 作品数改为25后停止再恢复，仍直接进入 review，不重新打开合集或重传成片。
+3. 不同的官方合集选择仍等待明确决定，授权更改后只选择一次并回读。
+4. 账号变化仍清除旧账号的完成证明；测试任务保持 ready，无发布记录，最终发布按钮点击为0，成片总发送次数为1。
+
+使用独立标识 `com.shuyin.douyin-collection-20261103`、隔离数据库和测试素材，通过本地阻塞代理及页面拦截隔离真实网站。结果与截图见 `output/playwright/douyin-collection/native-result.json`、`official-selected-count.png`、`collection-confirmed.png`。
+
+没有替换用户正在运行的 `D:\书引 AI\shuyin-ai.exe`、操作真实上传内容或完成正式安装/账号验收。当前安装版这次任务可展开“在官方页设置合集”，填写已经选中的真实合集名称，点击“已核对官方页合集，人工确认”继续，原官方选择保留。后续在包含修复的正式更新中复验用户页面，不要求重新上传或重新加入合集。
+
 ## 一次账号确认与昵称预填（2026-11-03）
 
 ### 根因与修复

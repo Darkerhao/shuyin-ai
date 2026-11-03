@@ -57,7 +57,9 @@
       const controls = [...document.querySelectorAll('.semi-select[class*="select-collection-"]')].filter(visible)
       if (controls.length !== 1) return { ok: true, available: false, loaded: false, options: [], selected: null }
       const control = controls[0]
-      const selected = control.querySelector('.semi-select-selection-text')?.textContent.trim()
+      const collectionName = element => element.querySelector('[class^="selected-item-title-"], [class^="option-title-"]')?.textContent.trim() || element.textContent.trim()
+      const selection = control.querySelector('.semi-select-selection-text')
+      const selected = selection ? collectionName(selection) : ''
       const name = selected && selected !== '请选择合集' ? selected : null
       if (action === 'openCollections') {
         if (control.getAttribute('aria-expanded') !== 'true' && ![...document.querySelectorAll('[role="listbox"], .semi-select-option-list')].some(visible)) control.click()
@@ -65,7 +67,7 @@
       }
       const popups = [...document.querySelectorAll('[role="listbox"], .semi-select-option-list')].filter(visible)
       const popup = popups.length === 1 ? popups[0] : null
-      const options = popup ? [...popup.querySelectorAll('[role="option"]')].filter(e => visible(e) && e.getAttribute('aria-disabled') !== 'true').map(e => ({ id: null, name: e.querySelector('[class^="option-title-"]')?.textContent.trim() || e.textContent.trim() })) : []
+      const options = popup ? [...popup.querySelectorAll('[role="option"]')].filter(e => visible(e) && e.getAttribute('aria-disabled') !== 'true').map(e => ({ id: null, name: collectionName(e) })) : []
       const filtered = popup && [...popup.querySelectorAll('input')].some(input => input.value.trim())
       const loaded = Boolean(popup && options.length && !filtered && popup.getAttribute('aria-busy') !== 'true' && !popup.querySelector('[role="progressbar"], .semi-spin-spinning'))
       if (action === 'selectCollection') {
@@ -73,7 +75,7 @@
           if (name) throw new Error('网页已加入合集，请先在官方页移除后重新核对。')
         } else {
           if (!loaded) throw new Error('合集选项尚未完整显示，请人工核对。')
-          const matches = [...popup.querySelectorAll('[role="option"]')].filter(e => visible(e) && e.getAttribute('aria-disabled') !== 'true' && (e.querySelector('[class^="option-title-"]')?.textContent.trim() || e.textContent.trim()) === payload.name)
+          const matches = [...popup.querySelectorAll('[role="option"]')].filter(e => visible(e) && e.getAttribute('aria-disabled') !== 'true' && collectionName(e) === payload.name)
           unique(matches, '目标合集重名或已失效，请重新选择。').click()
         }
         return { ok: true }
