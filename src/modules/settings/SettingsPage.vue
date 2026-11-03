@@ -13,25 +13,31 @@ import type { WorkspaceSettings } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import { useWindowCloseGuard } from '../../composables/useWindowCloseGuard'
 import { workspaceOperation } from './workspaceOperation'
+import StorageManager from './StorageManager.vue'
+import ModelDiagnostics from './ModelDiagnostics.vue'
+import { lastBackup, backupDue, type BackupRecord } from '../../services/maintenance'
 const desktop = api.isDesktop()
 const settings = ref<WorkspaceSettings | null>(null)
+const backupRecord = ref<BackupRecord | null>(null)
+const storageWorking = ref(false)
 const restorePath = ref('')
 const includeVideos = ref(false)
 const fullRestore = ref<fullBackup.BackupSummary | null>(null)
 const restoreDirectory = ref('')
 const { busy: operationBusy, error, message, operation, run } = workspaceOperation
 const loading = useOperation()
-const busy = computed(() => operationBusy.value || loading.busy.value)
-const closeGuard = useWindowCloseGuard(() => operationBusy.value, () => !operationBusy.value)
-onBeforeRouteLeave(() => !operationBusy.value)
-const load = () => loading.run(async () => { settings.value = await api.workspaceSettings() })
+const busy = computed(() => operationBusy.value || loading.busy.value || storageWorking.value)
+const closeGuard = useWindowCloseGuard(() => operationBusy.value || storageWorking.value, () => !operationBusy.value && !storageWorking.value)
+onBeforeRouteLeave(() => !operationBusy.value && !storageWorking.value)
+const load = () => loading.run(async () => { settings.value = await api.workspaceSettings(); backupRecord.value = await lastBackup() })
 const chooseRoot = () => run(async () => { const path = await api.chooseDirectory(); if (path) { settings.value = await api.setWorkspaceRoot(path); message.value = '新项目将使用此目录，已有项目保持原位置。' } }, '正在设置工作目录…')
-const backup = () => run(async () => { const path = await api.chooseDirectory(); if (path) message.value = `备份已保存：${await api.createBackup(path)}` }, '正在创建数据库备份，请等待完成后离开…')
+const backup = () => run(async () => { const path = await api.chooseDirectory(); if (path) { message.value = `备份已保存：${await api.createBackup(path)}`; backupRecord.value = await lastBackup() } }, '正在创建数据库备份，请等待完成后离开…')
 const chooseRestore = () => run(async () => { const path = await api.chooseBackup(); if (path) { restorePath.value = path; fullRestore.value = null; restoreDirectory.value = '' } })
 const backupAll = () => run(async () => {
   const directory = await api.chooseDirectory()
   if (!directory) return
   const result = await fullBackup.createFullBackup(directory, includeVideos.value)
+  backupRecord.value = await lastBackup()
   message.value = `完整备份已保存（${result.fileCount} 个文件）：${result.manifestPath}。请保留整个备份目录。`
 }, '正在创建完整备份，请等待完成后离开…')
 const chooseFullRestore = () => run(async () => {
@@ -47,12 +53,14 @@ const restoreAll = () => run(async () => {
   fullRestore.value = null
   message.value = `完整恢复完成，资料已放到：${result.workspacePath}。恢复前数据库：${result.previousDatabase}。请到模型设置检查密钥。`
   settings.value = await api.workspaceSettings()
+  backupRecord.value = await lastBackup()
 }, '正在恢复完整备份，请等待完成后离开…')
 const restore = () => run(async () => {
   const previous = await api.restoreBackup(restorePath.value)
   restorePath.value = ''
   message.value = `恢复完成。恢复前的数据已备份到：${previous}`
   settings.value = await api.workspaceSettings()
+  backupRecord.value = await lastBackup()
 }, '正在恢复数据库，请等待完成后离开…')
 onMounted(() => { if (desktop) void load() })
 </script>
@@ -132,6 +140,16 @@ onMounted(() => { if (desktop) void load() })
   </section>
   <section class="panel backup-primary">
     <h2>完整备份与恢复</h2>
+    <p v-if="backupRecord">
+      最近成功备份：{{ new Date(backupRecord.completedAt).toLocaleString() }} · {{ backupRecord.kind === 'full' ? '完整备份' : '仅数据库' }}
+    </p>
+    <p
+      v-if="backupDue(backupRecord)"
+      class="notice"
+      role="status"
+    >
+      {{ backupRecord ? '距离上次备份已超过7天，建议备份近期修改。' : '尚无成功备份记录，建议创建一次完整备份。' }}
+    </p>
     <p class="muted">
       备份数据库、自动草稿、个人样式、已关联图片和文档、已导出封面以及已登记任务包。备份是一个目录，请整体保管或搬移；不包含 API Key。文件缺失或校验失败时明确中止。
     </p>
@@ -193,6 +211,12 @@ onMounted(() => { if (desktop) void load() })
       </Button>
     </template>
   </ConfirmAction>
+  <StorageManager
+    v-if="desktop"
+    :disabled="operationBusy || loading.busy.value"
+    @working="storageWorking = $event"
+  />
+  <ModelDiagnostics v-if="desktop" />
   <Collapsible
     class="history-panel"
     :unmount-on-hide="false"

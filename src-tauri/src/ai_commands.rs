@@ -115,6 +115,7 @@ pub async fn test_model_connection(
         "Connection test".into(),
     )?;
     OpenAiCompatible::new(TIMEOUT, &req.base_url)?
+        .observed(database.inner(), None, "connection_test")
         .generate(req)
         .await?;
     Ok("连接成功，模型已返回完整文本。".into())
@@ -183,7 +184,7 @@ pub async fn execute_generation(
         let model=prepared.provider.input.model_name.clone();
         let system=if prepared.input.recommend_duration { audio::SYSTEM_PROMPT } else if prepared.input.revision.is_some() { revision::SYSTEM_PROMPT } else { SYSTEM_PROMPT };
         let req=request(prepared.provider,vault,system,prepared.user)?;
-        let provider=OpenAiCompatible::new(TIMEOUT, &req.base_url)?;
+        let provider=OpenAiCompatible::new(TIMEOUT, &req.base_url)?.observed(database,Some(id),if prepared.input.recommend_duration {"duration"} else if prepared.input.revision.is_some() {"writing_revision"}else{"writing"});
         let raw=tokio::select! {
             biased;
             _=receiver.changed()=>return Err(AiError::new("cancelled","生成已取消，原有内容保留。")),

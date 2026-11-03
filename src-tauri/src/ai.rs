@@ -3,6 +3,7 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Mutex, time::Dur
 use tokio::sync::watch;
 
 pub mod audio;
+pub mod diagnostics;
 pub mod images;
 pub mod publishing;
 pub mod revision;
@@ -158,10 +159,26 @@ pub trait TextProvider {
         request: TextRequest,
     ) -> Pin<Box<dyn Future<Output = Result<String, AiError>> + Send + '_>>;
 }
-pub struct OpenAiCompatible {
+pub struct OpenAiCompatible<'a> {
     client: reqwest::Client,
+    diagnostics: Option<diagnostics::Context<'a>>,
 }
-impl OpenAiCompatible {
+impl OpenAiCompatible<'_> {
+    pub fn observed<'db>(
+        self,
+        database: &'db crate::database::Database,
+        task: Option<&str>,
+        stage: &str,
+    ) -> OpenAiCompatible<'db> {
+        OpenAiCompatible {
+            client: self.client,
+            diagnostics: Some(diagnostics::Context {
+                database,
+                task: task.map(str::to_string),
+                stage: stage.into(),
+            }),
+        }
+    }
     pub fn new(timeout: Duration, base_url: &str) -> Result<Self, AiError> {
         let mut builder = reqwest::Client::builder()
             .timeout(timeout)
@@ -178,7 +195,10 @@ impl OpenAiCompatible {
         let client = builder
             .build()
             .map_err(|_| AiError::new("network", "无法初始化网络客户端。"))?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            diagnostics: None,
+        })
     }
 }
 fn network_error(error: reqwest::Error) -> AiError {
@@ -188,60 +208,74 @@ fn network_error(error: reqwest::Error) -> AiError {
         AiError::new("network", "无法连接模型服务，请检查网络、证书和服务地址。")
     }
 }
-impl TextProvider for OpenAiCompatible {
+impl TextProvider for OpenAiCompatible<'_> {
     fn generate(
         &self,
         request: TextRequest,
     ) -> Pin<Box<dyn Future<Output = Result<String, AiError>> + Send + '_>> {
         Box::pin(async move {
-            let mut body = serde_json::json!({"model":request.model,"messages":[
+            let mut log = diagnostics::Call::start(self.diagnostics.as_ref(), &request.model)?;
+            let result = async {
+                let mut body = serde_json::json!({"model":request.model,"messages":[
                 {"role":"system","content":request.system}, {"role":"user","content":request.user}
-            ],"stream":true});
-            if let Some(effort) = request.reasoning_effort {
-                body["reasoning_effort"] = effort.into();
+            ],"stream":true,"stream_options":{"include_usage":true}});
+                if let Some(effort) = request.reasoning_effort {
+                    body["reasoning_effort"] = effort.into();
+                }
+                let response = self
+                    .post_response(
+                        &request.base_url,
+                        "chat/completions",
+                        request.key,
+                        body,
+                        &mut log,
+                    )
+                    .await?;
+                if response
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|v| {
+                        v.split(';')
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .eq_ignore_ascii_case("text/event-stream")
+                    })
+                {
+                    return stream::read(response, &mut log).await;
+                }
+                // Some compatible services return a complete JSON response even with stream=true.
+                let data = Self::read_json(response, 2_000_000).await?;
+                log.usage(&data["usage"]);
+                let choice = &data["choices"][0];
+                if choice["finish_reason"].as_str() != Some("stop") {
+                    return Err(AiError::new(
+                        "incomplete",
+                        "模型输出未完整结束或被拒绝，未保存。请调整资料后重试。",
+                    ));
+                }
+                choice["message"]["content"]
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| AiError::new("invalid_response", "模型未返回可用文本。"))
             }
-            let response = self
-                .post_response(&request.base_url, "chat/completions", request.key, body)
-                .await?;
-            if response
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|v| {
-                    v.split(';')
-                        .next()
-                        .unwrap_or("")
-                        .trim()
-                        .eq_ignore_ascii_case("text/event-stream")
-                })
-            {
-                return stream::read(response).await;
-            }
-            // Some compatible services return a complete JSON response even with stream=true.
-            let data = Self::read_json(response, 2_000_000).await?;
-            let choice = &data["choices"][0];
-            if choice["finish_reason"].as_str() != Some("stop") {
-                return Err(AiError::new(
-                    "incomplete",
-                    "模型输出未完整结束或被拒绝，未保存。请调整资料后重试。",
-                ));
-            }
-            choice["message"]["content"]
-                .as_str()
-                .filter(|s| !s.trim().is_empty())
-                .map(str::to_string)
-                .ok_or_else(|| AiError::new("invalid_response", "模型未返回可用文本。"))
+            .await;
+            log.finish(&result)?;
+            result
         })
     }
 }
 
-impl OpenAiCompatible {
+impl OpenAiCompatible<'_> {
     async fn post_response(
         &self,
         base_url: &str,
         endpoint: &str,
         key: Option<String>,
         body: serde_json::Value,
+        log: &mut diagnostics::Call<'_>,
     ) -> Result<reqwest::Response, AiError> {
         let mut call = self
             .client
@@ -251,6 +285,7 @@ impl OpenAiCompatible {
             call = call.bearer_auth(key);
         }
         let response = call.send().await.map_err(network_error)?;
+        log.response();
         let status = response.status().as_u16();
         if !response.status().is_success() {
             // Never surface provider response bodies/headers: some gateways echo secrets.
@@ -284,9 +319,11 @@ impl OpenAiCompatible {
         key: Option<String>,
         body: serde_json::Value,
         limit: usize,
+        log: &mut diagnostics::Call<'_>,
     ) -> Result<serde_json::Value, AiError> {
         Self::read_json(
-            self.post_response(base_url, endpoint, key, body).await?,
+            self.post_response(base_url, endpoint, key, body, log)
+                .await?,
             limit,
         )
         .await

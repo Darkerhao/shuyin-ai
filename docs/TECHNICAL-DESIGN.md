@@ -1,5 +1,18 @@
 # 书引 AI 技术设计文档
 
+## 续作、缓存备份与请求诊断（2026-11-03）
+
+- `database/workflow.rs::workflow_snapshot`以一次SQL UNION读取video_jobs（含草稿更新时间）、audio_jobs、publish_tasks、活动ai_tasks、editor_drafts和文案/封面版本，排除归档书籍，按运行优先、时间倒序选每书续作目标并返回全部运行项。`useWorkflow`共享只读快照并合并并发刷新；`RunningTasks`每3秒刷新，失败保留上次快照并提示。`services/workflow.ts`统一状态文案及路由，视频用job、音频用audioJob、发布用task查询参数，不持久化第二份进度。
+- 音频快照增加可选任务ID，后端验证任务属于本书；WritingPage初次读取和轮询均使用明确的audioJob，避免被另一本书的活动任务替代。切换明确任务仍经过原暂存与离页检查。单镜/插画AI任务没有视频任务外键，进入对应书籍视频页，由原视频页选择最近编辑任务。
+- `database/storage.rs`扫描工作目录内普通文件，不跟随symlink或Windows reparse point。只有已知video_jobs对应`video/{job}/cache/`及`preview-{数字}/`内的未登记文件可清理；全库assets、导出封面及发布任务包路径受保护，全部`run-*`保留。目录链接及空目录不删除，保留渲染器既有引擎junction，清理后可继续生成。
+- 预览返回相对路径、大小及排序文件清单（路径/大小/mtime）的SHA256令牌；确认时重新扫描并比对令牌，在同一数据库连接锁内检查运行状态与引用，逐文件复核解析后的绝对路径和父目录链接后unlink。路径或清单变化停止并要求重预览；文件删除失败返回已释放字节数。扫描/清理由spawn_blocking执行，仍持有数据库连接锁，大目录扫描期间其他数据库操作可能等待。设置页维护操作期间禁止离页和关闭。
+- 成功备份复用`app_settings.last_successful_backup`，记录kind/path/completedAt；只有SQLite快照或完整目录写完才更新。恢复前自动安全快照不刷新用户备份时间。备份中的数据库快照早于成功记录更新，恢复后可能显示更早的成功时间。设置页只提醒，不增加自动备份调度。
+- `OpenAiCompatible.observed(database, task, stage)`挂载请求级诊断，保持TextProvider/String、ImageProvider/bytes接口不变。`ai/diagnostics.rs::Call`进入请求时计时，`send().await`返回响应头时记录首响应，Provider完成时记录总耗时；总耗时含响应接收、解析，图片请求还包括base64解码和图片校验，不含后续业务存储/用户采用。Future被丢弃时Drop记录cancelled；启动及备份恢复将遗留running记录置interrupted，不编造中断时长。
+- 文本请求发送`stream_options.include_usage=true`，SSE每个完整事件与普通JSON响应读取usage；图片JSON也读取实际usage。兼容prompt_tokens/input_tokens、completion_tokens/output_tokens，只保存有效非负整数；缺项保持NULL，不通过输入+输出补总数，不累加服务已返回的整次请求累计值。OpenAI官方[流式响应定义](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)已读取核对：最后一块可为空choices并带全请求usage，中断/取消可能收不到此块。兼容服务是否提供用量仍以其实际返回为准，不增加重试或协议回退。
+- 连接测试、文案生成/调整/时长建议、封面/视频插画、字幕校对、分镜批次和单镜调整均挂载诊断。设置页读取最近200条，运行记录存在时轮询，支持手动刷新。新表和恢复规则见[数据库](DATABASE.md)，受限主窗口命令在原projects权限登记，不新增依赖、网络权限或供应商。
+
+验收及真实Windows边界见[剩余三项验收](CREATOR-COMPLETION-VERIFICATION.md)。
+
 ## 单镜候选生成（2026-11-03）
 
 - `VideoSceneEditor`只发出revise事件，`VideoPage`排空现有草稿队列后冻结jobId/runId/字幕/完整分镜编辑快照。页面只挂载一个`VideoSceneRevision`弹窗，生成及对照期间阻止背后的编辑、任务切换和离页；弹窗复用原AlertDialog、Select、Textarea，正文滚动，操作区保留可见。

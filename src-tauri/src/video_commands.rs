@@ -156,7 +156,7 @@ pub async fn execute_video_scene_revision(
     ai_commands::run_task(database, active.inner(), id, |mut receiver| async move {
         let prepared = database.prepare_video_scene_revision(id).map_err(AiError::database)?;
         let request = ai_commands::request(prepared.provider, vault, &video::revision::prompt(), prepared.user)?;
-        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?;
+        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?.observed(database,Some(id),"video_scene_revision");
         let raw = tokio::select! {
             biased;
             _ = receiver.changed() => return Err(AiError::new("cancelled", "单镜生成已停止，原字幕和分镜保留。")),
@@ -755,7 +755,9 @@ async fn execute(
             String::new(),
         )
         .map_err(|e| e.message)?;
-        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url).map_err(|e| e.message)?;
+        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)
+            .map_err(|e| e.message)?
+            .observed(&db, Some(&job.id), "proofreading");
         proofread_subtitles(&db, &mut job, &provider, &request, flag.clone()).await?;
         if digest(audio.clone()).await? != job.plan.audio_sha256 {
             return Err("校对期间原音频发生变化，请新建视频任务。".into());
@@ -777,7 +779,9 @@ async fn execute(
             user,
         )
         .map_err(|e| e.message)?;
-        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url).map_err(|e| e.message)?;
+        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)
+            .map_err(|e| e.message)?
+            .observed(&db, Some(&job.id), "storyboard");
         let raw = tokio::select! { biased; _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()), response = provider.generate(request) => response.map_err(|e| e.message)? };
         let scenes = video::parse_storyboard(&raw, first, end)?;
         job.plan.scenes.extend(scenes);

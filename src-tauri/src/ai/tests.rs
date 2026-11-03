@@ -14,6 +14,84 @@ fn image_request(base_url: String) -> ImageRequest {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn call_diagnostics_record_returned_usage_timing_errors_and_cancellation_without_secrets() {
+    let (dir, db, input) = crate::database::video::tests::fixture();
+    let job = db.create_video_job(input).unwrap();
+    let body=serde_json::json!({"choices":[{"finish_reason":"stop","message":{"content":"PRIVATE_ANSWER"}}],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}).to_string();
+    let (url, thread) = server(200, &body, Duration::from_millis(25));
+    let request = TextRequest {
+        base_url: url.clone(),
+        model: "diagnostic-model".into(),
+        key: Some("PRIVATE_KEY".into()),
+        reasoning_effort: None,
+        system: "PRIVATE_PROMPT".into(),
+        user: "PRIVATE_USER".into(),
+    };
+    let result = OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .observed(&db, Some(&job.id), "storyboard")
+        .generate(request.clone())
+        .await
+        .unwrap();
+    assert_eq!(result, "PRIVATE_ANSWER");
+    thread.join().unwrap();
+    let calls = serde_json::to_value(db.list_model_calls().unwrap()).unwrap();
+    assert_eq!(calls[0]["inputTokens"], 12);
+    assert_eq!(calls[0]["outputTokens"], 7);
+    assert_eq!(calls[0]["totalTokens"], 19);
+    assert_eq!(calls[0]["status"], "succeeded");
+    assert!(
+        calls[0]["firstResponseMs"].as_i64().unwrap() <= calls[0]["elapsedMs"].as_i64().unwrap()
+    );
+    for value in [
+        "PRIVATE_KEY",
+        "PRIVATE_PROMPT",
+        "PRIVATE_USER",
+        "PRIVATE_ANSWER",
+    ] {
+        assert!(!calls.to_string().contains(value));
+    }
+    let (url, thread) = server(524, "PRIVATE_ERROR", Duration::ZERO);
+    let mut failed = request.clone();
+    failed.base_url = url.clone();
+    OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .observed(&db, Some(&job.id), "proofreading")
+        .generate(failed)
+        .await
+        .unwrap_err();
+    thread.join().unwrap();
+    let (url, thread) = server(200, &body, Duration::from_millis(200));
+    let mut cancelled = request;
+    cancelled.base_url = url.clone();
+    let provider =
+        OpenAiCompatible::new(TIMEOUT, &url)
+            .unwrap()
+            .observed(&db, Some(&job.id), "writing");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), provider.generate(cancelled))
+            .await
+            .is_err()
+    );
+    thread.join().unwrap();
+    let calls = serde_json::to_value(db.list_model_calls().unwrap()).unwrap();
+    assert!(calls
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["status"] == "cancelled"));
+    assert!(calls
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["errorCode"] == "timeout"));
+    drop(provider);
+    drop(db);
+    let db = crate::database::Database::open(dir.path().join("data.sqlite3"));
+    assert_eq!(db.list_model_calls().unwrap().len(), 3);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn image_contract_decodes_image_and_uses_the_configured_model() {
     let jpeg = test_jpeg();
     let body = serde_json::json!({"data":[{"b64_json":STANDARD.encode(&jpeg)}]}).to_string();
@@ -406,6 +484,7 @@ async fn streaming_avoids_a_gateway_that_times_out_buffered_completions() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn streaming_collects_only_content_and_preserves_reasoning_setting() {
+    let (_dir, db, _) = crate::database::video::tests::fixture();
     let (url, handle) = sse_server(concat!(
         ": heartbeat\r\n\r\n",
         "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"private reasoning\"}}]}\r\n\r\n",
@@ -418,6 +497,7 @@ async fn streaming_collects_only_content_and_preserves_reasoning_setting() {
     req.reasoning_effort = Some("high".into());
     let result = OpenAiCompatible::new(TIMEOUT, &url)
         .unwrap()
+        .observed(&db, None, "connection_test")
         .generate(req)
         .await;
     let received = handle.join().unwrap();
@@ -426,6 +506,11 @@ async fn streaming_collects_only_content_and_preserves_reasoning_setting() {
         serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(body["stream"], true);
     assert_eq!(body["reasoning_effort"], "high");
+    assert_eq!(body["stream_options"]["include_usage"], true);
+    let calls = serde_json::to_value(db.list_model_calls().unwrap()).unwrap();
+    assert_eq!(calls[0]["totalTokens"], 10);
+    assert!(calls[0]["inputTokens"].is_null());
+    assert!(calls[0]["outputTokens"].is_null());
 }
 
 #[tokio::test(flavor = "current_thread")]

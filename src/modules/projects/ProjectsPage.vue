@@ -7,6 +7,8 @@ import { isDesktop, listProjects } from '../../services/projects'
 import { projectStatuses, type Project } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
+import { useWorkflow } from '../../composables/useWorkflow'
+import { resumeLabel, resumeRoute } from '../../services/workflow'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,8 +22,11 @@ const filter = useQueryState('status', 'all', ['all', 'active', 'published'])
 const sort = useQueryState('sort', 'updated', ['updated', 'title'])
 const view = useQueryState('view', 'grid', ['grid', 'list'])
 const loaded = ref(false)
+const { snapshot: workflow, refresh: refreshWorkflow } = useWorkflow()
+const continuation = (id: string) => workflow.value.resume.find(task => task.projectId === id)
+const continueTo = (id: string) => { const task = continuation(id); return task ? resumeRoute(task) : `/projects/${id}/writing` }
 const { busy, error, run } = useOperation()
-const load = () => run(async () => { projects.value = await listProjects(); loaded.value = true })
+const load = () => run(async () => { projects.value = await listProjects(); loaded.value = true; await refreshWorkflow() })
 const filtered = computed(() => {
   const query = search.value.trim().toLocaleLowerCase()
   return projects.value.filter(project => {
@@ -34,7 +39,10 @@ const filters = computed(() => [
   { value: 'active', label: '创作中', count: projects.value.filter(p => p.status !== 'published' && p.status !== 'archived').length },
   { value: 'published', label: '已发布', count: projects.value.filter(p => p.status === 'published').length },
 ] as const)
-const recent = computed(() => projects.value.filter(p => p.status !== 'published' && p.status !== 'archived').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0])
+const recent = computed(() => projects.value.filter(p => p.status !== 'archived' && (p.status !== 'published' || continuation(p.id)?.running)).sort((a, b) => {
+  const left = continuation(a.id), right = continuation(b.id)
+  return Number(right?.running ?? false) - Number(left?.running ?? false) || (right?.updatedAt ?? b.updatedAt).localeCompare(left?.updatedAt ?? a.updatedAt)
+})[0])
 function clearFilters() { void router.replace({ query: { ...route.query, q: undefined, status: undefined } }) }
 function coverTone(id: string) { return [...id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4 }
 const date = (value: string) => new Date(value).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })
@@ -102,10 +110,10 @@ onMounted(() => { if (desktop) void load() })
       </p>
     </div>
     <RouterLink
-      :to="`/projects/${recent.id}/writing`"
+      :to="continueTo(recent.id)"
       :class="buttonVariants({ variant: 'outline' })"
     >
-      继续创作<AppIcon name="arrow" />
+      {{ continuation(recent.id) ? resumeLabel(continuation(recent.id)!) : '继续创作' }}<AppIcon name="arrow" />
     </RouterLink>
   </section>
   <div class="library-toolbar mb-6 flex flex-wrap items-center justify-between gap-4 border-b pb-5">
@@ -252,7 +260,7 @@ onMounted(() => { if (desktop) void load() })
         v-for="project in filtered"
         :key="project.id"
         class="project-card group block min-w-0 overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs transition-shadow hover:border-primary/30 hover:shadow-md"
-        :to="'/projects/' + project.id + '/writing'"
+        :to="continueTo(project.id)"
       >
         <div
           class="book-art relative flex h-48 items-center justify-center border-b"
@@ -286,7 +294,7 @@ onMounted(() => { if (desktop) void load() })
           </p>
           <div class="project-card-footer mt-5 flex items-center justify-between gap-2 border-t pt-4 text-xs">
             <span class="text-muted-foreground">{{ date(project.updatedAt) }} 更新</span>
-            <span class="flex items-center gap-1 font-medium text-primary">继续创作<AppIcon
+            <span class="flex items-center gap-1 font-medium text-primary">{{ continuation(project.id) ? resumeLabel(continuation(project.id)!) : '继续创作' }}<AppIcon
               name="arrow"
               class="size-3.5"
             /></span>

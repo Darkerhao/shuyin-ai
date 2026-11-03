@@ -55,7 +55,7 @@ pub(crate) async fn execute_image_task(
             width: prepared.width,
             height: prepared.height,
         };
-        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?;
+        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?.observed(database,Some(id),kind);
         let bytes = tokio::select! {
             biased;
             _ = receiver.changed() => return Err(AiError::new("cancelled", "生成已取消，已保存内容保留。")),
