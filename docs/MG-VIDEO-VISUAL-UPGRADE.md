@@ -40,7 +40,7 @@
 
 主要依据：
 
-- [统一目录](../src-tauri/video/visual-catalog.json)、[当前分镜Prompt](../prompts/video-storyboard-v4.md)（P1唯一v4入口，P0曾为v3）。
+- [统一目录](../src-tauri/video/visual-catalog.json)、[当前分镜Prompt](../prompts/video-storyboard-v5.md)（P1曾为v4，后续开镜时机修复升级为v5）。
 - [契约、上下文与校验](../src-tauri/src/video.rs#L39)、[具体构图和动作时刻](../src-tauri/video/illustrations.js#L337)。
 - [绝对时间轴、缓存与编码](../src-tauri/video/render.mjs#L12)、[转写输出](../src-tauri/video/transcribe.py)。
 - [图片Provider](../src-tauri/src/ai/images.rs)、[封面专用图片任务](../src-tauri/src/database/image_generation.rs)。
@@ -307,7 +307,7 @@ P0已经显式实现片段模式：保留原plan及全局cue索引，只在派�
 | 位置 | 后续需要做什么 |
 | --- | --- |
 | [visual-catalog.json](../src-tauri/video/visual-catalog.json) / [illustrations.js](../src-tauri/video/illustrations.js) | 单一目录、场景层、物体与景别；保留旧85物体几何和完整动作回归 |
-| [video.rs](../src-tauri/src/video.rs) / [Prompt](../prompts/video-storyboard-v4.md) | P0完成语义时机/批次优化；P1同步新增字段与校验，仅保留v4生成入口 |
+| [video.rs](../src-tauri/src/video.rs) / [Prompt](../prompts/video-storyboard-v5.md) | P0完成语义时机/批次优化；P1同步新增字段与校验，后续开镜时机修复统一升级为v5 |
 | [render.mjs](../src-tauri/video/render.mjs) / [video_commands.rs](../src-tauri/src/video_commands.rs) | 受控镜头、同源预览、图片就绪与缓存依赖；继续使用原任务调度 |
 | [VideoPage.vue](../src/modules/video/VideoPage.vue) / [video.ts](../src/types/video.ts) / [服务](../src/services/video.ts) | 展示与编辑同一份计划，明确预览/正式成片及人工确认 |
 | [任务数据](../src-tauri/src/database/video.rs) / [素材](../src-tauri/src/database/assets.rs) / [备份](../src-tauri/src/database/full_backup.rs) | 验证新计划读写、图片引用、恢复与旧成果保留；不重复维护业务状态 |

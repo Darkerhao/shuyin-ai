@@ -18,7 +18,7 @@
 | 范围 | 修改文件 |
 | --- | --- |
 | 唯一目录与绘图 | [visual-catalog.json](../src-tauri/video/visual-catalog.json)、[illustrations.js](../src-tauri/video/illustrations.js)、[render.mjs](../src-tauri/video/render.mjs)、[绘图说明](../src-tauri/video/README.md) |
-| 契约与生成 | [video.rs](../src-tauri/src/video.rs)、[video-storyboard-v4.md](../prompts/video-storyboard-v4.md)；v3文件移除 |
+| 契约与生成 | [video.rs](../src-tauri/src/video.rs)、[当前video-storyboard-v5.md](../prompts/video-storyboard-v5.md)；P1当时使用v4，后续开镜时机修复升级为v5 |
 | 确认页与提醒 | [VideoPage.vue](../src/modules/video/VideoPage.vue)、[storyboard.ts](../src/modules/video/storyboard.ts)、[video.ts](../src/types/video.ts) |
 | 回归 | [Node](../tests/video-render.test.mjs)、[页面](../tests/video.test.ts)、[提醒](../tests/video-storyboard.test.ts)、[数据库回归](../src-tauri/src/database/video.rs)，以及video.rs内的契约测试 |
 | 当前文档 | [PRD](PRD.md)、[技术设计](TECHNICAL-DESIGN.md)、[数据库](DATABASE.md)、[AI规则](AI-RULES.md)、[开发计划](DEVELOPMENT-PLAN.md)、[使用手册](USER-GUIDE.md)、[画面方案](MG-VIDEO-VISUAL-UPGRADE.md)、[接入说明](MG-VIDEO-INTEGRATION.md)、[P0历史验收](VIDEO-DIRECTOR-VERIFICATION.md)、本文 |

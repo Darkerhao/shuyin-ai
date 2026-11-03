@@ -19,7 +19,7 @@ P0当时没有实施场景/扩库/景别或图片，本文数据保留为历史�
 | --- | --- | --- |
 | 契约/调度 | [video.rs](../src-tauri/src/video.rs)、[video_commands.rs](../src-tauri/src/video_commands.rs)、[任务数据](../src-tauri/src/database/video.rs) | 单一VideoWork，预览阶段不能进入正式finish事务 |
 | 绘图/编译 | [illustrations.js](../src-tauri/video/illustrations.js)、[render.mjs](../src-tauri/video/render.mjs) | 同一可信draw；时窗不改源计划；真实第0帧避免引擎默认“未来封面” |
-| Prompt | [当前video-storyboard-v4.md](../prompts/video-storyboard-v4.md) | 本轮P0曾使用v3替换v2；后续P1替换为v4，历史版本可经Git查看，不并留生成入口 |
+| Prompt | [当前video-storyboard-v5.md](../prompts/video-storyboard-v5.md) | 本轮P0曾使用v3替换v2；后续P1为v4，开镜时机修复为v5，历史版本可经Git查看，不并留生成入口 |
 | 页面 | [VideoPage.vue](../src/modules/video/VideoPage.vue)、[进度](../src/modules/video/VideoJobProgress.vue)、[提醒](../src/modules/video/storyboard.ts) | 复用同一编辑状态/现有墨绿浅色控件，无新增字体或UI依赖 |
 | IPC/媒体 | [服务](../src/services/video.ts)、[类型](../src/types/video.ts)、[权限](../src-tauri/permissions/video.toml)、[配置](../src-tauri/tauri.conf.json) | 本书/当前代次/固定文件与有限镜号授权，img-src支持受限asset缩略图 |
 | 回归 | [Node](../tests/video-render.test.mjs)、[页面](../tests/video.test.ts)、[进度](../tests/video-progress.test.ts)、[提醒](../tests/video-storyboard.test.ts) | 时窗、动作、主次、失效、确认与错误保留 |

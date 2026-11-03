@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::OnceLock};
 
 pub mod subtitles;
 
-pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v4.md");
+pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v5.md");
 pub const BATCH_SIZE: usize = 24;
 
 #[derive(Deserialize)]
@@ -38,6 +38,22 @@ pub fn storyboard_prompt() -> String {
         "{PROMPT}\n可用绘图目录（仅可选用这些键）：\n{}",
         include_str!("../video/visual-catalog.json")
     )
+}
+
+pub fn parse_storyboard(raw: &str, first: usize, end: usize) -> Result<Vec<Scene>, String> {
+    let scenes: Vec<Scene> =
+        serde_json::from_str(raw).map_err(|_| "模型分镜不是合法 JSON，已保留字幕和此前分镜。")?;
+    validate_scenes(&scenes, first, end)?;
+    if scenes.iter().any(|scene| scene.image.is_some()) {
+        return Err("分镜模型只能选择手绘目录；关键图片须由用户选用并确认来源。".into());
+    }
+    if scenes.iter().any(|scene| scene.beats[0].cue != scene.first) {
+        return Err(
+            "模型分镜的首个物体须从本镜第一条字幕开始。请点击“继续准备字幕与分镜”重试本批，字幕和此前分镜已保留。"
+                .into(),
+        );
+    }
+    Ok(scenes)
 }
 
 pub fn storyboard_input(plan: &VideoPlan, first: usize, end: usize) -> String {
@@ -509,6 +525,34 @@ mod tests {
         )
         .is_err());
     }
+    #[test]
+    fn generated_storyboards_start_each_subject_at_the_first_cue_but_keep_later_conclusions() {
+        for first in [0, 24] {
+            let raw = serde_json::json!([
+                {"first":first,"last":first+2,"kind":"focus","title":"原书","beats":[
+                    {"cue":first,"object":"book","action":"draw","label":"原书"},
+                    {"cue":first+2,"object":"certificate","action":"check","label":"结论"}]},
+                {"first":first+3,"last":first+5,"kind":"route","title":"写作","beats":[
+                    {"cue":first+3,"object":"pen","action":"draw","label":"写作"}]}
+            ]);
+            let scenes = parse_storyboard(&raw.to_string(), first, first + 6).unwrap();
+            assert_eq!(scenes[0].beats[0].cue, first);
+            assert_eq!(scenes[0].beats[1].cue, first + 2);
+            assert_eq!(scenes[0].beats[1].action, "check");
+            assert_eq!(scenes[1].beats[0].cue, first + 3);
+            for scene_index in [0, 1] {
+                let mut delayed = raw.clone();
+                delayed[scene_index]["beats"][0]["cue"] = (scenes[scene_index].first + 1).into();
+                let delayed = delayed.to_string();
+                let manual: Vec<Scene> = serde_json::from_str(&delayed).unwrap();
+                assert!(validate_scenes(&manual, first, first + 6).is_ok());
+                assert!(parse_storyboard(&delayed, first, first + 6)
+                    .unwrap_err()
+                    .contains("第一条字幕"));
+            }
+        }
+    }
+
     #[test]
     fn storyboard_must_cover_exact_batch_and_use_allowed_components() {
         let mut scenes = vec![Scene {
