@@ -456,6 +456,9 @@ impl Database {
             })
         })
     }
+    pub fn audio_job(&self, id: &str) -> Result<AudioJob, String> {
+        self.with_connection(|c| job(c, id))
+    }
 
     pub fn start_audio_job(&self, input: StartAudioJobInput) -> Result<AudioJob, String> {
         if !valid_format(&input.format) {

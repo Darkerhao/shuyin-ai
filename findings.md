@@ -1,3 +1,13 @@
+# 新增实现要点
+
+续作由任务union派生，不持久化第二状态；缓存只逐个删除cache/preview普通文件，保留junction/空目录和所有run目录，使原引擎链接保持可用。诊断在统一Provider层通过请求作用域记录，Drop记取消，真实headers计首响应，服务usage字段记用量。新增schema17模型调用表。首次编译修正了SQLite i64映射、查询迭代器生命周期；无运行数据影响。
+
+实际清理后同计划20秒1080p试片可重新生成并播放，证明保留引擎junction的必要边界已闭环。备份快照早于成功时间写入，恢复后出现更早记录属于快照语义。OpenAI官方streaming-events页面实际读取确认include_usage末块/空choices、中断可能无usage；兼容服务未返回字段仍为空。首响应为HTTP headers而非TTFT，UI及文档已明确。
+
+# 剩余三项分析（2026-11-03）
+
+书架继续入口固定writing；任务状态已在audio_jobs/video_jobs/publish_tasks。备份复用SQLite快照，成功时间可存app_settings。render缓存与preview可再生，run目录可能包含已登记字幕/成片，不能整目录盲删。TextProvider返回String，优先保持现有业务协议，通过统一调用跟踪记录元数据。
+
 # 视频 P2 实施发现（2026-11-02）
 
 - 图片恢复只需稳定assetId：现有完整备份已包含全部图片并重映射assets路径；真实文件缺失后的恢复副本读回与计划摘要均通过，无需新表或第二套备份实现。

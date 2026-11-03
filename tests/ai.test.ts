@@ -70,6 +70,10 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
+  it('loads the exact audio task from a continuation link', async () => {
+    await render('/projects/p1/writing?tab=audio&audioJob=audio-exact')
+    expect(audio.getAudioJobView).toHaveBeenCalledWith('p1', 'audio-exact')
+  })
   it('opens audio directly, keeps its tab on return and validates unsupported tab values', async () => {
     const { wrapper, router } = await render('/projects/p1/writing?tab=audio')
     expect(wrapper.get('[role="tab"][data-state="active"]').text()).toBe('音频制作')

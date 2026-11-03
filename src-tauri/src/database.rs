@@ -3,12 +3,15 @@ mod assets;
 pub mod audio;
 mod backup;
 pub mod covers;
+pub mod diagnostics;
 pub mod drafts;
 pub mod full_backup;
 pub mod image_generation;
 mod projects;
 pub mod publishing;
+pub mod storage;
 pub mod video;
+pub mod workflow;
 pub use assets::Asset;
 pub use projects::{Project, ProjectInput, WorkspaceSettings};
 
@@ -84,6 +87,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0014_video_jobs.sql"),
     include_str!("../migrations/0015_reasoning_effort.sql"),
     include_str!("../migrations/0016_video_editor.sql"),
+    include_str!("../migrations/0017_model_calls.sql"),
 ];
 
 impl Database {

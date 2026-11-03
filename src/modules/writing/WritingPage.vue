@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { displayPath } from '@/lib/displayPath'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
+import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter, useRoute } from 'vue-router'
 import * as api from '../../services/ai'
 import * as audioApi from '../../services/audio'
 import { chooseAudio, chooseSourceDocument, getProject, isDesktop, linkAsset, listAssets, openAsset } from '../../services/projects'
@@ -28,6 +28,8 @@ import OperationFeedback from '../../components/OperationFeedback.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import { requestConfirmation } from '../../composables/useConfirmation'
 const props = defineProps<{ id: string }>()
+const route = useRoute()
+const readAudioView = () => audioApi.getAudioJobView(props.id, typeof route.query.audioJob === 'string' ? route.query.audioJob : undefined)
 const router = useRouter()
 const desktop = isDesktop()
 const title = ref('')
@@ -83,7 +85,7 @@ const activeAudioJob = computed(() => {
   return job && !['succeeded', 'cancelled'].includes(job.status) ? job : null
 })
 const otherActiveAudioJob = computed(() => activeAudioJob.value && activeAudioJob.value.projectId !== props.id ? activeAudioJob.value : null)
-const shownAudioJob = computed(() => otherActiveAudioJob.value ?? audioJob.value)
+const shownAudioJob = computed(() => route.query.audioJob && audioJob.value ? audioJob.value : otherActiveAudioJob.value ?? audioJob.value)
 const selectedDocument = computed(() => documents.value.find(item => `asset:${item.id}` === audioSourceKey.value) ?? null)
 const audioSourceReady = computed(() => audioSourceKey.value === 'text'
   ? !!sourceNotes.value.trim()
@@ -120,7 +122,7 @@ const canLeave = async () => {
   try { if (ready.value) await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
-onBeforeRouteUpdate((to, from) => to.params.id === from.params.id || canLeave())
+onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.audioJob === from.query.audioJob) || canLeave())
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || durationDirty.value || busy.value || preview.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(copyTimer) })
@@ -153,7 +155,7 @@ function applyAudioView(next: AudioJobView, refreshOnSuccess = true) {
   }
 }
 async function refreshAudio(showFailure = false) {
-  try { applyAudioView(await audioApi.getAudioJobView(props.id)) }
+  try { applyAudioView(await readAudioView()) }
   catch (cause) { if (showFailure) error.value = errorMessage(cause) }
 }
 function startAudioTimers() {
@@ -172,7 +174,7 @@ function stopAudioTimers() {
 function refreshAudioOnFocus() { if (desktop) void refreshAudio() }
 function refreshAudioOnVisibility() { if (desktop && !globalThis.document.hidden) void refreshAudio() }
 const load = () => run(async () => {
-  const [project, models, saved, recovery, files, savedAudio] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing'), readDraft<PublishingContent>(props.id, 'writing'), listAssets(props.id), audioApi.getAudioJobView(props.id)])
+  const [project, models, saved, recovery, files, savedAudio] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing'), readDraft<PublishingContent>(props.id, 'writing'), listAssets(props.id), readAudioView()])
   title.value = project.title
   sourceNotes.value = project.sourceNotes
   durationMinutes.value = project.targetDurationSeconds / 60
@@ -243,7 +245,7 @@ const controlAudio = (job: AudioJob, action: AudioJobAction) => {
   if (action === 'cancel') { audioConfirmation.value = { job, action }; return }
   return run(async () => {
     if (action === 'resume' && !job.notebookUrl && ['creating_notebook', 'verify_remote'].includes(job.stage)) {
-      const view = await audioApi.getAudioJobView(props.id)
+      const view = await readAudioView()
       applyAudioView(view)
       const url = view.browser.url
       if (!view.browser.open || !url) throw new Error('请先点击“查看网站”，打开原任务的空白笔记本，再继续跟进。')
@@ -374,6 +376,7 @@ function saveShortcut(event: globalThis.KeyboardEvent) {
     if (ready.value && !busy.value && !revisionLocked.value && dirty.value && canSave.value) void save()
   }
 }
+watch(() => route.query.audioJob, () => { if (desktop) void load() })
 onMounted(() => globalThis.addEventListener('keydown', saveShortcut))
 onMounted(() => {
   if (!desktop) return

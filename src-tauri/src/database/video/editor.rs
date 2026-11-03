@@ -316,7 +316,7 @@ mod tests {
             db.with_connection(|c| {
                 let row: (String, Option<String>, Option<String>) = c.query_row("SELECT updated_at,editor_draft_json,original_cues_json FROM video_jobs WHERE id='job'", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
                 assert_eq!(row, ("original".into(), None, None));
-                assert_eq!(c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0)).unwrap(), 16);
+                assert_eq!(c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0)).unwrap(), crate::database::MIGRATIONS.len() as u32);
                 Ok(())
             }).unwrap();
         }

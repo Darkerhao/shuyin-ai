@@ -286,6 +286,9 @@ impl Database {
             if result.is_err() {
                 cleanup_created(&root, &parent);
             }
+            if let Ok(summary) = &result {
+                super::storage::record_backup(c, "full", Path::new(&summary.manifest_path))?;
+            }
             result
         })
     }

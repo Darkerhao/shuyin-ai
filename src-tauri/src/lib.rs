@@ -44,6 +44,7 @@ pub fn run() {
             // Surface initialization errors through commands as before.
             if database.read().is_ok() {
                 database.recover_ai_tasks()?;
+                database.recover_model_calls()?;
                 database.recover_audio_jobs()?;
                 database.recover_video_jobs()?;
             }
@@ -93,6 +94,12 @@ pub fn run() {
             commands::create_backup,
             commands::restore_backup,
             commands::read_editor_draft,
+            commands::workflow_snapshot,
+            commands::last_backup,
+            commands::storage_usage,
+            commands::preview_cache_cleanup,
+            commands::clean_video_cache,
+            commands::list_model_calls,
             video_commands::read_video_draft,
             video_commands::save_video_draft,
             video_commands::original_video_cues,

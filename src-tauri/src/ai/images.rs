@@ -85,12 +85,15 @@ pub fn validate_image(bytes: &[u8]) -> Result<(&'static str, u32, u32), AiError>
     Ok((extension, decoded.width(), decoded.height()))
 }
 
-impl ImageProvider for OpenAiCompatible {
+impl ImageProvider for OpenAiCompatible<'_> {
     fn generate_image(
         &self,
         request: ImageRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AiError>> + Send + '_>> {
         Box::pin(async move {
+            let mut log =
+                super::diagnostics::Call::start(self.diagnostics.as_ref(), &request.model)?;
+            let result=async {
             // GPT Image exposes orientation sizes; the local renderer crops to the exact target ratio.
             let size = if request.width > request.height {
                 "1536x1024"
@@ -99,7 +102,8 @@ impl ImageProvider for OpenAiCompatible {
             };
             let data = self.post_json(&request.base_url, "images/generations", request.key,
                 serde_json::json!({"model":request.model,"prompt":request.prompt,"n":1,"size":size,"response_format":"b64_json"}),
-                MAX_IMAGE_BYTES * 4 / 3 + 1024 * 1024).await?;
+                MAX_IMAGE_BYTES * 4 / 3 + 1024 * 1024, &mut log).await?;
+            log.usage(&data["usage"]);
             let encoded = data["data"]
                 .as_array()
                 .filter(|a| a.len() == 1)
@@ -115,6 +119,9 @@ impl ImageProvider for OpenAiCompatible {
             })?;
             validate_image(&bytes)?;
             Ok(bytes)
+            }.await;
+            log.finish(&result)?;
+            result
         })
     }
 }

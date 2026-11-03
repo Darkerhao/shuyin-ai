@@ -1,5 +1,15 @@
 # 书引 AI 数据库设计文档
 
+## 模型调用诊断与备份时间（2026-11-03，v17）
+
+`0017_model_calls.sql`新增请求记录表model_calls：id主键；project_id可空外键，删除书籍时SET NULL；task_id为可空任务标识；model、stage、status、started_at必填；elapsed_ms、first_response_ms、input_tokens、output_tokens、total_tokens、error_code可空。status限定running/succeeded/failed/cancelled/interrupted；按started_at倒序建立索引，设置页读取最近200条。表不保存提示词、响应正文、密钥或原始供应商错误。书籍删除后保留请求元数据，未增加自动清理历史的规则。
+
+每次真实Provider请求各写一条记录，长字幕/分镜的不同批次分别记录。首响应为HTTP响应头到达耗时，总耗时为Provider请求处理完成耗时；字段未知即NULL。响应完成状态只说明Provider返回有效文本/图片，不表示业务输出校验、正式保存或人工采用成功。启动和备份恢复把未完成running置interrupted，取消沿用请求Future生命周期，不把未知用量补成零。
+
+最近一次用户备份成功后向既有app_settings写`last_successful_backup`，JSON为`{kind: "database" | "full", path, completedAt}`。只有备份完成才更新，失败保留旧值；完整备份path为manifest路径。记录随现有SQLite备份/恢复保存，但本次备份快照生成在本次成功时间写入之前，恢复它将回到快照中更早的备份记录。恢复前安全快照不计作新的用户备份。
+
+续作目标只查询已有任务、草稿和版本，不新增表；缓存预览令牌和占用不入库。v16→v17新增表，不重写原任务、版本、素材或草稿。旧备份在隔离快照中按现有迁移列表升级，原备份不改写；低于v17的程序不能打开已升级数据库，回退需使用升级前备份。迁移、恢复、中断及实际重启证据见[剩余三项验收](CREATOR-COMPLETION-VERIFICATION.md)。
+
 ## 单镜重新生成（2026-11-03，仍为v16）
 
 无表、列或SQL迁移。复用ai_tasks自由TEXT用途`video_scene_revision`，prompt_version为video-scene-revision-v1，input_json记录`{input:{jobId,runId,providerId,sceneIndex,subtitles,scenes,instruction},source}`；source是正式plan序列化后的SHA256字节数组。状态沿用pending/running/succeeded/failed/cancelled，模型选择与错误记录沿用现有字段。

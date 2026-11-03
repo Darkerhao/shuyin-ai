@@ -9,6 +9,7 @@ import appLogo from '../assets/app-icon.svg'
 import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useAppUpdates } from './composables/useAppUpdates'
+import RunningTasks from './components/RunningTasks.vue'
 
 const { initialize, status: updateStatus, update, error: updateError, settingsError } = useAppUpdates()
 const updateMessage = computed(() => updateStatus.value === 'current' ? '当前已是最新版本。' : update.value
@@ -169,6 +170,7 @@ watch(router.currentRoute, async (to, from) => {
           <span>书引 AI v{{ update.version }} {{ updateStatus === 'ready' ? '已下载，可以安装' : updateStatus === 'downloading' ? '正在后台下载' : updateStatus === 'restart' ? '已安装，请重启' : '可用' }}</span>
           <span>查看更新内容 →</span>
         </RouterLink>
+        <RunningTasks />
         <RouterView v-slot="{ Component, route: currentRoute }">
           <div
             :key="currentRoute.path"

@@ -12,7 +12,10 @@ fn invalid() -> AiError {
 
 // HTTP chunks can split UTF-8 and SSE lines anywhere. Decode only complete lines,
 // dispatch only complete events, and never treat reasoning deltas as answer text.
-pub(super) async fn read(mut response: reqwest::Response) -> Result<String, AiError> {
+pub(super) async fn read(
+    mut response: reqwest::Response,
+    log: &mut super::diagnostics::Call<'_>,
+) -> Result<String, AiError> {
     let mut line = Vec::new();
     let mut event = String::new();
     let mut content = String::new();
@@ -43,6 +46,7 @@ pub(super) async fn read(mut response: reqwest::Response) -> Result<String, AiEr
                 if !event.is_empty() {
                     let data: serde_json::Value =
                         serde_json::from_str(&event).map_err(|_| invalid())?;
+                    log.usage(&data["usage"]);
                     if data.get("error").is_some() {
                         // Provider errors may echo credentials or private prompts.
                         return Err(AiError::new(

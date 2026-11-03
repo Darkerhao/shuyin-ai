@@ -40,8 +40,17 @@ pub fn audio_job_snapshot(
     database: State<'_, Database>,
     automation: State<'_, AudioAutomation>,
     project_id: String,
+    id: Option<String>,
 ) -> Result<AudioJobView, String> {
-    view(&app, &database, &automation, &project_id)
+    let mut result = view(&app, &database, &automation, &project_id)?;
+    if let Some(id) = id {
+        let job = database.audio_job(&id)?;
+        if job.project_id != project_id {
+            return Err("音频任务不属于当前书籍。".into());
+        }
+        result.job = Some(job);
+    }
+    Ok(result)
 }
 #[tauri::command]
 pub async fn start_audio_job(

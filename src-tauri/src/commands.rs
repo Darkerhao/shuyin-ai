@@ -1,6 +1,62 @@
 use crate::database::drafts::EditorDraft;
+
+#[tauri::command]
+pub fn workflow_snapshot(
+    database: tauri::State<'_, crate::database::Database>,
+) -> Result<crate::database::workflow::WorkflowSnapshot, String> {
+    database.workflow_snapshot()
+}
 use crate::database::{Asset, Database, Project, ProjectInput, WorkspaceSettings};
 use tauri::State;
+
+#[tauri::command]
+pub fn last_backup(
+    database: State<'_, Database>,
+) -> Result<Option<crate::database::storage::BackupRecord>, String> {
+    database.last_backup()
+}
+#[tauri::command]
+pub async fn storage_usage(
+    app: tauri::AppHandle,
+) -> Result<Vec<crate::database::storage::StorageUsage>, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || app.state::<Database>().storage_usage())
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn preview_cache_cleanup(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<crate::database::storage::CachePreview, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Database>().preview_cache_cleanup(&project_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn clean_video_cache(
+    app: tauri::AppHandle,
+    project_id: String,
+    token: String,
+    confirmed: bool,
+) -> Result<u64, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Database>()
+            .clean_video_cache(&project_id, &token, confirmed)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn list_model_calls(
+    database: State<'_, Database>,
+) -> Result<Vec<crate::database::diagnostics::ModelCall>, String> {
+    database.list_model_calls()
+}
 
 #[tauri::command]
 pub fn read_editor_draft(

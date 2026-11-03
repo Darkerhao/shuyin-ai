@@ -12,6 +12,10 @@ import { chooseSelect } from './ui'
 import * as api from '../src/services/projects'
 import * as notes from '../src/services/notes'
 import * as fullBackup from '../src/services/backup'
+import * as maintenance from '../src/services/maintenance'
+import { workflowSnapshot } from '../src/services/workflow'
+vi.mock('../src/services/workflow', async original => ({ ...await original<typeof import('../src/services/workflow')>(), workflowSnapshot: vi.fn() }))
+vi.mock('../src/services/maintenance', async original => ({ ...await original<typeof maintenance>(), lastBackup: vi.fn(), modelCalls: vi.fn(), storageUsage: vi.fn(), previewCleanup: vi.fn(), cleanCache: vi.fn() }))
 vi.mock('../src/services/notes', () => ({ chooseNote: vi.fn(), importNote: vi.fn(), appendNote: vi.fn() }))
 vi.mock('../src/services/backup', () => ({ createFullBackup: vi.fn(), inspectFullBackup: vi.fn(), restoreFullBackup: vi.fn(), chooseFullBackup: vi.fn() }))
 import { emptyProject, type Asset, type Project } from '../src/types/project'
@@ -39,6 +43,9 @@ async function render(path: string, { pendingNavigation = false } = {}) {
 }
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(workflowSnapshot).mockResolvedValue({ resume: [], running: [] })
+  vi.mocked(maintenance.lastBackup).mockResolvedValue(null)
+  vi.mocked(maintenance.modelCalls).mockResolvedValue([])
   workspaceOperation.error.value = ''; workspaceOperation.message.value = ''
   vi.mocked(api.isDesktop).mockReturnValue(true)
   vi.mocked(api.listProjects).mockResolvedValue([saved])
