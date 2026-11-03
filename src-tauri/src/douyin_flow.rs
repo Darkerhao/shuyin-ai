@@ -320,14 +320,12 @@ pub async fn continue_douyin_task(
     }
     match decision {
         Decision::Account { name } if reason == "account" => {
-            if name.trim().is_empty() || name.chars().count() > 200 {
-                return Err("请填写官方窗口显示的账号昵称。".into());
-            }
             if let Some(expected) = session.account.as_ref() {
                 if !same_account(Some(expected), Some(account)) {
                     return Err("账号在确认期间已变化，请重新开始核对。".into());
                 }
             }
+            database.save_douyin_account_name(&name)?;
             let mut confirmed = account.clone();
             confirmed.name = name.trim().into();
             session.account = Some(confirmed.clone());
@@ -546,29 +544,6 @@ async fn drive(
         }
         tokio::time::sleep(std::time::Duration::from_millis(750)).await;
     };
-    let account = page
-        .account
-        .as_ref()
-        .ok_or("无法识别账号，请在官方窗口检查。")?;
-    if !same_account(session.account.as_ref(), Some(account)) {
-        session.reset_page_proofs();
-    }
-    if !session.account_confirmed {
-        let confirmed = publisher
-            .confirmed
-            .lock()
-            .map_err(|e| e.to_string())?
-            .clone();
-        if same_account(confirmed.as_ref(), Some(account)) {
-            session.account = confirmed;
-            session.account_confirmed = true;
-        } else {
-            session.account = Some(account.clone());
-            session.wait("account", "请在官方窗口核对账号，并确认使用这个账号继续。");
-            return Ok(());
-        }
-    }
-    session.done("connect", false);
     let window = publish_window(app)?;
     if !page.blocked && (page.kind == "home" || (page.kind == "upload" && !page.upload_ready)) {
         running(publisher, snapshot)?;
@@ -597,6 +572,33 @@ async fn drive(
         }
         return Box::pin(drive(app, main, database, publisher, snapshot, session)).await;
     }
+    let account = page
+        .account
+        .as_ref()
+        .ok_or("无法识别账号，请在官方窗口检查。")?;
+    if !same_account(session.account.as_ref(), Some(account)) {
+        session.reset_page_proofs();
+    }
+    if !session.account_confirmed {
+        let confirmed = publisher
+            .confirmed
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone();
+        if same_account(confirmed.as_ref(), Some(account)) {
+            session.account = confirmed;
+            session.account_confirmed = true;
+        } else {
+            let mut account = account.clone();
+            if account.name.is_empty() {
+                account.name = database.douyin_account_name()?;
+            }
+            session.account = Some(account);
+            session.wait("account", "请在官方窗口核对账号，并确认使用这个账号继续。");
+            return Ok(());
+        }
+    }
+    session.done("connect", false);
     if session.cover_pending {
         session.wait(
             "covers",

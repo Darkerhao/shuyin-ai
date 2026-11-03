@@ -14,8 +14,9 @@
     const names = [...document.querySelectorAll('[class^="bottom-binder-"] [class^="user-name-"]')].filter(visible).map(e => e.textContent.trim().replace(/^@/, ''))
     const avatarImage = avatar?.querySelector('[class^="avatar-"]')
     const background = avatarImage ? getComputedStyle(avatarImage).backgroundImage : ''
-    // Only the primary avatar identifies this window's account, not CSS fallbacks or URL parameters.
+    // The avatar object identifies the account; CDN hosts, sizes, fallbacks and URL parameters do not.
     const identity = (background.match(/^url\(["']?([^"')]+)["']?\)/)?.[1] || '').split(/[?#]/)[0]
+      .replace(/^https:\/\/p\d+\.douyinpic\.com\/aweme\/\d+x\d+\//, '')
     let identityKey = 0
     for (const c of identity) identityKey = (Math.imul(identityKey, 31) + c.charCodeAt(0)) | 0
     const account = authenticated ? { id: null, name: names.length === 1 ? names[0] : '', key: String(identityKey) } : null

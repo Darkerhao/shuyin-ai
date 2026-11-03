@@ -433,6 +433,35 @@ fn checked(c: &Connection, id: &str) -> Result<PublishTask, String> {
 }
 
 impl Database {
+    pub fn douyin_account_name(&self) -> Result<String, String> {
+        self.with_connection(|c| {
+            c.query_row(
+                "SELECT value FROM app_settings WHERE key='douyin_account_name'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map(Option::unwrap_or_default)
+            .map_err(|e| e.to_string())
+        })
+    }
+
+    pub fn save_douyin_account_name(&self, name: &str) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 200 {
+            return Err("请填写官方窗口显示的账号昵称。".into());
+        }
+        self.with_connection(|c| {
+            c.execute(
+                "INSERT INTO app_settings(key,value) VALUES('douyin_account_name',?1)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [name],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        })
+    }
+
     pub fn douyin_collection(&self, id: &str) -> Result<Option<CollectionChoice>, String> {
         self.with_connection(|c| Ok(load(c, id)?.douyin_collection))
     }

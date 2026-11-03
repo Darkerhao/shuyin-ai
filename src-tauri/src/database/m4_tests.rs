@@ -74,6 +74,40 @@ fn record() -> PublishRecordInput {
 }
 
 #[test]
+fn douyin_account_nickname_survives_reopening_and_invalid_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("account-name.sqlite3");
+    let db = Database::open(path.clone());
+    assert_eq!(db.douyin_account_name().unwrap(), "");
+    db.save_douyin_account_name("  甲子  ").unwrap();
+    assert_eq!(db.douyin_account_name().unwrap(), "甲子");
+    assert!(db.save_douyin_account_name("  ").is_err());
+    assert!(db.save_douyin_account_name(&"名".repeat(201)).is_err());
+    assert_eq!(db.douyin_account_name().unwrap(), "甲子");
+    drop(db);
+    let reopened = Database::open(path);
+    assert_eq!(reopened.douyin_account_name().unwrap(), "甲子");
+    reopened
+        .with_connection(|c| {
+            assert_eq!(
+                c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                MIGRATIONS.len() as u32
+            );
+            let saved: String = c
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key='douyin_account_name'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(saved, "甲子");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn publish_queue_rechecks_files_and_keeps_each_books_task_and_record() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(dir.path().join("db.sqlite3"));
