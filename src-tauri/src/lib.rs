@@ -140,6 +140,8 @@ pub fn run() {
             video_commands::read_video_image,
             video_commands::import_video_image,
             video_commands::start_video_illustration,
+            video_commands::start_video_scene_revision,
+            video_commands::execute_video_scene_revision,
             video_commands::execute_video_illustration,
             video_commands::video_settings,
             video_commands::save_video_settings,

@@ -1,7 +1,7 @@
 import type { Asset } from '../types/project'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { VideoCue, VideoEnvironmentReport, VideoJob, VideoScene, VideoSettings } from '../types/video'
+import type { VideoCue, VideoEnvironmentReport, VideoJob, VideoScene, VideoSceneRevisionInput, VideoSettings } from '../types/video'
 
 export const settings = () => invoke<VideoSettings>('video_settings')
 export const saveSettings = (settings: VideoSettings) => invoke<void>('save_video_settings', { settings })
@@ -13,6 +13,8 @@ export const previewJob = (id: string, firstScene: number, seconds: number) => i
 export const previewSource = async (projectId: string, id: string, runId: number, scene?: number) => convertFileSrc(await invoke<string>('video_preview_media', { projectId, id, runId, scene: scene ?? null }))
 export const cancelJob = (id: string) => invoke<void>('cancel_video_job', { id })
 export const savePlan = (id: string, subtitles: string, scenes: VideoScene[]) => invoke<void>('save_video_plan', { id, subtitles, scenes })
+export const startSceneRevision = (input: VideoSceneRevisionInput) => invoke<string>('start_video_scene_revision', { input })
+export const executeSceneRevision = (id: string) => invoke<VideoScene>('execute_video_scene_revision', { id })
 export const subtitles = (id: string) => invoke<string>('video_subtitles', { id })
 export const originalCues = (id: string) => invoke<VideoCue[]>('original_video_cues', { id })
 export const exportSubtitles = (id: string) => invoke<string>('export_video_subtitles', { id })

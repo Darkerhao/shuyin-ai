@@ -1,5 +1,14 @@
 # 书引 AI 技术设计文档
 
+## 单镜候选生成（2026-11-03）
+
+- `VideoSceneEditor`只发出revise事件，`VideoPage`排空现有草稿队列后冻结jobId/runId/字幕/完整分镜编辑快照。页面只挂载一个`VideoSceneRevision`弹窗，生成及对照期间阻止背后的编辑、任务切换和离页；弹窗复用原AlertDialog、Select、Textarea，正文滚动，操作区保留可见。
+- `start_video_scene_revision`复用ai_tasks建立`video_scene_revision`记录。input_json记录当前编辑快照及正式plan的SHA256；输入最大4MiB，要求有效字幕/完整分镜、固定镜头数量/范围、有效文本模型。不会保存video_jobs或清空分镜。
+- `execute_video_scene_revision`复用`ai_commands::run_task`、TextProvider、OpenAiCompatible的流式接收、300秒上限和cancel_generation。准备和结果返回时检查视频可编辑、run_id及正式plan摘要，取消/过期/失败不交付候选。记录仅表明模型请求成功，不能表示候选已采用。
+- `video/revision.rs`复用v5整批分镜规则和唯一目录，追加`video-scene-revision-v1`的单镜范围约束；模型只接收本镜、相邻镜头/字幕与修改要求，不发送全片字幕、音频、图片路径/素材ID/来源备注。结果必须为单元素数组，固定first/last，禁止image/labels/额外字段；继续复用validate_scenes和首beat锚点规则。图片镜头由宿主恢复原image，禁止新增beats。
+- 候选只在弹窗暂存，不建立新的计划存储。采用时再次比对前端快照，仅赋值`scenes[index]`，触发已有自动草稿与试片失效；正式保存不变。改要求或换模型会清除旧候选；未采用候选关闭即放弃，已采用的内容按现有草稿恢复。
+- 无SQL迁移、新依赖或新渲染路径。主窗口视频权限新增start/execute两条命令；停止继续使用原AI任务权限。当前RekaUI2.11.0的AlertDialogContent、DialogContent和Teleport源码已核对，浮层复用原根挂载与焦点返回行为。实际证据见[单镜验收](VIDEO-SCENE-REVISION-VERIFICATION.md)。
+
 ## 视频运行环境检查（2026-11-03）
 
 - `VideoEnvironmentCheck`嵌入原配置区，使用相同VideoSettings，不增加配置持久化路径；service调用主窗口限定的`check_video_environment`。检查结果仅保存在当前页面，输入/用途变化后失效，应用检测路径与保存均由用户显式操作。
