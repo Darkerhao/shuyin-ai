@@ -168,6 +168,12 @@ describe('official editor adapter safeguards (local DOM fixtures)', () => {
     expect(act('selectCollection', { name: '失效合集' })).toMatchObject({ ok: false })
     expect(click).toHaveBeenCalledOnce()
   })
+  it('reads only the collection title when the selected value also shows its work count', () => {
+    document.body.insertAdjacentHTML('beforeend', '<div class="semi-select select-collection-a"><span class="semi-select-selection-text"><div class="selected-item-uCP2L_"><div class="selected-item-title-ebAmMX">甲子读书 | 读懂一本书</div><div class="selected-item-extra-text-M2lci5">共24个作品</div></div></span></div>')
+    expect(act('collections')).toMatchObject({ available: true, loaded: false, options: [], selected: '甲子读书 | 读懂一本书' })
+    document.querySelector('.selected-item-extra-text-M2lci5')!.textContent = '共25个作品'
+    expect(act('collections')).toMatchObject({ selected: '甲子读书 | 读懂一本书' })
+  })
   it('keeps the same account key when only avatar query parameters or fallback images change', () => {
     const inspect = () => runInNewContext(readFileSync('src-tauri/src/douyin_page.js', 'utf8'), { document, location: pageLocation, navigator, getComputedStyle })
     document.body.insertAdjacentHTML('beforeend', '<div id="header-avatar"><div class="avatar-a"></div></div><span id="douyin-creator-master-side-upload">作品发布</span>')
