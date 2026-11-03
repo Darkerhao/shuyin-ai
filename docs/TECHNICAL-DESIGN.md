@@ -1,5 +1,14 @@
 # 书引 AI 技术设计文档
 
+## 视频运行环境检查（2026-11-03）
+
+- `VideoEnvironmentCheck`嵌入原配置区，使用相同VideoSettings，不增加配置持久化路径；service调用主窗口限定的`check_video_environment`。检查结果仅保存在当前页面，输入/用途变化后失效，应用检测路径与保存均由用户显式操作。
+- `video/environment.rs`只补齐空路径：Node/Python查PATH（排除WindowsApps启动占位符），引擎查工作目录及当前目录附近的已知独立工程布局，Python兼顾`.tools/video-runtime`和引擎旁runtime，模型从虚拟环境所属目录查model-small/video-model-small。不扫描磁盘，不强行覆盖显式错误路径。
+- 每次检查在配置工作区创建独立`.video-check-*`临时目录，复用`video_process::run`的Windows Job Object、隐藏子进程、输出文件和45秒阶段上限。Node和Python分别探测，单项失败继续返回其余结果；已有字幕完全跳过Python进程。只清理本次创建的检查目录。
+- `video/runtime.mjs`为渲染与检查共用的Node中文路径保护、引擎0.7.3识别；实际渲染每代复制此模块。检查从引擎当前`tools/bins.mjs`读取FFMPEG/findChrome，执行FFmpeg版本命令、通过引擎自身Playwright启动浏览器；从`tools/project.mjs`读取实际字体目录，并在浏览器加载boot.js所需的四组字体。不会因系统另有无关FFmpeg而误报就绪。
+- `transcribe.py`复用语音依赖版本及模型四文件校验；检查模式验证faster-whisper/av可导入，并以CPU/int8/local_files_only加载实际模型，不执行转写。原转写时间码、进度及输出流程不变。依据已安装Frametell0.7.3的README、package.json、bins/project/lib/boot源码，以及当前锁定Playwright1.61.1实际API实现验证；无新增依赖。
+- schema16不变，无新表、列或SQL迁移；本次检查不产生业务任务、草稿或成片。证据见[环境检查验收](VIDEO-ENVIRONMENT-VERIFICATION.md)。
+
 ## 视频编辑恢复与对照（2026-11-03）
 
 - 复用`useEditorDraft`的400ms防抖和串行队列，`DraftKind=video`通过`read_video_draft/save_video_draft`以任务ID读写；存储位于`video_jobs.editor_draft_json`，不扩展文案/封面草稿的项目唯一键。字幕存字符串，分镜使用已有缓存JSON快照，位置保存section/index/onlyChanges/cursor；暂存不执行正式字幕/分镜校验，允许未完成SRT。最大4MiB。

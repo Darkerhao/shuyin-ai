@@ -96,6 +96,7 @@ pub fn run() {
             video_commands::read_video_draft,
             video_commands::save_video_draft,
             video_commands::original_video_cues,
+            video_commands::check_video_environment,
             commands::save_editor_draft,
             note_import::import_reading_notes,
             commands::create_full_backup,

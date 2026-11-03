@@ -7,6 +7,7 @@ import OperationFeedback from '../../components/OperationFeedback.vue'
 import VideoJobProgress from './VideoJobProgress.vue'
 import VideoSceneEditor from './VideoSceneEditor.vue'
 import VideoSubtitleEditor from './VideoSubtitleEditor.vue'
+import VideoEnvironmentCheck from './VideoEnvironmentCheck.vue'
 import { initialPosition, type VideoEditorDraft } from './subtitles'
 import { inspectStoryboard } from './storyboard'
 import { Button } from '@/components/ui/button'
@@ -28,7 +29,8 @@ const route = useRoute()
 const desktop = isDesktop()
 const { busy: operationBusy, error, message, run } = useOperation()
 const imageWorking = ref(false)
-const busy = computed(() => operationBusy.value || imageWorking.value)
+const environmentWorking = ref(false)
+const busy = computed(() => operationBusy.value || imageWorking.value || environmentWorking.value)
 const title = ref('')
 const loaded = ref(false)
 const assets = ref<Asset[]>([])
@@ -180,7 +182,7 @@ const choosePath = (key: keyof VideoSettings, directory: boolean) => run(async (
   const path = await api.chooseRuntimePath(directory)
   if (typeof path === 'string') config.value[key] = path
 })
-const saveConfig = () => run(async () => { await api.saveSettings(config.value); savedConfig.value = JSON.stringify(config.value); message.value = '视频运行环境已保存，生成时会检查实际可用性。' })
+const saveConfig = () => run(async () => { await api.saveSettings(config.value); savedConfig.value = JSON.stringify(config.value); message.value = '视频运行环境已保存，可点击“一键检查环境”验证。' })
 const begin = (sourceAudio: string, sourceSubtitle: string | null) => run(async () => {
   if (dirty.value || configDirty.value) throw new Error('请先保存或还原字幕、分镜和运行环境修改。')
   const job = await api.startJob(props.id, sourceAudio, providerId.value, sourceSubtitle)
@@ -505,6 +507,14 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
             还原配置
           </Button>
         </div>
+        <VideoEnvironmentCheck
+          :settings="config"
+          :has-subtitles="subtitleId !== 'auto' || !!selected?.plan.cues.length"
+          :disabled="busy || running"
+          @working="environmentWorking = $event"
+          @apply="config = $event"
+          @choose="choosePath($event, $event === 'engineRoot' || $event === 'modelPath')"
+        />
         <p class="muted">
           Frametell 为 AGPL-3.0 引擎，当前不随书引捆绑分发；首次准备步骤见 MG 视频使用文档。
         </p>

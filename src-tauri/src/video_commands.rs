@@ -174,6 +174,22 @@ pub fn video_settings(database: State<'_, Database>) -> Result<VideoSettings, St
     database.video_settings()
 }
 #[tauri::command]
+pub async fn check_video_environment(
+    app: AppHandle,
+    settings: VideoSettings,
+    needs_transcription: bool,
+) -> Result<video::environment::EnvironmentReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        video::environment::inspect(
+            app.state::<Database>().inner(),
+            settings,
+            needs_transcription,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
 pub fn save_video_settings(
     database: State<'_, Database>,
     settings: VideoSettings,
@@ -551,6 +567,10 @@ async fn execute(
     process::write_new(
         &directory.join("render.mjs"),
         include_bytes!("../video/render.mjs"),
+    )?;
+    process::write_new(
+        &directory.join("runtime.mjs"),
+        include_bytes!("../video/runtime.mjs"),
     )?;
     process::write_new(
         &directory.join("illustrations.js"),

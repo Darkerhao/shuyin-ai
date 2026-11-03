@@ -8,6 +8,8 @@ export interface VideoBeat {
   label: string
 }
 export interface VideoSettings { engineRoot: string; nodePath: string; pythonPath: string; modelPath: string }
+export interface VideoEnvironmentItem { id: 'node' | 'engine' | 'ffmpeg' | 'browser' | 'fonts' | 'python' | 'model'; status: 'ok' | 'error' | 'skipped'; version: string; path: string; detail: string }
+export interface VideoEnvironmentReport { settings: VideoSettings; items: VideoEnvironmentItem[] }
 export interface VideoCue { start: number; end: number; text: string }
 export interface VideoSceneImage {
   assetId: string; source: string; rights: string; creator?: string

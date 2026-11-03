@@ -1,5 +1,13 @@
 # 视频自动草稿与字幕对照验收（2026-11-03）
 
+## 后续补充：真实Windows桌面恢复
+
+同日后续已使用独立标识`com.shuyin.video-runtime-verify`的Tauri调试构建（嵌入生产前端、非浏览器mock）完成恢复验收。从既有长片输入复制469条字幕、72镜计划与933.46秒音频为隔离夹具；在真实界面修改字幕/镜头并等待SQLite暂存，强制结束精确测试进程，重开恢复文本、镜头标题及筛选，正式plan_json仍未改变。切换另一隔离任务再返回保留各自内容；对应音频在首句末暂停，单句恢复不改镜头。随后发送原生WM_CLOSE并确认进程退出，再启动后SRT光标恢复到18。
+
+命令：`node output/playwright/video-runtime/native.mjs seed`、`app.ps1 Force`、`app.ps1 Start`、`native.mjs restart`、`app.ps1 Close`、再次`app.ps1 Start`及`native.mjs final`。证据位于同目录`native-seed.json`、`native-restart.json`、`native-final.json`、`native-restored.png`。隔离数据库按Tauri现有路径规则位于C盘专用标识目录，复制音频、工作区和构建位于D盘。测试脚本最初的选项日期标签与窗口标题定位问题已修正后重跑；没有据此改动产品代码。
+
+这补齐了本文末尾当时未执行的真实Windows关闭/强制退出恢复部分。NSIS安装升级、全片逐句听审和其他平台仍未执行；详细后续环境检查验证见[环境验收](VIDEO-ENVIRONMENT-VERIFICATION.md)。
+
 ## 实现与范围
 
 - 视频任务独立暂存未完成SRT、分镜及编辑位置。复用`useEditorDraft`的400ms防抖、串行写入、关闭监听；失败提示并支持重试，离页及任务切换等待写入。恢复最近编辑任务，显式任务链接优先。
