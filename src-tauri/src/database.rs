@@ -83,6 +83,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0013_audio_jobs.sql"),
     include_str!("../migrations/0014_video_jobs.sql"),
     include_str!("../migrations/0015_reasoning_effort.sql"),
+    include_str!("../migrations/0016_video_editor.sql"),
 ];
 
 impl Database {

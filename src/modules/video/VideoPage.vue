@@ -6,20 +6,22 @@ import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import VideoJobProgress from './VideoJobProgress.vue'
 import VideoSceneEditor from './VideoSceneEditor.vue'
+import VideoSubtitleEditor from './VideoSubtitleEditor.vue'
+import { initialPosition, type VideoEditorDraft } from './subtitles'
 import { inspectStoryboard } from './storyboard'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useOperation } from '../../composables/useOperation'
-import { useWindowCloseGuard } from '../../composables/useWindowCloseGuard'
+import { useEditorDraft } from '../../composables/useEditorDraft'
+import { readDraft, saveDraft } from '../../services/drafts'
 import { getProject, isDesktop, listAssets, openAsset, openProjectDirectory } from '../../services/projects'
 import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { visualCatalog, videoStatuses, type VideoJob, type VideoScene, type VideoSettings } from '../../types/video'
+import { visualCatalog, videoStatuses, type VideoCue, type VideoJob, type VideoScene, type VideoSettings } from '../../types/video'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -42,6 +44,13 @@ const savedConfig = ref('')
 const subtitleText = ref('')
 const scenes = ref<VideoScene[]>([])
 const savedEditor = ref('')
+const editorJobId = ref('')
+const draftReady = ref(false)
+const position = ref(initialPosition())
+const originalCues = ref<VideoCue[]>([])
+const originalError = ref('')
+const taskAudioUrl = ref('')
+const subtitleEditor = ref<InstanceType<typeof VideoSubtitleEditor>>()
 const audioUrl = ref('')
 const videoUrl = ref('')
 const previewUrl = ref('')
@@ -55,14 +64,16 @@ const selected = computed(() => jobs.value.find(job => job.id === selectedId.val
 const running = computed(() => jobs.value.some(job => job.status === 'running'))
 const audios = computed(() => assets.value.filter(a => a.assetType === 'audio' && a.existsStatus === 'available'))
 const subtitles = computed(() => assets.value.filter(a => a.assetType === 'subtitle' && /\.srt$/i.test(a.originalName) && a.existsStatus === 'available'))
-const editable = computed(() => selected.value && !['running', 'succeeded'].includes(selected.value.status))
+const editable = computed(() => selected.value && editorJobId.value === selected.value.id && !['running', 'succeeded'].includes(selected.value.status))
 const legacyPlan = computed(() => scenes.value.some(scene => !scene.beats?.length && !scene.image))
 const completePlan = computed(() => scenes.value.length > 0 && !legacyPlan.value && scenes.value.at(-1)!.last + 1 === selected.value?.plan.cues.length)
 const storyboardNotes = computed(() => selected.value ? inspectStoryboard({ ...selected.value.plan, scenes: scenes.value }) : [])
 const sceneSnapshot = computed(() => JSON.stringify(scenes.value))
 const editorValue = () => JSON.stringify([subtitleText.value, sceneSnapshot.value])
 const jobLabel = (job: VideoJob) => `${videoStatuses[job.status]} · ${job.createdAt ? new Date(job.createdAt).toLocaleString() : job.id}`
-const dirty = computed(() => loaded.value && editable.value && savedEditor.value !== editorValue())
+const dirty = computed(() => loaded.value && !!editable.value && savedEditor.value !== editorValue())
+const draftContent = computed<VideoEditorDraft>(() => ({ subtitles: subtitleText.value, scenes: sceneSnapshot.value, position: position.value }))
+const autosave = useEditorDraft(() => selectedId.value, 'video', draftContent, () => String(selected.value?.runId), dirty, draftReady, canPrepareLeave, true)
 const configDirty = computed(() => loaded.value && savedConfig.value !== JSON.stringify(config.value))
 const previewKey = computed(() => selected.value?.preview && !dirty.value ? `${props.id}:${selected.value.id}:${selected.value.runId}:${selected.value.preview.signature}` : '')
 const runtimeFields: { key: keyof VideoSettings; label: string; directory: boolean; hint: string }[] = [
@@ -75,35 +86,74 @@ let disposed = false
 let polling = false
 let timer: ReturnType<typeof globalThis.setInterval> | undefined
 
-function canLeave() {
-  if (dirty.value || configDirty.value || busy.value) { error.value = '请先保存或还原当前修改，再离开视频制作。'; return false }
+function canPrepareLeave() {
+  if (configDirty.value || busy.value) { error.value = '请先保存运行环境或等待当前操作完成，再离开视频制作。'; return false }
   return true
 }
+async function canLeave() {
+  if (!canPrepareLeave()) return false
+  try { await autosave.flush(); return true } catch { return false }
+}
 onBeforeRouteLeave(canLeave)
-onBeforeRouteUpdate((to, from) => to.params.id === from.params.id || canLeave())
-const closeGuard = useWindowCloseGuard(() => !!dirty.value || configDirty.value || busy.value, canLeave)
+onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.job === from.query.job) || canLeave())
 
-async function adopt(job: VideoJob | undefined) {
+async function adopt(job: VideoJob | undefined, restoreDraft = true) {
+  draftReady.value = false
+  editorJobId.value = ''
+  autosave.status.value = ''; autosave.error.value = ''
+  position.value = initialPosition(); originalCues.value = []; originalError.value = ''
   if (!job) { subtitleText.value = ''; scenes.value = []; savedEditor.value = editorValue(); return }
-  const text = await api.subtitles(job.id)
-  if (disposed || selectedId.value !== job.id) return
+  const projectId = props.id
+  const [text, draft] = await Promise.all([api.subtitles(job.id), restoreDraft && !['running', 'succeeded'].includes(job.status) ? readDraft<VideoEditorDraft>(job.id, 'video') : null])
+  if (disposed || selectedId.value !== job.id || projectId !== props.id) return
   subtitleText.value = text
   scenes.value = JSON.parse(JSON.stringify(job.plan.scenes))
   savedEditor.value = editorValue()
+  if (draft && draft.basedOn === String(job.runId)) {
+    subtitleText.value = draft.content.subtitles
+    scenes.value = JSON.parse(draft.content.scenes)
+    position.value = draft.content.position
+    autosave.status.value = '已恢复上次暂存的编辑位置和内容'
+  }
+  editorJobId.value = job.id
+  if (job.plan.cues.length) {
+    try {
+      const cues = await api.originalCues(job.id)
+      if (!disposed && selectedId.value === job.id && projectId === props.id) originalCues.value = cues
+    } catch (cause) {
+      if (!disposed && selectedId.value === job.id && projectId === props.id) originalError.value = String(cause)
+    }
+  }
+  await nextTick()
+  if (disposed || selectedId.value !== job.id || projectId !== props.id) return
+  draftReady.value = !!editable.value
+  if (draft) {
+    if (position.value.section === 'scene') focusScene(position.value.index)
+    else subtitleEditor.value?.restorePosition()
+  }
+  return !!draft
 }
 function put(job: VideoJob) { jobs.value = [job, ...jobs.value.filter(j => j.id !== job.id)]; selectedId.value = job.id }
 const load = () => run(async () => {
+  loaded.value = false; draftReady.value = false
+  const projectId = props.id
   const [book, files, models, settings, history] = await Promise.all([getProject(props.id), listAssets(props.id), listProviders(), api.settings(), api.listJobs(props.id)])
-  if (disposed) return
+  if (disposed || projectId !== props.id) return
   title.value = book.title; assets.value = files; providers.value = models.filter(p => p.modelKind === 'text' && p.isEnabled)
   imageProviders.value = models.filter(p => p.modelKind === 'image' && p.isEnabled)
   config.value = settings; savedConfig.value = JSON.stringify(settings)
   jobs.value = history
-  selectedId.value = history.find(j => j.id === route.query.job)?.id ?? history[0]?.id ?? ''
+  const recentDraft = history.filter(j => j.draftUpdatedAt).sort((a, b) => b.draftUpdatedAt!.localeCompare(a.draftUpdatedAt!))[0]
+  selectedId.value = history.find(j => j.id === route.query.job)?.id ?? recentDraft?.id ?? history[0]?.id ?? ''
   audioId.value = audios.value.find(a => a.id === route.query.audio)?.id ?? audios.value[0]?.id ?? ''
   providerId.value = providers.value.find(p => p.isDefault)?.id ?? providers.value[0]?.id ?? ''
-  await adopt(selected.value)
+  const restored = await adopt(selected.value)
   loaded.value = true
+  await nextTick()
+  if (restored) {
+    if (position.value.section === 'scene') focusScene(position.value.index)
+    else subtitleEditor.value?.restorePosition()
+  }
 })
 async function poll() {
   if (!running.value || polling || busy.value || disposed) return
@@ -144,47 +194,65 @@ const resume = (render: boolean) => run(async () => {
   if (!selected.value) return
   if (!render && !providerId.value) throw new Error('请选择已启用的文本模型生成分镜。')
   if (configDirty.value) throw new Error('请先保存运行环境配置。')
-  if (render) { await api.savePlan(selected.value.id, subtitleText.value, scenes.value); selected.value.preview = null }
+  if (render) { await persistPlan(scenes.value); selected.value.preview = null }
   else if (dirty.value) throw new Error('字幕已修改，请使用“保存字幕并重新生成分镜”。')
-  savedEditor.value = editorValue()
-  put(await api.continueJob(selected.value.id, render, render ? null : providerId.value))
+  await startSavedWork(() => api.continueJob(selected.value!.id, render, render ? null : providerId.value))
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
 const preview = () => run(async () => {
   if (!selected.value) return
   if (configDirty.value) throw new Error('请先保存运行环境配置。')
-  await api.savePlan(selected.value.id, subtitleText.value, scenes.value)
+  await persistPlan(scenes.value)
   selected.value.preview = null
-  savedEditor.value = editorValue()
-  put(await api.previewJob(selected.value.id, Number(previewFirstScene.value), Number(previewSeconds.value)))
+  await startSavedWork(() => api.previewJob(selected.value!.id, Number(previewFirstScene.value), Number(previewSeconds.value)))
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
 async function refreshImages() { assets.value = await listAssets(props.id) }
 function focusScene(index: number) {
+  position.value = { ...position.value, section: 'scene', index }
   const card = jobPanel.value?.querySelector<globalThis.HTMLElement>(`#video-scene-${index}`)
-  card?.scrollIntoView({ block: 'nearest' })
+  card?.scrollIntoView?.({ block: 'nearest' })
   card?.querySelector('input')?.focus({ preventScroll: true })
 }
 const regenerate = () => run(async () => {
   if (!selected.value) return
   if (!providerId.value) throw new Error('请选择已启用的文本模型生成分镜。')
   if (configDirty.value) throw new Error('请先保存运行环境配置。')
-  await api.savePlan(selected.value.id, subtitleText.value, [])
+  await persistPlan([])
   selected.value.preview = null
-  scenes.value = []; savedEditor.value = editorValue()
-  put(await api.continueJob(selected.value.id, false, providerId.value))
+  await startSavedWork(() => api.continueJob(selected.value!.id, false, providerId.value))
 })
 const stop = () => run(async () => { if (selected.value) { await api.cancelJob(selected.value.id); message.value = '正在停止本任务的识别或渲染进程，原音频不受影响。' } })
-const switchJob = (id: unknown) => run(async () => { if (dirty.value) throw new Error('请先保存或还原当前修改。'); selectedId.value = String(id); await adopt(selected.value) })
-const resetEditor = () => run(async () => { await adopt(selected.value) })
+const switchJob = (id: unknown) => run(async () => { await autosave.flush(); selectedId.value = String(id); await adopt(selected.value) })
+const resetEditor = () => run(async () => {
+  await autosave.flush()
+  draftReady.value = false
+  try { await saveDraft(selectedId.value, 'video', null); await adopt(selected.value, false) }
+  finally { draftReady.value = !!editable.value }
+})
+async function persistPlan(nextScenes: VideoScene[]) {
+  await autosave.flush()
+  draftReady.value = false
+  try {
+    await api.savePlan(selectedId.value, subtitleText.value, nextScenes)
+    scenes.value = nextScenes
+    savedEditor.value = editorValue()
+  } finally { await nextTick(); draftReady.value = !!editable.value }
+}
+async function startSavedWork(start: () => Promise<VideoJob>) {
+  await autosave.flush()
+  draftReady.value = false
+  try { put(await start()) }
+  finally { await nextTick(); draftReady.value = !!editable.value }
+}
 const saveEditor = () => run(async () => {
   if (!selected.value) return
-  await api.savePlan(selected.value.id, subtitleText.value, scenes.value)
+  await persistPlan(scenes.value)
   selected.value.preview = null
-  savedEditor.value = editorValue()
   jobs.value = await api.listJobs(props.id)
+  await autosave.flush()
   message.value = '字幕和分镜校对已保存，尚未启动渲染。'
 })
 const exportSrt = () => run(async () => {
@@ -203,6 +271,14 @@ watch(audioId, async id => {
   if (!id || !desktop) return
   try { const url = await api.mediaSource(props.id, id); if (!disposed && id === audioId.value) audioUrl.value = url }
   catch (cause) { mediaError.value = `音频无法预览：${String(cause)}` }
+})
+watch(() => selected.value?.audioAssetId, async (id, _old, onCleanup) => {
+  taskAudioUrl.value = ''
+  let current = true
+  onCleanup(() => { current = false })
+  if (!id || !desktop) return
+  try { const url = await api.mediaSource(props.id, id); if (current && !disposed) taskAudioUrl.value = url }
+  catch (cause) { if (current && !disposed) mediaError.value = `任务原声无法试听：${String(cause)}` }
 })
 watch(() => selected.value?.videoAssetId, async id => {
   videoUrl.value = ''; mediaError.value = ''
@@ -225,7 +301,7 @@ watch(previewKey, async (key, _previous, onCleanup) => {
     if (current && !disposed) { previewUrl.value = url; previewFrames.value = frames }
   } catch (cause) { if (current && !disposed) mediaError.value = `试片无法读取，请重新生成：${String(cause)}` }
 })
-watch(() => props.id, () => { if (desktop) void load() })
+watch(() => [props.id, route.query.job], () => { if (desktop) void load() })
 onMounted(() => { if (desktop) { void load(); timer = globalThis.setInterval(() => { void poll() }, 1500) } })
 onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(timer) })
 </script>
@@ -252,7 +328,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
   </header>
   <ProjectNavigation :id="id" />
   <OperationFeedback
-    :error="error || closeGuard.error.value"
+    :error="error || autosave.error.value"
     :message="message"
     @dismiss="message = ''"
   />
@@ -443,7 +519,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
       <div class="video-job-heading">
         <h2>任务与成片</h2><Select
           :model-value="selectedId"
-          :disabled="busy || !!dirty"
+          :disabled="busy"
           @update:model-value="switchJob"
         >
           <SelectTrigger aria-label="选择视频历史任务">
@@ -535,6 +611,14 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           aria-label="原声 MG 视频成片"
           @error="mediaError = '成片预览失败，请刷新任务或使用系统播放器。'"
         />
+        <Button
+          v-if="editorJobId !== selected.id && !['running', 'succeeded'].includes(selected.status)"
+          variant="outline"
+          :disabled="busy"
+          @click="run(async () => { await adopt(selected) })"
+        >
+          重新读取字幕与草稿
+        </Button>
         <template v-if="editable && selected.plan.cues.length">
           <div class="video-editor-heading">
             <h3>字幕与分镜校对</h3><p class="muted">
@@ -547,12 +631,32 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           >
             当前是旧版文字图解分镜，不会按旧模板继续渲染。请保留字幕并升级手绘分镜，原音频和历史成片不变。
           </p>
-          <label for="video-subtitles">SRT 字幕</label><Textarea
-            id="video-subtitles"
+          <div class="actions">
+            <p
+              role="status"
+              aria-live="polite"
+              class="muted"
+            >
+              {{ autosave.error.value || autosave.status.value || '编辑会自动暂存；正式保存后才用于制作。' }}
+            </p>
+            <Button
+              v-if="autosave.error.value"
+              variant="outline"
+              :disabled="busy"
+              @click="run(() => autosave.flush())"
+            >
+              重试暂存
+            </Button>
+          </div>
+          <VideoSubtitleEditor
+            :key="selected.id"
+            ref="subtitleEditor"
             v-model="subtitleText"
+            v-model:position="position"
+            :originals="originalCues"
+            :original-error="originalError"
+            :audio-src="taskAudioUrl"
             :disabled="busy"
-            rows="9"
-            spellcheck="false"
           />
           <div class="actions">
             <Button
@@ -716,6 +820,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               :providers="imageProviders"
               :disabled="busy"
               :image-disabled="busy || running || !completePlan"
+              @focusin="position = { ...position, section: 'scene', index }"
               @update:scene="scenes[index] = $event"
               @refresh-assets="refreshImages"
               @working="imageWorking = $event"

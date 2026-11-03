@@ -306,6 +306,28 @@ pub fn video_subtitles(database: State<'_, Database>, id: String) -> Result<Stri
 }
 
 #[tauri::command]
+pub fn original_video_cues(database: State<'_, Database>, id: String) -> Result<Vec<Cue>, String> {
+    database.original_video_cues(&id)
+}
+
+#[tauri::command]
+pub fn read_video_draft(
+    database: State<'_, Database>,
+    id: String,
+) -> Result<Option<crate::database::drafts::EditorDraft>, String> {
+    database.read_video_draft(&id)
+}
+
+#[tauri::command]
+pub fn save_video_draft(
+    database: State<'_, Database>,
+    id: String,
+    draft: Option<crate::database::drafts::EditorDraft>,
+) -> Result<(), String> {
+    database.save_video_draft(&id, draft)
+}
+
+#[tauri::command]
 pub fn export_video_subtitles(database: State<'_, Database>, id: String) -> Result<String, String> {
     database.export_video_subtitles(&id)
 }
@@ -649,6 +671,7 @@ async fn execute(
         if digest(audio.clone()).await? != job.plan.audio_sha256 {
             return Err("转写期间音频发生变化，未采用字幕。".into());
         }
+        db.save_original_video_cues(&job.id, job.run_id, &job.plan.cues)?;
         db.save_video_progress(&job.id, job.run_id, &job.plan, "transcribing")?;
     }
     if flag.load(Ordering::SeqCst) {
@@ -888,6 +911,7 @@ mod tests {
                 directory: Some(directory.to_path_buf()),
             },
             VideoJob {
+                draft_updated_at: None,
                 id: "job".into(),
                 project_id: "book".into(),
                 audio_asset_id: None,
