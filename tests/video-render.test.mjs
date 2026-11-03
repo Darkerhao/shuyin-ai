@@ -11,6 +11,18 @@ import { setImmediate } from 'node:timers/promises';
 import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 import * as renderer from '../src-tauri/video/render.mjs';
+import { inspectRuntime } from '../src-tauri/video/runtime.mjs';
+
+test('environment inspection reports every rendering dependency when the selected engine is missing', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-environment-'));
+  try {
+    const report = await inspectRuntime(path.join(directory, 'missing-engine'), directory);
+    assert.deepEqual(report.map(item => item.id), ['node', 'engine', 'ffmpeg', 'browser', 'fonts']);
+    assert(report.slice(1).every(item => item.status === 'error'));
+    assert.match(report.find(item => item.id === 'fonts').detail, /浏览器未就绪/);
+    assert.equal(fs.readdirSync(directory).length, 0);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 const { buildEpisode, measureRenderProgress } = renderer;
 

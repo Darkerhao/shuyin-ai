@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "allow-video"
 description = "本书原声音频的字幕、分镜、视频任务、已登记媒体和本次试片的单文件预览。"
-commands.allow = ["read_video_draft", "save_video_draft", "original_video_cues", "read_video_image", "import_video_image", "start_video_illustration", "execute_video_illustration", "video_settings", "save_video_settings", "list_video_jobs", "start_video_job", "continue_video_job", "cancel_video_job", "save_video_plan", "video_subtitles", "export_video_subtitles", "media_asset_path", "preview_video_job", "video_preview_media"]
+commands.allow = ["check_video_environment", "read_video_draft", "save_video_draft", "original_video_cues", "read_video_image", "import_video_image", "start_video_illustration", "execute_video_illustration", "video_settings", "save_video_settings", "list_video_jobs", "start_video_job", "continue_video_job", "cancel_video_job", "save_video_plan", "video_subtitles", "export_video_subtitles", "media_asset_path", "preview_video_job", "video_preview_media"]

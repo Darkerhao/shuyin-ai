@@ -13,6 +13,30 @@ spec.loader.exec_module(adapter)
 
 
 class TranscriptionTests(unittest.TestCase):
+    def test_environment_loads_model_offline_without_transcribing(self):
+        calls = []
+        module = types.ModuleType("faster_whisper")
+        module.WhisperModel = lambda path, **kwargs: calls.append((path, kwargs))
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory)
+            for name in ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"):
+                (model / name).write_text("fixture", encoding="utf-8")
+            with patch.object(adapter, "version", side_effect=lambda name: "16.1.0" if name == "av" else "1.2.1"), patch.dict(sys.modules, {"faster_whisper": module}):
+                report = adapter.inspect_environment(model)
+                self.assertEqual([item["status"] for item in report], ["ok", "ok"])
+                self.assertEqual(len(calls), 1)
+                self.assertTrue(calls[0][1]["local_files_only"])
+                (model / "model.bin").unlink()
+                report = adapter.inspect_environment(model)
+                self.assertEqual([item["status"] for item in report], ["ok", "error"])
+                self.assertEqual(len(calls), 1)
+
+    def test_environment_reports_wrong_dependencies_without_loading_model(self):
+        with patch.object(adapter, "version", return_value="0.0.0"):
+            report = adapter.inspect_environment(Path("missing-model"))
+        self.assertEqual([item["status"] for item in report], ["error", "error"])
+        self.assertIn("av==16.1.0", report[0]["detail"])
+
     def test_adapter_preserves_word_times_and_only_loads_local_model(self):
         calls = {}
         updates = []

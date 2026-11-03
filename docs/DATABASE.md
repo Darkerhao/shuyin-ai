@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 视频运行环境检查（2026-11-03，仍为v16）
+
+无表、列或迁移变化。检查读取原工作目录，接收页面当前VideoSettings并返回临时结果，不写app_settings或video_jobs。只有用户点击原“保存运行环境”才更新原video_runtime设置。识别路径、逐项结果与探测版本不持久化，避免把旧检查结果当成当前可用性。
+
 ## 视频编辑草稿与原文快照（2026-11-03，v16）
 
 `0016_video_editor.sql`为video_jobs增加两个可空TEXT列：editor_draft_json保存`{basedOn,content:{subtitles,scenes,position},updatedAt}`，original_cues_json保存首次转写/导入的原始Cue数组。原有任务、plan_json、素材、时间戳及v9文案/封面草稿不改写；无需新表或新外键。草稿与任务同行，删除任务/书籍自然删除其草稿。

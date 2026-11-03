@@ -1,10 +1,11 @@
 import type { Asset } from '../types/project'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { VideoCue, VideoJob, VideoScene, VideoSettings } from '../types/video'
+import type { VideoCue, VideoEnvironmentReport, VideoJob, VideoScene, VideoSettings } from '../types/video'
 
 export const settings = () => invoke<VideoSettings>('video_settings')
 export const saveSettings = (settings: VideoSettings) => invoke<void>('save_video_settings', { settings })
+export const checkEnvironment = (settings: VideoSettings, needsTranscription: boolean) => invoke<VideoEnvironmentReport>('check_video_environment', { settings, needsTranscription })
 export const listJobs = (projectId: string) => invoke<VideoJob[]>('list_video_jobs', { projectId })
 export const startJob = (projectId: string, audioAssetId: string, providerId: string, subtitleAssetId: string | null) => invoke<VideoJob>('start_video_job', { input: { projectId, audioAssetId, providerId, subtitleAssetId } })
 export const continueJob = (id: string, render: boolean, providerId: string | null) => invoke<VideoJob>('continue_video_job', { id, render, providerId })

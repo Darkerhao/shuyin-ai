@@ -4,17 +4,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { assertNodeRuntime, enginePackage } from './runtime.mjs';
+export { assertNodeRuntime } from './runtime.mjs';
 
 const catalog = JSON.parse(fs.readFileSync(new URL('./visual-catalog.json', import.meta.url), 'utf8'));
 const visuals = fs.readFileSync(new URL('./illustrations.js', import.meta.url), 'utf8');
-
-export function assertNodeRuntime(version = process.versions.node, platform = process.platform) {
-  const [major, minor, patch] = version.split('.').map(Number);
-  // nodejs/node#61108 fixes native rmSync crashes on Windows non-ASCII paths.
-  if (platform === 'win32' && (major === 23 || (major === 24 && (minor < 13 || (minor === 13 && patch === 0))) || (major === 25 && minor < 4))) {
-    throw new Error(`Node.js ${version} 存在 Windows 中文路径处理缺陷，会导致视频进程崩溃。请在「视频运行环境」的「Node 程序」中选择 Node.js 24.13.1 或更新的 24.x LTS（推荐 24.22.2），保存后重试；已保存字幕和分镜会保留。`);
-  }
-}
 
 // The model selects trusted drawings and subtitle anchors; it never supplies code.
 export function buildEpisode(plan, range, images = {}) {
@@ -198,8 +192,7 @@ async function main(inputFile, outputFile) {
   assertNodeRuntime();
   const input = JSON.parse(fs.readFileSync(inputFile, 'utf8'));
   const engine = path.resolve(input.engineRoot);
-  const pkg = JSON.parse(fs.readFileSync(path.join(engine, 'package.json'), 'utf8'));
-  if (pkg.name !== '@frametell/engine' || pkg.version !== '0.7.3') throw new Error('Select the tested Frametell engine 0.7.3 directory (whiteboard-teacher-video/engine).');
+  const pkg = enginePackage(engine);
   const { FFMPEG, probe, findChrome } = await import(pathToFileURL(path.join(engine, 'tools/bins.mjs')));
   if (!fs.existsSync(FFMPEG) || !findChrome()) throw new Error('FFmpeg or Chrome/Edge is missing from the independent engine installation.');
   const metadata = probe(input.audioPath);
