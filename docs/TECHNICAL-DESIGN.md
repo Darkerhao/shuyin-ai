@@ -1,5 +1,11 @@
 # 书引 AI 技术设计文档
 
+## 抖音账号确认收敛（2026-11-03）
+
+`douyin_flow.rs::drive` 在官方首页/上传控件加载状态下先完成固定上传页导航，再比较账号并等待唯一确认，不增加新入口或确认状态。`douyin_page.js` 对已观察到的 `https://p数字.douyinpic.com/aweme/宽x高/aweme-avatar/对象` 地址只以头像对象生成当前窗口指纹；CDN 域名、尺寸、查询参数和 CSS 候补图不构成换号证据，不同头像对象仍触发原有重新核对。
+
+账号决定核对当前页面后，通过发布数据库服务校验并保存昵称至既有 `app_settings.douyin_account_name`，再沿用原有内存确认。等待账号时优先显示页面昵称；缺失时读取保存值。该值只作可编辑提示，不产生稳定账号 ID、不持久化确认、不授权合集或上传。复用现有 IPC、会话锁和备份，无新增依赖、权限或迁移；验证见 `DOUYIN-FLOW-VERIFICATION.md`。
+
 ## 续作、缓存备份与请求诊断（2026-11-03）
 
 - `database/workflow.rs::workflow_snapshot`以一次SQL UNION读取video_jobs（含草稿更新时间）、audio_jobs、publish_tasks、活动ai_tasks、editor_drafts和文案/封面版本，排除归档书籍，按运行优先、时间倒序选每书续作目标并返回全部运行项。`useWorkflow`共享只读快照并合并并发刷新；`RunningTasks`每3秒刷新，失败保留上次快照并提示。`services/workflow.ts`统一状态文案及路由，视频用job、音频用audioJob、发布用task查询参数，不持久化第二份进度。

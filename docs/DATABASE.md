@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 抖音账号昵称预填（2026-11-03，仍为v17）
+
+复用 `app_settings` 的字符串键 `douyin_account_name`，仅保存最近一次人工确认的昵称，去除首尾空白，长度限定1–200字符。未设置返回空字符串；无效输入或写入失败不覆盖已保存值。该昵称随原有 SQLite 快照和完整备份保留，不保存账号 ID、头像指纹、浏览器会话或确认权限。
+
+官方页昵称优先于保存的提示值，提示可修改；读取昵称不会自动确认账号或启用跨重启默认合集。本次不增加表、列、索引或迁移，数据库仍为v17。重开数据库和无效编辑回归见 `DOUYIN-FLOW-VERIFICATION.md`。
+
 ## 模型调用诊断与备份时间（2026-11-03，v17）
 
 `0017_model_calls.sql`新增请求记录表model_calls：id主键；project_id可空外键，删除书籍时SET NULL；task_id为可空任务标识；model、stage、status、started_at必填；elapsed_ms、first_response_ms、input_tokens、output_tokens、total_tokens、error_code可空。status限定running/succeeded/failed/cancelled/interrupted；按started_at倒序建立索引，设置页读取最近200条。表不保存提示词、响应正文、密钥或原始供应商错误。书籍删除后保留请求元数据，未增加自动清理历史的规则。

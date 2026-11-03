@@ -1,5 +1,52 @@
 # 智能辅助流程改版实施与本地验证
 
+## 一次账号确认与昵称预填（2026-11-03）
+
+### 根因与修复
+
+- 头像指纹仍包含 CDN 域名和 `/aweme/100x100/` 等显示尺寸。同一头像对象从 `p11.douyinpic.com/aweme/100x100/` 换到 `p3.douyinpic.com/aweme/200x200/` 时被判为不同账号。新增 DOM 回归先失败：key 从 `3184342` 变为 `-1587249213`；隔离 Windows 运行旧流程，第一次账号决定后又返回 `waitingFor=account`，复现第二次确认。
+- `drive` 原先在首页确认后才导航上传页。正常首页流程现先导航到唯一的固定上传地址并等待控件，再请求账号确认；头像指纹对已观察到的抖音 CDN 地址去除域名与显示尺寸，保留头像对象，不同对象仍重新核对。没有新增确认入口或状态。
+- 人工填写的昵称原先仅保存在当前内存确认，首次页面又往往没有编辑预览昵称。现将已校验昵称写入既有 `app_settings.douyin_account_name`；等待确认时优先使用页面昵称，缺失时带入上次值。确认权限继续保留在内存，保存的昵称不能自动授权或启用默认合集。
+
+修改文件：
+
+- 实现：`src-tauri/src/douyin_page.js`、`src-tauri/src/douyin_flow.rs`、`src-tauri/src/database/publishing.rs`、`src/modules/publishing/DouyinVerification.vue`。
+- 回归：`tests/douyin-editor.test.ts`、`tests/douyin.test.ts`、`src-tauri/src/database/m4_tests.rs`。
+- 文档：`docs/PRD.md`、`docs/TECHNICAL-DESIGN.md`、`docs/DATABASE.md`、`docs/AI-RULES.md`、`docs/DEVELOPMENT-PLAN.md`、`docs/USER-GUIDE.md`、本记录。
+
+无表结构、迁移、依赖、权限或版本号变更，数据库保持 v17。新设置仅保存1–200字符的显示昵称，原有备份保存该设置，账号 ID、头像指纹与确认权限不入库。归类 fix/patch，未提交或发布。
+
+### 实际命令与结果
+
+Rust 命令先加载 `. ./.tools/env.ps1`；Rust 测试的 `TEMP`、`TMP`、`SQLITE_TMPDIR` 指向 `output/playwright/douyin-account/rust-temp`。原生脚本复用既有 WebView2/CDP 夹具方式，使用独立标识 `com.shuyin.douyin-account-20261103`、测试数据库和工作目录；通过阻塞代理与页面拦截隔离真实平台请求。
+
+| 命令 | 结果 |
+| --- | --- |
+| `npx vitest run tests/douyin-editor.test.ts -t 'same avatar from another CDN'`（修复前） | 1项失败，同一头像 CDN/尺寸改变被判为不同 key |
+| `node output/playwright/douyin-account/native.cjs`（修复前） | 一次账号决定后又等待账号确认，期望 `covers`、实际 `account` |
+| `npx vitest run tests/douyin-editor.test.ts tests/douyin.test.ts tests/publishing.test.ts` | 53项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked douyin -- --nocapture` | 16项通过，包含昵称重开数据库、无效编辑保留、停止/关闭与身份回归 |
+| `npm run lint` | 通过 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `npx tauri build --debug --no-bundle --config output/playwright/douyin-account/tauri-test.json` | 隔离桌面构建通过；实际执行 `npm run build`、`npm run typecheck` 与 Vite 构建 |
+| `node output/playwright/douyin-account/native.cjs`（修复后） | 8项隔离桌面场景通过，账号确认通过真实前端按钮点击 |
+| 设置 `$env:DOUYIN_EXPECT_SAVED_NAME='1'` 后执行同一原生脚本 | 新应用进程的9项场景通过，额外核对宿主及真实前端输入框的重启预填 |
+| `git diff --check` | 通过 |
+
+新增数据库回归初次编译使用了 rusqlite 不支持的 `usize` 读取类型，改为仓库已有的 `u32` 读法后上述16项通过。构建保留既有约630kB分块提示；没有调整构建限制或弱化检查。未执行全量 npm/Rust 测试。
+
+### 验收对应与边界
+
+1. 初始确认发生在已就绪的上传页；正常首页不单独请求确认。
+2. 一次真实前端按钮点击后，成片只选择一次并完成文案回读；从上传页到编辑页再次改变 CDN 与尺寸，确认控件仍消失，没有第二次账号等待。
+3. 同窗口停止后恢复沿用账号、成片、封面与合集，不重复上传。
+4. 关闭测试应用后重新启动，保存昵称带入宿主状态和实际输入框，但仍等待一次明确确认。
+5. 不同头像对象仍等待重新核对，并清除原账号的合集与完成证明；昵称记忆不代替身份。
+6. 测试任务保持 ready、无发布记录，最终发布按钮点击为0。
+
+最终结果与界面截图为 `output/playwright/douyin-account/native-result.json`、`account-confirmation.png`。本轮没有读取用户截图时的真实 DOM；CDN/尺寸变化是已复现的代码缺陷，不能写成现场唯一原因。没有操作真实抖音账号或真实素材上传，也没有替换当前运行的 `D:\书引 AI\shuyin-ai.exe` 或构建/安装 NSIS 更新包。下一步通过 fix/patch 发布含修复的正式桌面构建，再在用户当前任务核对；最终发布仍由用户完成。
+
 ## 已选合集误报与重复账号确认（2026-11-01）
 
 ### 根因与最小修复

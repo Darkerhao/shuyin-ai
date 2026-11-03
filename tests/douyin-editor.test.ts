@@ -179,6 +179,17 @@ describe('official editor adapter safeguards (local DOM fixtures)', () => {
     avatar.style.backgroundImage = 'url("https://example.test/another.png?size=80")'
     expect(inspect().account.key).not.toBe(original)
   })
+  it('keeps one account identity when Douyin serves the same avatar from another CDN or at another size', () => {
+    const inspect = () => runInNewContext(readFileSync('src-tauri/src/douyin_page.js', 'utf8'), { document, location: pageLocation, navigator, getComputedStyle })
+    document.body.insertAdjacentHTML('beforeend', '<div id="header-avatar"><div class="avatar-a"></div></div><span id="douyin-creator-master-side-upload">作品发布</span>')
+    const avatar = document.querySelector('.avatar-a') as HTMLElement
+    avatar.style.backgroundImage = 'url("https://p11.douyinpic.com/aweme/100x100/aweme-avatar/tos-cn-i-account-a.jpeg?from=2956013662")'
+    const original = inspect().account.key
+    avatar.style.backgroundImage = 'url("https://p3.douyinpic.com/aweme/200x200/aweme-avatar/tos-cn-i-account-a.jpeg?from=another-page")'
+    expect(inspect().account.key).toBe(original)
+    avatar.style.backgroundImage = 'url("https://p3.douyinpic.com/aweme/200x200/aweme-avatar/tos-cn-i-account-b.jpeg")'
+    expect(inspect().account.key).not.toBe(original)
+  })
   it('cannot claim no collection while another selection is present or accept an unloaded list', () => {
     document.body.insertAdjacentHTML('beforeend', '<div class="semi-select select-collection-a"><span class="semi-select-selection-text">手工合集</span></div>')
     expect(act('selectCollection', { name: null })).toMatchObject({ ok: false })
