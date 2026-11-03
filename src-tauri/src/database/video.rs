@@ -16,6 +16,7 @@ use std::{
 };
 
 mod editor;
+mod revision;
 
 #[derive(Debug)]
 pub struct VideoImageSnapshot {

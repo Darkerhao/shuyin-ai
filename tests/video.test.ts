@@ -9,6 +9,8 @@ import { emptyProject } from '../src/types/project'
 import { emptyProvider } from '../src/types/ai'
 import { chooseSelect } from './ui'
 import type { VideoJob } from '../src/types/video'
+import VideoSceneRevision from '../src/modules/video/VideoSceneRevision.vue'
+import VideoSubtitleEditor from '../src/modules/video/VideoSubtitleEditor.vue'
 import * as drafts from '../src/services/drafts'
 vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
 vi.mock('../src/services/video', () => ({ originalCues: vi.fn(), settings: vi.fn(), saveSettings: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), mediaSource: vi.fn(), chooseRuntimePath: vi.fn(), chooseImage: vi.fn(), importImage: vi.fn(), readImage: vi.fn(), startIllustration: vi.fn(), executeIllustration: vi.fn() }))
@@ -36,6 +38,40 @@ async function render(onStoryboardUpdate?: () => void) {
   const wrapper = mount({ template: '<router-view />' }, { global: { plugins: [router], mixins: [{ updated() { if (this.$options.name === 'UiSelect' && this.$el.parentElement?.closest('.video-scenes')) onStoryboardUpdate?.() } }] } }); mounted.push(wrapper)
   await flushPromises(); return wrapper
 }
+it('adopts only the selected scene into its existing automatic draft without changing subtitles or other unsaved scenes', async () => {
+  vi.useFakeTimers()
+  const current = structuredClone(job)
+  current.plan.duration = 12
+  current.plan.cues = Array.from({ length: 3 }, (_, i) => ({ start: i * 4, end: i * 4 + 3, text: `字幕${i}` }))
+  current.plan.scenes = current.plan.cues.map((_, i) => ({ first: i, last: i, kind: 'focus', title: `分镜${i}`, beats: [{ cue: i, object: 'book', action: 'draw', label: '原书' }] }))
+  const srt = current.plan.cues.map((cue, i) => `${i+1}\n00:00:${String(cue.start).padStart(2, '0')},000 --> 00:00:${String(cue.end).padStart(2, '0')},000\n${cue.text}\n`).join('\n')
+  vi.mocked(api.listJobs).mockResolvedValue([current]); vi.mocked(api.subtitles).mockResolvedValue(srt)
+  const wrapper = await render()
+  await wrapper.get('[aria-label="第1镜标题"]').setValue('其他镜头未保存的修改')
+  await wrapper.get('[aria-label="重新生成第2镜"]').trigger('click'); await flushPromises()
+  const dialog = wrapper.getComponent(VideoSceneRevision)
+  expect(dialog.props('input').sceneIndex).toBe(1)
+  expect(dialog.props('input').scenes[0]!.title).toBe('其他镜头未保存的修改')
+  const revised = { ...current.plan.scenes[1]!, title: '只替换第二镜' }
+  dialog.vm.$emit('adopt', revised); await flushPromises()
+  await vi.advanceTimersByTimeAsync(400)
+  const draft = vi.mocked(drafts.saveDraft).mock.lastCall![2]!.content as { subtitles: string; scenes: string }
+  expect(draft.subtitles).toBe(srt)
+  expect(JSON.parse(draft.scenes)).toEqual([{ ...current.plan.scenes[0], title: '其他镜头未保存的修改' }, revised, current.plan.scenes[2]])
+  expect(api.savePlan).not.toHaveBeenCalled()
+  expect(api.continueJob).not.toHaveBeenCalled()
+  expect(api.startJob).not.toHaveBeenCalled()
+})
+it('rejects a candidate if its editor snapshot changed instead of overwriting newer work', async () => {
+  const wrapper = await render()
+  await wrapper.get('[aria-label="重新生成第1镜"]').trigger('click'); await flushPromises()
+  const dialog = wrapper.getComponent(VideoSceneRevision)
+  wrapper.getComponent(VideoSubtitleEditor).vm.$emit('update:modelValue', '更新后的字幕'); await flushPromises()
+  dialog.vm.$emit('adopt', { ...job.plan.scenes[0], title: '过期候选' }); await flushPromises()
+  expect((wrapper.get('[aria-label="第1镜标题"]').element as HTMLInputElement).value).toBe('观点')
+  expect((wrapper.get('#video-subtitles').element as HTMLTextAreaElement).value).toBe('更新后的字幕')
+  expect(wrapper.findComponent(VideoSceneRevision).exists()).toBe(false)
+})
 it('restores the last edited task, unsaved SRT, storyboard and cursor after remounting without saving a plan', async () => {
   const content = { subtitles: '还没写完的 SRT', scenes: JSON.stringify([{ ...job.plan.scenes[0], title: '暂存镜头' }]), position: { section: 'srt', index: 0, onlyChanges: true, cursor: 4 } }
   vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: '1', content })

@@ -8,6 +8,7 @@ import VideoJobProgress from './VideoJobProgress.vue'
 import VideoSceneEditor from './VideoSceneEditor.vue'
 import VideoSubtitleEditor from './VideoSubtitleEditor.vue'
 import VideoEnvironmentCheck from './VideoEnvironmentCheck.vue'
+import VideoSceneRevision from './VideoSceneRevision.vue'
 import { initialPosition, type VideoEditorDraft } from './subtitles'
 import { inspectStoryboard } from './storyboard'
 import { Button } from '@/components/ui/button'
@@ -22,7 +23,7 @@ import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { visualCatalog, videoStatuses, type VideoCue, type VideoJob, type VideoScene, type VideoSettings } from '../../types/video'
+import { visualCatalog, videoStatuses, type VideoCue, type VideoJob, type VideoScene, type VideoSceneRevisionInput, type VideoSettings } from '../../types/video'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -30,7 +31,8 @@ const desktop = isDesktop()
 const { busy: operationBusy, error, message, run } = useOperation()
 const imageWorking = ref(false)
 const environmentWorking = ref(false)
-const busy = computed(() => operationBusy.value || imageWorking.value || environmentWorking.value)
+const sceneRevision = ref<VideoSceneRevisionInput>()
+const busy = computed(() => operationBusy.value || imageWorking.value || environmentWorking.value || !!sceneRevision.value)
 const title = ref('')
 const loaded = ref(false)
 const assets = ref<Asset[]>([])
@@ -212,6 +214,24 @@ const preview = () => run(async () => {
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
 async function refreshImages() { assets.value = await listAssets(props.id) }
+const reviseScene = (sceneIndex: number) => run(async () => {
+  if (!selected.value || !editable.value || !completePlan.value || running.value || !providerId.value) return
+  await autosave.flush()
+  position.value = { ...position.value, section: 'scene', index: sceneIndex }
+  sceneRevision.value = { jobId: selected.value.id, runId: selected.value.runId, providerId: providerId.value, sceneIndex, subtitles: subtitleText.value, scenes: JSON.parse(sceneSnapshot.value), instruction: '' }
+})
+function adoptScene(candidate: VideoScene) {
+  const snapshot = sceneRevision.value
+  if (!snapshot) return
+  if (!editable.value || selected.value?.id !== snapshot.jobId || selected.value.runId !== snapshot.runId || subtitleText.value !== snapshot.subtitles || sceneSnapshot.value !== JSON.stringify(snapshot.scenes)) {
+    error.value = '编辑内容或任务已变化，候选已过期，请重新生成这一镜。'
+    sceneRevision.value = undefined
+    return
+  }
+  scenes.value[snapshot.sceneIndex] = candidate
+  sceneRevision.value = undefined
+  message.value = `已采用第${snapshot.sceneIndex + 1}镜，其余分镜和字幕保留。请保存校对并查看试片。`
+}
 function focusScene(index: number) {
   position.value = { ...position.value, section: 'scene', index }
   const card = jobPanel.value?.querySelector<globalThis.HTMLElement>(`#video-scene-${index}`)
@@ -335,6 +355,13 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
     @dismiss="message = ''"
   />
   <OperationFeedback :error="selected?.error || mediaError" />
+  <VideoSceneRevision
+    v-if="sceneRevision"
+    :input="sceneRevision"
+    :providers="providers"
+    @adopt="adoptScene"
+    @close="sceneRevision = undefined"
+  />
   <p
     v-if="!desktop"
     class="notice"
@@ -830,6 +857,8 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               :providers="imageProviders"
               :disabled="busy"
               :image-disabled="busy || running || !completePlan"
+              :revision-disabled="running || !completePlan || !providerId"
+              @revise="reviseScene(index)"
               @focusin="position = { ...position, section: 'scene', index }"
               @update:scene="scenes[index] = $event"
               @refresh-assets="refreshImages"

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::OnceLock};
 
 pub mod environment;
+pub mod revision;
 pub mod subtitles;
 
 pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v5.md");

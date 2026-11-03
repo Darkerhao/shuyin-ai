@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 单镜重新生成（2026-11-03，仍为v16）
+
+无表、列或SQL迁移。复用ai_tasks自由TEXT用途`video_scene_revision`，prompt_version为video-scene-revision-v1，input_json记录`{input:{jobId,runId,providerId,sceneIndex,subtitles,scenes,instruction},source}`；source是正式plan序列化后的SHA256字节数组。状态沿用pending/running/succeeded/failed/cancelled，模型选择与错误记录沿用现有字段。
+
+start/prepare/finish均不写video_jobs.plan_json或editor_draft_json。准备与返回结果时检查源任务可编辑、run_id及正式计划摘要；取消状态在相同SQLite连接锁内检查，迟到候选不能成功返回。成功仅标记模型调用结束，不写writing_versions、素材或候选历史。候选由页面先对照再采用，采用只变更当前编辑的scenes[index]并进入原视频自动草稿；正式保存仍由save_video_plan校验写入。未采用候选不恢复；已采用草稿随原备份/恢复流程保留。重启时pending/running继续按既有规则标为中断。
+
 ## 视频运行环境检查（2026-11-03，仍为v16）
 
 无表、列或迁移变化。检查读取原工作目录，接收页面当前VideoSettings并返回临时结果，不写app_settings或video_jobs。只有用户点击原“保存运行环境”才更新原video_runtime设置。识别路径、逐项结果与探测版本不持久化，避免把旧检查结果当成当前可用性。

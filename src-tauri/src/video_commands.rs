@@ -133,6 +133,38 @@ pub fn start_video_illustration(
 ) -> Result<String, String> {
     database.start_video_illustration(input)
 }
+
+#[tauri::command]
+pub fn start_video_scene_revision(
+    database: State<'_, Database>,
+    input: video::revision::SceneRevisionInput,
+) -> Result<String, String> {
+    database.start_video_scene_revision(input)
+}
+
+#[tauri::command]
+pub async fn execute_video_scene_revision(
+    database: State<'_, Database>,
+    vault: State<'_, SystemCredentials>,
+    active: State<'_, crate::ai::ActiveTasks>,
+    id: String,
+) -> Result<Scene, crate::ai::AiError> {
+    use crate::ai::AiError;
+    let database = database.inner();
+    let vault = vault.inner();
+    let id = id.as_str();
+    ai_commands::run_task(database, active.inner(), id, |mut receiver| async move {
+        let prepared = database.prepare_video_scene_revision(id).map_err(AiError::database)?;
+        let request = ai_commands::request(prepared.provider, vault, &video::revision::prompt(), prepared.user)?;
+        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?;
+        let raw = tokio::select! {
+            biased;
+            _ = receiver.changed() => return Err(AiError::new("cancelled", "单镜生成已停止，原字幕和分镜保留。")),
+            response = provider.generate(request) => response?,
+        };
+        database.finish_video_scene_revision(id, &raw).map_err(AiError::database)
+    }).await
+}
 #[tauri::command]
 pub async fn execute_video_illustration(
     database: State<'_, Database>,

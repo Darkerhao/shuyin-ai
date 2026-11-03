@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import VideoImageEditor from './VideoImageEditor.vue'
 import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { Asset } from '../../types/project'
@@ -10,9 +11,10 @@ import { visualCatalog, type VideoCue, type VideoScene, type VideoSceneImage } f
 defineProps<{
   projectId: string; sceneIndex: number; cues: VideoCue[]
   assets: Asset[]; providers: ModelProvider[]; disabled: boolean; imageDisabled: boolean
+  revisionDisabled: boolean
 }>()
 const scene = defineModel<VideoScene>('scene', { required: true })
-const emit = defineEmits<{ 'refresh-assets': []; working: [value: boolean] }>()
+const emit = defineEmits<{ 'refresh-assets': []; working: [value: boolean]; revise: [] }>()
 const sceneKindLabel = (kind: VideoScene['kind']) => Object.hasOwn(visualCatalog.kinds, kind) ? visualCatalog.kinds[kind as keyof typeof visualCatalog.kinds] : '旧版文字图解'
 function setSceneImage(image: VideoSceneImage | undefined) {
   if (image) { scene.value.image = image; scene.value.beats = [] }
@@ -25,6 +27,14 @@ function setSceneImage(image: VideoSceneImage | undefined) {
     :id="`video-scene-${sceneIndex}`"
     class="video-scene"
   >
+    <Button
+      variant="outline"
+      :disabled="disabled || revisionDisabled"
+      :aria-label="`重新生成第${sceneIndex + 1}镜`"
+      @click="emit('revise')"
+    >
+      重新生成这一镜
+    </Button>
     <p class="muted">
       第 {{ sceneIndex + 1 }} 镜 · 字幕 {{ scene.first + 1 }}—{{ scene.last + 1 }} · {{ sceneKindLabel(scene.kind) }}
     </p><Input
