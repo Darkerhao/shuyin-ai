@@ -1,12 +1,12 @@
 use crate::{
-    ai::{OpenAiCompatible, TextProvider, TIMEOUT},
+    ai::{OpenAiCompatible, TextProvider, TextRequest, TIMEOUT},
     ai_commands,
     credentials::SystemCredentials,
     database::{
         video::{StartVideoInput, VideoJob},
         Database,
     },
-    video::{self, Cue, PreviewRequest, Scene, VideoProgress, VideoSettings, VideoWork},
+    video::{self, subtitles, Cue, PreviewRequest, Scene, VideoProgress, VideoSettings, VideoWork},
     video_process as process,
 };
 use serde::{Deserialize, Serialize};
@@ -444,6 +444,37 @@ async fn digest(path: PathBuf) -> Result<String, String> {
         .map_err(|e| e.to_string())?
 }
 
+async fn proofread_subtitles(
+    db: &Database,
+    job: &mut VideoJob,
+    provider: &impl TextProvider,
+    request: &TextRequest,
+    flag: Arc<AtomicBool>,
+) -> Result<(), String> {
+    while subtitles::pending(&job.plan) {
+        let first = job
+            .plan
+            .subtitle_review
+            .as_ref()
+            .ok_or("字幕校对进度缺失。")?
+            .completed;
+        let end = (first + subtitles::BATCH_SIZE).min(job.plan.cues.len());
+        let mut request = request.clone();
+        request.system = subtitles::PROMPT.into();
+        request.user = subtitles::input(&job.plan, first, end);
+        let raw = tokio::select! { biased;
+            _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()),
+            response = provider.generate(request) => response.map_err(|e| format!("字幕校对失败：{} 已保存进度保留，可继续重试。", e.message))?,
+        };
+        if flag.load(Ordering::SeqCst) {
+            return Err("视频任务已停止。".into());
+        }
+        subtitles::apply(&mut job.plan, first, end, &raw)?;
+        db.save_video_progress(&job.id, job.run_id, &job.plan, "proofreading")?;
+    }
+    Ok(())
+}
+
 async fn execute(
     app: &AppHandle,
     mut job: VideoJob,
@@ -618,13 +649,19 @@ async fn execute(
         if digest(audio.clone()).await? != job.plan.audio_sha256 {
             return Err("转写期间音频发生变化，未采用字幕。".into());
         }
-        db.save_video_progress(&job.id, job.run_id, &job.plan, "storyboard")?;
+        db.save_video_progress(&job.id, job.run_id, &job.plan, "transcribing")?;
     }
     if flag.load(Ordering::SeqCst) {
         return Err("视频任务已停止。".into());
     }
     let subtitle = directory.join("transcript.srt");
     process::write_new(&subtitle, video::to_srt(&job.plan.cues).as_bytes())?;
+    if job.plan.subtitle_review.is_none() && job.plan.scenes.is_empty() {
+        job.plan.subtitle_review = Some(subtitles::SubtitleReview::new(
+            db.video_subtitle_reference(&job.id)?,
+        ));
+        db.save_video_progress(&job.id, job.run_id, &job.plan, "proofreading")?;
+    }
     db.register_video_subtitle(&job.id, job.run_id, &subtitle)?;
     let mut first = job.plan.scenes.last().map_or(0, |s| s.last + 1);
     if first > 0 {
@@ -635,6 +672,23 @@ async fn execute(
             .as_deref()
             .ok_or("分镜模型已被移除，请新建任务。")?,
     )?;
+    if subtitles::pending(&job.plan) {
+        let request = ai_commands::request(
+            config.clone(),
+            app.state::<SystemCredentials>().inner(),
+            subtitles::PROMPT,
+            String::new(),
+        )
+        .map_err(|e| e.message)?;
+        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url).map_err(|e| e.message)?;
+        proofread_subtitles(&db, &mut job, &provider, &request, flag.clone()).await?;
+        if digest(audio.clone()).await? != job.plan.audio_sha256 {
+            return Err("校对期间原音频发生变化，请新建视频任务。".into());
+        }
+        let corrected = directory.join("proofread.srt");
+        process::write_new(&corrected, video::to_srt(&job.plan.cues).as_bytes())?;
+        db.register_video_subtitle(&job.id, job.run_id, &corrected)?;
+    }
     while first < job.plan.cues.len() {
         if flag.load(Ordering::SeqCst) {
             return Err("视频任务已停止。".into());
@@ -670,6 +724,164 @@ async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ReviewProvider {
+        requests: Mutex<Vec<TextRequest>>,
+        fail_at: Option<usize>,
+    }
+
+    impl TextProvider for ReviewProvider {
+        fn generate(
+            &self,
+            request: TextRequest,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<String, crate::ai::AiError>> + Send + '_>,
+        > {
+            Box::pin(async move {
+                let user: serde_json::Value = serde_json::from_str(&request.user).unwrap();
+                assert_eq!(request.system, subtitles::PROMPT);
+                assert_eq!(request.reasoning_effort.as_deref(), Some("high"));
+                self.requests.lock().unwrap().push(request);
+                if user["cues"][0]["index"].as_u64().map(|i| i as usize) == self.fail_at {
+                    return Err(crate::ai::AiError::new("timeout", "本机模拟超时"));
+                }
+                Ok(serde_json::to_string(
+                    &user["cues"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|cue| serde_json::json!({"index":cue["index"],"text":"我是甲子"}))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn subtitle_proofreading_resumes_saved_batches_and_preserves_original_srt() {
+        let (dir, db, input) = crate::database::video::tests::fixture();
+        let job = db.create_video_job(input).unwrap();
+        let mut job = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        job.plan.duration = 65.0;
+        job.plan.cues = (0..65)
+            .map(|i| Cue {
+                start: i as f64,
+                end: i as f64 + 0.9,
+                text: "我是夹子".into(),
+            })
+            .collect();
+        job.plan.subtitle_review = Some(subtitles::SubtitleReview::new(
+            subtitles::SubtitleReference::from_prompt(
+                "原书".into(),
+                String::new(),
+                "## 固定开场\n我是甲子",
+            ),
+        ));
+        db.save_video_progress(&job.id, job.run_id, &job.plan, "proofreading")
+            .unwrap();
+        let original = video::to_srt(&job.plan.cues);
+        let original_path = dir.path().join("original.srt");
+        process::write_new(&original_path, original.as_bytes()).unwrap();
+        db.register_video_subtitle(&job.id, job.run_id, &original_path)
+            .unwrap();
+        assert_eq!(db.video_job(&job.id).unwrap().stage, "proofreading");
+        let request = TextRequest {
+            base_url: "http://localhost/v1".into(),
+            model: "selected-model".into(),
+            reasoning_effort: Some("high".into()),
+            key: None,
+            system: String::new(),
+            user: String::new(),
+        };
+        let flag = Arc::new(AtomicBool::new(false));
+        let provider = ReviewProvider {
+            requests: Mutex::new(vec![]),
+            fail_at: Some(60),
+        };
+        assert!(
+            proofread_subtitles(&db, &mut job, &provider, &request, flag.clone())
+                .await
+                .unwrap_err()
+                .contains("本机模拟超时")
+        );
+        assert_eq!(provider.requests.lock().unwrap().len(), 2);
+        let saved = db.video_job(&job.id).unwrap();
+        assert_eq!(saved.plan.subtitle_review.as_ref().unwrap().completed, 60);
+        assert_eq!(saved.plan.cues[59].text, "我是甲子");
+        assert_eq!(saved.plan.cues[60].text, "我是夹子");
+        assert!(saved.plan.scenes.is_empty());
+        assert_eq!(std::fs::read_to_string(&original_path).unwrap(), original);
+        db.recover_video_jobs().unwrap();
+        assert!(db
+            .save_video_progress(&job.id, job.run_id, &job.plan, "proofreading")
+            .is_err());
+        drop(db);
+        let db = Database::open(dir.path().join("data.sqlite3"));
+        let mut resumed = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        let provider = ReviewProvider {
+            requests: Mutex::new(vec![]),
+            fail_at: None,
+        };
+        proofread_subtitles(&db, &mut resumed, &provider, &request, flag.clone())
+            .await
+            .unwrap();
+        assert_eq!(provider.requests.lock().unwrap().len(), 1);
+        assert_eq!(resumed.plan.subtitle_review.as_ref().unwrap().completed, 65);
+        assert!(resumed.plan.cues.iter().all(|cue| cue.text == "我是甲子"));
+        let corrected = dir.path().join("proofread.srt");
+        process::write_new(&corrected, video::to_srt(&resumed.plan.cues).as_bytes()).unwrap();
+        db.register_video_subtitle(&resumed.id, resumed.run_id, &corrected)
+            .unwrap();
+        assert_eq!(db.video_job(&resumed.id).unwrap().stage, "storyboard");
+        assert_eq!(std::fs::read_to_string(&original_path).unwrap(), original);
+        proofread_subtitles(&db, &mut resumed, &provider, &request, flag.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            provider.requests.lock().unwrap().len(),
+            1,
+            "completed review must not be requested again"
+        );
+        db.end_video_job(&resumed.id, resumed.run_id, "awaiting_confirmation", "")
+            .unwrap();
+        db.edit_video_plan(&resumed.id, resumed.plan.cues.clone(), vec![])
+            .unwrap();
+        assert!(db
+            .video_job(&resumed.id)
+            .unwrap()
+            .plan
+            .subtitle_review
+            .is_none());
+
+        // A stop before the next request does not call the provider or advance the saved cursor.
+        resumed = db
+            .claim_video_job(&resumed.id, VideoWork::Prepare, None)
+            .unwrap();
+        resumed.plan.subtitle_review = Some(subtitles::SubtitleReview::new(Default::default()));
+        db.save_video_progress(&resumed.id, resumed.run_id, &resumed.plan, "proofreading")
+            .unwrap();
+        flag.store(true, Ordering::SeqCst);
+        assert!(
+            proofread_subtitles(&db, &mut resumed, &provider, &request, flag)
+                .await
+                .is_err()
+        );
+        assert_eq!(provider.requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            db.video_job(&resumed.id)
+                .unwrap()
+                .plan
+                .subtitle_review
+                .unwrap()
+                .completed,
+            0
+        );
+    }
 
     fn fixture(directory: &Path) -> (ActiveVideo, VideoJob) {
         (

@@ -63,6 +63,36 @@ it('shows progress from saved storyboard coverage, including the saved scene pre
   expect(wrapper.get('[aria-current="step"]').text()).toContain('动画分镜')
 })
 
+it('keeps subtitle proofreading in the first step and reports only saved reviewed cues', async () => {
+  const plan = { ...job.plan,
+    cues: Array.from({ length: 120 }, (_, i) => ({ start: i, end: i + 0.9, text: i < 60 ? `已校对${i}` : `尚未校对${i}` })),
+    subtitleReview: { promptVersion: 'subtitle-proofread-v1', completed: 60, reference: { book: '原书', author: '', opening: '我是甲子', ending: '下期见' } },
+  }
+  const wrapper = render({ ...job, stage: 'proofreading', plan })
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('50')
+  expect(wrapper.text()).toContain('已校对 60 / 120 条字幕')
+  expect(wrapper.text()).toContain('参考音频提示词的开场与结尾')
+  expect(wrapper.text()).toContain('最近校对的字幕')
+  expect(wrapper.text()).toContain('已校对59')
+  expect(wrapper.text()).not.toContain('尚未校对')
+  expect(wrapper.get('[aria-current="step"]').text()).toContain('原声字幕')
+  expect(wrapper.findAll('.is-done')).toHaveLength(0)
+  await wrapper.setProps({ job: { ...job, stage: 'proofreading', status: 'failed', plan } })
+  expect(wrapper.text()).toContain('停在「AI 校对原声字幕」')
+  expect(wrapper.text()).toContain('已校对59')
+  expect(wrapper.find('[role="progressbar"]').exists()).toBe(false)
+})
+
+it('does not show unreviewed text as a recent proofreading result before the first batch', () => {
+  const wrapper = render({ ...job, stage: 'proofreading', plan: { ...job.plan,
+    cues: [{ start: 0, end: 1, text: '尚未校对的原文' }],
+    subtitleReview: { promptVersion: 'subtitle-proofread-v1', completed: 0, reference: { book: '原书', author: '', opening: '', ending: '' } },
+  } })
+  expect(wrapper.text()).toContain('已校对 0 / 1 条字幕')
+  expect(wrapper.text()).toContain('首批校对完成并保存后')
+  expect(wrapper.text()).not.toContain('尚未校对的原文')
+})
+
 it('ends running feedback at confirmation, failure, cancellation and completion', async () => {
   vi.useFakeTimers()
   const wrapper = render()

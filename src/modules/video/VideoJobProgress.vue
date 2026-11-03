@@ -21,21 +21,23 @@ const steps = ['原声字幕', '动画分镜', '确认分镜', '画面渲染', '
 const step = computed(() => {
   if (props.job.status === 'succeeded') return steps.length
   if (props.job.status === 'awaiting_confirmation') return 2
-  return { preparing: 0, transcribing: 0, storyboard: 1, previewing: 2, rendering: 3, validating: 4, complete: 4 }[props.job.stage] ?? 0
+  return { preparing: 0, transcribing: 0, proofreading: 0, storyboard: 1, previewing: 2, rendering: 3, validating: 4, complete: 4 }[props.job.stage] ?? 0
 })
 const covered = computed(() => (props.job.plan.scenes.at(-1)?.last ?? -1) + 1)
+const reviewed = computed(() => props.job.plan.subtitleReview?.completed ?? 0)
 const percent = computed(() => {
   const p = progress.value
   const measured = p && rendering.value && renderSteps.some(item => item.phase === p.phase && (p.phase === 'rendering_frames' || item.unit === p.unit))
   if (p && p.total > 0 && (props.job.stage === 'transcribing' || measured)) return Math.min(100, Math.max(0, Math.floor(p.completed / p.total * 100)))
   if (props.job.stage === 'storyboard' && props.job.plan.cues.length) return Math.min(100, Math.floor(covered.value / props.job.plan.cues.length * 100))
+  if (props.job.stage === 'proofreading' && props.job.plan.cues.length) return Math.min(100, Math.floor(reviewed.value / props.job.plan.cues.length * 100))
   return null
 })
 const phaseCopy: Record<string, [string, string]> = {
   loading_model: ['正在唤醒本地语音模型', '模型在你的电脑上加载。准备好后，识别出的字幕会逐段出现在下方。'],
   decoding_audio: ['正在读取原声音频', '正在解码音频并定位人声，为逐句识别做准备。'],
   recognizing: ['正在听懂你的原声', '按原声时间轴逐段识别，字幕预览会随识别进展更新。'],
-  finalizing_subtitles: ['正在整理字幕时间轴', '原声识别已结束，正在核对字幕，随后开始编排动画分镜。'],
+  finalizing_subtitles: ['正在整理字幕时间轴', '原声识别已结束，保存字幕后将由文本模型逐段校对，再编排动画分镜。'],
   checking_layout: ['正在检查每一镜的排版', '逐镜检查文字与图形，检查通过后开始绘制视频画面。'],
   rendering_thumbnails: ['正在生成分镜缩略图', '从本次真实绘图中截取，不使用另一套预览画面。'],
   rendering_frames: ['正在让分镜动起来', '按已完成的视频片段更新真实帧数，复用的缓存也会计入。画面就绪后，再合成字幕与原声。'],
@@ -52,7 +54,8 @@ const copy = computed<[string, string]>(() => {
   if (job.status === 'failed') return ['这一步没有完成', `停在「${videoStages[job.stage] || job.stage}」。已保存的字幕与分镜保留，可检查原因后继续。`]
   if (job.status === 'cancelled') return ['制作已停止', '已保存的字幕与分镜保留，需要时可继续准备或重新确认制作。']
   if (job.status === 'draft') return ['准备好，再开始', '选好音频和字幕来源，即可开始制作。']
-  if (job.stage === 'transcribing' && job.sourceSubtitleId) return ['正在读取已有字幕', '校验字幕内容与时间码后，将直接进入动画分镜编排。']
+  if (job.stage === 'transcribing' && job.sourceSubtitleId) return ['正在读取已有字幕', '校验字幕内容与时间码后，将由文本模型逐段校对，再编排动画分镜。']
+  if (job.stage === 'proofreading') return ['正在逐段校对原声字幕', '参考音频提示词的开场与结尾，结合上下文检查正文错别字、人名和术语。保留原时间码，不确定的文字留待试听。']
   const phase = progress.value?.phase
   if (job.stage === 'previewing') return ['正在制作原声试片', `${phase === 'checking_video' ? '正在核对试片' : phaseCopy[phase ?? '']?.[0] || '正在准备绘制环境'}。仅预览所选片段，不重新识别字幕，不登记为正式成片。`]
   if (phase && phaseCopy[phase]) return phaseCopy[phase]
@@ -75,7 +78,7 @@ const speed = computed(() => {
   return fresh.value && p?.unit === 'seconds' && p.speed && Number.isFinite(p.speed) && p.speed > 0 ? `${p.speed.toFixed(2)}×` : ''
 })
 const cueCount = computed(() => progress.value?.cueCount || props.job.plan.cues.length)
-const previewCues = computed(() => progress.value?.preview.length ? progress.value.preview : props.job.plan.cues.slice(-3))
+const previewCues = computed(() => props.job.stage === 'proofreading' ? props.job.plan.cues.slice(Math.max(0, reviewed.value - 3), reviewed.value) : progress.value?.preview.length ? progress.value.preview : props.job.plan.cues.slice(-3))
 const previewScenes = computed(() => props.job.plan.scenes.slice(-2))
 const measure = computed(() => {
   if (props.job.stage === 'transcribing' && progress.value?.total) return `已识别 ${time(progress.value.completed)} / ${time(progress.value.total)}`
@@ -86,6 +89,7 @@ const measure = computed(() => {
     if (p.unit === 'seconds' && ['rendering_subtitles', 'muxing_audio'].includes(p.phase)) return `已${p.phase === 'rendering_subtitles' ? '合成' : '合入'} ${time(p.completed)} / ${time(p.total)}`
   }
   if (props.job.stage === 'storyboard' && props.job.plan.cues.length) return `已编排 ${covered.value} / ${props.job.plan.cues.length} 条字幕`
+  if (props.job.stage === 'proofreading' && props.job.plan.cues.length) return `已校对 ${reviewed.value} / ${props.job.plan.cues.length} 条字幕`
   return phaseCopy[progress.value?.phase ?? '']?.[0] ?? videoStages[props.job.stage] ?? props.job.stage
 })
 watch(active, value => {
@@ -264,7 +268,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
         </template>
         <template v-else-if="previewCues.length">
           <div class="preview-heading">
-            <AppIcon name="headphones" /><span>{{ progress?.preview.length ? '实时字幕预览' : '已保存字幕预览' }}</span><small>待校对</small>
+            <AppIcon name="headphones" /><span>{{ job.stage === 'proofreading' ? '最近校对的字幕' : progress?.preview.length ? '实时字幕预览' : '已保存字幕预览' }}</span><small>{{ job.plan.subtitleReview ? '仍需试听核对' : '待校对' }}</small>
           </div>
           <ol class="subtitle-preview">
             <li
@@ -279,7 +283,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
           v-else
           class="preview-placeholder"
         >
-          <AppIcon name="headphones" /><strong>让每一句原声，慢慢成为画面</strong><p>首段字幕识别出来后，将在这里实时呈现。</p>
+          <AppIcon name="headphones" /><strong>让每一句原声，慢慢成为画面</strong><p>{{ job.stage === 'proofreading' ? '首批校对完成并保存后，将在这里展示。' : '首段字幕识别出来后，将在这里实时呈现。' }}</p>
         </div>
       </div>
     </div>

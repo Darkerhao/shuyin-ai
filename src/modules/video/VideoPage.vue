@@ -305,7 +305,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           </Select>
         </div>
         <div class="video-field">
-          <label for="video-provider">分镜文本模型</label><Select
+          <label for="video-provider">字幕校对与分镜模型</label><Select
             v-model="providerId"
             :disabled="running || busy"
           >
@@ -369,7 +369,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
         v-if="!providers.length"
         class="notice"
       >
-        请先在模型设置中配置可用的文本模型，用于生成分镜。
+        请先在模型设置中配置可用的文本模型，用于字幕校对和生成分镜。
       </p>
       <Button
         :disabled="running || busy || !audioId || !providerId || !config.engineRoot || !config.nodePath"
@@ -389,7 +389,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
       </CollapsibleTrigger>
       <CollapsibleContent class="video-runtime-content">
         <p class="muted">
-          独立安装的引擎还需要 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘；不自动下载，不向模型服务发送音频，仅将字幕发给所选文本模型生成分镜。
+          独立安装的引擎还需要 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘；不自动下载。字幕生成后自动分批校对，再生成分镜，会增加文本模型用量与等待时间。仅发送字幕、书名、作者及已保存音频提示词的首尾参考，不发送音频。
         </p>
         <div class="video-form-grid">
           <div
@@ -542,7 +542,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
         <template v-if="editable && selected.plan.cues.length">
           <div class="video-editor-heading">
             <h3>字幕与分镜校对</h3><p class="muted">
-              以实际原声为准。人名、外语请试听核对；每条字幕最多32字。更改条数或内容后应重新生成分镜。
+              以实际原声为准，AI 校对后仍需试听人名和外语；每条字幕最多32字。“保存字幕并重新生成分镜”会先重新校对全文。原始 SRT 保留在本书素材中。
             </p>
           </div>
           <p

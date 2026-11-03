@@ -206,6 +206,27 @@ impl Database {
     pub fn video_job(&self, id: &str) -> Result<VideoJob, String> {
         self.with_connection(|c| get(c, id))
     }
+    pub fn video_subtitle_reference(
+        &self,
+        id: &str,
+    ) -> Result<crate::video::subtitles::SubtitleReference, String> {
+        self.with_connection(|c| {
+            let job = get(c, id)?;
+            let book = projects::get(c, &job.project_id)?;
+            let frozen = match &job.audio_asset_id {
+                Some(asset) => super::audio::prompt_for_asset(c, &job.project_id, asset)?,
+                None => None,
+            };
+            let prompt = match frozen {
+                Some(prompt) => prompt,
+                None => c.query_row(
+                    "SELECT json_extract(content_json,'$.audioPrompt') FROM writing_versions WHERE project_id=?1 AND kind='publishing' ORDER BY version_no DESC LIMIT 1",
+                    [&job.project_id], |row| row.get::<_, String>(0),
+                ).optional().map_err(|e| e.to_string())?.unwrap_or_default(),
+            };
+            Ok(crate::video::subtitles::SubtitleReference::from_prompt(book.input.title, book.input.author, &prompt))
+        })
+    }
     pub fn recover_video_jobs(&self) -> Result<(), String> {
         self.with_connection(|c| recover(c))
     }
@@ -325,6 +346,7 @@ impl Database {
                 }
                 image.sha256.clone_from(&snapshots[&image.asset_id].sha256);
             }
+            if cues != job.plan.cues || scenes.is_empty() { job.plan.subtitle_review = None; }
             job.plan.cues = cues; job.plan.scenes = scenes;
             c.execute(&format!("UPDATE video_jobs SET plan_json=?1,status='awaiting_confirmation',stage='storyboard',updated_at={NOW} WHERE id=?2"), params![serde_json::to_string(&job.plan).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
             Ok(())
@@ -345,9 +367,14 @@ impl Database {
             }
             let asset =
                 assets::register_existing(&tx, &job.project_id, path, Some("subtitle"), None)?;
+            let stage = if crate::video::subtitles::pending(&job.plan) {
+                "proofreading"
+            } else {
+                "storyboard"
+            };
             tx.execute(
-                "UPDATE video_jobs SET subtitle_asset_id=?1,stage='storyboard' WHERE id=?2",
-                params![asset, id],
+                "UPDATE video_jobs SET subtitle_asset_id=?1,stage=?2 WHERE id=?3",
+                params![asset, stage, id],
             )
             .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
@@ -381,9 +408,9 @@ impl Database {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    fn fixture() -> (tempfile::TempDir, Database, StartVideoInput) {
+    pub(crate) fn fixture() -> (tempfile::TempDir, Database, StartVideoInput) {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path().join("data.sqlite3"));
         let book = db.save_project(None, serde_json::from_value(serde_json::json!({"title":"视频测试书", "author":"", "publisher":"", "isbn":"", "description":"", "sourceNotes":"", "theme":"", "targetAudience":"", "contentStyle":"", "targetDurationSeconds":600,"status":"draft"})).unwrap()).unwrap();
@@ -413,6 +440,40 @@ mod tests {
             c.execute("INSERT INTO model_providers(id,name,provider_type,base_url,model_name,is_default,is_enabled,model_kind,created_at,updated_at) VALUES('replacement','new','openai-compatible','http://127.0.0.1:4321/v1','replacement-model',0,1,'text','now','now'),('disabled','disabled','openai-compatible','http://localhost/v1','disabled-model',0,0,'text','now','now'),('image','image','openai-compatible','http://localhost/v1','image-model',0,1,'image','now','now')", []).unwrap();
             Ok(())
         }).unwrap();
+    }
+
+    #[test]
+    fn subtitle_reference_prefers_the_audio_snapshot_and_stays_with_its_book() {
+        let (_dir, db, input) = fixture();
+        let project = input.project_id.clone();
+        let audio = input.audio_asset_id.clone();
+        let job = db.create_video_job(input).unwrap();
+        assert!(db
+            .video_subtitle_reference(&job.id)
+            .unwrap()
+            .opening
+            .is_empty());
+        let prompt = "## 固定开场（逐字朗读）\n最新提示词的开场\n## 固定结尾（逐字朗读）\n最新结尾";
+        db.save_writing(serde_json::from_value(serde_json::json!({"projectId":project,"kind":"publishing","content":{"format":"publishing","title":"标题","description":"描述","audioPrompt":prompt},"basedOn":null,"isConfirmed":false})).unwrap()).unwrap();
+        assert_eq!(
+            db.video_subtitle_reference(&job.id).unwrap().opening,
+            "最新提示词的开场"
+        );
+        let frozen = serde_json::json!({"promptVersion":"audio-template-v3","prompt":"## 固定开场（逐字朗读）\n生成这份音频时的开场\n## 固定结尾（逐字朗读）\n原始结尾","targetDurationSeconds":600,"format":"deep_dive","source":{"kind":"text","text":"书籍来源"}}).to_string();
+        db.with_connection(|c| {
+            c.execute("INSERT INTO audio_jobs(id,project_id,input_json,status,stage,run_id,asset_id,created_at,updated_at) VALUES('frozen',?1,?2,'succeeded','completed',1,?3,'now','now')", params![project,frozen,audio]).map_err(|e|e.to_string())?;
+            Ok(())
+        }).unwrap();
+        let reference = db.video_subtitle_reference(&job.id).unwrap();
+        assert_eq!(reference.opening, "生成这份音频时的开场");
+        assert_eq!(reference.ending, "原始结尾");
+        assert_eq!(reference.book, "视频测试书");
+        assert!(reference.author.is_empty());
+        db.with_connection(|c| {
+            assert!(super::super::audio::prompt_for_asset(c, "other-book", &audio)?.is_none());
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

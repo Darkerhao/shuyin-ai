@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 字幕校对进度与参考（2026-11-02，仍为v15）
+
+无表、列或SQL迁移。`video_jobs.plan_json`增加可省略的`subtitleReview: {promptVersion, completed, reference: {book, author, opening, ending}}`，记录已校对的连续字幕条数与开始校对时的参考快照。每个合法批次的cue文字、completed与stage=proofreading通过现有带run_id/status条件的UPDATE一起写入。字幕登记按是否还有未校对条目进入proofreading或storyboard；原始与校对SRT分别登记为本书素材，不覆盖源文件。
+
+校对参考只读取本书对应音频任务的冻结prompt，没有关联记录时读取本书最新publishing.audioPrompt；不增加音频任务关联字段。取消/失败/正常重启/恢复保留已校对内容与游标，旧运行无法写回。继续未完成任务不重新取参考，已完成校对不重复请求。人工修改字幕或清空分镜重建时移除subtitleReview；只保存画面修改则保留。
+
+旧plan缺字段按None读取，不自动重写或宣称已校对；旧任务已有分镜时继续保留，主动重建才校对。完整备份沿用原始/校对SRT素材及SQLite快照，不依赖运行缓存。新程序可读旧记录，旧程序严格JSON读取不保证读懂新字段，回退须使用升级前备份。
+
 ## 分镜重试的模型绑定（2026-11-02，仍为v15）
 
 无表、列或迁移变化。继续准备或重新生成分镜时，校验当前选择是已启用的文本模型，再在同一条UPDATE中写入既有provider_id、running状态及递增run_id；模型校验或任务认领失败时保留原绑定和任务数据。继续准备不改plan_json，已保存字幕和分镜可复用；试片与完整渲染不改绑模型。
