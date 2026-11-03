@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::OnceLock};
 
+pub mod subtitles;
+
 pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v4.md");
 pub const BATCH_SIZE: usize = 24;
 
@@ -79,7 +81,7 @@ pub struct VideoSettings {
     pub model_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cue {
     pub start: f64,
@@ -186,6 +188,8 @@ pub struct VideoPlan {
     pub duration: f64,
     pub cues: Vec<Cue>,
     pub scenes: Vec<Scene>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_review: Option<subtitles::SubtitleReview>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

@@ -143,6 +143,7 @@ pub fn normalize_base_url(value: &str) -> Result<String, String> {
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
+#[derive(Clone)]
 pub struct TextRequest {
     pub base_url: String,
     pub model: String,

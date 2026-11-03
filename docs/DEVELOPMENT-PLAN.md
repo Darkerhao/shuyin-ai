@@ -1,5 +1,36 @@
 # 书引 AI 开发计划与验收标准
 
+## 原声字幕自动校对（2026-11-02）
+
+实现：本地转写或读取SRT后，使用当前文本模型逐批校对全文，再生成分镜。每批60条附相邻上下文，首尾参考优先来自对应音频任务冻结提示词，无关联时读取本书最新已保存音频提示词；只提取明确首尾段落。校对Prompt独立版本化，不以指导补台词、不改时间码/条数，不确定文字保留供试听。
+
+`subtitleReview`与cue在原plan_json中保存参考、版本和连续已完成条数；原始SRT独立保留，完成后另存校对SRT。停止/失败/重启可以继续，整批结构错误不改保存内容。原声字幕步骤显示实际校对进度与最近结果。旧任务已有分镜时继续保留；主动重新生成分镜会先重新校对全文。schema15不变，无SQL迁移、依赖或权限变化，属于feat/minor兼容功能增强，不手动升版本、不提交或发布。
+
+修改文件：`prompts/subtitle-proofread-v1.md`、`src-tauri/src/video/subtitles.rs`、`src-tauri/src/{video,video_commands,ai}.rs`、`src-tauri/src/database/{audio,video}.rs`、`src/types/video.ts`、`src/modules/video/{VideoPage,VideoJobProgress}.vue`、`tests/video-progress.test.ts`与`docs/{PRD,TECHNICAL-DESIGN,DATABASE,AI-RULES,USER-GUIDE,DEVELOPMENT-PLAN}.md`。
+
+验收对应：
+
+- 首尾参考：覆盖三个已存在音频模板、无固定段落、优先使用音频冻结提示词、无音频任务使用本书最新保存版本、跨书隔离及未知作者留空。
+- 全文与时间轴：覆盖65条跨两批输入，前后上下文不混入输出，所有文字逐条返回，条数/索引/时间码/SRT时间保持不变。
+- 异常保稿：漏条、重复、乱序、越界、额外时间码、非法长度/控制符整批拒绝；模拟第二批失败保留首批60条，重启后只请求剩余5条，旧run_id及取消拒绝落库，原始SRT不覆盖。
+- 页面与后续使用：已校对条数和最近三条只读保存结果，首批返回前不显示未校对字幕，校对阶段归属于原声字幕步骤，失败显示明确阶段；完成校对SRT登记后进入storyboard，重复继续不重新校对，显式重建清除旧游标。
+
+实际验证（Rust命令先`. ./.tools/env.ps1`）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npx vitest run tests/video-progress.test.ts tests/video.test.ts tests/video-storyboard.test.ts tests/video-image.test.ts` | 4个文件、39项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 181项通过、2项既有测试按原设置忽略（原生凭据、视频子进程专项） |
+| `npm run lint` | 通过 |
+| `npm run build` | TypeScript及生产前端构建通过，保留已有npm用户配置与包体积提示 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `git diff --check` | 通过 |
+
+首轮`cargo test --manifest-path src-tauri/Cargo.toml --locked subtitle -- --nocapture`为8通过、1失败：新增音频快照测试夹具遗漏audio_jobs.run_id必填值，补齐夹具后上述全量测试通过；未放宽数据库约束。
+
+未调用真实外部模型、未替用户处理截图中的音频、未进行人工桌面/安装包验收，也未更改正式任务数据。模型回归使用内存TextProvider，现有HTTP契约测试同时随Rust全量通过；不能据此保证真实长音频的纠错质量。下一步在包含该改动的桌面构建中对一份实际音频运行，试听首尾、人名与跨批次正文，并对照原始和校对SRT。
+
 ## 文本流式接收与视频524排查（2026-11-02）
 
 确认了客户端固定非流式请求，以及复用字幕时首批分镜请求失败仍显示preparing两个问题。截图的524属于网关响应；本机未找到截图对应644条字幕的任务，不掌握当次推理档位、服务商日志或首包耗时，不能认定是推理参数不兼容。

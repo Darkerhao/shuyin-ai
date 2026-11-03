@@ -21,7 +21,11 @@ export interface VideoScene {
   labels?: string[]
   image?: VideoSceneImage
 }
-export interface VideoPlan { title: string; audioSha256: string; duration: number; cues: VideoCue[]; scenes: VideoScene[] }
+export interface VideoSubtitleReview {
+  promptVersion: string; completed: number
+  reference: { book: string; author: string; opening: string; ending: string }
+}
+export interface VideoPlan { title: string; audioSha256: string; duration: number; cues: VideoCue[]; scenes: VideoScene[]; subtitleReview?: VideoSubtitleReview }
 export interface VideoProgress {
   startedAt: number; stage: string; phase: string; completed: number; total: number
   cueCount: number; preview: VideoCue[]
@@ -37,4 +41,4 @@ export interface VideoJob {
   preview?: VideoPreview | null
 }
 export const videoStatuses: Record<VideoJob['status'], string> = { draft: '待开始', running: '制作中', awaiting_confirmation: '等待确认分镜', succeeded: '成片已保存', failed: '处理失败', cancelled: '已停止' }
-export const videoStages: Record<string, string> = { preparing: '检查音频与运行环境', transcribing: '识别原声字幕', storyboard: '生成动画分镜', previewing: '渲染原声试片', rendering: '绘制画面与合入原声', validating: '校验成片并归档', complete: '制作完成' }
+export const videoStages: Record<string, string> = { preparing: '检查音频与运行环境', transcribing: '识别原声字幕', proofreading: 'AI 校对原声字幕', storyboard: '生成动画分镜', previewing: '渲染原声试片', rendering: '绘制画面与合入原声', validating: '校验成片并归档', complete: '制作完成' }

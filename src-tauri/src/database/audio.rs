@@ -179,6 +179,20 @@ fn parse_input(json: &str) -> Result<FrozenAudioInput, String> {
     serde_json::from_str(json).map_err(|_| "音频任务快照损坏。".into())
 }
 
+pub(super) fn prompt_for_asset(
+    connection: &Connection,
+    project: &str,
+    asset: &str,
+) -> Result<Option<String>, String> {
+    let input: Option<String> = connection.query_row(
+        "SELECT input_json FROM audio_jobs WHERE project_id=?1 AND asset_id=?2 ORDER BY created_at DESC,id DESC LIMIT 1",
+        params![project, asset], |row| row.get(0),
+    ).optional().map_err(|e| e.to_string())?;
+    input
+        .map(|json| parse_input(&json).map(|input| input.prompt))
+        .transpose()
+}
+
 fn row_job(row: &Row<'_>) -> rusqlite::Result<AudioJob> {
     let input_json: String = row.get(4)?;
     let input = parse_input(&input_json).map_err(|error| {
