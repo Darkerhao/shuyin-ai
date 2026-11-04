@@ -847,48 +847,71 @@ onMounted(() => { if (desktop) void loadTask() })
     </section>
     <ConfirmAction
       v-if="recordOpen"
-      title="确认作品已在抖音发布成功？"
+      class="publish-record-dialog"
+      title="记录发布成功"
       confirm-label="确认已发布并保存"
       form="publish-record-form"
       :destructive="false"
       :busy="busy"
       @cancel="recordOpen = false"
     >
-      <p>请在平台看到作品发布成功后再确认。这里仅记录结果。</p>
+      <p class="publish-record-description">
+        请在抖音看到作品发布成功后再保存，记录本次发布结果。
+      </p>
       <form
         id="publish-record-form"
         @submit.prevent="recordSuccess()"
       >
-        <fieldset :disabled="busy">
-          <label for="published-at">实际发布时间</label><Input
-            id="published-at"
-            v-model="record.publishedAt"
-            type="datetime-local"
-            required
-          />
-          <label for="post-url">作品链接（选填）</label><Input
-            id="post-url"
-            v-model="record.postUrl"
-            type="url"
-            maxlength="2048"
-            placeholder="https://…"
-          />
-          <label for="publish-notes">备注（选填）</label><Textarea
-            id="publish-notes"
-            v-model="record.notes"
-            rows="3"
-            maxlength="2000"
-          />
-          <template v-if="nextTasks.length">
-            <label for="publish-next-task">接下来处理的作品（选填）</label>
+        <fieldset
+          class="publish-record-fields"
+          :disabled="busy"
+        >
+          <div class="publish-record-field">
+            <label for="published-at">实际发布时间</label>
+            <Input
+              id="published-at"
+              v-model="record.publishedAt"
+              type="datetime-local"
+              required
+            />
+          </div>
+          <div class="publish-record-field">
+            <label for="post-url">作品链接 <span class="optional">选填</span></label>
+            <Input
+              id="post-url"
+              v-model="record.postUrl"
+              type="url"
+              maxlength="2048"
+              placeholder="粘贴已发布作品的链接，如 https://…"
+            />
+          </div>
+          <div class="publish-record-field">
+            <label for="publish-notes">备注 <span class="optional">选填</span></label>
+            <Textarea
+              id="publish-notes"
+              v-model="record.notes"
+              rows="3"
+              maxlength="2000"
+              placeholder="补充本次发布的说明，方便以后回顾"
+            />
+          </div>
+          <div
+            v-if="nextTasks.length"
+            class="publish-record-next publish-record-field"
+          >
+            <label for="publish-next-task">接下来处理的作品 <span class="optional">选填</span></label>
             <Select
               v-model="nextTaskId"
               :disabled="busy"
             >
-              <SelectTrigger id="publish-next-task">
-                <SelectValue placeholder="请选择下一篇，不会自动选择" />
+              <SelectTrigger
+                id="publish-next-task"
+                class="w-full min-w-0"
+                aria-describedby="publish-next-help"
+              >
+                <SelectValue placeholder="选择下一篇待发布作品" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent class="w-(--reka-select-trigger-width)">
                 <SelectItem
                   v-for="task in nextTasks"
                   :key="task.id"
@@ -898,21 +921,49 @@ onMounted(() => { if (desktop) void loadTask() })
                 </SelectItem>
               </SelectContent>
             </Select>
-            <Button
-              type="button"
-              :disabled="busy || !nextTaskId"
-              @click="recordSuccess(true)"
+            <p
+              id="publish-next-help"
+              class="publish-record-help"
             >
-              确认记录并准备下一篇
-            </Button>
-          </template>
+              先保存本次记录，再开始所选作品的辅助发布。
+            </p>
+          </div>
         </fieldset>
       </form>
+      <template #actions>
+        <Button
+          v-if="nextTasks.length"
+          id="publish-record-next"
+          type="button"
+          form="publish-record-form"
+          variant="outline"
+          :disabled="busy || !nextTaskId"
+          @click="($event.currentTarget as globalThis.HTMLButtonElement).form?.reportValidity() && recordSuccess(true)"
+        >
+          确认记录并准备下一篇
+          <AppIcon name="arrow" />
+        </Button>
+      </template>
     </ConfirmAction>
   </template>
 </template>
 
 <style scoped>
+:global(.publish-record-dialog) { max-width: 600px; gap: 0; border-radius: 16px; background: var(--card); }
+:global(.publish-record-dialog > h2) { margin: 0; font-size: 20px; line-height: 1.5; }
+:global(.publish-record-dialog > .actions) { justify-content: flex-end; gap: 10px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.publish-record-description { margin: 8px 0 24px; color: var(--muted-foreground); font-size: 13px; line-height: 1.7; }
+.publish-record-fields { display: grid; gap: 20px; }
+.publish-record-field { display: grid; min-width: 0; gap: 8px; }
+.publish-record-field label { display: flex; align-items: baseline; gap: 8px; margin: 0; color: var(--foreground); }
+.publish-record-field .optional { margin-left: auto; }
+.publish-record-next { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--accent); }
+.publish-record-help { margin: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
+@media (max-width: 560px) {
+  :global(.publish-record-dialog) { padding: 20px; }
+  :global(.publish-record-dialog > .actions) { flex-direction: column; align-items: stretch; }
+}
+
 .publish-preflight { scroll-margin-top: 90px; }
 .preflight-summary { grid-template-columns: 90px minmax(0, 1fr); font-size: 13px; gap: 12px 16px; }
 .preflight-summary dd { min-width: 0; overflow-wrap: anywhere; }

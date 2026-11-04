@@ -1,5 +1,30 @@
 # 书引 AI 开发计划与验收标准
 
+## 发布记录弹窗样式优化（2026-11-04）
+
+按用户截图优化“记录发布成功”弹窗：原下一篇选择框按内容收缩，接续按钮紧贴选择框且与保存底栏分离，标题、说明和字段之间的间距偏大。已收敛为最大600px白色弹窗，统一字段留白与选填标签；下一篇使用独立浅绿区域、全宽选择框和说明文字，接续按钮以描边样式与保存、取消一起放在分隔线下方。窄窗口按钮纵向排列，低高度窗口沿用原弹窗内部滚动。
+
+浏览器检查进一步复现长选项撑宽菜单：560px窗口中菜单宽704.72px、选择框宽452px。已将这一处菜单宽度绑定到Reka公开的触发器宽度变量，长选项在菜单内换行。两种保存都经过同一表单原生校验；回车只保存本次记录，只有明确点击接续按钮才启动所选下一篇。复用原输入、任务与记录成功后的路由流程，无新增状态、依赖、权限或数据库迁移，schema仍为v17，版本影响为style/fix（patch）。
+
+修改文件：`src/components/ConfirmAction.vue`、`src/modules/publishing/PublishingPage.vue`、`docs/TECHNICAL-DESIGN.md`和本计划。没有修改共享主题、其他页面布局、Rust或数据库结构。
+
+实际验证：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run lint` | 通过，0 ESLint警告 |
+| `npm run build` | TypeScript检查与Vite生产构建通过；保留既有大于500kB的分块提示 |
+| `npx vitest run tests/publishing.test.ts tests/publish-queue.test.ts tests/confirmation.test.ts tests/maintenance.test.ts --maxWorkers=2` | 46项通过，覆盖发布记录、下一篇接续、共享确认和备份操作 |
+| `npm run preview -- --port 18596 --strictPort` | 启动本轮生产预览 |
+| `node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=publish-record-style run-code --filename output/playwright/publish-record-style/setup.cjs --json` | 加载独立内存Tauri IPC和本地示例封面，供界面验证使用 |
+| `node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=publish-record-style run-code --filename output/playwright/publish-record-style/check-layout.cjs --json` | 1440×900、1366×768、1120×800、800×900、560×900、375×900、900×500共7组通过；全宽选择框、长标题与菜单无横向溢出，底栏响应式排列，初始取消焦点、取消/Escape、焦点返回和减少动态效果通过，页面异常0 |
+| `node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=publish-record-style run-code --filename output/playwright/publish-record-style/check-actions.cjs --json` | 两个确认按钮阻止空时间和非法链接；记录失败保留输入及下一篇，处理中禁用表单和Escape，重试写入成功后只接续一次；普通保存与回车不接续，空队列可正常保存，页面异常0 |
+| `git diff --check` | 通过 |
+
+验收标准均已在上述范围验证：下一篇区域与表单对齐、按钮层级清晰、窄/短窗口可操作、长选项不溢出、既有记录和接续流程保留。浏览器报告与截图位于`output/playwright/publish-record-style/`，含`preview.png`、`selected-1366.png`、`selected-375.png`、`layout-cli-result.json`和`actions-cli-result.json`。
+
+本轮仅验证本地前端与隔离内存业务数据，未操作真实抖音账号、正式用户发布记录或Windows原生窗口/SQLite，未更新安装包、修改版本号、提交或发布。下一步在包含本次源码的Windows桌面构建打开“记录发布成功”弹窗，核对实际系统缩放与原生日期输入。
+
 ## 发布标题与双封面确认入口修复（2026-11-04）
 
 改版将人工确认收敛到「确认并开始辅助发布」与「确认并导出任务包」，但已填写标题的检查入口仍定位到输入框，用户指南也保留了旧勾选步骤。已在发布自检卡明确两项确认方式，将已填写标题与封面的待处理入口改为「去确认」，任务包入口改为「去准备任务包」。标题为空时定位输入框；素材不齐时确认和任务包入口定位到说明与缺项提示，操作继续禁用。
