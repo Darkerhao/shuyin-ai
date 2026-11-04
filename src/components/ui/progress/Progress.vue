@@ -22,7 +22,7 @@ const props = defineProps<{ modelValue?: number | null; class?: HTMLAttributes['
 </template>
 
 <style scoped>
-.progress-indicator { transition: width .3s ease; }
+.progress-indicator { transition: width 180ms ease; }
 .progress-indicator[data-state='indeterminate'] { width: 30%; animation: processing 2.4s ease-in-out infinite; }
 @keyframes processing { from { transform: translateX(-100%); } to { transform: translateX(440%); } }
 @media (prefers-reduced-motion: reduce) { .progress-indicator { animation: none !important; transition: none; } }
