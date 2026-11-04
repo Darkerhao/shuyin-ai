@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## 共用原声播放器与真实波形（2026-11-04）
+
+`components/AudioPlayer.vue`负责唯一媒体元素、源加载、播放/暂停、倍速和音量；`AudioWaveform.vue`负责实际幅度包络、悬停时间、进度指针与原有Slider的指针/键盘交互。媒体URL统一为`services/projects.ts::mediaSource`，复用`media_asset_path`的本书已登记音视频校验及单文件授权；移除视频service中的重复入口。WritingPage成功任务卡和其他音频列表、VideoPage制作原声、VideoSubtitleEditor任务原声均使用该组件。
+
+`services/audioWaveform.ts`通过授权URL读取本地音频，使用浏览器OfflineAudioContext在8kHz解码，按声道计算256个RMS幅度区间并归一化。只在播放器可见且启用时请求，一次只解码一份文件，最多保留4份小型包络Promise；不保留PCM或写磁盘缓存。同源并发请求合并，失败移除缓存。SVG按实际容器宽度显示24–128条幅度柱，播放时仅逐帧读取媒体currentTime并更新裁切与指针，不向父页高频发送字幕事件或持久化播放位置。悬停只预览，拖动仍通过现有Reka Slider发出seek。时间格式统一为`lib/mediaTime.ts`，补齐Slider的aria-valuetext传递。
+
+主窗口CSP的connect-src增加既有`asset:`与`http://asset.localhost`，用于本地解码fetch；默认asset scope继续为空，只能读取原命令显式授权的文件，没有新增IPC或capability。格式徽标只展示文件扩展名，不把M4A写成无损。两套配色仅为组件状态；EQ动画和流体微光只表达播放状态，减少动态效果时停止。document的捕获play监听在任意音视频开始时暂停其他播放器，卸载解除监听。字幕试听继续使用任务原声、现有句尾定时检查与迟到pause隔离，手动寻迹清除单句停止边界。
+
+解码不参与声音输出，实际播放仍使用原audio文件。波形读取失败不阻塞播放；长文件首次波形需要等待整文件解码，播放无需等它完成。数据库仍为v17，详细依据、验证及长文件性能边界见[原声播放器验收](AUDIO-PLAYER-VERIFICATION.md)。
+
 ## 发布标签生成与带入（2026-11-04）
 
 唯一全量生成Prompt升级为 `publishing-v7`，按项调整为 `publishing-revision-v6`。`PublishingDraft.tags` 必填，`parse_tags`在生成和标签调整两个接收边界共用：要求每个非空话题以ASCII `#` 开头，正文为Unicode字母/数字或下划线，以一个空格重新连接。`WritingContent::Publishing.tags` 使用serde默认空字符串兼容旧JSON，并沿用现有字段长度校验限制500字；人工编辑可清空。全量输出仍完整校验后才追加版本，未选择tags的调整保持原标签。

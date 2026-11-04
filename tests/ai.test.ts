@@ -1,4 +1,4 @@
-import { chooseSelect, openSelect, tab, tabPanel, button, dialog, answerConfirmation } from './ui'
+import { chooseSelect, openSelect, tab, tabPanel, button, dialog, answerConfirmation, mockResizeObserver } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
@@ -11,13 +11,15 @@ import * as api from '../src/services/ai'
 import * as projects from '../src/services/projects'
 import * as drafts from '../src/services/drafts'
 import * as audio from '../src/services/audio'
+import { loadWaveform } from '../src/services/audioWaveform'
 vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
 import { emptyProject, type Asset } from '../src/types/project'
 import { emptyProvider, emptyPublishing, type ModelProvider, type WritingVersion } from '../src/types/ai'
 import type { AudioJob, AudioJobStatus, AudioJobView } from '../src/types/audio'
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), setAudioDuration: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/audio', () => ({ getAudioJobView: vi.fn(), startAudioJob: vi.fn(), controlAudioJob: vi.fn() }))
-vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn() }))
+vi.mock('../src/services/audioWaveform', () => ({ loadWaveform: vi.fn().mockResolvedValue([.2, .6, .8, .1]) }))
+vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn(), mediaSource: vi.fn() }))
 const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模型', modelName: 'model', isDefault: true, credentialStatus: 'available' }
 const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'publishing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
 const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', tags: '#读书 #生死疲劳 #文学', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
@@ -54,6 +56,8 @@ async function render(path = '/projects/p1/writing') {
 }
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(loadWaveform).mockResolvedValue([.2, .6, .8, .1])
+  mockResizeObserver()
   vi.mocked(drafts.readDraft).mockResolvedValue(null)
   vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   vi.mocked(projects.isDesktop).mockReturnValue(true)
@@ -63,6 +67,7 @@ beforeEach(() => {
   vi.mocked(api.listVersions).mockImplementation(async (_id, kind) => kind === 'publishing' ? [initial] : [])
   vi.mocked(api.startGeneration).mockResolvedValue('t1')
   vi.mocked(projects.listAssets).mockResolvedValue([])
+  vi.mocked(projects.mediaSource).mockResolvedValue('http://asset.localhost/audio.m4a')
   vi.mocked(projects.chooseSourceDocument).mockResolvedValue(null)
   vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView())
   vi.mocked(audio.startAudioJob).mockResolvedValue(audioView(makeAudioJob('created', { stage: 'opening_site' })))
@@ -571,13 +576,17 @@ describe('publishing workflow', () => {
     vi.mocked(projects.linkAsset).mockResolvedValue('audio-1')
     vi.mocked(projects.listAssets).mockResolvedValueOnce([]).mockResolvedValueOnce([audioAsset])
     const { wrapper } = await render()
-    await tab(wrapper, '音频制作').trigger('click')
+    await tab(wrapper, '音频制作').trigger('keydown', { key: 'Enter' }); await flushPromises()
     await button(wrapper, '导入音频成品').trigger('click'); await flushPromises()
     expect(projects.linkAsset).toHaveBeenCalledWith('p1', 'D:/本期音频.m4a')
     expect(wrapper.text()).toContain('本期音频.m4a')
     expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('原有提示词')
-    await button(wrapper, '打开音频').trigger('click'); await flushPromises()
-    expect(projects.openAsset).toHaveBeenCalledWith('audio-1')
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+    await wrapper.get('[aria-label="播放音频"]').trigger('click'); await flushPromises()
+    expect(play).toHaveBeenCalledOnce()
+    expect(projects.mediaSource).toHaveBeenCalledWith('p1', 'audio-1')
+    expect(projects.openAsset).not.toHaveBeenCalled()
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
   })
   it('copies the current edited field, reports failure, and preserves content', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
@@ -983,16 +992,27 @@ describe('audio automation', () => {
     expect(audio.controlAudioJob).toHaveBeenCalledWith('job-1', 'cancel')
   })
 
-  it('shows the archived audio and opens it from the completed task', async () => {
+  it('shows one inline player for the archived audio and plays it directly from the completed task', async () => {
     const succeeded = makeAudioJob('succeeded', { stage: 'completed', assetId: 'audio-1', outputSize: 2048 })
     vi.mocked(audio.getAudioJobView).mockResolvedValue(audioView(succeeded))
     vi.mocked(projects.listAssets).mockResolvedValue([audioAsset])
     const { wrapper } = await render()
-    await tab(wrapper, '音频制作').trigger('click')
+    await tab(wrapper, '音频制作').trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(tab(wrapper, '音频制作').attributes('aria-selected')).toBe('true')
     expect(wrapper.text()).toContain('音频已保存')
-    const openButtons = wrapper.findAll('button').filter(item => item.text() === '打开音频')
-    await openButtons.at(-1)!.trigger('click'); await flushPromises()
-    expect(projects.openAsset).toHaveBeenCalledWith('audio-1')
+    await flushPromises()
+    const taskCard = wrapper.get('[aria-labelledby="audio-job-title"]')
+    expect(taskCard.find('.audio-player').exists()).toBe(true)
+    expect(wrapper.findAll('audio')).toHaveLength(1)
+    expect(wrapper.get('audio').attributes('controls')).toBeUndefined()
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+    await taskCard.get('[aria-label="播放音频"]').trigger('click'); await flushPromises()
+    expect(play).toHaveBeenCalledOnce()
+    expect(projects.openAsset).not.toHaveBeenCalled()
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+    await tab(wrapper, '发布文案').trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(pause).toHaveBeenCalledOnce()
+    expect(wrapper.get('#result-audioPrompt').element).toHaveProperty('value', initial.content.audioPrompt)
   })
 
   it('blocks the current book while another book owns the active task', async () => {
@@ -1016,6 +1036,8 @@ describe('audio automation', () => {
     await flushPromises(); await flushPromises()
     expect(vi.mocked(projects.listAssets).mock.calls.length).toBeGreaterThanOrEqual(2)
     expect(wrapper.text()).toContain('本期音频.m4a')
+    expect(wrapper.get('[aria-labelledby="audio-job-title"]').find('.audio-player').exists()).toBe(true)
+    expect(wrapper.findAll('audio')).toHaveLength(1)
   })
 })
 

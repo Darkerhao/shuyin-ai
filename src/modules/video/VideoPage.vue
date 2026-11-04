@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
+import AudioPlayer from '../../components/AudioPlayer.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import VideoJobProgress from './VideoJobProgress.vue'
@@ -19,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useOperation } from '../../composables/useOperation'
 import { useEditorDraft } from '../../composables/useEditorDraft'
 import { readDraft, saveDraft } from '../../services/drafts'
-import { getProject, isDesktop, listAssets, openAsset, openProjectDirectory } from '../../services/projects'
+import { getProject, isDesktop, listAssets, mediaSource, openAsset, openProjectDirectory } from '../../services/projects'
 import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
@@ -54,7 +55,6 @@ const draftReady = ref(false)
 const position = ref(initialPosition())
 const originalCues = ref<VideoCue[]>([])
 const originalError = ref('')
-const taskAudioUrl = ref('')
 const subtitleEditor = ref<InstanceType<typeof VideoSubtitleEditor>>()
 const playbackCue = ref(-1)
 const playbackScene = computed(() => scenes.value.findIndex(scene => playbackCue.value >= scene.first && playbackCue.value <= scene.last))
@@ -65,7 +65,6 @@ async function onPlayback(index: number, follow: boolean) {
   const row = globalThis.document.getElementById(`video-scene-${playbackScene.value}`)
   revealInScroller(row)
 }
-const audioUrl = ref('')
 const videoUrl = ref('')
 const previewUrl = ref('')
 const previewFrames = ref<{ sceneIndex: number; src: string }[]>([])
@@ -298,24 +297,10 @@ const exportSrt = () => run(async () => {
 const showAsset = (id: string, directory = false) => run(() => openAsset(id, directory))
 const showDirectory = () => run(() => openProjectDirectory(props.id))
 
-watch(audioId, async id => {
-  audioUrl.value = ''; mediaError.value = ''
-  if (!id || !desktop) return
-  try { const url = await api.mediaSource(props.id, id); if (!disposed && id === audioId.value) audioUrl.value = url }
-  catch (cause) { mediaError.value = `音频无法预览：${String(cause)}` }
-})
-watch(() => selected.value?.audioAssetId, async (id, _old, onCleanup) => {
-  taskAudioUrl.value = ''
-  let current = true
-  onCleanup(() => { current = false })
-  if (!id || !desktop) return
-  try { const url = await api.mediaSource(props.id, id); if (current && !disposed) taskAudioUrl.value = url }
-  catch (cause) { if (current && !disposed) mediaError.value = `任务原声无法试听：${String(cause)}` }
-})
 watch(() => selected.value?.videoAssetId, async id => {
   videoUrl.value = ''; mediaError.value = ''
   if (!id || !desktop) return
-  try { const url = await api.mediaSource(props.id, id); if (!disposed && id === selected.value?.videoAssetId) videoUrl.value = url }
+  try { const url = await mediaSource(props.id, id); if (!disposed && id === selected.value?.videoAssetId) videoUrl.value = url }
   catch (cause) { mediaError.value = `视频无法预览：${String(cause)}` }
 })
 watch(selectedId, () => { previewFirstScene.value = '0' })
@@ -465,15 +450,16 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
             已有 SRT 可在发布准备的素材管理中关联；使用已有字幕不需要语音模型。
           </p>
         </div>
-        <audio
-          v-if="audioUrl"
-          :src="audioUrl"
-          controls
-          preload="metadata"
-          aria-label="所选原声音频"
-          @error="mediaError = '音频预览失败，请核对文件或使用系统播放器。'"
-        />
       </div>
+      <AudioPlayer
+        v-if="audioId"
+        :project-id="id"
+        :asset-id="audioId"
+        :title="title"
+        :format="audios.find(asset => asset.id === audioId)?.originalName.split('.').pop()?.toUpperCase()"
+        subtitle="制作原声 · 本地音频"
+        aria-label="所选原声音频"
+      />
       <p
         v-if="!audios.length"
         class="notice"
@@ -706,7 +692,8 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
             v-model:position="position"
             :originals="originalCues"
             :original-error="originalError"
-            :audio-src="taskAudioUrl"
+            :project-id="id"
+            :audio-asset-id="selected.audioAssetId"
             :disabled="busy"
             @playback="onPlayback"
           />
@@ -874,7 +861,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               :image-disabled="busy || running || !completePlan"
               :revision-disabled="running || !completePlan || !providerId"
               :playing="playbackScene === index"
-              :audio-available="!!taskAudioUrl"
+              :audio-available="!!subtitleEditor?.audio"
               @play="subtitleEditor?.play(scene.first)"
               @revise="reviseScene(index)"
               @focusin="position = { ...position, section: 'scene', index }"
@@ -932,7 +919,6 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-render-action { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
 .video-render-action .muted { max-width: 600px; }
 .video-error { overflow-wrap: anywhere; white-space: pre-wrap; }
-audio { width: 100%; align-self: center; }
 video { display: block; width: 100%; max-height: 640px; background: #151d18; border-radius: 10px; }
 @media (max-width: 980px) { .video-form-grid, .video-scenes { grid-template-columns: minmax(0, 1fr); } .video-render-action, .video-job-heading { align-items: stretch; flex-direction: column; } .video-job-heading [role='combobox'] { max-width: none; } }
 @media (max-width: 520px) { .video-inputs, .video-job, .video-runtime { padding: 16px; } }

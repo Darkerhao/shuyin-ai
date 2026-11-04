@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import type { Asset, Project, ProjectInput, WorkspaceSettings } from '../types/project'
 export { isDesktop, errorMessage } from './verification'
@@ -10,6 +10,7 @@ export const listAssets = (projectId: string) => invoke<Asset[]>('list_assets', 
 export const linkAsset = (projectId: string, path: string, assetId: string | null = null) => invoke<string>('link_asset', { projectId, path, assetId })
 export const unlinkAsset = (id: string) => invoke<void>('unlink_asset', { id })
 export const openAsset = (id: string, directory = false) => invoke<void>('open_asset', { id, directory })
+export const mediaSource = async (projectId: string, assetId: string) => convertFileSrc(await invoke<string>('media_asset_path', { projectId, assetId }))
 export const workspaceSettings = () => invoke<WorkspaceSettings>('workspace_settings')
 export const setWorkspaceRoot = (path: string) => invoke<WorkspaceSettings>('set_workspace_root', { path })
 export const openProjectDirectory = (id: string) => invoke<void>('open_project_directory', { id })

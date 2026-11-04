@@ -7,10 +7,10 @@ import { SliderRange, SliderRoot, SliderThumb, SliderTrack, useForwardPropsEmits
 
 defineOptions({ name: 'UiSlider' })
 
-const props = defineProps<SliderRootProps & { class?: HTMLAttributes["class"], ariaLabel?: string }>()
+const props = defineProps<SliderRootProps & { class?: HTMLAttributes["class"], ariaLabel?: string, ariaValueText?: string }>()
 const emits = defineEmits<SliderRootEmits>()
 
-const delegatedProps = reactiveOmit(props, "class", "ariaLabel")
+const delegatedProps = reactiveOmit(props, "class", "ariaLabel", "ariaValueText")
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
 </script>
@@ -40,6 +40,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
       :key="key"
       data-slot="slider-thumb"
       :aria-label="ariaLabel"
+      :aria-valuetext="ariaValueText"
       class="bg-white border-primary ring-ring/50 block size-4 shrink-0 rounded-full border shadow-sm transition-[color,box-shadow] hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
     />
   </SliderRoot>
