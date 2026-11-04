@@ -27,6 +27,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import { requestConfirmation } from '../../composables/useConfirmation'
+import { useCopyFeedback } from '../../composables/useCopyFeedback'
+import CopyButton from '../../components/CopyButton.vue'
 const props = defineProps<{ id: string }>()
 const route = useRoute()
 const readAudioView = () => audioApi.getAudioJobView(props.id, typeof route.query.audioJob === 'string' ? route.query.audioJob : undefined)
@@ -69,15 +71,35 @@ const revisionLocked = computed(() => revising.value || !!preview.value)
 const activeTab = useQueryState('tab', 'publishing', ['publishing', 'audio', 'cover'])
 const durationOpen = ref(activeTab.value === 'audio')
 watch(activeTab, tab => { if (tab === 'audio') durationOpen.value = true })
-const copiedField = ref('')
-let copyTimer: ReturnType<typeof globalThis.setTimeout> | undefined
+const clipboard = useCopyFeedback()
+const copiedField = clipboard.copied
+const copyLabel = ref('')
+const historyOpen = ref(false)
+const historyVersionId = ref<string | null>(null)
+const historyVersion = computed(() => versions.value.find(version => version.id === historyVersionId.value))
+const savedFlash = ref(false)
+const waitingSeconds = ref(0)
+let savedTimer: ReturnType<typeof globalThis.setTimeout> | undefined
+let waitingTimer: ReturnType<typeof globalThis.setInterval> | undefined
+watch(taskId, id => {
+  globalThis.clearInterval(waitingTimer)
+  if (!id) return
+  const started = Date.now(); waitingSeconds.value = 0
+  waitingTimer = globalThis.setInterval(() => { waitingSeconds.value = Math.floor((Date.now() - started) / 1000) }, 1000)
+})
+function flashSave() {
+  globalThis.clearTimeout(savedTimer); savedFlash.value = true
+  savedTimer = globalThis.setTimeout(() => { savedFlash.value = false }, 1000)
+}
 const tabs = [
   { value: 'publishing', label: '发布文案' },
   { value: 'audio', label: '音频制作' },
   { value: 'cover', label: '封面素材' },
 ]
 const { busy, error, message, operation, run } = useOperation()
-const autosave = useEditorDraft(() => props.id, 'writing', draft, () => selected.value?.id ?? null, dirty, ready, prepareLeave)
+// Preserve the current source when a newer history entry has not been adopted.
+const draftRequired = computed(() => dirty.value || selected.value?.id !== versions.value[0]?.id)
+const autosave = useEditorDraft(() => props.id, 'writing', draft, () => selected.value?.id ?? null, draftRequired, ready, prepareLeave)
 const audioBrowser = computed(() => audioView.value?.browser ?? null)
 const audioJob = computed(() => audioView.value?.job ?? null)
 const activeAudioJob = computed(() => {
@@ -125,7 +147,7 @@ onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.audioJob === from.query.audioJob) || canLeave())
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || durationDirty.value || busy.value || preview.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
-onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(copyTimer) })
+onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(savedTimer); globalThis.clearInterval(waitingTimer) })
 function setAssets(files: Asset[]) {
   documents.value = files.filter(asset => asset.assetType === 'document')
   audioAssets.value = files.filter(asset => asset.assetType === 'audio')
@@ -187,7 +209,10 @@ const load = () => run(async () => {
   providerId.value = providers.value.find(p => p.isDefault)?.id ?? providers.value[0]?.id ?? ''
   versions.value = saved
   accept(recovery ? saved.find(v => v.id === recovery.basedOn) ?? null : saved[0] ?? null)
-  if (recovery) { draft.value = { ...emptyPublishing(), ...recovery.content }; message.value = '已恢复自动暂存的草稿，保存修改后才会新增历史版本。' }
+  if (recovery) {
+    draft.value = { ...emptyPublishing(), ...recovery.content }
+    if (dirty.value) message.value = '已恢复自动暂存的草稿，保存修改后才会新增历史版本。'
+  }
   ready.value = true
 })
 async function switchVersion(id: string | null) {
@@ -199,7 +224,7 @@ async function persistWriting() {
   accept(saved); versions.value = [saved, ...versions.value]
   await autosave.flush()
 }
-const save = () => run(async () => { await persistWriting(); message.value = '修改已保存。' })
+const save = () => run(async () => { await persistWriting(); flashSave() })
 function audioStatusLabel(job: AudioJob) { return audioStatusLabels[job.status] }
 function audioStageLabel(job: AudioJob) { return audioStageLabels[job.stage] ?? job.stage }
 function audioElapsed(job: AudioJob) {
@@ -307,8 +332,10 @@ const generate = () => run(async () => {
     const saved = await api.executeGeneration(taskId.value)
     if (!('id' in saved)) throw new Error('生成结果类型不符，当前内容保留。')
     versions.value = [saved, ...versions.value]
-    if (!dirty.value) accept(saved)
-    message.value = dirty.value ? '生成完成，当前修改已保留。保存后可在历史版本中查看新结果。' : '发布文案、音频提示词、封面主副标题及两种比例的图片提示词已生成并保存。'
+    const first = !selected.value && !dirty.value
+    if (first) accept(saved)
+    historyVersionId.value = saved.id; historyOpen.value = !first
+    message.value = first ? `已生成并保存 v${saved.versionNo}，可继续编辑。` : `已保存备选 v${saved.versionNo}。当前内容保留，可在版本对照中取用。`
   } finally { taskId.value = '' }
 })
 function openRevision() { revisionOpen.value = true }
@@ -348,14 +375,10 @@ async function makeCover() {
   if (!dirty.value && selected.value) await router.push({ path: `/projects/${props.id}/covers`, query: { writingVersion: selected.value.id } })
 }
 async function copy(field: PublishingTextField, label: string) {
+  copyLabel.value = label
   error.value = ''; message.value = ''
-  try {
-    await globalThis.navigator.clipboard.writeText(draft.value[field]); message.value = `已复制${label}。`; error.value = ''
-    copiedField.value = field
-    globalThis.clearTimeout(copyTimer)
-    copyTimer = globalThis.setTimeout(() => { copiedField.value = '' }, 2000)
-  }
-  catch { error.value = '复制失败，请选中文本后手动复制。' }
+  await clipboard.copy(draft.value[field], field)
+  error.value = clipboard.error.value
 }
 const fields: { key: PublishingTextField; label: string; rows: number; limit: number; help?: string }[] = [
   { key: 'title', label: '发布标题', rows: 2, limit: 30 },
@@ -369,11 +392,18 @@ const fields: { key: PublishingTextField; label: string; rows: number; limit: nu
 ]
 const revisionOptions: { key: PublishingField; label: string }[] = [...fields, { key: 'coverDesign', label: '封面字号与配色' }]
 const canSave = computed(() => [draft.value.title, draft.value.description, draft.value.audioPrompt].every(value => value.trim()))
+const historyFields = computed(() => fields.filter(field => fieldTab(field.key) === activeTab.value))
+function takeHistoryField(field: PublishingTextField) {
+  if (historyVersion.value && !busy.value && !revisionLocked.value) draft.value[field] = historyVersion.value.content[field]
+}
 function fieldTab(key: string) { return key.startsWith('cover') ? 'cover' : key === 'audioPrompt' ? 'audio' : 'publishing' }
 function saveShortcut(event: globalThis.KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
     event.preventDefault()
-    if (ready.value && !busy.value && !revisionLocked.value && dirty.value && canSave.value) void save()
+    if (ready.value && !busy.value && !revisionLocked.value && canSave.value) {
+      if (dirty.value) void save()
+      else flashSave()
+    }
   }
 }
 watch(() => route.query.audioJob, () => { if (desktop) void load() })
@@ -421,7 +451,11 @@ onMounted(async () => {
       </RouterLink>
     </Button>
   </header>
-  <ProjectNavigation :id="id" />
+  <ProjectNavigation
+    :id="id"
+    :editing="dirty"
+    :busy="busy"
+  />
   <p
     v-if="!desktop"
     class="notice"
@@ -486,7 +520,7 @@ onMounted(async () => {
           type="button"
           @click="generate"
         >
-          <AppIcon name="sparkle" />{{ taskId && !recommending ? '生成中…' : '一键生成' }}
+          <AppIcon name="sparkle" />{{ taskId && !recommending ? '生成中…' : versions.length ? '生成备选' : '一键生成' }}
         </Button>
         <Button
           variant="outline"
@@ -594,7 +628,7 @@ onMounted(async () => {
       class="notice"
       role="status"
     >
-      {{ recommending ? '正在根据书籍体量和内容重点推荐时长，最多等待 120 秒。可取消后手动设置。' : revising ? '正在调整选中的内容，最多等待 120 秒。完成后先预览，再决定是否采用。' : '正在生成文案、音频提示词和封面素材，最多等待 120 秒。你可以继续编辑，当前修改会保留。' }}
+      {{ recommending ? '正在推荐时长，可停止后手动设置。' : revising ? '正在调整选中内容，完成后先预览再采用。' : '正在生成备选，你可以继续编辑，当前内容保留。' }}已等待 {{ waitingSeconds }} 秒，单次最多等待 5 分钟。
     </p>
     <section
       v-if="revisionOpen"
@@ -775,16 +809,13 @@ onMounted(async () => {
           >
             <div class="result-heading">
               <label :for="`result-${field.key}`">{{ field.label }}</label>
-              <Button
-                type="button"
-                :class="{ 'border-primary/30 bg-accent text-primary': copiedField === field.key }"
-                :disabled="!draft[field.key].trim()"
-                :aria-label="`复制${field.label}`"
-                variant="outline"
+              <CopyButton
+                compact
+                :label="`复制${field.label}`"
+                :copied="copiedField === field.key"
+                :disabled="!draft[field.key]"
                 @click="copy(field.key, field.label)"
-              >
-                <AppIcon :name="copiedField === field.key ? 'check' : 'copy'" />{{ copiedField === field.key ? '已复制' : `复制${field.label}` }}
-              </Button>
+              />
             </div>
             <p
               v-if="field.help"
@@ -1171,8 +1202,10 @@ onMounted(async () => {
       <div class="sticky-actions">
         <span
           class="save-status"
-          :class="{ 'is-dirty': dirty }"
-        ><i class="status-dot" />{{ dirty ? autosave.status.value || '有未保存的修改' : selected ? '当前版本已保存' : '生成后自动保存' }}<span class="shortcut-hint"> · Ctrl / ⌘ S 保存</span></span>
+          :class="{ 'is-dirty': dirty, 'is-saved': savedFlash }"
+          role="status"
+          aria-live="polite"
+        ><i class="status-dot" />{{ dirty ? autosave.error.value || autosave.status.value || '有未保存的修改' : selected ? `已保存为版本 v${selected.versionNo}` : '尚无保存版本' }}<span class="shortcut-hint"> · Ctrl / ⌘ S 保存</span></span>
         <div class="actions wrap">
           <Button
             type="submit"
@@ -1202,6 +1235,7 @@ onMounted(async () => {
     </form>
     <Collapsible
       v-if="versions.length"
+      v-model:open="historyOpen"
       class="history-panel"
       :unmount-on-hide="false"
     >
@@ -1209,11 +1243,10 @@ onMounted(async () => {
         历史版本（{{ versions.length }}） · 每次生成和保存，都为你保留
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <label for="writing-version">选择历史版本</label>
+        <label for="writing-version">预览历史版本</label>
         <Select
-          :model-value="selected?.id ?? null"
+          v-model="historyVersionId"
           :disabled="busy || !!preview"
-          @update:model-value="switchVersion"
         >
           <SelectTrigger
             id="writing-version"
@@ -1227,11 +1260,57 @@ onMounted(async () => {
               :key="version.id"
               :value="version.id"
             >
-              v{{ version.versionNo }} · {{ version.sourceType === 'ai' ? '生成' : '修改' }} · {{ new Date(version.createdAt).toLocaleString() }}
+              v{{ version.versionNo }} · {{ version.sourceType === 'ai' ? '生成' : '修改' }} · {{ version.modelName || '手动保存' }} · {{ new Date(version.createdAt).toLocaleString() }}{{ selected?.id === version.id ? ' · 当前编辑来源' : '' }}
             </SelectItem>
           </SelectContent>
         </Select>
+        <template v-if="historyVersion">
+          <div class="actions">
+            <Button
+              variant="outline"
+              :disabled="busy || revisionLocked"
+              @click="switchVersion(historyVersion.id)"
+            >
+              用于当前编辑
+            </Button>
+            <span class="muted text-sm">预览不会改变当前稿；取用单项后保存为新版本。</span>
+          </div>
+          <div
+            v-for="field in historyFields"
+            :key="field.key"
+            class="version-comparison"
+          >
+            <div>
+              <label :for="`history-current-${field.key}`">当前稿 · {{ field.label }}</label><Textarea
+                :id="`history-current-${field.key}`"
+                :model-value="draft[field.key]"
+                readonly
+                :rows="Math.min(field.rows, 5)"
+              />
+            </div>
+            <div>
+              <label :for="`history-candidate-${field.key}`">v{{ historyVersion.versionNo }} · {{ field.label }}</label><Textarea
+                :id="`history-candidate-${field.key}`"
+                :model-value="historyVersion.content[field.key]"
+                readonly
+                :rows="Math.min(field.rows, 5)"
+              /><Button
+                variant="ghost"
+                size="sm"
+                :disabled="busy || revisionLocked || draft[field.key] === historyVersion.content[field.key]"
+                @click="takeHistoryField(field.key)"
+              >
+                取用{{ field.label }}
+              </Button>
+            </div>
+          </div>
+        </template>
       </CollapsibleContent>
     </Collapsible>
+    <span
+      class="sr-only"
+      role="status"
+      aria-live="polite"
+    >{{ copiedField ? `已复制${copyLabel}` : '' }}</span>
   </template>
 </template>

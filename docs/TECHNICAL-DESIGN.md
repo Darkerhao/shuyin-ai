@@ -1,5 +1,21 @@
 # 书引 AI 技术设计文档
 
+## 工作台视觉与交互优化（2026-11-04）
+
+共享主题与控件维护唯一材质和间距规范，移除被替代的深侧栏和双行导航规则。`BookCard.vue`统一网格/列表卡片与一套Reka UI DropdownMenu，主链接与更多按钮并列，避免嵌套交互。更多及键盘从按钮定位，右键通过公开reference属性从点击位置定位；保留12px窗口避让。Content使用as-child挂载组件自己的div，使scoped菜单外壳样式实际命中，不能依赖第三方多层转发保留作用域属性。`CopyButton.vue`与`useCopyFeedback`统一800ms状态及稳定按钮宽度。沿用锁定组件库、系统字体和现有业务服务，无新增依赖。
+
+`project_progress`在线程池读取草稿、版本、封面文件校验、成片元信息及发布任务，运行任务优先，返回五项只读摘要；没有持久化完成状态。`ProjectNavigation`保留RouterLink、精确当前态和Tooltip，当前未保存编辑单独提示；App只在书籍主窗口注册Ctrl/Cmd+1～5，输入法组合、重复按键和模态交互不跳页。副作用在卸载时清理。
+
+文案版本栏只维护预览选择，当前正式来源仍由原`selected`/草稿控制。当前编辑来源与最新历史不同时，即使正文未改，也沿用`editor_drafts`保存当前内容与`based_on`，离页或正常关闭后仍恢复当前稿；主动采用最新版本或正式另存后按原规则清除不再需要的草稿。恢复内容与来源版本相同时不提示未保存。备选生成追加原`writing_versions`，字段取用写入原草稿，保存仍追加版本。Provider继续单次流式接收、完整解析/校验/提交；本轮增加真实等待反馈，不将未完整片段写进业务字段。
+
+`renderCover`在原排版计算中返回标题/副标题命中范围，DOM输入层直接编辑当前`CoverConfig`；预览、导出仍为一个Canvas渲染器。行内编辑与背景拖动互斥，输入层限制在可见舞台内；160ms预设过渡不改输出像素。
+
+`VideoSubtitleEditor`在原单句播放器上增加连续播放、跟随与播放字幕索引，VideoPage按scene.first/last映射镜头；共享`revealInScroller`只滚动内部列表，不聚焦控件、不更新正式字幕时间码或每帧持久化位置。媒体暂停事件仅在播放器当前确已暂停时清除试听边界，忽略切句后迟到的旧暂停事件。
+
+发布页一次明确核对后先验证选中PNG，再复用保存/任务包/辅助发布流程。元信息查询保留当前请求Promise，辅助接续在核验前等待同一查询完成；无音轨或读取失败继续阻止启动并保留输入，不额外请求或自动重试。`video_asset_metadata`及`export_video_asset`复用已有按书籍/素材/类型校验的`video_asset_path`，在线程池检查元信息；另存使用create_new拒绝覆盖，失败只清理本次新文件。新增能力仅授权主窗口，文件选择增加dialog:allow-save，未提供任意Shell或文件删除接口。
+
+主窗口`onDragDropEvent`仅在书架接收单文件，将原始路径通过source查询参数带入原添加表单；保存复用`save_project`事务，取消不写库。侧栏显隐使用既有app_settings，数据库仍为v17。Vite预优化限定index.html，避免扫描本地验收输出。实现与运行边界见[本轮验收](UI-UX-REFINEMENT-VERIFICATION.md)。
+
 ## 已选合集名称回读（2026-11-03）
 
 官方合集选择值将名称放在 `selected-item-title-*`，作品数放在相邻 `selected-item-extra-text-*`，读取整个 `.semi-select-selection-text.textContent` 会把二者拼接，造成任务目标与网页选择不一致。`douyin_editor.js` 的合集动作统一从名称节点读取；已选值和列表选项共用同一名称提取函数，仍支持官方仅显示文本标签的状态，不靠正则删去名称的一部分。

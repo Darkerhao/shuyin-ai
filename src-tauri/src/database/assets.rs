@@ -136,6 +136,63 @@ pub(super) fn register_existing(
 }
 
 impl Database {
+    pub fn video_asset_metadata(
+        &self,
+        project: &str,
+        id: &str,
+    ) -> Result<crate::media::VideoMetadata, String> {
+        crate::media::inspect(&self.video_asset_path(project, id, "video")?)
+    }
+    pub fn export_video_asset(
+        &self,
+        project: &str,
+        id: &str,
+        destination: &str,
+    ) -> Result<(), String> {
+        use std::{
+            fs::{File, OpenOptions},
+            io,
+        };
+        let source = self.video_asset_path(project, id, "video")?;
+        let source = source.as_path();
+        let metadata = crate::media::inspect(source)?;
+        if metadata.duration_seconds <= 0.0
+            || !metadata.has_audio
+            || metadata.width == 0
+            || metadata.height == 0
+        {
+            return Err("成片缺少有效画面或原声。".into());
+        }
+        let destination = Path::new(destination);
+        if !destination.is_absolute()
+            || !source
+                .extension()
+                .and_then(|s| s.to_str())
+                .zip(destination.extension().and_then(|s| s.to_str()))
+                .is_some_and(|(source, target)| source.eq_ignore_ascii_case(target))
+        {
+            return Err("请选择与原成片相同格式的完整保存路径。".into());
+        }
+        let mut input = File::open(source).map_err(|e| e.to_string())?;
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    "目标文件已存在，请选择新的文件名；不会覆盖原文件。".to_owned()
+                } else {
+                    e.to_string()
+                }
+            })?;
+        if let Err(error) = io::copy(&mut input, &mut output).and_then(|_| output.sync_all()) {
+            drop(output);
+            let _ = std::fs::remove_file(destination);
+            return Err(error.to_string());
+        }
+        Ok(())
+    }
+
     pub fn list_assets(&self, project_id: &str) -> Result<Vec<Asset>, String> {
         self.with_connection(|c| {
             get(c,project_id)?;

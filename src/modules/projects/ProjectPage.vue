@@ -7,7 +7,7 @@ import { useWindowCloseGuard } from '../../composables/useWindowCloseGuard'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
+import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter, useRoute } from 'vue-router'
 import * as api from '../../services/projects'
 import { appendNote, chooseNote, importNote, type ImportedNote } from '../../services/notes'
 import { emptyProject, projectInput, type Asset, type Project } from '../../types/project'
@@ -19,11 +19,16 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 const props = defineProps<{ id?: string }>()
 const router = useRouter()
+const route = useRoute()
 const desktop = api.isDesktop()
 const project = ref<Project | null>(null)
 const form = ref(emptyProject())
 const original = ref(JSON.stringify(form.value))
 const sourcePaths = ref<string[]>([])
+if (!props.id && typeof route.query.source === 'string' && /\.(txt|md|epub|pdf|docx)$/i.test(route.query.source)) {
+  sourcePaths.value = [route.query.source]
+  form.value.title = route.query.source.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, '')
+}
 const documents = ref<Asset[]>([])
 const dirty = computed(() => JSON.stringify(form.value) !== original.value || sourcePaths.value.length > 0)
 const ready = ref(!props.id)
@@ -73,7 +78,10 @@ const canLeave = () => leaving || (!busy.value && (!dirty.value || requestConfir
 const closeGuard = useWindowCloseGuard(() => dirty.value || busy.value, canLeave)
 onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate(canLeave)
-onMounted(() => { if (desktop && props.id) void load() })
+onMounted(async () => {
+  if (desktop && props.id) await load()
+  if (route.query.focus === 'title') globalThis.document.getElementById('title')?.focus()
+})
 </script>
 <template>
   <header class="page-heading">
@@ -95,6 +103,8 @@ onMounted(() => { if (desktop && props.id) void load() })
   <ProjectNavigation
     v-if="project"
     :id="project.id"
+    :editing="dirty"
+    :busy="busy"
   />
   <p
     v-if="!desktop"

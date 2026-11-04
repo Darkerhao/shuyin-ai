@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open, save } from '@tauri-apps/plugin-dialog'
 import type { Asset, Project, ProjectInput, WorkspaceSettings } from '../types/project'
 export { isDesktop, errorMessage } from './verification'
 export const listProjects = (search = '', status = '') => invoke<Project[]>('list_projects', { search, status })
@@ -13,6 +13,15 @@ export const openAsset = (id: string, directory = false) => invoke<void>('open_a
 export const workspaceSettings = () => invoke<WorkspaceSettings>('workspace_settings')
 export const setWorkspaceRoot = (path: string) => invoke<WorkspaceSettings>('set_workspace_root', { path })
 export const openProjectDirectory = (id: string) => invoke<void>('open_project_directory', { id })
+export interface VideoMetadata { durationSeconds: number; width: number; height: number; hasAudio: boolean }
+export const videoAssetMetadata = (projectId: string, id: string) => invoke<VideoMetadata>('video_asset_metadata', { projectId, id })
+export async function exportVideoAsset(asset: Asset) {
+  const extension = asset.filePath.split('.').pop()!.toLowerCase()
+  const destination = await save({ title: '另存成片', defaultPath: asset.originalName, filters: [{ name: '原格式成片', extensions: [extension] }] })
+  if (!destination) return false
+  await invoke<void>('export_video_asset', { projectId: asset.projectId, id: asset.id, destination })
+  return true
+}
 export const relocateWorkspace = (id: string, path: string) => invoke<Project>('relocate_workspace', { id, path })
 export const createBackup = (directory: string) => invoke<string>('create_backup', { directory })
 export const restoreBackup = (path: string) => invoke<string>('restore_backup', { path })

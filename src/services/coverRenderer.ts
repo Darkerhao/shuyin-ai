@@ -1,6 +1,7 @@
 import { coverSizes, type CoverConfig } from '../types/cover'
 
 type Context = globalThis.CanvasRenderingContext2D
+export interface CoverTextBounds { x: number; y: number; width: number; height: number }
 export const coverFonts = {
   sans: '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
   serif: '"SimSun", "Songti SC", "Noto Serif CJK SC", serif',
@@ -90,13 +91,15 @@ export function renderCover(canvas: globalThis.HTMLCanvasElement, config: CoverC
   const draw = (block: ReturnType<typeof fitText>, start: number, color: string, weight: number) => {
     ctx.font = `${weight} ${block.size}px ${family}`; ctx.fillStyle = color
     block.lines.forEach((line, i) => ctx.fillText(line, x, start + block.lineHeight * (i + 0.5)))
+    const measured = Math.max(0, ...block.lines.map(line => ctx.measureText(line).width))
+    return { x: config.align === 'center' ? x - measured / 2 : x, y: start, width: measured, height: block.height }
   }
   draw(brand, height * 0.06, config.accentColor, 400)
   ctx.fillStyle = config.accentColor
   ctx.fillRect(config.align === 'center' ? width / 2 - 32 : padding, top - 28, 64, 6)
-  draw(title, top, config.textColor, 700)
-  draw(subtitle, top + title.height + gap, config.subtitleColor ?? config.textColor, 400)
-  return { titleSize: title.size, subtitleSize: subtitle.size }
+  const titleBounds = draw(title, top, config.textColor, 700)
+  const subtitleBounds = draw(subtitle, top + title.height + gap, config.subtitleColor ?? config.textColor, 400)
+  return { titleSize: title.size, subtitleSize: subtitle.size, bounds: { title: titleBounds, subtitle: subtitleBounds } }
 }
 
 export async function coverPng(config: CoverConfig, background: globalThis.HTMLImageElement | null): Promise<number[]> {

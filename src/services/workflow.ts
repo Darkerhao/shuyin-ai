@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 export interface ResumeTask { projectId: string; title: string; kind: string; taskId: string; status: string; stage: string; updatedAt: string; running: boolean }
 export interface WorkflowSnapshot { resume: ResumeTask[]; running: ResumeTask[] }
 export const workflowSnapshot = () => invoke<WorkflowSnapshot>('workflow_snapshot')
+export interface ProjectStage { path: string; status: string; tone: 'neutral' | 'ready' | 'working' | 'attention' }
+export const projectProgress = (projectId: string) => invoke<ProjectStage[]>('project_progress', { projectId })
 export function resumeRoute(task: ResumeTask) {
   const path = `/projects/${task.projectId}`
   if (task.kind === 'audio') return { path: `${path}/writing`, query: { tab: 'audio', audioJob: task.taskId } }

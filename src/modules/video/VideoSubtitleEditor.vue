@@ -5,13 +5,19 @@ import { Textarea } from '@/components/ui/textarea'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import type { VideoCue } from '../../types/video'
 import { cueKey, replaceSubtitleText, subtitleClock, subtitleRows, type VideoEditorPosition } from './subtitles'
+import { revealInScroller } from '../../lib/scroll'
 
 const props = defineProps<{ originals: VideoCue[]; originalError: string; audioSrc: string; disabled: boolean }>()
+const emit = defineEmits<{ playback: [index: number, follow: boolean] }>()
 const text = defineModel<string>({ required: true })
 const position = defineModel<VideoEditorPosition>('position', { required: true })
 const editorRoot = ref<globalThis.HTMLElement>()
 const audio = ref<globalThis.HTMLAudioElement>()
 const playing = ref<number | null>(null)
+const isPlaying = ref(false)
+const playbackCue = ref(-1)
+const playbackTime = ref(0)
+const followPlayback = ref(false)
 const playbackError = ref('')
 let stopTimer: ReturnType<typeof globalThis.setTimeout> | undefined
 let playRevision = 0
@@ -20,7 +26,11 @@ const originalsByTime = computed(() => new Map(props.originals.map(cue => [cueKe
 const compared = computed(() => rows.value.map(row => ({ ...row, original: originalsByTime.value.get(cueKey(row)) })))
 const changed = computed(() => compared.value.filter(row => row.original && row.original.text !== row.text))
 const filtered = computed(() => position.value.onlyChanges ? changed.value : compared.value)
-const page = computed(() => Math.max(0, Math.floor(filtered.value.findIndex(row => row.index === position.value.index) / 20)))
+function isEditingText() {
+  const active = globalThis.document.activeElement as globalThis.HTMLElement | null
+  return active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || active?.isContentEditable
+}
+const page = computed(() => Math.max(0, Math.floor(filtered.value.findIndex(row => row.index === (followPlayback.value && isPlaying.value && playbackCue.value >= 0 && !isEditingText() ? playbackCue.value : position.value.index)) / 20)))
 const visible = computed(() => filtered.value.slice(page.value * 20, (page.value + 1) * 20))
 const rawOpen = ref(false)
 watch(() => position.value.section, section => { if (section === 'srt') rawOpen.value = true }, { immediate: true })
@@ -29,12 +39,45 @@ function select(index: number) { position.value = { ...position.value, section: 
 function stop() {
   playRevision++
   globalThis.clearTimeout(stopTimer)
-  if (playing.value !== null) audio.value?.pause()
+  if (playing.value !== null || isPlaying.value) audio.value?.pause()
+  isPlaying.value = false
+  playbackCue.value = -1
+  emit('playback', -1, false)
   playing.value = null
 }
 function stopAtEnd() {
   const row = rows.value.find(row => row.index === playing.value)
   if (row && audio.value && audio.value.currentTime >= row.end) stop()
+}
+function updatePlayback() {
+  playbackTime.value = audio.value?.currentTime ?? 0
+  const index = rows.value.find(row => playbackTime.value >= row.start && playbackTime.value < row.end)?.index ?? -1
+  const following = followPlayback.value && !isEditingText()
+  if (index !== playbackCue.value) { playbackCue.value = index; emit('playback', index, !!following) }
+  if (following && index >= 0) {
+    const row = editorRoot.value?.querySelector<globalThis.HTMLElement>(`#subtitle-row-${index}`)
+    revealInScroller(row)
+  }
+  stopAtEnd()
+}
+function pausePlayback() {
+  // A queued pause event can arrive after the next play() has resumed this element.
+  if (!audio.value?.paused) return
+  isPlaying.value = false; playing.value = null; globalThis.clearTimeout(stopTimer)
+  playbackCue.value = -1
+  emit('playback', -1, false)
+}
+function toggleFollow() {
+  followPlayback.value = !followPlayback.value
+  emit('playback', playbackCue.value, followPlayback.value)
+}
+async function playAll() {
+  stop(); playbackError.value = ''
+  if (!audio.value) return
+  const revision = playRevision
+  isPlaying.value = true
+  try { await audio.value.play(); if (revision === playRevision) isPlaying.value = true }
+  catch { if (revision === playRevision) { stop(); playbackError.value = '原声无法播放，请核对音频文件后重试。' } }
 }
 function checkPlayback() {
   stopAtEnd()
@@ -48,6 +91,7 @@ async function play(index: number) {
   try {
     audio.value.currentTime = row.start
     playing.value = index
+    isPlaying.value = true
     await audio.value.play()
     if (revision !== playRevision) return
     checkPlayback()
@@ -77,7 +121,7 @@ function restorePosition() {
     editorRoot.value?.querySelector(`#subtitle-row-${position.value.index}`)?.scrollIntoView?.({ block: 'center' })
   }
 }
-defineExpose({ restorePosition })
+defineExpose({ restorePosition, play })
 watch(() => props.audioSrc, stop)
 watch(() => props.disabled, disabled => { if (disabled) stop() })
 onBeforeUnmount(stop)
@@ -92,6 +136,21 @@ onBeforeUnmount(stop)
     <div class="actions">
       <Button
         variant="outline"
+        :disabled="disabled || !audioSrc"
+        @click="playAll"
+      >
+        连续播放原声
+      </Button>
+      <Button
+        variant="ghost"
+        :aria-pressed="followPlayback"
+        :disabled="disabled || !audioSrc"
+        @click="toggleFollow"
+      >
+        跟随播放
+      </Button>
+      <Button
+        variant="outline"
         :aria-pressed="position.onlyChanges"
         :disabled="disabled || !originals.length"
         @click="filterChanges"
@@ -100,7 +159,7 @@ onBeforeUnmount(stop)
       </Button>
       <span class="muted">共 {{ rows.length }} 句 · {{ changed.length }} 句与原文不同</span>
       <Button
-        v-if="playing !== null"
+        v-if="playing !== null || isPlaying"
         variant="outline"
         @click="stop"
       >
@@ -126,11 +185,21 @@ onBeforeUnmount(stop)
       ref="audio"
       :src="audioSrc"
       preload="metadata"
+      controls
       aria-label="当前视频任务原声"
-      @timeupdate="stopAtEnd"
+      @timeupdate="updatePlayback"
+      @play="isPlaying = true"
+      @pause="pausePlayback"
       @ended="stop"
       @error="stop(); playbackError = '原声读取失败，请在素材管理中核对音频。'"
     />
+    <p
+      v-if="audioSrc"
+      class="muted playback-status"
+      role="status"
+    >
+      原声 {{ subtitleClock(playbackTime) }}{{ isPlaying && playbackCue >= 0 ? ` · 第 ${playbackCue + 1} 句` : '' }}
+    </p>
     <p
       v-if="!audioSrc"
       class="muted"
@@ -155,7 +224,7 @@ onBeforeUnmount(stop)
         :id="`subtitle-row-${row.index}`"
         :key="row.index"
         class="subtitle-row"
-        :class="{ 'subtitle-row-active': position.section === 'subtitles' && position.index === row.index }"
+        :class="{ 'subtitle-row-active': position.section === 'subtitles' && position.index === row.index, 'subtitle-row-playing': isPlaying && playbackCue === row.index }"
       >
         <div class="actions">
           <Button
@@ -249,6 +318,9 @@ onBeforeUnmount(stop)
 .subtitle-list { display: grid; gap: .75rem; max-height: 560px; overflow: auto; padding: 2px; }
 .subtitle-row { padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; min-width: 0; }
 .subtitle-row-active { border-color: var(--primary); }
+.subtitle-row-playing { background: var(--accent); box-shadow: inset 3px 0 var(--primary); }
+.subtitle-review audio { width: 100%; }
+.playback-status { margin: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
 .subtitle-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 .subtitle-columns > div { min-width: 0; }
 .subtitle-original { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: .5rem; }

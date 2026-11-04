@@ -7,6 +7,7 @@ import OperationFeedback from '../../components/OperationFeedback.vue'
 import VideoJobProgress from './VideoJobProgress.vue'
 import VideoSceneEditor from './VideoSceneEditor.vue'
 import VideoSubtitleEditor from './VideoSubtitleEditor.vue'
+import { revealInScroller } from '../../lib/scroll'
 import VideoEnvironmentCheck from './VideoEnvironmentCheck.vue'
 import VideoSceneRevision from './VideoSceneRevision.vue'
 import { initialPosition, type VideoEditorDraft } from './subtitles'
@@ -55,6 +56,15 @@ const originalCues = ref<VideoCue[]>([])
 const originalError = ref('')
 const taskAudioUrl = ref('')
 const subtitleEditor = ref<InstanceType<typeof VideoSubtitleEditor>>()
+const playbackCue = ref(-1)
+const playbackScene = computed(() => scenes.value.findIndex(scene => playbackCue.value >= scene.first && playbackCue.value <= scene.last))
+async function onPlayback(index: number, follow: boolean) {
+  playbackCue.value = index
+  if (!follow || playbackScene.value < 0) return
+  await nextTick()
+  const row = globalThis.document.getElementById(`video-scene-${playbackScene.value}`)
+  revealInScroller(row)
+}
 const audioUrl = ref('')
 const videoUrl = ref('')
 const previewUrl = ref('')
@@ -348,7 +358,11 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
       <AppIcon name="folder" />打开书籍目录
     </Button>
   </header>
-  <ProjectNavigation :id="id" />
+  <ProjectNavigation
+    :id="id"
+    :editing="dirty"
+    :busy="busy"
+  />
   <OperationFeedback
     :error="error || autosave.error.value"
     :message="message"
@@ -694,6 +708,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
             :original-error="originalError"
             :audio-src="taskAudioUrl"
             :disabled="busy"
+            @playback="onPlayback"
           />
           <div class="actions">
             <Button
@@ -858,6 +873,9 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               :disabled="busy"
               :image-disabled="busy || running || !completePlan"
               :revision-disabled="running || !completePlan || !providerId"
+              :playing="playbackScene === index"
+              :audio-available="!!taskAudioUrl"
+              @play="subtitleEditor?.play(scene.first)"
               @revise="reviseScene(index)"
               @focusin="position = { ...position, section: 'scene', index }"
               @update:scene="scenes[index] = $event"

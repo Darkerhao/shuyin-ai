@@ -10,7 +10,7 @@ import { continueDouyinTask, getDouyinSession, onDouyinProgress, openDouyinWindo
 import type { PublishTask } from '../../types/publishing'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 
-const props = defineProps<{ desktop: boolean; task?: PublishTask | null; disabled?: boolean; prepareTask?: () => Promise<PublishTask> }>()
+const props = defineProps<{ desktop: boolean; task?: PublishTask | null; disabled?: boolean; hideStart?: boolean; prepareTask?: () => Promise<PublishTask> }>()
 const emit = defineEmits<{ working: [active: boolean] }>()
 const session = ref<DouyinSession | null>(null)
 const pending = ref(false)
@@ -269,7 +269,7 @@ defineExpose({ start })
     </div>
     <div class="actions wrap">
       <Button
-        v-if="!active && session?.status !== 'review'"
+        v-if="!hideStart && !active && session?.status !== 'review'"
         type="button"
         :disabled="!desktop || disabled || pending || stopping || task?.status === 'published'"
         @click="start"

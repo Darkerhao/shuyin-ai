@@ -16,6 +16,9 @@ import { workspaceOperation } from './workspaceOperation'
 import StorageManager from './StorageManager.vue'
 import ModelDiagnostics from './ModelDiagnostics.vue'
 import { lastBackup, backupDue, type BackupRecord } from '../../services/maintenance'
+import { useInterfacePreferences } from '../../composables/useInterfacePreferences'
+import { isTauri } from '@tauri-apps/api/core'
+const preferences = useInterfacePreferences()
 const desktop = api.isDesktop()
 const settings = ref<WorkspaceSettings | null>(null)
 const backupRecord = ref<BackupRecord | null>(null)
@@ -29,7 +32,7 @@ const loading = useOperation()
 const busy = computed(() => operationBusy.value || loading.busy.value || storageWorking.value)
 const closeGuard = useWindowCloseGuard(() => operationBusy.value || storageWorking.value, () => !operationBusy.value && !storageWorking.value)
 onBeforeRouteLeave(() => !operationBusy.value && !storageWorking.value)
-const load = () => loading.run(async () => { settings.value = await api.workspaceSettings(); backupRecord.value = await lastBackup() })
+const load = () => loading.run(async () => { settings.value = await api.workspaceSettings(); backupRecord.value = await lastBackup(); await preferences.initialize() })
 const chooseRoot = () => run(async () => { const path = await api.chooseDirectory(); if (path) { settings.value = await api.setWorkspaceRoot(path); message.value = '新项目将使用此目录，已有项目保持原位置。' } }, '正在设置工作目录…')
 const backup = () => run(async () => { const path = await api.chooseDirectory(); if (path) { message.value = `备份已保存：${await api.createBackup(path)}`; backupRecord.value = await lastBackup() } }, '正在创建数据库备份，请等待完成后离开…')
 const chooseRestore = () => run(async () => { const path = await api.chooseBackup(); if (path) { restorePath.value = path; fullRestore.value = null; restoreDirectory.value = '' } })
@@ -211,6 +214,23 @@ onMounted(() => { if (desktop) void load() })
       </Button>
     </template>
   </ConfirmAction>
+  <section
+    v-if="desktop"
+    class="panel"
+    aria-label="界面偏好"
+  >
+    <h2>界面偏好</h2>
+    <label
+      class="check-label"
+      for="sidebar-prompt-visible"
+    ><Checkbox
+      id="sidebar-prompt-visible"
+      :model-value="preferences.sidebarPrompt.value"
+      :disabled="!isTauri() || preferences.busy.value"
+      @update:model-value="preferences.setPrompt($event === true)"
+    />显示侧栏创作提示</label>
+    <OperationFeedback :error="preferences.error.value" />
+  </section>
   <StorageManager
     v-if="desktop"
     :disabled="operationBusy || loading.busy.value"

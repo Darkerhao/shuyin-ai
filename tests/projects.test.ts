@@ -309,7 +309,7 @@ describe('M1 projects and materials', () => {
     expect(wrapper.get('.library-grid').classes()).toContain('is-list')
     expect(wrapper.get('[aria-label="列表视图"]').attributes('aria-pressed')).toBe('true')
     expect(wrapper.findAll('.library-filters button')[1]!.attributes('aria-pressed')).toBe('true')
-    await wrapper.get('.project-card').trigger('click'); await flushPromises()
+    await wrapper.get('.project-card-link').trigger('click'); await flushPromises()
     expect(router.currentRoute.value.path).toBe('/projects/p1/writing')
     router.back(); await flushPromises()
     expect(router.currentRoute.value.query).toEqual({ q: '余华', status: 'active', sort: 'title', view: 'list' })
