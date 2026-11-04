@@ -672,6 +672,7 @@ fn publishing() -> WritingContent {
     WritingContent::Publishing {
         title: "发布标题".into(),
         description: "发布内容".into(),
+        tags: "#读书 #生死疲劳 #文学".into(),
         audio_prompt: "音频提示词".into(),
         cover_title: "换了几辈子，还是放不下".into(),
         cover_subtitle: "《生死疲劳》里的执念".into(),
@@ -695,6 +696,7 @@ fn cover_materials_and_legacy_publishing_survive_save_backup_and_restart() {
     }).unwrap();
     let old = db.list_versions(&p.id, "publishing").unwrap().remove(0);
     let WritingContent::Publishing {
+        tags,
         cover_title,
         cover_subtitle,
         cover_prompt_landscape,
@@ -705,6 +707,7 @@ fn cover_materials_and_legacy_publishing_survive_save_backup_and_restart() {
         panic!()
     };
     assert!([
+        tags,
         cover_title,
         cover_subtitle,
         cover_prompt_landscape,

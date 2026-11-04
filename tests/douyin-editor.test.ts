@@ -73,6 +73,14 @@ describe('official editor adapter safeguards (local DOM fixtures)', () => {
     expect(act('publish').ok).toBe(false)
     expect(publish).not.toHaveBeenCalled()
   })
+  it('appends all generated hashtags after the description and does not duplicate them on continuation', () => {
+    const generated = { title: '如何把钱花在值得的地方', description: '读《高性价比人生指南》，一起看清生活中的取舍。', tags: '#读书 #高性价比人生指南 #生活选择 #好书分享' }
+    const expected = `${generated.description}\n\n${generated.tags}`
+    expect(act('fill', generated)).toMatchObject({ ok: true, description: expected })
+    expect(act('read')).toMatchObject({ description: expected })
+    expect(act('fill', generated)).toMatchObject({ ok: true, description: expected })
+    expect(document.execCommand).toHaveBeenCalledOnce()
+  })
   it('refuses a different existing description before changing either field', () => {
     document.querySelector('[contenteditable]')!.removeAttribute('data-placeholder')
     document.querySelector('[contenteditable]')!.textContent = '人工编辑的内容'

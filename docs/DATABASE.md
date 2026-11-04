@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 文案发布标签（2026-11-04，仍为v17）
+
+`writing_versions.content_json`的publishing对象新增 `tags` 字符串（最多500字），例如 `"#读书 #我的前半生 #身份认同"`。新生成必填合法标签；旧对象缺字段时默认读为空，不UPDATE、回填或重写历史JSON。人工编辑允许空标签，新保存仍追加版本。`editor_drafts.content_json`沿用完整编辑对象保存，标签不单建表或重复状态。
+
+发布来源选择同时带入标签，之后以既有 `publish_tasks.tags`保存实际可编辑文字快照；来源版本不被修改。任务包 `tags.txt`与manifest仍读取任务快照。数据库及完整备份自动保留上述JSON和现有列，无SQL迁移、表/索引/权限变化，`user_version=17`不变。旧程序不具备新增字段契约，回退应使用升级前备份。
+
 ## P3预览不持久化（2026-11-04，仍为v17）
 
 生成中的文字快照只在任务Channel和当前页面保留，不写`editor_drafts`、`writing_versions`或`ai_tasks.preview_json`。当前稿的正常编辑继续由原自动草稿保存；全量结果完整校验后追加原历史，按项完整候选仍保存在原任务输出，明确采用才新增版本。无表、列、索引或迁移变化。取消/断流/结构错误及实际IPC/SQLite证据见[P3验收](P3-STREAMING-PREVIEW-VERIFICATION.md)。
