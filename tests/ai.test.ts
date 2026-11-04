@@ -70,6 +70,70 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
+  it('shows live candidate text before completion without editing or saving the current draft', async () => {
+    let emit: ((content: Partial<typeof initial.content>) => void) | undefined
+    let finish!: (value: WritingVersion) => void
+    vi.mocked(api.executeGeneration).mockImplementation((_id: string, onPreview?: typeof emit) => {
+      emit = onPreview
+      return new Promise(resolve => { finish = resolve })
+    })
+    const { wrapper } = await render()
+    await wrapper.get('#result-title').setValue('正在编辑的当前稿')
+    await button(wrapper, '生成备选').trigger('click'); await flushPromises()
+    emit?.({ title: '正在形成的候选', description: '第一句\n第二句' }); await flushPromises()
+    const live = wrapper.get('[aria-label="生成中的候选预览"]')
+    expect(live.text()).toContain('正在形成的候选')
+    expect(live.text()).toContain('尚未校验或保存')
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', '正在编辑的当前稿')
+    expect(api.saveWriting).not.toHaveBeenCalled()
+    finish(generated); await flushPromises()
+    expect(wrapper.find('[aria-label="生成中的候选预览"]').exists()).toBe(false)
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', '正在编辑的当前稿')
+    expect(wrapper.get('#history-candidate-title').element).toHaveProperty('value', generated.content.title)
+  })
+
+  it('clears stopped candidates, ignores late old fragments and keeps new requests independent', async () => {
+    const callbacks: ((content: Partial<typeof initial.content>) => void)[] = []
+    const failures: ((cause: Error) => void)[] = []
+    vi.mocked(api.executeGeneration).mockImplementation((_id: string, onPreview?: (content: Partial<typeof initial.content>) => void) => {
+      callbacks.push(onPreview!)
+      return new Promise((_resolve, reject) => { failures.push(reject) })
+    })
+    vi.mocked(api.cancelGeneration).mockResolvedValue(undefined)
+    const { wrapper } = await render()
+    await button(wrapper, '生成备选').trigger('click'); await flushPromises()
+    callbacks[0]!({ title: '应当清除的片段' }); await flushPromises()
+    await button(wrapper, '取消生成').trigger('click'); await flushPromises()
+    callbacks[0]!({ title: '停止后的迟到片段' }); await flushPromises()
+    expect(wrapper.text()).not.toContain('停止后的迟到片段')
+    failures[0]!(new Error('生成已取消')); await flushPromises()
+    expect(wrapper.find('[aria-label="生成中的候选预览"]').exists()).toBe(false)
+    await button(wrapper, '生成备选').trigger('click'); await flushPromises()
+    callbacks[1]!({ title: '新请求的片段' }); callbacks[0]!({ title: '上个请求的片段' }); await flushPromises()
+    expect(wrapper.get('[aria-label="生成中的候选预览"]').text()).toContain('新请求的片段')
+    expect(wrapper.text()).not.toContain('上个请求的片段')
+    failures[1]!(new Error('连接中断')); await flushPromises()
+    expect(wrapper.find('[aria-label="生成中的候选预览"]').exists()).toBe(false)
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', initial.content.title)
+    expect(api.saveWriting).not.toHaveBeenCalled()
+    expect(vi.mocked(drafts.saveDraft).mock.calls.every(([, , draft]) => !JSON.stringify(draft).includes('片段'))).toBe(true)
+  })
+  it('detaches live candidates on unmount and renders incoming text as plain text', async () => {
+    let emit: ((content: Partial<typeof initial.content>) => void) | undefined
+    let finish!: (value: WritingVersion) => void
+    vi.mocked(api.executeGeneration).mockImplementation((_id: string, onPreview?: typeof emit) => {
+      emit = onPreview
+      return new Promise(resolve => { finish = resolve })
+    })
+    const { wrapper } = await render()
+    await button(wrapper, '生成备选').trigger('click'); await flushPromises()
+    emit?.({ description: '<img src=x onerror=alert(1)>' }); await flushPromises()
+    expect(wrapper.get('[aria-label="生成中的候选预览"]').find('img').exists()).toBe(false)
+    expect(wrapper.get('[aria-label="生成中的候选预览"]').text()).toContain('<img src=x onerror=alert(1)>')
+    wrapper.unmount()
+    emit?.({ title: '卸载后的片段' }); finish(generated); await flushPromises()
+    expect(document.body.textContent).not.toContain('卸载后的片段')
+  })
   it('keeps the saved current version when generating an alternative and takes only the explicitly chosen field', async () => {
     vi.mocked(api.executeGeneration).mockResolvedValue(generated)
     const { wrapper } = await render()

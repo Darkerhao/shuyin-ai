@@ -1,6 +1,7 @@
 use super::images::{test_jpeg, test_png, test_webp, ImageProvider, ImageRequest};
 use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
+use std::sync::Arc;
 use tokio::sync::oneshot;
 
 fn image_request(base_url: String) -> ImageRequest {
@@ -603,4 +604,44 @@ async fn streaming_rejects_oversized_answers() {
         .unwrap_err();
     handle.join().unwrap();
     assert_eq!(error.code, "invalid_response");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn live_candidates_arrive_before_completion_and_never_include_reasoning_or_json() {
+    let (release, released) = oneshot::channel();
+    let (url, server) = reply_server(move |_, stream| {
+        let reasoning = serde_json::json!({"choices":[{"index":0,"delta":{"reasoning_content":"PRIVATE_REASONING"}}]});
+        let first = serde_json::json!({"choices":[{"index":0,"delta":{"content":r#"{"title":"正在生成"#}}]});
+        write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {reasoning}\n\ndata: {first}\n\n").unwrap();
+        stream.flush().unwrap();
+        if released.blocking_recv().is_err() {
+            return;
+        }
+        let last = serde_json::json!({"choices":[{"index":0,"delta":{"content":r#"的标题","description":"完成正文"}"#},"finish_reason":"stop"}]});
+        let _ = write!(stream, "data: {last}\n\ndata: [DONE]\n\n");
+    });
+    let (received, preview_received) = oneshot::channel();
+    let first = Arc::new(Mutex::new(Some(received)));
+    let provider = OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .with_content_observer(move |raw| {
+            let shown = super::preview::texts(raw, None);
+            if !shown.is_empty() {
+                if let Some(sender) = first.lock().unwrap().take() {
+                    let _ = sender.send(shown);
+                }
+            }
+        });
+    let mut generation = provider.generate(request(url));
+    let early = tokio::select! {
+        result = &mut generation => panic!("generation finished before live preview: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(5), preview_received) => result.unwrap().unwrap(),
+    };
+    release.send(()).unwrap();
+    assert_eq!(early.len(), 1);
+    assert_eq!(early["title"], "正在生成");
+    let raw = generation.await.unwrap();
+    assert_eq!(super::preview::texts(&raw, None)["title"], "正在生成的标题");
+    assert!(!raw.contains("PRIVATE_REASONING"));
+    assert!(server.join().unwrap().contains("chat/completions"));
 }

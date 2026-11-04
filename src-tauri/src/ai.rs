@@ -5,6 +5,7 @@ use tokio::sync::watch;
 pub mod audio;
 pub mod diagnostics;
 pub mod images;
+pub(crate) mod preview;
 pub mod publishing;
 pub mod revision;
 mod stream;
@@ -159,8 +160,10 @@ pub trait TextProvider {
         request: TextRequest,
     ) -> Pin<Box<dyn Future<Output = Result<String, AiError>> + Send + '_>>;
 }
+type ContentObserver = dyn Fn(&str) + Send + Sync;
 pub struct OpenAiCompatible<'a> {
     client: reqwest::Client,
+    on_content: Option<Box<ContentObserver>>,
     diagnostics: Option<diagnostics::Context<'a>>,
 }
 impl OpenAiCompatible<'_> {
@@ -172,12 +175,20 @@ impl OpenAiCompatible<'_> {
     ) -> OpenAiCompatible<'db> {
         OpenAiCompatible {
             client: self.client,
+            on_content: self.on_content,
             diagnostics: Some(diagnostics::Context {
                 database,
                 task: task.map(str::to_string),
                 stage: stage.into(),
             }),
         }
+    }
+    pub fn with_content_observer(
+        mut self,
+        observer: impl Fn(&str) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_content = Some(Box::new(observer));
+        self
     }
     pub fn new(timeout: Duration, base_url: &str) -> Result<Self, AiError> {
         let mut builder = reqwest::Client::builder()
@@ -197,6 +208,7 @@ impl OpenAiCompatible<'_> {
             .map_err(|_| AiError::new("network", "无法初始化网络客户端。"))?;
         Ok(Self {
             client,
+            on_content: None,
             diagnostics: None,
         })
     }
@@ -243,7 +255,7 @@ impl TextProvider for OpenAiCompatible<'_> {
                             .eq_ignore_ascii_case("text/event-stream")
                     })
                 {
-                    return stream::read(response, &mut log).await;
+                    return stream::read(response, &mut log, self.on_content.as_deref()).await;
                 }
                 // Some compatible services return a complete JSON response even with stream=true.
                 let data = Self::read_json(response, 2_000_000).await?;
@@ -255,11 +267,15 @@ impl TextProvider for OpenAiCompatible<'_> {
                         "模型输出未完整结束或被拒绝，未保存。请调整资料后重试。",
                     ));
                 }
-                choice["message"]["content"]
+                let content = choice["message"]["content"]
                     .as_str()
                     .filter(|s| !s.trim().is_empty())
                     .map(str::to_string)
-                    .ok_or_else(|| AiError::new("invalid_response", "模型未返回可用文本。"))
+                    .ok_or_else(|| AiError::new("invalid_response", "模型未返回可用文本。"))?;
+                if let Some(observe) = &self.on_content {
+                    observe(&content);
+                }
+                Ok(content)
             }
             .await;
             log.finish(&result)?;

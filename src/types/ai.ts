@@ -28,3 +28,5 @@ export interface GenerationInput { projectId: string; providerId: string; target
 export interface DurationRecommendation { minutes: number; reason: string }
 export interface GenerationPreview { taskId: string; fields: PublishingField[]; before: PublishingContent; content: PublishingContent }
 export type GenerationResult = WritingVersion | GenerationPreview | DurationRecommendation
+
+export type GenerationTextPreview = Partial<Record<PublishingTextField, string>>
