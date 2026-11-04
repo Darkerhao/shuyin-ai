@@ -35,6 +35,7 @@ pub(crate) fn texts(raw: &str, selected: Option<&[PublishingField]>) -> BTreeMap
     for field in [
         PublishingField::Title,
         PublishingField::Description,
+        PublishingField::Tags,
         PublishingField::AudioPrompt,
         PublishingField::CoverTitle,
         PublishingField::CoverSubtitle,
@@ -219,6 +220,16 @@ impl Reader<'_> {
 mod tests {
     use super::*;
     use crate::ai::revision::PublishingField;
+
+    #[test]
+    fn previews_partial_tags_without_leaking_unselected_text() {
+        let raw = r##"{"title":"当前书籍","tags":"#读书 #当前主"##;
+        assert_eq!(texts(raw, None)["tags"], "#读书 #当前主");
+        let shown = texts(raw, Some(&[PublishingField::Tags]));
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown["tags"], "#读书 #当前主");
+        assert!(!texts(raw, Some(&[PublishingField::Title])).contains_key("tags"));
+    }
 
     #[test]
     fn partial_candidates_decode_text_and_audio_without_json_or_unselected_fields() {

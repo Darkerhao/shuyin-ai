@@ -9,8 +9,8 @@ pub(crate) mod preview;
 pub mod publishing;
 pub mod revision;
 mod stream;
-pub const PROMPT_VERSION: &str = "publishing-v6";
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v6.md");
+pub const PROMPT_VERSION: &str = "publishing-v7";
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v7.md");
 pub const TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -25,6 +25,8 @@ pub enum WritingContent {
     Publishing {
         title: String,
         description: String,
+        #[serde(default)]
+        tags: String,
         #[serde(rename = "audioPrompt")]
         audio_prompt: String,
         #[serde(rename = "coverTitle", default)]
@@ -53,6 +55,7 @@ impl WritingContent {
                 Self::Publishing {
                     title,
                     description,
+                    tags,
                     audio_prompt,
                     cover_title,
                     cover_subtitle,
@@ -72,6 +75,7 @@ impl WritingContent {
                     && !audio_prompt.trim().is_empty()
                     && audio_prompt.chars().count() <= 20_000
                     && [
+                        (tags, 500),
                         (cover_title, 30),
                         (cover_subtitle, 60),
                         (cover_prompt_landscape, 2000),

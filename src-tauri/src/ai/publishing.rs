@@ -41,6 +41,7 @@ impl CoverDesign {
 pub struct PublishingDraft {
     title: String,
     description: String,
+    tags: String,
     introduction: String,
     sections: Vec<Section>,
     cover_title: String,
@@ -120,6 +121,7 @@ impl AudioDraft {
 }
 impl PublishingDraft {
     pub fn into_content(self, book: &str, duration_seconds: i64) -> Result<WritingContent, String> {
+        let tags = parse_tags(&self.tags)?;
         self.cover_design.validate()?;
         if [
             &self.cover_title,
@@ -150,6 +152,7 @@ impl PublishingDraft {
         let content = WritingContent::Publishing {
             title: self.title.trim().into(),
             description: self.description.trim().into(),
+            tags,
             audio_prompt,
             cover_title: self.cover_title.trim().into(),
             cover_subtitle: self.cover_subtitle.trim().into(),
@@ -163,9 +166,59 @@ impl PublishingDraft {
     }
 }
 
+pub(super) fn parse_tags(raw: &str) -> Result<String, String> {
+    let tags = raw.split_whitespace().collect::<Vec<_>>();
+    if tags.is_empty()
+        || tags.iter().any(|tag| {
+            tag.strip_prefix('#').is_none_or(|name| {
+                name.is_empty()
+                    || !name
+                        .chars()
+                        .all(|character| character.is_alphanumeric() || character == '_')
+            })
+        })
+    {
+        return Err("标签须使用空格分隔的 #标签 格式，原有内容保留。".into());
+    }
+    Ok(tags.join(" "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn generates_valid_hashtags_without_putting_them_in_the_description() {
+        let mut value = draft();
+        value["tags"] = serde_json::json!("  #读书  #明朝那些事儿\n#历史_人物 #Book2026  ");
+        let content = serde_json::from_value::<PublishingDraft>(value.clone())
+            .unwrap()
+            .into_content("明朝那些事儿", 600)
+            .unwrap();
+        let content = serde_json::to_value(content).unwrap();
+        assert_eq!(content["tags"], "#读书 #明朝那些事儿 #历史_人物 #Book2026");
+        assert_eq!(content["description"], value["description"]);
+    }
+    #[test]
+    fn rejects_missing_empty_malformed_and_oversized_generated_hashtags() {
+        let mut missing = draft();
+        missing.as_object_mut().unwrap().remove("tags");
+        assert!(serde_json::from_value::<PublishingDraft>(missing).is_err());
+        for tags in [
+            " ".into(),
+            "#".into(),
+            "读书 #好书分享".into(),
+            "#读书#历史".into(),
+            "#读书， #历史".into(),
+            "#读书 @作者".into(),
+            format!("#{}", "字".repeat(500)),
+        ] {
+            let mut invalid = draft();
+            invalid["tags"] = serde_json::json!(tags);
+            if let Ok(value) = serde_json::from_value::<PublishingDraft>(invalid) {
+                assert!(value.into_content("书", 600).is_err());
+            }
+        }
+    }
     #[test]
     fn selected_duration_controls_planning_without_spoken_time_promises() {
         for minutes in [1, 5, 15, 18, 30, 60, 1440] {
@@ -217,7 +270,7 @@ mod tests {
         }
     }
     fn draft() -> serde_json::Value {
-        serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "introduction":"今天我们要聊的这本书，是《明朝那些事儿》。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。", "coverPromptWidescreen":"横版 16:9，城墙横向绵延，远景开阔，中央留白，无文字。", "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}})
+        serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "tags":"#读书 #明朝那些事儿 #历史", "introduction":"今天我们要聊的这本书，是《明朝那些事儿》。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。", "coverPromptWidescreen":"横版 16:9，城墙横向绵延，远景开阔，中央留白，无文字。", "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}})
     }
     #[test]
     fn validates_design_before_accepting_ai_output() {

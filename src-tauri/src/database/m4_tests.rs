@@ -605,6 +605,7 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
         let content = WritingContent::Publishing {
             title: format!("一起读《{title}》"),
             description: format!("读《{title}》\n从原书出发。"),
+            tags: format!("#读书 #{title} #经典阅读"),
             audio_prompt: format!("请以《{title}》原书为来源。"),
             cover_title: format!("一起读《{title}》"),
             cover_subtitle: "从书中看见生活".into(),
@@ -632,11 +633,15 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
         assert_eq!(writing.len(), 2);
         let mut i = input(&db, &p);
         if let WritingContent::Publishing {
-            title, description, ..
+            title,
+            description,
+            tags,
+            ..
         } = &writing[0].content
         {
             i.title = title.clone();
             i.description = description.clone();
+            i.tags = tags.clone();
         }
         let publish = db.save_publish_task(None, i).unwrap();
         db.prepare_publish_task(&publish.id).unwrap();

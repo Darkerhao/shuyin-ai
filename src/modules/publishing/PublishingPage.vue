@@ -88,9 +88,9 @@ function defaults(): PublishInput {
 async function selectWriting(id: string | null) {
   if (id === draft.value.writingVersionId) return
   const version = writing.value.find(v => v.id === id)
-  if (version && (draft.value.title || draft.value.description) && !await requestConfirmation('使用此版本将替换当前发布标题和内容，确定继续？', 'publish-writing-version')) return
+  if (version && (draft.value.title || draft.value.description || draft.value.tags) && !await requestConfirmation('使用此版本将替换当前发布标题、内容和标签，确定继续？', 'publish-writing-version')) return
   draft.value.writingVersionId = id
-  if (version) { draft.value.title = version.content.title; draft.value.description = version.content.description }
+  if (version) { draft.value.title = version.content.title; draft.value.description = version.content.description; draft.value.tags = version.content.tags }
   draft.value.titleConfirmed = false
 }
 function accept(task: PublishTask | null) {
@@ -402,7 +402,7 @@ onMounted(() => { if (desktop) void loadTask() })
             </SelectContent>
           </Select>
           <p class="muted">
-            选择后带入标题和内容，仍可编辑；保存任务后固定文字快照与来源版本。
+            选择后带入标题、内容和标签，仍可编辑；保存任务后固定文字快照与来源版本。
           </p>
           <label for="publish-title">发布标题</label>
           <Input
@@ -418,13 +418,20 @@ onMounted(() => { if (desktop) void loadTask() })
             rows="6"
             maxlength="1000"
           />
-          <label for="publish-tags">标签（选填，按平台格式填写）</label>
+          <label for="publish-tags">发布标签（可编辑）</label>
           <Input
             id="publish-tags"
             v-model="draft.tags"
             maxlength="500"
             placeholder="#读书 #好书分享"
+            aria-describedby="publish-tags-help"
           />
+          <p
+            id="publish-tags-help"
+            class="muted"
+          >
+            从所选文案版本带入，多个 #标签 用空格分隔；辅助发布时自动追加到抖音内容末尾。旧文案可在内容创作中按项生成标签，也可留空。
+          </p>
         </section>
         <section class="panel">
           <h2>音频、成片与封面</h2>

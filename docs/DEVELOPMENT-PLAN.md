@@ -1,5 +1,33 @@
 # 书引 AI 开发计划与验收标准
 
+## AI发布标签（2026-11-04）
+
+完成同一次文案生成中的独立tags字段、统一格式解析和500字校验；WritingPage复用原字段配置支持编辑、复制、自动暂存、历史对照/取用、流式候选及只调整标签。发布准备选择来源时同时带入标签，替换确认覆盖仅已填写标签的情况；辅助发布继续由既有适配器把标签追加到正文末尾，并回读后继续。Prompt版本为publishing-v7/publishing-revision-v6，无额外AI请求、新依赖或SQL迁移，schema17；属于feat/minor兼容增强，未手动升版。
+
+验收标准：新生成标签与书籍主题相关且为 `#标签`；旧文案可读写及按项补齐；未选中字段保持原值；标签编辑/复制/版本/草稿恢复及备份保留；取消、失败和替换取消保稿；所选来源标签进入发布快照，抖音填写及继续不重复追加，最终发布由用户完成。
+
+修改文件：`src/types/ai.ts`、`src/modules/writing/WritingPage.vue`、`src/modules/publishing/PublishingPage.vue`；`src-tauri/src/ai.rs`、`src-tauri/src/ai/{publishing,revision,preview}.rs`、`src-tauri/src/database/{m2_tests,m4_tests}.rs`；新Prompt `prompts/publishing-v7.md`和`prompts/publishing-revision-v6.md`；`tests/{ai,publishing,douyin-editor}.test.ts`；`docs/{PRD,TECHNICAL-DESIGN,DATABASE,AI-RULES,USER-GUIDE,DEVELOPMENT-PLAN}.md`。旧Prompt保留追溯，无新依赖、权限或迁移文件；未提交、发布或修改版本号。
+
+实际验证：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npx vitest run tests/ai.test.ts tests/publishing.test.ts tests/douyin-editor.test.ts --maxWorkers 2` | 140通过；覆盖生成、失败保稿、标签调整采用、草稿恢复、来源切换确认、发布快照与标签追加一次 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 214通过、2项既有专项忽略；覆盖新标签格式/长度、只改标签、原始旧JSON不重写、备份恢复与重启、三书文案/发布任务保留 |
+| `npm run lint` | 通过，0 lint警告 |
+| `npm run build` | TypeScript检查与Vite构建通过；保留既有超过500kB分块提示 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `git diff --check` | 通过 |
+| `node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=shuyin-tags run-code --filename output/playwright/publishing-tags/setup.js` | 隔离浏览器加载当前源码及内存Tauri IPC夹具 |
+| `node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=shuyin-tags run-code --filename output/playwright/publishing-tags/check.js --json` | 两页各1440/1120/800/375px共8组布局通过；标签有可访问名称和说明，编辑/复制/版本保存/来源带入/发布保存及键盘聚焦通过，页面错误0 |
+| `npm run desktop:build -- --debug --no-bundle --config output/playwright/publishing-tags/tauri.native.conf.json` | 当前源码完成TypeScript/Vite与Tauri debug构建，保留既有500kB分块提示 |
+| `node output/playwright/publishing-tags/native.cjs` | 隔离Windows WebView2完成本机Provider补旧标签、采用版本、编辑保存、来源带入、发布草稿与正常重启；原始旧JSON未被改写，最新版本使用`publishing-revision-v6`，`user_version=17`、integrity ok、外键异常0 |
+
+Rust命令先执行 `. ./.tools/env.ps1`；测试进程TEMP/TMP/SQLITE_TMPDIR指向仓库 `output/publishing-tags-test-temp`。实施前回归明确失败：旧Rust拒绝未知tags字段，前端缺少标签编辑/调整/预览和来源带入；实施后上述最终命令通过。浏览器结果已解析核对，JSON与已查看截图位于 `output/playwright/publishing-tags/`，没有把CLI退出码单独当作成功证据。
+
+本轮自动化与Windows原生闭环验收通过；3—5个标签及语义相关性由Prompt要求，真实模型质量仍需实际书籍试用。浏览器模拟IPC，Windows隔离构建使用本机契约模型与独立SQLite；未访问用户数据库、未调用外部模型、未打开抖音官方页面，实际平台话题识别、安装升级和跨平台仍未验收。下一步使用包含本次改动的正式桌面构建，为一份真实文案生成标签并检查官方发布预览。
+
 ## 书架十二套稳定配色（2026-11-04）
 
 按用户确认方案，将书架四套示意封面配色扩为十二套，集中维护深书封/浅背景配对，并用书籍ID的FNV-1a哈希稳定选择。移除旧字符求和和`tone-*`样式，网格/列表共用同一组件；改名、排序、筛选及重开保持颜色。已有书籍采用新规则后重新分配一次，正式封面与业务数据保留。无新增依赖、权限或数据库迁移，属于style/patch，未手动修改版本。

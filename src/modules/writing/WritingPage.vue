@@ -397,6 +397,7 @@ async function copy(field: PublishingTextField, label: string) {
 const fields: { key: PublishingTextField; label: string; rows: number; limit: number; help?: string }[] = [
   { key: 'title', label: '发布标题', rows: 2, limit: 30 },
   { key: 'description', label: '发布内容', rows: 7, limit: 1000 },
+  { key: 'tags', label: '发布标签', rows: 2, limit: 500, help: 'AI 会生成与书籍和本期主题相关的 #标签，可修改或清空。选择文案来源后自动带入发布准备，辅助发布时追加到抖音内容末尾。旧文案可通过按项调整单独生成标签。' },
   { key: 'audioPrompt', label: '音频生成提示词', rows: 18, limit: 20000, help: '自动任务会把这里已保存的完整指导写入 Gemini Notebook；也可手动复制到网站。网站格式和时间档位不保证精确分钟或单人效果。' },
   { key: 'coverTitle', label: '封面主标题', rows: 2, limit: 30, help: '提炼本书的悬念或看点，与发布标题分开使用。旧版本没有封面内容，可再次一键生成，也可手动填写。' },
   { key: 'coverSubtitle', label: '封面副标题', rows: 2, limit: 60, help: '用书名和具体看点补充主标题，可直接带入制作封面。' },
@@ -832,7 +833,7 @@ onMounted(async () => {
           :value="tab.value"
         >
           <p class="tab-intro">
-            {{ tab.value === 'publishing' ? '一份有吸引力的标题，一段让人想点开的介绍。' : tab.value === 'audio' ? '自动生成或手动导入音频，再到视频制作识别字幕、生成原声 MG 成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
+            {{ tab.value === 'publishing' ? '准备标题、介绍和话题标签，让感兴趣的观众找到你的作品。' : tab.value === 'audio' ? '自动生成或手动导入音频，再到视频制作识别字幕、生成原声 MG 成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
           </p>
           <section
             v-if="tab.value === 'cover' && draft.coverDesign"
@@ -864,6 +865,7 @@ onMounted(async () => {
             </div>
             <p
               v-if="field.help"
+              :id="`result-help-${field.key}`"
               class="muted"
             >
               {{ field.help }}
@@ -874,7 +876,8 @@ onMounted(async () => {
               :rows="field.rows"
               :maxlength="field.limit"
               :disabled="(busy && !taskId) || revisionLocked"
-              :placeholder="`生成后在这里查看和修改${field.label}`"
+              :aria-describedby="field.help ? `result-help-${field.key}` : undefined"
+              :placeholder="field.key === 'tags' ? '#读书 #好书分享 #书籍主题' : `生成后在这里查看和修改${field.label}`"
             />
             <p
               v-if="field.key !== 'audioPrompt'"

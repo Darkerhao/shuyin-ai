@@ -1,17 +1,18 @@
 use super::{
-    publishing::{AudioDraft, CoverDesign},
+    publishing::{parse_tags, AudioDraft, CoverDesign},
     WritingContent,
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "publishing-revision-v5";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v5.md");
+pub const PROMPT_VERSION: &str = "publishing-revision-v6";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v6.md");
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum PublishingField {
     Title,
     Description,
+    Tags,
     AudioPrompt,
     CoverTitle,
     CoverSubtitle,
@@ -25,6 +26,7 @@ impl PublishingField {
         match self {
             Self::Title => "title",
             Self::Description => "description",
+            Self::Tags => "tags",
             Self::AudioPrompt => "audioPrompt",
             Self::CoverTitle => "coverTitle",
             Self::CoverSubtitle => "coverSubtitle",
@@ -86,6 +88,8 @@ pub fn revise(
             serde_json::from_value::<AudioDraft>(value.clone())
                 .map_err(|_| "音频调整需要书籍引入及五个完整部分。")?
                 .into_prompt(book, duration_seconds)?
+        } else if *field == PublishingField::Tags {
+            parse_tags(value.as_str().ok_or("标签调整结果必须是文字。")?)?
         } else {
             let text = value.as_str().ok_or("调整结果必须是文字。")?.trim();
             if text.is_empty() {
@@ -123,6 +127,39 @@ pub fn revise(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn generates_tags_for_legacy_content_and_preserves_unselected_fields() {
+        let base = original();
+        let updated = revise(
+            &json!({"tags":" #读书  #测试书\n#好书分享 "}).to_string(),
+            &base,
+            &[PublishingField::Tags],
+            "测试书",
+            600,
+        )
+        .unwrap();
+        let mut expected = serde_json::to_value(&base).unwrap();
+        assert_eq!(expected["tags"], "");
+        expected["tags"] = json!("#读书 #测试书 #好书分享");
+        assert_eq!(serde_json::to_value(updated).unwrap(), expected);
+        for invalid in [
+            json!({"tags":"#读书", "description":"擅自修改内容"}),
+            json!({"tags":"读书"}),
+            json!({"tags":""}),
+            json!({"tags":["#读书"]}),
+            json!({"tags":format!("#{}", "字".repeat(500))}),
+        ] {
+            assert!(revise(
+                &invalid.to_string(),
+                &base,
+                &[PublishingField::Tags],
+                "测试书",
+                600,
+            )
+            .is_err());
+        }
+    }
 
     #[test]
     fn widescreen_prompt_can_be_added_to_old_content_without_changing_other_fields() {

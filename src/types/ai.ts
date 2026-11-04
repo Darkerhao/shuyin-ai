@@ -9,6 +9,7 @@ export interface PublishingContent {
   format: 'publishing'
   title: string
   description: string
+  tags: string
   audioPrompt: string
   coverTitle: string
   coverSubtitle: string
@@ -17,7 +18,7 @@ export interface PublishingContent {
   coverPromptWidescreen: string
   coverDesign?: CoverDesign | null
 }
-export const emptyPublishing = (): PublishingContent => ({ format: 'publishing', title: '', description: '', audioPrompt: '', coverTitle: '', coverSubtitle: '', coverPromptLandscape: '', coverPromptPortrait: '', coverPromptWidescreen: '' })
+export const emptyPublishing = (): PublishingContent => ({ format: 'publishing', title: '', description: '', tags: '', audioPrompt: '', coverTitle: '', coverSubtitle: '', coverPromptLandscape: '', coverPromptPortrait: '', coverPromptWidescreen: '' })
 export type WritingContent = PublishingContent
 export interface WritingVersion { id: string; projectId: string; kind: WritingKind; versionNo: number; content: WritingContent; sourceType: 'ai' | 'manual' | 'mixed'; modelName: string; promptVersion: string; isConfirmed: boolean; createdAt: string }
 export interface SaveWritingInput { projectId: string; kind: WritingKind; content: WritingContent; basedOn: string | null; isConfirmed: boolean }

@@ -20,7 +20,7 @@ vi.mock('../src/services/audio', () => ({ getAudioJobView: vi.fn(), startAudioJo
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn() }))
 const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模型', modelName: 'model', isDefault: true, credentialStatus: 'available' }
 const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'publishing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
-const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
+const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', tags: '#读书 #生死疲劳 #文学', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
 const browser = { supported: true, open: false, url: null, message: null }
 function makeAudioJob(status: AudioJobStatus, overrides: Partial<AudioJob> = {}): AudioJob {
   return {
@@ -70,6 +70,44 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
+  it('copies, saves and restores edited publishing tags with the existing draft', async () => {
+    vi.mocked(api.listVersions).mockResolvedValue([generated])
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const { wrapper, router } = await render()
+    expect(wrapper.get('#result-tags').element).toHaveProperty('value', generated.content.tags)
+    const tags = '#读书 #生死疲劳 #人生选择'
+    await wrapper.get('#result-tags').setValue(tags)
+    await button(wrapper, '复制发布标签').trigger('click'); await flushPromises()
+    expect(writeText).toHaveBeenLastCalledWith(tags)
+    await router.push('/projects'); await flushPromises()
+    const stored = vi.mocked(drafts.saveDraft).mock.lastCall![2]!
+    expect(stored).toMatchObject({ basedOn: generated.id, content: { tags } })
+    vi.mocked(drafts.readDraft).mockResolvedValue(stored)
+    await router.push('/projects/p1/writing'); await flushPromises()
+    expect(wrapper.get('#result-tags').element).toHaveProperty('value', tags)
+    vi.mocked(api.saveWriting).mockImplementation(async input => ({ ...generated, id: 'v3', versionNo: 3, content: input.content }))
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveWriting).toHaveBeenLastCalledWith(expect.objectContaining({ basedOn: generated.id, content: { ...generated.content, tags } }))
+  })
+  it('adds tags to an older writing version through an explicitly adopted revision', async () => {
+    const content = { ...initial.content, tags: '#读书 #测试书 #好书分享' }
+    vi.mocked(api.executeGeneration).mockResolvedValue({ taskId: 't1', fields: ['tags'], before: initial.content, content })
+    const { wrapper } = await render()
+    await button(wrapper, '按项调整').trigger('click')
+    await wrapper.get('#revision-title').trigger('click')
+    await wrapper.get('#revision-tags').trigger('click')
+    await button(wrapper, '生成预览').trigger('click'); await flushPromises()
+    expect(api.startGeneration).toHaveBeenLastCalledWith(expect.objectContaining({ revision: { basedOn: initial.id, fields: ['tags'], instruction: '' } }))
+    expect(wrapper.get('#revision-after-tags').element).toHaveProperty('value', content.tags)
+    expect(wrapper.get('#result-tags').element).toHaveProperty('value', '')
+    vi.mocked(api.applyGeneration).mockResolvedValue({ ...initial, id: 'v2', versionNo: 2, content })
+    await button(wrapper, '采用并保存新版本').trigger('click'); await flushPromises()
+    expect(wrapper.get('#result-tags').element).toHaveProperty('value', content.tags)
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', initial.content.title)
+    expect(wrapper.get('#result-description').element).toHaveProperty('value', initial.content.description)
+    expect(wrapper.get('#result-audioPrompt').element).toHaveProperty('value', initial.content.audioPrompt)
+  })
   it('shows live candidate text before completion without editing or saving the current draft', async () => {
     let emit: ((content: Partial<typeof initial.content>) => void) | undefined
     let finish!: (value: WritingVersion) => void
@@ -80,9 +118,10 @@ describe('publishing workflow', () => {
     const { wrapper } = await render()
     await wrapper.get('#result-title').setValue('正在编辑的当前稿')
     await button(wrapper, '生成备选').trigger('click'); await flushPromises()
-    emit?.({ title: '正在形成的候选', description: '第一句\n第二句' }); await flushPromises()
+    emit?.({ title: '正在形成的候选', description: '第一句\n第二句', tags: '#读书 #候选主题' }); await flushPromises()
     const live = wrapper.get('[aria-label="生成中的候选预览"]')
     expect(live.text()).toContain('正在形成的候选')
+    expect(live.text()).toContain('#读书 #候选主题')
     expect(live.text()).toContain('尚未校验或保存')
     expect(wrapper.get('#result-title').element).toHaveProperty('value', '正在编辑的当前稿')
     expect(api.saveWriting).not.toHaveBeenCalled()
@@ -412,10 +451,10 @@ describe('publishing workflow', () => {
     expect(api.listVersions).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('请在桌面应用')
   })
-  it('generates publishing and five cover fields in one task', async () => {
+  it('generates publishing tags and five cover fields in one task', async () => {
     vi.mocked(api.listVersions).mockResolvedValue([])
     const { wrapper } = await render()
-    expect(wrapper.findAll('textarea')).toHaveLength(8)
+    expect(wrapper.findAll('textarea')).toHaveLength(9)
     expect(wrapper.find('#writing-kind').exists()).toBe(false)
     expect(wrapper.find('#writing-count').exists()).toBe(false)
     expect(wrapper.find('#writing-reference').exists()).toBe(false)
@@ -424,6 +463,7 @@ describe('publishing workflow', () => {
     expect(api.startGeneration).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', providerId: 'm1', targetDurationSeconds: 600 })
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('新标题')
     expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('新内容')
+    expect(wrapper.get('#result-tags').element).toHaveProperty('value', generated.content.tags)
     expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('新提示词')
     for (const field of ['coverTitle', 'coverSubtitle', 'coverPromptLandscape', 'coverPromptPortrait', 'coverPromptWidescreen'] as const) {
       expect((wrapper.get(`#result-${field}`).element as HTMLTextAreaElement).value).toBe(generated.content[field])
@@ -433,6 +473,7 @@ describe('publishing workflow', () => {
     const { wrapper } = await render()
     await wrapper.get('#result-title').setValue('未保存标题')
     await wrapper.get('#result-description').setValue('未保存内容')
+    await wrapper.get('#result-tags').setValue('#读书 #未保存标签')
     await wrapper.get('#result-audioPrompt').setValue('未保存提示词')
     await wrapper.get('#result-coverTitle').setValue('未保存封面主标题')
     await wrapper.get('#result-coverPromptPortrait').setValue('竖版 3:4，未保存的画面创意')
@@ -441,6 +482,7 @@ describe('publishing workflow', () => {
     expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('模型请求超时')
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('未保存标题')
     expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('未保存内容')
+    expect(wrapper.get('#result-tags').element).toHaveProperty('value', '#读书 #未保存标签')
     expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('未保存提示词')
     expect(api.saveWriting).not.toHaveBeenCalled()
     expect((wrapper.get('#result-coverTitle').element as HTMLTextAreaElement).value).toBe('未保存封面主标题')
