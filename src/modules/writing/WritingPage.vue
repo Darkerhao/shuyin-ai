@@ -13,7 +13,7 @@ import * as api from '../../services/ai'
 import * as audioApi from '../../services/audio'
 import { chooseAudio, chooseSourceDocument, getProject, isDesktop, linkAsset, listAssets, openAsset } from '../../services/projects'
 import { errorMessage } from '../../services/verification'
-import { emptyPublishing, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type PublishingTextField, type WritingVersion } from '../../types/ai'
+import { emptyPublishing, type GenerationTextPreview, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type PublishingTextField, type WritingVersion } from '../../types/ai'
 import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
 import type { Asset } from '../../types/project'
 import type { AudioFormat, AudioJob, AudioJobAction, AudioJobStatus, AudioJobView } from '../../types/audio'
@@ -61,6 +61,20 @@ const draft = ref(emptyPublishing())
 const original = ref(JSON.stringify(draft.value))
 const dirty = computed(() => JSON.stringify(draft.value) !== original.value)
 const taskId = ref('')
+const liveContent = ref<GenerationTextPreview>({})
+let detachPreview = () => {}
+async function executeWriting(id: string) {
+  let attached = true
+  const detach = () => { attached = false; liveContent.value = {} }
+  detachPreview = detach
+  try {
+    return await api.executeGeneration(id, content => {
+      if (attached && taskId.value === id && !cancelling.value) liveContent.value = content
+    })
+  } finally { detach(); detachPreview = () => {} }
+}
+onBeforeUnmount(() => detachPreview())
+
 const cancelling = ref(false)
 const revisionOpen = ref(false)
 const revisionFields = ref<PublishingField[]>(['title'])
@@ -329,7 +343,7 @@ const generate = () => run(async () => {
   try {
     await persistDuration()
     taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60 })
-    const saved = await api.executeGeneration(taskId.value)
+    const saved = await executeWriting(taskId.value)
     if (!('id' in saved)) throw new Error('生成结果类型不符，当前内容保留。')
     versions.value = [saved, ...versions.value]
     const first = !selected.value && !dirty.value
@@ -349,7 +363,7 @@ const generateRevision = () => run(async () => {
     if (dirty.value) await persistWriting()
     if (!selected.value) throw new Error('请先生成或保存一套内容。')
     taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60, revision: { basedOn: selected.value.id, fields: [...revisionFields.value], instruction: revisionInstruction.value.trim() } })
-    const result = await api.executeGeneration(taskId.value)
+    const result = await executeWriting(taskId.value)
     if (!('taskId' in result)) throw new Error('调整结果类型不符，当前内容保留。')
     preview.value = result
     message.value = '候选结果已生成。核对后采用，或放弃并保留原内容。'
@@ -366,7 +380,7 @@ function closeRevision() { preview.value = null; revisionOpen.value = false }
 async function cancel() {
   if (cancelling.value) return
   cancelling.value = true
-  try { await api.cancelGeneration(taskId.value) }
+  try { await api.cancelGeneration(taskId.value); detachPreview() }
   catch { error.value = '取消失败，请稍后重试。' }
   finally { cancelling.value = false }
 }
@@ -630,6 +644,37 @@ onMounted(async () => {
     >
       {{ recommending ? '正在推荐时长，可停止后手动设置。' : revising ? '正在调整选中内容，完成后先预览再采用。' : '正在生成备选，你可以继续编辑，当前内容保留。' }}已等待 {{ waitingSeconds }} 秒，单次最多等待 5 分钟。
     </p>
+    <section
+      v-if="taskId && !recommending && (!revising || revisionFields.some(field => field !== 'coverDesign'))"
+      class="panel"
+      aria-label="生成中的候选预览"
+    >
+      <h2>生成中的候选预览</h2>
+      <p class="muted text-sm">
+        以下内容尚未校验或保存，停止或失败后会清除。当前稿和历史版本保留。
+      </p>
+      <p
+        v-if="!Object.keys(liveContent).length"
+        class="muted text-sm"
+        role="status"
+      >
+        等待正文返回…
+      </p>
+      <div class="max-h-80 space-y-5 overflow-y-auto pr-2">
+        <section
+          v-for="field in fields.filter(item => liveContent[item.key])"
+          :key="field.key"
+          :aria-label="`候选${field.label}`"
+        >
+          <h3 class="text-sm font-medium">
+            {{ field.label }}
+          </h3>
+          <p class="m-0 whitespace-pre-wrap break-words text-sm leading-relaxed">
+            {{ liveContent[field.key] }}
+          </p>
+        </section>
+      </div>
+    </section>
     <section
       v-if="revisionOpen"
       class="panel mb-6 space-y-5"

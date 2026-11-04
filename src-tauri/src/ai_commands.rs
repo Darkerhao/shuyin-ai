@@ -175,16 +175,30 @@ pub async fn execute_generation(
     vault: State<'_, SystemCredentials>,
     active: State<'_, ActiveTasks>,
     id: String,
+    webview: tauri::Webview,
+    on_preview: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<GenerationResult, AiError> {
     let database = database.inner();
     let vault = vault.inner();
     let id = id.as_str();
+    let on_preview = on_preview.map(|channel| {
+        channel.channel_on::<_, std::collections::BTreeMap<String, String>>(webview)
+    });
     run_task(database, active.inner(), id, |mut receiver| async move {
         let prepared=database.prepare_generation(id).map_err(AiError::database)?;
         let model=prepared.provider.input.model_name.clone();
         let system=if prepared.input.recommend_duration { audio::SYSTEM_PROMPT } else if prepared.input.revision.is_some() { revision::SYSTEM_PROMPT } else { SYSTEM_PROMPT };
         let req=request(prepared.provider,vault,system,prepared.user)?;
-        let provider=OpenAiCompatible::new(TIMEOUT, &req.base_url)?.observed(database,Some(id),if prepared.input.recommend_duration {"duration"} else if prepared.input.revision.is_some() {"writing_revision"}else{"writing"});
+        let mut provider=OpenAiCompatible::new(TIMEOUT, &req.base_url)?.observed(database,Some(id),if prepared.input.recommend_duration {"duration"} else if prepared.input.revision.is_some() {"writing_revision"}else{"writing"});
+        if !prepared.input.recommend_duration {
+            if let Some(channel) = on_preview {
+                let fields = prepared.input.revision.as_ref().map(|revision| revision.fields.clone());
+                provider = provider.with_content_observer(move |raw| {
+                    let content = crate::ai::preview::texts(raw, fields.as_deref());
+                    if !content.is_empty() { let _ = channel.send(content); }
+                });
+            }
+        }
         let raw=tokio::select! {
             biased;
             _=receiver.changed()=>return Err(AiError::new("cancelled","生成已取消，原有内容保留。")),

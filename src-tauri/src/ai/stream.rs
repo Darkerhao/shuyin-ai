@@ -1,4 +1,5 @@
-use super::{network_error, AiError};
+use super::{network_error, AiError, ContentObserver};
+use std::time::{Duration, Instant};
 
 fn incomplete() -> AiError {
     AiError::new(
@@ -15,12 +16,15 @@ fn invalid() -> AiError {
 pub(super) async fn read(
     mut response: reqwest::Response,
     log: &mut super::diagnostics::Call<'_>,
+    on_content: Option<&ContentObserver>,
 ) -> Result<String, AiError> {
     let mut line = Vec::new();
     let mut event = String::new();
     let mut content = String::new();
     let mut stopped = false;
     let mut received = 0;
+    let mut last_preview = None::<Instant>;
+    let mut preview_length = 0;
     while let Some(chunk) = response.chunk().await.map_err(network_error)? {
         received += chunk.len();
         // SSE adds envelopes to every token, including reasoning and heartbeats.
@@ -38,6 +42,11 @@ pub(super) async fn read(
             if text.is_empty() {
                 if event.trim() == "[DONE]" {
                     return if stopped && !content.trim().is_empty() {
+                        if let Some(observe) =
+                            on_content.filter(|_| preview_length != content.len())
+                        {
+                            observe(&content);
+                        }
                         Ok(content)
                     } else {
                         Err(incomplete())
@@ -64,6 +73,14 @@ pub(super) async fn read(
                             content.push_str(value.as_str().ok_or_else(invalid)?);
                             if content.len() > 2_000_000 {
                                 return Err(invalid());
+                            }
+                            if let Some(observe) = on_content.filter(|_| {
+                                last_preview
+                                    .is_none_or(|last| last.elapsed() >= Duration::from_millis(80))
+                            }) {
+                                observe(&content);
+                                last_preview = Some(Instant::now());
+                                preview_length = content.len();
                             }
                         }
                         if let Some(reason) = choice.get("finish_reason").filter(|v| !v.is_null()) {

@@ -1,5 +1,10 @@
 # 书引 AI 数据库设计文档
 
+## P3预览不持久化（2026-11-04，仍为v17）
+
+生成中的文字快照只在任务Channel和当前页面保留，不写`editor_drafts`、`writing_versions`或`ai_tasks.preview_json`。当前稿的正常编辑继续由原自动草稿保存；全量结果完整校验后追加原历史，按项完整候选仍保存在原任务输出，明确采用才新增版本。无表、列、索引或迁移变化。取消/断流/结构错误及实际IPC/SQLite证据见[P3验收](P3-STREAMING-PREVIEW-VERIFICATION.md)。
+
+
 ## 视觉与创作交互优化（2026-11-04，仍为v17）
 
 本轮无表、列、索引或SQL迁移。侧栏提示显隐使用`app_settings.sidebar_prompt_visible`，值为JSON布尔字符串，未设置默认为true；读取失败提示，写入失败保留原显示状态。原SQLite快照与完整备份自然包含此设置。

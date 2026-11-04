@@ -86,4 +86,4 @@ node $cli -s=visual-pages run-code --filename output/playwright/visual-completio
 
 唯一仍缺的本轮Windows原生手势是：在隔离测试版“我的书籍”页面，从资源管理器拖入 `drop-source/Windows拖入验收.md`，核对书名/来源后取消，确认没有新书；再拖入并保存，确认只创建一本且原件不变。多文件/不支持格式的服务与前端保护已有自动化覆盖，但不代替手势。
 
-先补齐该人工结果，再判断是否需要P3逐字候选预览。本轮未实施P3，也不将它改成必需功能。
+本报告记录时建议先补齐该人工结果，再判断是否需要P3。用户后续明确要求开始P3，现已按[P3验收](P3-STREAMING-PREVIEW-VERIFICATION.md)实施；原生拖入手势仍保持待人工验证，不补记为通过。
