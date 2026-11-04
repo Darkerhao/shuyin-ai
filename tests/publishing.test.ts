@@ -16,7 +16,7 @@ import { emptyProject, type Asset } from '../src/types/project'
 import { newCover } from '../src/types/cover'
 import type { PublishTask } from '../src/types/publishing'
 vi.mock('../src/services/publishing', () => ({ listPublishTasks: vi.fn(), listPublishQueue: vi.fn(), savePublishTask: vi.fn(), preparePublishTask: vi.fn(), recordPublishSuccess: vi.fn(), openPublishItem: vi.fn() }))
-vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), linkAsset: vi.fn(), chooseAsset: vi.fn(), unlinkAsset: vi.fn(), openAsset: vi.fn() }))
+vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), videoAssetMetadata: vi.fn(), linkAsset: vi.fn(), chooseAsset: vi.fn(), unlinkAsset: vi.fn(), openAsset: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listVersions: vi.fn() }))
 vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), readCoverExport: vi.fn() }))
 vi.mock('../src/services/douyin', () => ({ openDouyinWindow: vi.fn(), getDouyinSession: vi.fn(), startDouyinTask: vi.fn(), continueDouyinTask: vi.fn(), stopDouyinTask: vi.fn(), onDouyinProgress: vi.fn() }))
@@ -56,6 +56,7 @@ beforeEach(() => {
   vi.mocked(projects.isDesktop).mockReturnValue(true)
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), id: 'p1', title: '测试书', workspacePath: 'D:/书籍', createdAt: '', updatedAt: '', archivedAt: null })
   vi.mocked(projects.listAssets).mockResolvedValue([asset, audio])
+  vi.mocked(projects.videoAssetMetadata).mockResolvedValue({ width: 1920, height: 1080, durationSeconds: 8, hasAudio: true })
   vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task }])
   vi.mocked(ai.listVersions).mockResolvedValue([])
   vi.mocked(covers.listCovers).mockResolvedValue([
@@ -68,6 +69,27 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 
 describe('M4 publish preparation', () => {
+  it('confirms the displayed combination once, validates cover files and never records publication automatically', async () => {
+    const { wrapper } = await render()
+    await wrapper.get('#publish-title').setValue('本次核对标题')
+    vi.mocked(covers.readCoverExport).mockRejectedValueOnce(new Error('封面文件缺失'))
+    await button(wrapper, '确认并导出任务包').trigger('click'); await flushPromises()
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+    expect(api.preparePublishTask).not.toHaveBeenCalled()
+    await button(wrapper, '确认并导出任务包').trigger('click'); await flushPromises()
+    expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ title: '本次核对标题', titleConfirmed: true, coversConfirmed: true }))
+    expect(api.preparePublishTask).toHaveBeenCalledWith('t1')
+    expect(api.recordPublishSuccess).not.toHaveBeenCalled()
+    expect(douyin.startDouyinTask).not.toHaveBeenCalled()
+  })
+  it('shows actual video dimensions and blocks review when the chosen video has no audio', async () => {
+    vi.mocked(projects.videoAssetMetadata).mockResolvedValue({ width: 1080, height: 1920, durationSeconds: 12, hasAudio: false })
+    const { wrapper } = await render()
+    expect(wrapper.get('#publish-preflight').text()).toContain('1080 × 1920 · 12 秒 · 缺少音轨')
+    expect(button(wrapper, '确认并开始辅助发布').element.disabled).toBe(true)
+    expect(button(wrapper, '确认并导出任务包').element.disabled).toBe(true)
+    expect(api.preparePublishTask).not.toHaveBeenCalled()
+  })
   it('keeps task selection and new-task state in the URL without overwriting edits on save', async () => {
     vi.mocked(api.listPublishTasks).mockResolvedValue([task, { ...task, id: 't2', title: '另一篇任务' }])
     const { wrapper, router } = await render('/projects/p1/publishing?task=t1')
@@ -99,7 +121,7 @@ describe('M4 publish preparation', () => {
   it('starts assistance only after saving changes and preparing the resulting task', async () => {
     const { wrapper } = await render()
     await wrapper.get('#publish-description').setValue('保留当前修改')
-    await button(wrapper, '开始抖音辅助发布').trigger('click'); await flushPromises()
+    await button(wrapper, '确认并开始辅助发布').trigger('click'); await flushPromises()
     expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ description: '保留当前修改' }))
     expect(api.preparePublishTask).toHaveBeenCalledWith('t1')
     expect(douyin.startDouyinTask).toHaveBeenCalledWith('t1')
@@ -125,6 +147,33 @@ describe('M4 publish preparation', () => {
     expect(router.currentRoute.value.query).toEqual({ task: 't2' })
     expect(vi.mocked(api.recordPublishSuccess).mock.invocationCallOrder.at(-1)).toBeLessThan(vi.mocked(douyin.startDouyinTask).mock.invocationCallOrder[0]!)
   })
+  it.each(['available', 'no-audio', 'unreadable'])('waits for delayed video metadata before checking an explicit next-task continuation (%s)', async status => {
+    let metadataReady!: (info: projects.VideoMetadata) => void
+    let metadataFailed!: (cause: Error) => void
+    vi.mocked(projects.videoAssetMetadata).mockImplementation(() => new Promise((resolve, reject) => { metadataReady = resolve; metadataFailed = reject }))
+    vi.mocked(douyin.startDouyinTask).mockResolvedValue({ runId: 2, taskId: 't1', status: 'review', step: 'review', message: '检查并发布', waitingFor: null, account: null, completed: [], manual: [], collection: null, options: [] })
+    const { wrapper, router } = await render('/projects/p1/publishing?task=t1&assist=1')
+    expect(douyin.startDouyinTask).not.toHaveBeenCalled()
+    expect(api.preparePublishTask).not.toHaveBeenCalled()
+    expect(wrapper.get('#publish-title').element.matches(':disabled')).toBe(true)
+    if (status === 'unreadable') metadataFailed(new Error('成片不可读'))
+    else metadataReady({ width: 1920, height: 1080, durationSeconds: 8, hasAudio: status === 'available' })
+    await flushPromises()
+    expect(router.currentRoute.value.query.assist).toBeUndefined()
+    if (status === 'available') {
+      expect(douyin.startDouyinTask).toHaveBeenCalledExactlyOnceWith('t1')
+      await router.replace({ query: { ...router.currentRoute.value.query, marker: 'no-replay' } }); await flushPromises()
+      expect(douyin.startDouyinTask).toHaveBeenCalledOnce()
+    } else {
+      expect(douyin.startDouyinTask).not.toHaveBeenCalled()
+      expect(api.savePublishTask).not.toHaveBeenCalled()
+      expect(api.preparePublishTask).not.toHaveBeenCalled()
+      expect(wrapper.get('#publish-title').element).toHaveProperty('value', task.title)
+      expect(wrapper.get('#publish-title').element.matches(':disabled')).toBe(false)
+      if (status === 'unreadable') expect(wrapper.get('#publish-preflight').text()).toContain('成片无法读取')
+    }
+    expect(api.recordPublishSuccess).not.toHaveBeenCalled()
+  })
   it('loads the exact older task from the queue and keeps its saved writing source', async () => {
     vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, id: 'newer', title: '新任务' }, { ...task, writingVersionId: 'saved-source' }])
     vi.mocked(ai.listVersions).mockResolvedValue([{ id: 'saved-source', projectId: 'p1', kind: 'publishing', content: { ...emptyPublishing(), title: '来源标题', description: '来源正文' }, versionNo: 1, sourceType: 'manual', modelName: '', promptVersion: '', isConfirmed: false, createdAt: '' }])
@@ -144,7 +193,7 @@ describe('M4 publish preparation', () => {
     let finish!: (value: douyin.DouyinSession) => void
     vi.mocked(douyin.startDouyinTask).mockImplementation(() => new Promise(resolve => { finish = resolve }))
     const { wrapper, router } = await render()
-    await button(wrapper, '开始抖音辅助发布').trigger('click'); await flushPromises()
+    await button(wrapper, '确认并开始辅助发布').trigger('click'); await flushPromises()
     expect(douyin.startDouyinTask).toHaveBeenCalledWith('t1')
     expect(wrapper.get('#publish-title').element.matches(':disabled')).toBe(true)
     expect(wrapper.get('#publish-video').element.matches(':disabled')).toBe(true)
@@ -164,12 +213,11 @@ describe('M4 publish preparation', () => {
   })
   it('clears cover confirmation when a selection changes and saves nullable selections', async () => {
     const { wrapper } = await render()
-    expect(wrapper.get('#covers-confirmed').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('#publish-preflight').text()).toContain('2 / 2 · 已核对')
     await chooseSelect(wrapper, '#publish-landscape', '请选择已导出封面')
-    expect(wrapper.get('#covers-confirmed').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#publish-preflight').text()).toContain('待核对横竖两张图')
     await chooseSelect(wrapper, '#publish-video', '请选择最终成片')
-    await wrapper.get('#title-confirmed').trigger('click')
-    expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#publish-preflight').text()).toContain('待核对')
     expect(api.savePublishTask).not.toHaveBeenCalled()
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ videoAssetId: null, audioAssetId: 'a2', landscapeCoverId: null, titleConfirmed: false, coversConfirmed: false }))
@@ -202,7 +250,7 @@ describe('M4 publish preparation', () => {
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('已有发布标题')
     expect(wrapper.getComponent(PublishingPage).findAll('img').map(img => img.attributes('alt'))).toEqual(['封面 v1：横版', '封面 v2：竖版'])
     expect(wrapper.get('#publish-landscape').text()).toBe('v1 · 横版')
-    expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#publish-preflight').text()).toContain('待核对')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.savePublishTask).toHaveBeenCalledWith(null, expect.objectContaining({ writingVersionId: 'w1', title: '已有发布标题', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: false }))
   })
@@ -215,16 +263,16 @@ describe('M4 publish preparation', () => {
     await chooseSelect(wrapper, '#publish-writing-version', /^v1 · 历史标题/)
     await answerConfirmation(true)
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('历史标题')
-    expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#publish-preflight').text()).toContain('待核对')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ writingVersionId: 'old', title: '历史标题' }))
   })
   it('invalidates confirmation after edits and preserves draft on save failure and navigation', async () => {
     const { wrapper, router } = await render()
     await wrapper.get('#publish-title').setValue('新标题')
-    expect(wrapper.get('#title-confirmed').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#publish-preflight').text()).toContain('待核对')
     vi.mocked(api.savePublishTask).mockRejectedValueOnce('保存失败')
-    await button(wrapper, '生成完整任务包').trigger('click'); await flushPromises()
+    await button(wrapper, '确认并导出任务包').trigger('click'); await flushPromises()
     expect(api.preparePublishTask).not.toHaveBeenCalled(); expect(wrapper.text()).toContain('保存失败')
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('新标题')
     const navigation = router.push('/projects'); await answerConfirmation(false); await navigation
@@ -234,7 +282,7 @@ describe('M4 publish preparation', () => {
     const { wrapper } = await render()
     await wrapper.get('#publish-description').setValue('新内容\n保留换行')
     vi.mocked(api.preparePublishTask).mockRejectedValueOnce('任务包生成失败：磁盘不可写')
-    await button(wrapper, '生成完整任务包').trigger('click'); await flushPromises()
+    await button(wrapper, '确认并导出任务包').trigger('click'); await flushPromises()
     expect(api.savePublishTask).toHaveBeenCalledOnce(); expect(api.preparePublishTask).toHaveBeenCalledWith('t1')
     expect(wrapper.text()).toContain('磁盘不可写'); expect((wrapper.get('#publish-description').element as HTMLTextAreaElement).value).toBe('新内容\n保留换行')
     expect(button(wrapper, '记录发布成功').element.disabled).toBe(true)

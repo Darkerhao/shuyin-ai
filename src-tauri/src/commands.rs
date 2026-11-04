@@ -1,6 +1,63 @@
 use crate::database::drafts::EditorDraft;
 
 #[tauri::command]
+pub async fn video_asset_metadata(
+    app: tauri::AppHandle,
+    project_id: String,
+    id: String,
+) -> Result<crate::media::VideoMetadata, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<crate::database::Database>()
+            .video_asset_metadata(&project_id, &id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn interface_preferences(
+    database: tauri::State<'_, crate::database::Database>,
+) -> Result<crate::database::workflow::InterfacePreferences, String> {
+    database.interface_preferences()
+}
+#[tauri::command]
+pub fn set_sidebar_prompt(
+    database: tauri::State<'_, crate::database::Database>,
+    visible: bool,
+) -> Result<(), String> {
+    database.set_sidebar_prompt(visible)
+}
+#[tauri::command]
+pub async fn project_progress(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<Vec<crate::database::workflow::ProjectStage>, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<crate::database::Database>()
+            .project_progress(&project_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn export_video_asset(
+    app: tauri::AppHandle,
+    project_id: String,
+    id: String,
+    destination: String,
+) -> Result<(), String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<crate::database::Database>()
+            .export_video_asset(&project_id, &id, &destination)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub fn workflow_snapshot(
     database: tauri::State<'_, crate::database::Database>,
 ) -> Result<crate::database::workflow::WorkflowSnapshot, String> {

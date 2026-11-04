@@ -12,9 +12,10 @@ defineProps<{
   projectId: string; sceneIndex: number; cues: VideoCue[]
   assets: Asset[]; providers: ModelProvider[]; disabled: boolean; imageDisabled: boolean
   revisionDisabled: boolean
+  playing?: boolean; audioAvailable?: boolean
 }>()
 const scene = defineModel<VideoScene>('scene', { required: true })
-const emit = defineEmits<{ 'refresh-assets': []; working: [value: boolean]; revise: [] }>()
+const emit = defineEmits<{ 'refresh-assets': []; working: [value: boolean]; revise: []; play: [] }>()
 const sceneKindLabel = (kind: VideoScene['kind']) => Object.hasOwn(visualCatalog.kinds, kind) ? visualCatalog.kinds[kind as keyof typeof visualCatalog.kinds] : '旧版文字图解'
 function setSceneImage(image: VideoSceneImage | undefined) {
   if (image) { scene.value.image = image; scene.value.beats = [] }
@@ -26,7 +27,17 @@ function setSceneImage(image: VideoSceneImage | undefined) {
   <article
     :id="`video-scene-${sceneIndex}`"
     class="video-scene"
+    :class="{ 'video-scene-playing': playing }"
   >
+    <Button
+      variant="ghost"
+      size="sm"
+      :disabled="disabled || !audioAvailable"
+      :aria-label="`试听第${sceneIndex + 1}镜`"
+      @click="emit('play')"
+    >
+      {{ playing ? '正在播放这一镜' : '试听这一镜' }}
+    </Button>
     <Button
       variant="outline"
       :disabled="disabled || revisionDisabled"
@@ -240,6 +251,7 @@ function setSceneImage(image: VideoSceneImage | undefined) {
 .video-beat-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-block: 10px; }
 .video-anchor { grid-column: 1 / -1; }
 .video-scene { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; }
+.video-scene-playing { background: var(--accent); border-color: var(--primary); }
 .video-scene { scroll-margin-block: 16px; min-width: 0; }
 .video-field { display: grid; align-content: start; gap: 8px; min-width: 0; }
 .video-field [role='combobox'] { width: 100%; min-width: 0; }

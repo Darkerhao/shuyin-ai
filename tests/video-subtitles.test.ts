@@ -52,6 +52,29 @@ it('seeks the task audio to the cue, tolerates buffering, stops at the end and p
   wrapper.unmount()
   expect(pause).toHaveBeenCalledTimes(2)
 })
+it('keeps the new sentence boundary when an earlier playback emits a delayed pause event', async () => {
+  const wrapper = render()
+  const audio = wrapper.get('audio').element as HTMLAudioElement
+  let paused = true
+  vi.spyOn(audio, 'paused', 'get').mockImplementation(() => paused)
+  const pause = vi.spyOn(audio, 'pause').mockImplementation(() => {
+    paused = true
+    queueMicrotask(() => audio.dispatchEvent(new Event('pause')))
+  })
+  vi.spyOn(audio, 'play').mockImplementation(async () => {
+    paused = false
+    queueMicrotask(() => audio.dispatchEvent(new Event('play')))
+  })
+  await wrapper.get('[aria-label="试听第1句"]').trigger('click'); await flushPromises()
+  await wrapper.get('[aria-label="试听第2句"]').trigger('click'); await flushPromises()
+  expect(pause).toHaveBeenCalledOnce()
+  expect(audio.currentTime).toBe(3)
+  audio.currentTime = 5.1
+  await wrapper.get('audio').trigger('timeupdate'); await flushPromises()
+  expect(pause).toHaveBeenCalledTimes(2)
+  expect(wrapper.getComponent(VideoSubtitleEditor).emitted('playback')!.at(-1)).toEqual([-1, false])
+  expect(wrapper.getComponent(VideoSubtitleEditor).props('modelValue')).toBe(srt)
+})
 it('reports a playback failure without changing text or starting another playback', async () => {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockRejectedValue(new Error('missing'))
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
@@ -59,4 +82,60 @@ it('reports a playback failure without changing text or starting another playbac
   await wrapper.get('[aria-label="试听第1句"]').trigger('click'); await flushPromises()
   expect(wrapper.get('[role="alert"]').text()).toContain('原声无法播放')
   expect(wrapper.getComponent(VideoSubtitleEditor).props('modelValue')).toBe(srt)
+})
+it('plays continuously across cue boundaries with one audio element and preserves the saved editing position', async () => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+  const wrapper = render()
+  const editor = wrapper.getComponent(VideoSubtitleEditor)
+  const before = { ...editor.props('position') }
+  await wrapper.findAll('button').find(item => item.text() === '连续播放原声')!.trigger('click'); await flushPromises()
+  const audio = wrapper.get('audio').element as HTMLAudioElement
+  audio.currentTime = 3.5; await wrapper.get('audio').trigger('timeupdate')
+  expect(wrapper.findAll('audio')).toHaveLength(1)
+  expect(wrapper.get('#subtitle-row-1').classes()).toContain('subtitle-row-playing')
+  expect(editor.emitted('playback')!.at(-1)).toEqual([1, false])
+  expect(editor.props('position')).toEqual(before)
+  expect(editor.props('modelValue')).toBe(srt)
+})
+it('restores the current cue indication after pausing and resuming the native player', async () => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+  const wrapper = render()
+  const editor = wrapper.getComponent(VideoSubtitleEditor)
+  const audio = wrapper.get('audio').element as HTMLAudioElement
+  await wrapper.get('audio').trigger('play')
+  audio.currentTime = 3.5; await wrapper.get('audio').trigger('timeupdate')
+  await wrapper.get('audio').trigger('pause')
+  expect(editor.emitted('playback')!.at(-1)).toEqual([-1, false])
+  await wrapper.get('audio').trigger('play'); await wrapper.get('audio').trigger('timeupdate')
+  expect(editor.emitted('playback')!.at(-1)).toEqual([1, false])
+  expect(wrapper.get('#subtitle-row-1').classes()).toContain('subtitle-row-playing')
+})
+it('follows playback across pages without replacing an actively edited subtitle or saving a new editing position', async () => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+  const wrapper = render()
+  const editor = wrapper.getComponent(VideoSubtitleEditor)
+  const longText = Array.from({ length: 30 }, (_, index) => `${index + 1}\n00:00:${String(index).padStart(2, '0')},000 --> 00:00:${String(index + 1).padStart(2, '0')},000\n字幕${index + 1}\n`).join('\n')
+  editor.vm.$emit('update:modelValue', longText); await flushPromises()
+  await wrapper.findAll('button').find(item => item.text() === '跟随播放')!.trigger('click')
+  const input = wrapper.get('#subtitle-text-0').element as HTMLTextAreaElement
+  document.body.appendChild(wrapper.element)
+  input.focus()
+  const before = { ...editor.props('position') }
+  const audio = wrapper.get('audio').element as HTMLAudioElement
+  audio.currentTime = 25.2
+  await wrapper.get('audio').trigger('play'); await wrapper.get('audio').trigger('timeupdate')
+  expect(document.activeElement).toBe(input)
+  expect(wrapper.find('#subtitle-text-0').exists()).toBe(true)
+  expect(wrapper.find('#subtitle-text-25').exists()).toBe(false)
+  expect(editor.emitted('playback')!.at(-1)).toEqual([25, false])
+  input.blur()
+  audio.currentTime = 26.2
+  await wrapper.get('audio').trigger('timeupdate')
+  expect(wrapper.find('#subtitle-text-26').exists()).toBe(true)
+  expect(editor.emitted('playback')!.at(-1)).toEqual([26, true])
+  expect(editor.props('position')).toEqual(before)
+  expect(editor.props('modelValue')).toBe(longText)
 })

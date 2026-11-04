@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 视觉与创作交互优化（2026-11-04，仍为v17）
+
+本轮无表、列、索引或SQL迁移。侧栏提示显隐使用`app_settings.sidebar_prompt_visible`，值为JSON布尔字符串，未设置默认为true；读取失败提示，写入失败保留原显示状态。原SQLite快照与完整备份自然包含此设置。
+
+导航成果状态是对原书籍、editor_drafts、writing_versions、cover_versions、video_jobs、audio_jobs、assets及publish_tasks的查询结果，不新增完成度表或手动状态。文案历史只追加；预览不写库，字段取用进入原草稿。封面行内文字写原三尺寸配置，视频播放位置和正在播放的字幕/分镜只在界面保留。
+
+发布前一次明确核对继续保存原title_confirmed/covers_confirmed字段。素材和标题变化撤销对应核对，任务包与最终人工发布记录沿用现有校验与事务。拖入文件复用书籍与来源原子保存；另存成片只写用户选择的新文件，不重写素材路径或历史。验证见[本轮验收](UI-UX-REFINEMENT-VERIFICATION.md)。
+
 ## 抖音账号昵称预填（2026-11-03，仍为v17）
 
 复用 `app_settings` 的字符串键 `douyin_account_name`，仅保存最近一次人工确认的昵称，去除首尾空白，长度限定1–200字符。未设置返回空字符串；无效输入或写入失败不覆盖已保存值。该昵称随原有 SQLite 快照和完整备份保留，不保存账号 ID、头像指纹、浏览器会话或确认权限。

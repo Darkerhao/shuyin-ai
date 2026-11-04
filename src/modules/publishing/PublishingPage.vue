@@ -2,7 +2,6 @@
 import { displayPath } from '@/lib/displayPath'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -10,9 +9,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import * as api from '../../services/publishing'
-import { getProject, isDesktop, listAssets } from '../../services/projects'
+import { getProject, isDesktop, listAssets, openAsset, videoAssetMetadata, type VideoMetadata } from '../../services/projects'
 import { listVersions } from '../../services/ai'
-import { listCovers } from '../../services/covers'
+import { listCovers, readCoverExport } from '../../services/covers'
 import { listJobs as listVideoJobs } from '../../services/video'
 import { publishInput, publishStatuses, type PublishInput, type PublishQueueItem, type PublishTask } from '../../types/publishing'
 import type { Asset } from '../../types/project'
@@ -27,6 +26,10 @@ import CoverThumbnail from '../../components/CoverThumbnail.vue'
 import DouyinVerification from './DouyinVerification.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import { requestConfirmation } from '../../composables/useConfirmation'
+import { useCopyFeedback } from '../../composables/useCopyFeedback'
+import CopyButton from '../../components/CopyButton.vue'
+const clipboard = useCopyFeedback()
+const copiedField = clipboard.copied
 
 const props = defineProps<{ id: string; taskId?: string }>()
 const router = useRouter()
@@ -54,6 +57,21 @@ const video = computed(() => videos.value.find(a => a.id === draft.value.videoAs
 const audio = computed(() => audios.value.find(a => a.id === draft.value.audioAssetId))
 const selectedLandscape = computed(() => landscape.value.find(c => c.id === draft.value.landscapeCoverId))
 const selectedPortrait = computed(() => portrait.value.find(c => c.id === draft.value.portraitCoverId))
+const videoInfo = ref<VideoMetadata | null>(null)
+const videoInfoError = ref('')
+let videoInfoRequest = Promise.resolve()
+watch(() => [draft.value.videoAssetId, video.value?.filePath, video.value?.modifiedAt, video.value?.fileSize] as const, ([id], _, onCleanup) => {
+  let stale = false
+  onCleanup(() => { stale = true })
+  videoInfo.value = null; videoInfoError.value = ''
+  videoInfoRequest = id ? videoAssetMetadata(props.id, id).then(
+    info => { if (!stale) videoInfo.value = info },
+    () => { if (!stale) videoInfoError.value = '成片无法读取，请重新关联有效的视频。' },
+  ) : Promise.resolve()
+})
+const titleCount = computed(() => [...draft.value.title].length)
+const descriptionCount = computed(() => [...draft.value.description].length)
+const canReview = computed(() => titleCount.value > 0 && titleCount.value <= 30 && descriptionCount.value > 0 && descriptionCount.value <= 1000 && audio.value?.existsStatus === 'available' && video.value?.existsStatus === 'available' && !!videoInfo.value?.hasAudio && videoInfo.value.width > 0 && videoInfo.value.height > 0 && videoInfo.value.durationSeconds > 0 && !!selectedLandscape.value && !!selectedPortrait.value)
 const recordOpen = ref(false)
 const assetsOpen = ref(false)
 const record = ref({ publishedAt: '', postUrl: '', notes: '' })
@@ -152,10 +170,21 @@ async function persist() {
   await syncTaskUrl(selected.value!.id)
   return selected.value!.id
 }
+async function persistReviewed() {
+  await videoInfoRequest
+  if (!canReview.value) throw new Error('请先补齐文案、有效原声和成片，以及两张发布封面。')
+  const snapshot = JSON.stringify(draft.value)
+  await Promise.all([readCoverExport(props.id, draft.value.landscapeCoverId!), readCoverExport(props.id, draft.value.portraitCoverId!)])
+  if (JSON.stringify(draft.value) !== snapshot) throw new Error('本次文字或素材已变化，请重新核对后开始。')
+  draft.value.titleConfirmed = true; draft.value.coversConfirmed = true
+  return persist()
+}
 function locateMissing(key: string) {
-  const fields: Record<string, string> = { title: 'publish-title', description: 'publish-description', audio: 'publish-audio', video: 'publish-video', landscape: 'publish-landscape', portrait: 'publish-portrait', covers: 'covers-confirmed', package: 'prepare-package' }
+  const fields: Record<string, string> = { title: 'publish-title', description: 'publish-description', audio: 'publish-audio', video: 'publish-video', landscape: 'publish-landscape', portrait: 'publish-portrait', covers: 'publish-confirm', package: 'publish-export' }
+  if (key === 'package' || key === 'covers') globalThis.document.getElementById('publish-preflight')?.scrollIntoView({ block: 'start' })
   globalThis.document.getElementById(fields[key] ?? 'publish-title')?.focus()
 }
+function resetReview() { draft.value.titleConfirmed = false; draft.value.coversConfirmed = false }
 async function showAssets() {
   assetsOpen.value = true
   await nextTick()
@@ -163,13 +192,13 @@ async function showAssets() {
   globalThis.document.querySelector<globalThis.HTMLButtonElement>('#publish-assets button')?.focus({ preventScroll: true })
 }
 async function prepareDouyinTask() {
-  const id = await persist()
+  const id = await persistReviewed()
   if (selected.value?.status !== 'ready') update(await api.preparePublishTask(id))
   return selected.value!
 }
 const save = () => run(async () => { await persist(); message.value = '发布草稿已保存。' })
 const prepare = () => run(async () => {
-  const id = await persist()
+  const id = await persistReviewed()
   update(await api.preparePublishTask(id))
   message.value = '任务包已生成。请检查平台预览并手动发布，成功后回来记录结果。'
 })
@@ -179,8 +208,8 @@ const open = (item: Parameters<typeof api.openPublishItem>[1]) => run(async () =
 async function copy(field: 'title' | 'description' | 'tags' | 'all') {
   error.value = ''; message.value = ''
   const text = field === 'all' ? [draft.value.title, draft.value.description, draft.value.tags].filter(Boolean).join('\n\n') : draft.value[field]
-  try { await globalThis.navigator.clipboard.writeText(text); error.value = ''; message.value = '已复制发布文字。' }
-  catch { error.value = '复制失败，请选中文字后手动复制。' }
+  await clipboard.copy(text, field)
+  error.value = clipboard.error.value
 }
 function confirmPublish() {
   const now = new Date()
@@ -227,7 +256,11 @@ onMounted(() => { if (desktop) void loadTask() })
       <AppIcon name="upload" />发布前的最后一步
     </Badge>
   </header>
-  <ProjectNavigation :id="id" />
+  <ProjectNavigation
+    :id="id"
+    :editing="dirty"
+    :busy="busy"
+  />
   <p
     v-if="!desktop"
     class="notice"
@@ -255,22 +288,13 @@ onMounted(() => { if (desktop) void loadTask() })
       :task="selected"
       :disabled="operationBusy || recordOpen || published"
       :prepare-task="prepareDouyinTask"
+      :hide-start="true"
       @working="douyinBusy = $event"
     >
       <template #summary>
         <p class="muted">
           {{ title }} · 成片：{{ video?.originalName || '尚未选择' }}
         </p>
-        <div class="actions wrap">
-          <CoverThumbnail
-            v-if="selectedLandscape"
-            :cover="selectedLandscape"
-          />
-          <CoverThumbnail
-            v-if="selectedPortrait"
-            :cover="selectedPortrait"
-          />
-        </div>
       </template>
     </DouyinVerification>
     <section class="panel">
@@ -387,12 +411,6 @@ onMounted(() => { if (desktop) void loadTask() })
             maxlength="30"
             @input="draft.titleConfirmed = false"
           />
-          <label class="check-label"><Checkbox
-            id="title-confirmed"
-            :model-value="draft.titleConfirmed"
-            :disabled="busy || published || recordOpen"
-            @update:model-value="draft.titleConfirmed = $event === true"
-          />我已确认发布标题</label>
           <label for="publish-description">发布内容</label>
           <Textarea
             id="publish-description"
@@ -414,6 +432,7 @@ onMounted(() => { if (desktop) void loadTask() })
           <Select
             v-model="draft.audioAssetId"
             :disabled="busy || published || recordOpen"
+            @update:model-value="resetReview"
           >
             <SelectTrigger
               id="publish-audio"
@@ -458,6 +477,7 @@ onMounted(() => { if (desktop) void loadTask() })
           <Select
             v-model="draft.videoAssetId"
             :disabled="busy || published || recordOpen"
+            @update:model-value="resetReview"
           >
             <SelectTrigger
               id="publish-video"
@@ -528,10 +548,6 @@ onMounted(() => { if (desktop) void loadTask() })
                   </SelectItem>
                 </SelectContent>
               </Select>
-              <CoverThumbnail
-                v-if="published && selectedLandscape"
-                :cover="selectedLandscape"
-              />
             </div>
             <div>
               <label for="publish-portrait">竖版封面 · 3:4</label><Select
@@ -557,10 +573,6 @@ onMounted(() => { if (desktop) void loadTask() })
                   </SelectItem>
                 </SelectContent>
               </Select>
-              <CoverThumbnail
-                v-if="published && selectedPortrait"
-                :cover="selectedPortrait"
-              />
             </div>
           </div>
           <p
@@ -571,12 +583,6 @@ onMounted(() => { if (desktop) void loadTask() })
               封面工坊
             </RouterLink> 一次导出横版和竖版两张封面。
           </p>
-          <label class="check-label"><Checkbox
-            id="covers-confirmed"
-            :model-value="draft.coversConfirmed"
-            :disabled="busy || published || recordOpen"
-            @update:model-value="draft.coversConfirmed = $event === true"
-          />我已确认所选两张封面</label>
         </section>
         <div
           v-if="!published"
@@ -589,14 +595,6 @@ onMounted(() => { if (desktop) void loadTask() })
           >
             保存发布草稿
           </Button>
-          <Button
-            id="prepare-package"
-            type="button"
-            variant="outline"
-            @click="prepare"
-          >
-            {{ busy ? '处理中…' : '生成完整任务包' }}
-          </Button>
           <span class="muted">{{ dirty ? '有未保存修改，生成时会先保存' : '每次生成都保留已有任务包' }}</span>
         </div>
       </fieldset>
@@ -604,75 +602,160 @@ onMounted(() => { if (desktop) void loadTask() })
     <section class="panel publish-actions">
       <h2>复制发布文字</h2>
       <div class="actions wrap">
-        <Button
+        <CopyButton
+          label="复制标题"
+          :copied="copiedField === 'title'"
           :disabled="!draft.title"
-          variant="outline"
-          type="button"
           @click="copy('title')"
-        >
-          复制标题
-        </Button><Button
+        /><CopyButton
+          label="复制内容"
+          :copied="copiedField === 'description'"
           :disabled="!draft.description"
-          variant="outline"
-          type="button"
           @click="copy('description')"
-        >
-          复制内容
-        </Button><Button
+        /><CopyButton
+          label="复制标签"
+          :copied="copiedField === 'tags'"
           :disabled="!draft.tags"
-          variant="outline"
-          type="button"
           @click="copy('tags')"
-        >
-          复制标签
-        </Button><Button
+        /><CopyButton
+          label="一键复制全部"
+          :copied="copiedField === 'all'"
           :disabled="!draft.title || !draft.description"
-          variant="outline"
-          type="button"
           @click="copy('all')"
-        >
-          一键复制全部
-        </Button>
+        />
       </div>
+      <span
+        class="sr-only"
+        role="status"
+        aria-live="polite"
+      >{{ copiedField ? '已复制' : '' }}</span>
     </section>
     <section
-      v-if="selected"
-      class="panel"
+      id="publish-preflight"
+      class="panel publish-preflight"
+      aria-labelledby="publish-preflight-title"
     >
-      <h2>已保存任务检查</h2>
+      <h2 id="publish-preflight-title">
+        发布前自检
+      </h2>
+      <dl class="preflight-summary">
+        <dt>发布标题</dt><dd>{{ titleCount }} / 30 字 · {{ draft.titleConfirmed ? '已核对' : '待核对' }}</dd>
+        <dt>发布内容</dt><dd>{{ descriptionCount }} / 1000 字</dd>
+        <dt>制作原声</dt><dd>
+          {{ audio ? assetLabel(audio) : '尚未选择' }}<Button
+            v-if="audio"
+            variant="link"
+            size="sm"
+            :disabled="busy || audio.existsStatus !== 'available'"
+            @click="run(() => openAsset(audio!.id))"
+          >
+            试听原声
+          </Button>
+        </dd>
+        <dt>最终成片</dt><dd>
+          {{ video ? assetLabel(video) : '尚未选择' }}<span
+            v-if="videoInfo"
+            class="block"
+          >{{ videoInfo.width }} × {{ videoInfo.height }} · {{ Math.round(videoInfo.durationSeconds) }} 秒 · {{ videoInfo.hasAudio ? '含音轨' : '缺少音轨' }}</span><span
+            v-if="videoInfoError"
+            class="block text-destructive"
+          >{{ videoInfoError }}</span><Button
+            v-if="video"
+            variant="link"
+            size="sm"
+            :disabled="busy || video.existsStatus !== 'available'"
+            @click="run(() => openAsset(video!.id, true))"
+          >
+            在文件夹中定位
+          </Button>
+        </dd>
+        <dt>发布封面</dt><dd>已选 {{ Number(!!selectedLandscape) + Number(!!selectedPortrait) }} / 2 · {{ draft.coversConfirmed ? '已核对' : '待核对横竖两张图' }}</dd>
+        <dt>任务包</dt><dd>{{ dirty ? '修改后需重新准备' : selected?.status === 'ready' ? '已就绪' : selected?.status === 'published' ? '已归档发布记录' : '尚未准备' }}</dd>
+      </dl>
+      <div
+        class="preflight-covers"
+        aria-label="本次发布封面"
+      >
+        <figure v-if="selectedLandscape">
+          <CoverThumbnail :cover="selectedLandscape" /><figcaption>横版 4:3 · v{{ selectedLandscape.versionNo }}</figcaption>
+        </figure>
+        <figure v-if="selectedPortrait">
+          <CoverThumbnail :cover="selectedPortrait" /><figcaption>竖版 3:4 · v{{ selectedPortrait.versionNo }}</figcaption>
+        </figure>
+      </div>
+      <template v-if="!published">
+        <p class="muted">
+          点击下方操作，表示已核对本次文案、成片与两张封面。应用辅助上传和填写，最终由你在抖音页面发布。
+        </p>
+        <p
+          v-if="!canReview"
+          class="text-sm text-muted-foreground"
+        >
+          请补齐文案、有效音视频与双封面，再开始发布准备。
+        </p>
+        <div class="actions">
+          <Button
+            id="publish-confirm"
+            :disabled="busy || recordOpen || !canReview"
+            @click="assistant?.start()"
+          >
+            确认并开始辅助发布
+          </Button>
+          <Button
+            id="publish-export"
+            variant="outline"
+            :disabled="busy || recordOpen || !canReview"
+            @click="prepare"
+          >
+            确认并导出任务包
+          </Button>
+        </div>
+      </template>
       <p
-        v-if="dirty"
+        v-if="dirty && selected"
         class="notice"
       >
         当前修改尚未保存，下列检查对应已保存的任务。
       </p>
-      <ul class="publish-checklist">
-        <li
-          v-for="item in selected.checklist"
-          :key="item.key"
-          :class="{ 'check-pending': !item.passed }"
-        >
-          {{ item.passed ? '✓' : '○' }} {{ item.label }}
-          <Button
-            v-if="!item.passed && !published"
-            variant="ghost"
-            size="sm"
-            :disabled="busy || recordOpen"
-            @click="locateMissing(item.key)"
-          >
-            {{ item.key === 'package' ? '准备任务包' : '去补齐' }}
-          </Button>
-        </li>
-      </ul>
+      <Collapsible
+        v-if="selected"
+        :key="`${selected.id}-${selected.status}`"
+        :default-open="selected.checklist.some(item => !item.passed)"
+        class="preflight-details"
+      >
+        <CollapsibleTrigger class="disclosure-trigger">
+          已保存任务检查 · {{ selected.checklist.some(item => !item.passed) ? '有待处理项目' : '已通过' }}
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <ul class="publish-checklist">
+            <li
+              v-for="item in selected.checklist"
+              :key="item.key"
+              :class="{ 'check-pending': !item.passed }"
+            >
+              {{ item.passed ? '✓' : '○' }} {{ item.label }}
+              <Button
+                v-if="!item.passed && !published"
+                variant="ghost"
+                size="sm"
+                :disabled="busy || recordOpen"
+                @click="locateMissing(item.key)"
+              >
+                {{ item.key === 'package' || item.key === 'covers' ? '去核对' : '去补齐' }}
+              </Button>
+            </li>
+          </ul>
+        </CollapsibleContent>
+      </Collapsible>
       <p
-        v-if="selected.taskDirectory"
+        v-if="selected?.taskDirectory"
         class="file-path"
       >
-        {{ displayPath(selected.taskDirectory) }}
+        {{ displayPath(selected?.taskDirectory) }}
       </p>
       <div class="actions wrap">
         <Button
-          v-if="selected.taskDirectory"
+          v-if="selected?.taskDirectory"
           :disabled="busy"
           variant="outline"
           type="button"
@@ -690,7 +773,7 @@ onMounted(() => { if (desktop) void loadTask() })
           打开视频
         </Button>
         <Button
-          v-if="selected.taskDirectory"
+          v-if="selected?.taskDirectory"
           :disabled="busy"
           variant="outline"
           type="button"
@@ -699,7 +782,7 @@ onMounted(() => { if (desktop) void loadTask() })
           查看横版封面
         </Button>
         <Button
-          v-if="selected.taskDirectory"
+          v-if="selected?.taskDirectory"
           :disabled="busy"
           variant="outline"
           type="button"
@@ -717,7 +800,7 @@ onMounted(() => { if (desktop) void loadTask() })
         </Button>
         <Button
           v-if="!published"
-          :disabled="busy || dirty || recordOpen || selected.status !== 'ready'"
+          :disabled="busy || dirty || recordOpen || selected?.status !== 'ready'"
           type="button"
           @click="confirmPublish"
         >
@@ -728,7 +811,7 @@ onMounted(() => { if (desktop) void loadTask() })
         任务包保留视频原路径，上传和最终发布由你在平台完成。打开入口或生成任务包不会标记已发布。
       </p>
       <div
-        v-if="selected.record"
+        v-if="selected?.record"
         class="notice"
       >
         <strong>已记录发布成功</strong><p>{{ new Date(selected.record.publishedAt).toLocaleString() }}</p><p
@@ -809,12 +892,21 @@ onMounted(() => { if (desktop) void loadTask() })
 </template>
 
 <style scoped>
+.publish-preflight { scroll-margin-top: 90px; }
+.preflight-summary { grid-template-columns: 90px minmax(0, 1fr); font-size: 13px; gap: 12px 16px; }
+.preflight-summary dd { min-width: 0; overflow-wrap: anywhere; }
+.preflight-covers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; max-width: 560px; margin-top: 24px; }
+.preflight-covers figure { min-width: 0; margin: 0; }
+.preflight-covers figcaption { margin-top: 8px; color: var(--muted-foreground); font-size: 12px; }
+.publish-preflight .publish-checklist { margin-top: 24px; }
+.preflight-details { margin-top: 24px; }
+
 .publish-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; }
 .publish-save { grid-column: 1 / -1; justify-content: flex-start; margin-top: 0; }
 .publish-save .muted { margin-left: auto; font-size: 11px; }
 .publish-actions { margin-top: 24px; }
 .publish-checklist { list-style: none; padding: 0; line-height: 2; font-size: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.publish-checklist li { padding: 9px 12px; background: #f1f6ec; border-radius: 7px; }
+.publish-checklist li { padding: 9px 0; }
 .check-pending { color: #8c5d23; }
 @media (max-width: 1000px) { .publish-form-grid { grid-template-columns: 1fr; } }
 </style>

@@ -623,7 +623,7 @@ onMounted(() => { if (desktop) void load() })
   --model-image-ink: #80663b;
   --model-warning: #896023;
   --model-destructive: #a53d35;
-  --model-control-border: #81978a;
+  --model-control-border: var(--input-border);
   color: var(--foreground);
 }
 .models-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin: 0 0 28px; }
@@ -631,13 +631,13 @@ onMounted(() => { if (desktop) void load() })
 .models-heading p { margin: 0; color: var(--muted-foreground); font-size: 14px; }
 .add-model-button { height: 40px; padding-inline: 16px; border-radius: 9px; }
 .model-layout { display: grid; grid-template-columns: 264px minmax(0, 1fr); align-items: start; gap: 24px; }
-.model-library { position: sticky; top: var(--workspace-sticky-top); min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--card); padding: 16px 12px 0; }
+.model-library { position: sticky; top: var(--workspace-sticky-top); min-width: 0; border: 0; box-shadow: var(--panel-shadow); border-radius: 14px; background: var(--card); padding: 16px 12px 0; }
 .library-title { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 12px; }
 .library-title h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; }
 .library-title h2 > span { display: grid; min-width: 22px; height: 22px; padding-inline: 5px; place-items: center; border: 1px solid var(--border); border-radius: 6px; color: var(--muted-foreground); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .model-search { position: relative; margin-inline: 4px; }
 .model-search > .app-icon { position: absolute; z-index: 1; top: 12px; left: 11px; width: 16px; height: 16px; color: var(--muted-foreground); pointer-events: none; }
-.model-search :deep(input) { height: 40px; padding-left: 34px; padding-right: 32px; border-color: var(--model-control-border); background: var(--card); border-radius: 8px; font-size: 12px; box-shadow: none; }
+.model-search :deep(input) { padding-left: 34px; padding-right: 32px; font-size: 13px; }
 .model-search > button { position: absolute; right: 3px; top: 4px; }
 .provider-list { max-height: min(540px, 54vh); overflow-y: auto; padding: 2px; margin-top: 8px; scrollbar-gutter: stable; }
 .provider-group + .provider-group { margin-top: 14px; }
@@ -677,7 +677,7 @@ onMounted(() => { if (desktop) void load() })
 .model-empty p, .library-placeholder { margin: 0; font-size: 12px; line-height: 1.8; color: var(--muted-foreground); }
 .library-placeholder { padding: 28px 10px; text-align: center; }
 .model-detail { min-width: 0; }
-.model-editor { display: flex; flex-direction: column; max-height: calc(100dvh - 230px); border: 1px solid var(--border); border-radius: 14px; background: var(--card); }
+.model-editor { display: flex; flex-direction: column; max-height: calc(100dvh - 230px); border: 0; box-shadow: var(--panel-shadow); border-radius: 14px; background: var(--card); }
 .model-editor-body { min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scroll-padding-block: 20px; }
 .model-editor-heading { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 24px 28px; border-bottom: 1px solid var(--border); }
 .editor-symbol { width: 42px; height: 42px; border-radius: 12px; }
@@ -687,15 +687,15 @@ onMounted(() => { if (desktop) void load() })
 .model-editor-heading p { margin: 3px 0 0; font-size: 12px; color: var(--muted-foreground); }
 .editor-kind { flex-shrink: 0; margin-left: auto; padding: 3px 9px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted-foreground); font-size: 11px; }
 .model-section { padding: 24px 28px; }
-.model-section + .model-section { border-top: 1px solid var(--border); }
+.model-section + .model-section { padding-top: 8px; }
 .model-section-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; margin-bottom: 20px; }
 .model-section-heading h3 { margin: 0; font-size: 14px; font-weight: 600; }
 .model-section-heading > span { color: var(--muted-foreground); font-size: 12px; }
-.model-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px 18px; }
+.model-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px 18px; }
 .model-field { min-width: 0; }
 .field-full { grid-column: 1 / -1; }
-.model-field label, .reasoning-row label, .model-option-row label { margin: 0 0 8px; font-size: 13px; font-weight: 500; }
-.model-field :deep(input), .model-control { width: 100%; min-width: 0; height: 42px; border-color: var(--model-control-border); border-radius: 8px; background: var(--card); box-shadow: 0 1px 2px #202d2803; font-size: 13px; }
+.model-field label, .reasoning-row label, .model-option-row label { margin: 0 0 6px; font-size: 13px; font-weight: 500; }
+.model-control { width: 100%; min-width: 0; font-size: 13px; }
 .model-field :deep(input:focus-visible), .model-control:focus-visible { border-color: var(--primary); }
 .model-field :deep(input), .model-control, .model-option-row :deep([data-slot="checkbox"]) { scroll-margin-block: 20px; }
 .required-mark { margin-left: 3px; color: var(--muted-foreground); font-size: 12px; }
@@ -707,7 +707,7 @@ onMounted(() => { if (desktop) void load() })
 .api-key-input { position: relative; }
 .api-key-input :deep(input) { padding-right: 42px; }
 .api-key-input > button { position: absolute; top: 5px; right: 5px; color: var(--muted-foreground); }
-.connection-help { margin-top: 20px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--model-surface); }
+.connection-help { margin-top: 20px; padding: 0; border: 0; }
 .connection-help :deep(.disclosure-trigger) { min-height: 20px; font-size: 12px; }
 .connection-help p { margin: 12px 0 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.8; }
 .connection-help code { color: var(--foreground); font-size: 11px; overflow-wrap: anywhere; }
@@ -730,7 +730,7 @@ onMounted(() => { if (desktop) void load() })
 .model-save-status > span { display: block; margin: 4px 0 0 21px; font-size: 11px; color: var(--muted-foreground); }
 .model-action-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .model-action-buttons > button { min-height: 38px; border-radius: 8px; font-size: 12px; }
-.model-danger-zone { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 24px 0 0; padding: 18px 22px; border: 1px solid var(--border); border-radius: 10px; }
+.model-danger-zone { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 24px 0 0; padding: 18px 4px; border: 0; }
 .model-danger-zone strong { font-size: 13px; font-weight: 500; }
 .model-danger-zone p { margin: 3px 0 0; color: var(--muted-foreground); font-size: 12px; }
 .delete-model { color: var(--model-destructive); font-size: 12px; }

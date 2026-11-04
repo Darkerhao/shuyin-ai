@@ -13,7 +13,7 @@ import * as api from '../../services/covers'
 import { listProviders, listVersions, cancelGeneration } from '../../services/ai'
 import { emptyPublishing, type ModelProvider, type PublishingContent } from '../../types/ai'
 import { getProject, isDesktop, linkAsset, listAssets, openProjectDirectory } from '../../services/projects'
-import { backgroundRect, coverFonts, coverPng, decodeBackground, renderCover } from '../../services/coverRenderer'
+import { backgroundRect, coverFonts, coverPng, decodeBackground, renderCover, type CoverTextBounds } from '../../services/coverRenderer'
 import { coverSizes, coverTemplates, newCover, coverWorkspace, recoverCoverWorkspace, normalizeCover, coverSizeIndex, type CoverWorkspace, type CoverConfig, type CoverVersion, type CoverPreset } from '../../types/cover'
 import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
@@ -56,7 +56,60 @@ const backgroundLoading = computed(() => !!draft.value.backgroundAssetId && !bac
 const backgroundError = computed(() => backgrounds.value[draft.value.backgroundAssetId ?? '']?.error ?? '')
 const allBackgroundsReady = computed(() => editor.value.covers.every(config => !config.backgroundAssetId || backgrounds.value[config.backgroundAssetId]?.image))
 const previewError = ref('')
-const actualSizes = ref({ titleSize: 112, subtitleSize: 44 })
+const actualSizes = ref<{ titleSize: number; subtitleSize: number; bounds: Record<'title' | 'subtitle', CoverTextBounds> | null }>({ titleSize: 112, subtitleSize: 44, bounds: null })
+const inlineField = ref<'title' | 'subtitle' | null>(null)
+const inlineStyle = ref({ left: '0px', top: '0px', width: '160px' })
+let inlineOriginal = ''
+let resizeObserver: globalThis.ResizeObserver | undefined
+let previewAnimation: globalThis.Animation | undefined
+function positionInline() {
+  if (!inlineField.value || !canvas.value) return
+  const rect = canvas.value.getBoundingClientRect()
+  const stage = canvas.value.parentElement!.getBoundingClientRect()
+  const bounds = actualSizes.value.bounds?.[inlineField.value]
+  if (!bounds) return
+  const width = Math.min(stage.width - 16, Math.max(130, (bounds.width || draft.value.width * .82) * rect.width / draft.value.width))
+  const left = Math.max(8, Math.min(rect.left - stage.left + bounds.x * rect.width / draft.value.width, stage.width - width - 8))
+  inlineStyle.value = { left: `${left}px`, top: `${rect.top - stage.top + bounds.y * rect.height / draft.value.height}px`, width: `${width}px` }
+}
+async function editInline(field: 'title' | 'subtitle') {
+  if (busy.value) return
+  inlineField.value = field; inlineOriginal = draft.value[field]; drag = null
+  positionInline()
+  await nextTick()
+  canvas.value?.parentElement?.querySelector<globalThis.HTMLInputElement>('#cover-inline-text')?.focus()
+}
+function endInline(cancel = false) {
+  if (cancel && inlineField.value) draft.value[inlineField.value] = inlineOriginal
+  inlineField.value = null
+}
+function inlineKey(event: globalThis.KeyboardEvent) {
+  if (event.isComposing || event.keyCode === 229) return
+  if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); endInline(event.key === 'Escape') }
+}
+function textAtPointer(event: globalThis.MouseEvent) {
+  if (!canvas.value || !actualSizes.value.bounds) return
+  const rect = canvas.value.getBoundingClientRect()
+  const x = (event.clientX - rect.left) * draft.value.width / rect.width
+  const y = (event.clientY - rect.top) * draft.value.height / rect.height
+  return (['title', 'subtitle'] as const).find(key => {
+    const bounds = actualSizes.value.bounds![key]
+    return x >= bounds.x && x <= bounds.x + bounds.width && y >= bounds.y && y <= bounds.y + bounds.height
+  })
+}
+function editAtPointer(event: globalThis.MouseEvent) {
+  const field = textAtPointer(event)
+  if (field) void editInline(field)
+}
+function fadePreview() {
+  previewAnimation?.cancel()
+  if (!globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches) previewAnimation = canvas.value?.animate?.([{ opacity: .45 }, { opacity: 1 }], { duration: 160 })
+}
+watch(canvas, element => {
+  resizeObserver?.disconnect()
+  if (element) { resizeObserver = new globalThis.ResizeObserver(positionInline); resizeObserver.observe(element) }
+}, { flush: 'post' })
+onBeforeUnmount(() => { resizeObserver?.disconnect(); previewAnimation?.cancel() })
 const { busy, error, message, operation, run } = useOperation()
 const useAi = ref(false)
 const activeTab = useQueryState('tab', 'text', ['text', 'style', 'background'])
@@ -115,7 +168,7 @@ const load = () => run(async () => {
   if (recovery) {
     selected.value = saved.find(v => v.id === recovery.basedOn) ?? null
     editor.value = recoverCoverWorkspace(recovery.content)
-    message.value = '已恢复各尺寸封面编辑配置，未新增历史版本。'
+    if (dirty.value) message.value = '已恢复各尺寸封面编辑配置，未新增历史版本。'
   }
   else if (!saved.length && writing.value?.coverTitle && writing.value.coverSubtitle) {
     applyWritingTitles()
@@ -170,6 +223,7 @@ function paint() {
   previewError.value = ''
   try {
     actualSizes.value = renderCover(canvas.value, draft.value, background.value)
+    positionInline()
   }
   catch (cause) { previewError.value = cause instanceof Error ? cause.message : String(cause) }
   editor.value.covers.forEach((config, index) => {
@@ -184,7 +238,7 @@ function setPreviewCanvas(el: globalThis.Element | ComponentPublicInstance | nul
 }
 let drag: { x: number; y: number; positionX: number; positionY: number; overflowX: number; overflowY: number } | null = null
 function startDrag(event: globalThis.PointerEvent) {
-  if (busy.value || !background.value || !canvas.value || event.button !== 0) return
+  if (busy.value || inlineField.value || textAtPointer(event) || !background.value || !canvas.value || event.button !== 0) return
   const rect = backgroundRect(draft.value, background.value)
   const bounds = canvas.value.getBoundingClientRect()
   drag = { x: event.clientX, y: event.clientY, positionX: draft.value.backgroundX, positionY: draft.value.backgroundY, overflowX: (rect.width - draft.value.width) * bounds.width / draft.value.width, overflowY: (rect.height - draft.value.height) * bounds.height / draft.value.height }
@@ -201,6 +255,7 @@ function applyPreset(id: string | null) {
   const preset = presets.value.find(p => p.id === id)
   if (!preset) return
   Object.assign(draft.value, preset.style, { subtitleColor: preset.style.subtitleColor ?? preset.style.textColor }); presetId.value = id
+  fadePreview()
   message.value = `已应用「${preset.name}」，可继续为本书调整。`
 }
 const savePreset = () => run(async () => {
@@ -218,14 +273,17 @@ watch(() => editor.value.covers.map(config => config.backgroundAssetId), ids => 
 watch(editor, paint, { deep: true, flush: 'post' })
 
 function applyTemplate(key: CoverConfig['templateId']) {
+  endInline()
   Object.assign(draft.value, coverTemplates[key].style, { templateId: key })
   presetId.value = null
+  fadePreview()
 }
 function isTemplateApplied(key: CoverConfig['templateId']) {
   return draft.value.templateId === key && Object.entries(coverTemplates[key].style).every(([field, value]) => draft.value[field as keyof CoverConfig] === value)
 }
 function changeSize(index: number) {
   if (busy.value) return
+  endInline()
   editor.value.activeSize = index
   presetId.value = null
   drag = null
@@ -308,7 +366,7 @@ const save = (exportPng = false, currentOnly = false) => run(async () => {
   for (const config of configs) baseline[coverSizeIndex(config)] = config
   original.value = JSON.stringify(baseline)
   await autosave.flush()
-  message.value = exportPng ? `已导出 ${saved.length} 张封面：${saved.map(v => `${coverSizes[coverSizeIndex(v.config)]!.label}：${v.exportedPath}`).join('；')}` : `全部尺寸编辑配置已保存，共 ${saved.length} 个版本。`
+  message.value = exportPng ? `已导出 ${saved.length} 张封面，可在本书目录查看。` : `全部尺寸编辑配置已保存，共 ${saved.length} 个版本。`
 })
 async function showPreview() {
   coverView.value = 'preview'; await nextTick()
@@ -358,7 +416,11 @@ onMounted(async () => {
       </RouterLink>
     </Button>
   </header>
-  <ProjectNavigation :id="id" />
+  <ProjectNavigation
+    :id="id"
+    :editing="dirty"
+    :busy="busy"
+  />
   <p
     v-if="!desktop"
     class="notice"
@@ -1031,13 +1093,45 @@ onMounted(async () => {
             :style="{ aspectRatio: `${draft.width} / ${draft.height}` }"
             aria-label="当前封面画布"
             role="img"
-            :class="{ 'cursor-grab touch-none': !!background && !busy }"
+            :class="{ 'cursor-grab touch-none': !!background && !busy && !inlineField }"
+            @dblclick="editAtPointer"
             @pointerdown="startDrag"
             @pointermove="moveDrag"
             @pointerup="drag = null"
             @pointercancel="drag = null"
             @lostpointercapture="drag = null"
           />
+          <Input
+            v-if="inlineField"
+            id="cover-inline-text"
+            class="cover-inline-editor"
+            :style="inlineStyle"
+            :model-value="draft[inlineField]"
+            :aria-label="inlineField === 'title' ? '画布主标题' : '画布副标题'"
+            :maxlength="inlineField === 'title' ? 200 : 300"
+            @update:model-value="draft[inlineField!] = String($event)"
+            @keydown="inlineKey"
+            @blur="endInline()"
+          />
+        </div>
+        <div class="actions cover-inline-actions">
+          <Button
+            variant="ghost"
+            size="sm"
+            :disabled="busy"
+            @click="editInline('title')"
+          >
+            在画布编辑主标题
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            :disabled="busy"
+            @click="editInline('subtitle')"
+          >
+            在画布编辑副标题
+          </Button>
+          <span class="text-xs text-muted-foreground">也可双击文字 · Enter 完成 · Esc 撤销</span>
         </div>
         <div
           v-if="draft.backgroundAssetId"
@@ -1244,7 +1338,9 @@ onMounted(async () => {
 .cover-jump { display: none; }
 .cover-preview h2 { font-size: 13px; }
 .preview-dimensions { font-size: 12px; color: var(--muted-foreground); }
-.canvas-stage { display: flex; align-items: center; justify-content: center; height: clamp(280px, 43vh, 470px); padding: 24px; background-color: #eef0e9; background-image: radial-gradient(#cbd4c0 0.8px, transparent 0.8px); background-size: 12px 12px; border: 1px solid #e4e8db; border-radius: 9px; overflow: hidden; }
+.canvas-stage { position: relative; display: flex; align-items: center; justify-content: center; height: clamp(280px, 43vh, 470px); padding: 24px; background: var(--background); border: 0; border-radius: 10px; overflow: hidden; }
+.cover-inline-editor { position: absolute; z-index: 2; min-height: 40px; background: var(--card); color: var(--foreground); }
+.cover-inline-actions { gap: 8px; margin-top: 8px; }
 canvas { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; box-shadow: 0 6px 18px #22352224; }
 .preview-caption { text-align: center; color: var(--muted-foreground); font-size: 12px; margin: 17px 0 11px; }
 .export-formats { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 17px; }

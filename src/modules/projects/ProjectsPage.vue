@@ -4,12 +4,12 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useQueryState } from '../../composables/useQueryState'
 import { isDesktop, listProjects } from '../../services/projects'
-import { projectStatuses, type Project } from '../../types/project'
+import type { Project } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import { useWorkflow } from '../../composables/useWorkflow'
 import { resumeLabel, resumeRoute } from '../../services/workflow'
-import { Badge } from '@/components/ui/badge'
+import BookCard from '../../components/BookCard.vue'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -44,7 +44,6 @@ const recent = computed(() => projects.value.filter(p => p.status !== 'archived'
   return Number(right?.running ?? false) - Number(left?.running ?? false) || (right?.updatedAt ?? b.updatedAt).localeCompare(left?.updatedAt ?? a.updatedAt)
 })[0])
 function clearFilters() { void router.replace({ query: { ...route.query, q: undefined, status: undefined } }) }
-function coverTone(id: string) { return [...id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4 }
 const date = (value: string) => new Date(value).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })
 onMounted(() => { if (desktop) void load() })
 
@@ -156,7 +155,7 @@ onMounted(() => { if (desktop) void load() })
           type="search"
           autocomplete="off"
           class="bg-white pl-9 pr-9"
-          placeholder="搜索书名、作者或 ISBN"
+          placeholder="书名、作者或 ISBN"
           :disabled="!desktop"
           @keydown.esc="search = ''"
         />
@@ -256,51 +255,13 @@ onMounted(() => { if (desktop) void load() })
       aria-label="项目列表"
       :aria-busy="busy"
     >
-      <RouterLink
+      <BookCard
         v-for="project in filtered"
         :key="project.id"
-        class="project-card group block min-w-0 overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs transition-shadow hover:border-primary/30 hover:shadow-md"
-        :to="continueTo(project.id)"
-      >
-        <div
-          class="book-art relative flex h-48 items-center justify-center border-b"
-          :class="'tone-' + coverTone(project.id)"
-        >
-          <Badge
-            variant="outline"
-            class="absolute right-3 top-3 border-white/70 bg-white/90 text-xs font-normal"
-          >
-            {{ projectStatuses[project.status] }}
-          </Badge>
-          <div
-            class="book-jacket"
-            aria-hidden="true"
-          >
-            <AppIcon name="book" /><strong>{{ project.title }}</strong><small>{{ project.author || '我的读书计划' }}</small>
-          </div>
-        </div>
-        <div class="project-card-copy p-5">
-          <h2
-            class="m-0 truncate text-base font-semibold"
-            :title="project.title"
-          >
-            {{ project.title }}
-          </h2>
-          <p class="mb-3 mt-1 text-xs text-muted-foreground">
-            {{ project.author || '作者待补充' }}
-          </p>
-          <p class="m-0 line-clamp-2 min-h-10 text-sm leading-5 text-muted-foreground">
-            {{ project.description || project.sourceNotes || '记录一个想法，开始这本书的创作。' }}
-          </p>
-          <div class="project-card-footer mt-5 flex items-center justify-between gap-2 border-t pt-4 text-xs">
-            <span class="text-muted-foreground">{{ date(project.updatedAt) }} 更新</span>
-            <span class="flex items-center gap-1 font-medium text-primary">{{ continuation(project.id) ? resumeLabel(continuation(project.id)!) : '继续创作' }}<AppIcon
-              name="arrow"
-              class="size-3.5"
-            /></span>
-          </div>
-        </div>
-      </RouterLink>
+        :project="project"
+        :resume="continuation(project.id)"
+        @deleted="load"
+      />
       <RouterLink
         v-if="!search && filter === 'all'"
         class="add-project-card flex min-h-72 flex-col items-center justify-center gap-4 rounded-xl border border-dashed bg-muted/20 p-8 text-center text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent/50 hover:text-primary"
@@ -344,17 +305,3 @@ onMounted(() => { if (desktop) void load() })
     </section>
   </template>
 </template>
-
-<style scoped>
-.book-art { background: #eff2ed; }
-.book-art.tone-1 { background: #f4eee7; }
-.book-art.tone-2 { background: #eaf0f3; }
-.book-art.tone-3 { background: #f2ebeb; }
-.book-jacket { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; width: 112px; height: 138px; padding: 16px 10px; border-radius: 2px 5px 5px 2px; border-left: 5px solid #ffffff20; background: #48614f; color: #fffaf0; box-shadow: 3px 2px 0 #fffcf2, 5px 3px 0 #d4d6cf, 9px 10px 18px #24372b20; text-align: center; }
-.tone-1 .book-jacket { background: #916f50; }
-.tone-2 .book-jacket { background: #4b667b; }
-.tone-3 .book-jacket { background: #855960; }
-.book-jacket strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-family: 'Songti SC', 'SimSun', serif; font-size: 19px; line-height: 1.6; letter-spacing: 1px; }
-.book-jacket small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: #ffffffcc; }
-.book-jacket .app-icon { width: 14px; height: 14px; }
-</style>
