@@ -158,6 +158,7 @@ Rust在保存校对时按本书assets解析图片，复用ImageProvider静态格
 
 - 在现有 `components/ui` 增加 AlertDialog 与 Progress，沿用 shadcn-vue 源码分发模式和已锁定的 Reka UI 2.11.0。参考当前官方 [AlertDialog registry](https://www.shadcn-vue.com/r/styles/new-york-v4/alert-dialog.json)、[Progress registry](https://www.shadcn-vue.com/r/styles/new-york-v4/progress.json) 及本地依赖源码；只保留实际使用的导出，不增加依赖。
 - `ConfirmAction` 是确认弹窗的共同入口，内容通过 Portal 挂载到 body，焦点限制在弹窗内，默认聚焦取消，处理中禁止退出和重复确认。表单确认通过 `form` 属性关联真实表单，保留原生校验；确认按钮不自动关闭，只有业务成功才关闭，因此失败不丢字段。
+- 2026-11-04发布记录弹窗优化：`ConfirmAction`关闭自动属性继承，将调用方属性直接传给`AlertDialogContent`，使页面专属样式命中实际浮层。`PublishingPage`使用最大600px白色弹窗、20px字段间距和独立浅绿下一篇区域；选择框全宽，菜单使用当前Reka源码公开的`--reka-select-trigger-width`与触发器同宽，长选项换行。接续按钮通过原`actions`插槽进入带分隔线的底栏，使用次级描边，窄窗口纵向排列。两种保存均使用同一表单的原生校验；接续按钮先调用所属表单`reportValidity()`再复用`recordSuccess(true)`，回车仍只保存本次记录。原记录、忙碌锁定、失败保留和成功后接续调用链继续复用，不新增业务状态、依赖或SQL迁移。实际验证见`DEVELOPMENT-PLAN.md`的“发布记录弹窗样式优化”。
 - `requestConfirmation()` 返回 Promise，`AppConfirmation` 在应用根部唯一挂载。所有原生确认调用及其路由/历史切换调用链改为等待结果；并发请求直接取消后来的操作，应用卸载按取消结束待确认请求。下拉框触发的确认显式指定稳定触发器 ID，避免选项卸载后焦点丢失。浏览器 `beforeunload` 的系统级关闭保护继续保留。
 - 视频/合集折叠区复用 Collapsible，设置 `unmountOnHide=false` 保留输入；运行环境使用 `defaultOpen` 按首次加载的配置决定展开，不新增重复展开状态。封面与试片卡片使用 Button，保留业务布局，删除重复焦点样式。
 - Progress 仅接受当前阶段的百分比或空值；空值显示不定进度，ARIA 不提供数值；确定进度与减少动态效果规则在基础组件内统一。视频环形阶段展示保留业务职责，直线进度不再维护另一份动画实现。

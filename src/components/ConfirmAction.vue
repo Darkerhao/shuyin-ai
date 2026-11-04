@@ -2,6 +2,8 @@
 import { Button } from '@/components/ui/button'
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogTitle } from '@/components/ui/alert-dialog'
 
+defineOptions({ inheritAttrs: false })
+
 const props = withDefaults(defineProps<{
   title: string
   confirmLabel?: string
@@ -27,6 +29,7 @@ function restoreFocus(event: globalThis.Event) {
     @update:open="!$event && !busy && emit('cancel')"
   >
     <AlertDialogContent
+      v-bind="$attrs"
       :aria-describedby="undefined"
       :aria-busy="busy"
       @escape-key-down="busy && $event.preventDefault()"
