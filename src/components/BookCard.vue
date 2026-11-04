@@ -22,7 +22,26 @@ const loaded = ref(false)
 const { busy, error, message, run } = useOperation()
 const to = computed(() => props.resume ? resumeRoute(props.resume) : `/projects/${props.project.id}/writing`)
 const action = computed(() => props.resume ? resumeLabel(props.resume) : '继续创作')
-const tone = computed(() => [...props.project.id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4)
+const bookTones = [
+  ['#48614f', '#eff2ed'], // 松柏绿
+  ['#876648', '#f4eee7'], // 栗棕
+  ['#4b667b', '#eaf0f3'], // 雾蓝
+  ['#793f50', '#f3e9ed'], // 酒红
+  ['#646b43', '#f1f2e8'], // 橄榄绿
+  ['#555b7c', '#ededf4'], // 靛蓝
+  ['#8b6338', '#f6efe3'], // 赭石
+  ['#3e6a67', '#e9f1ef'], // 深青绿
+  ['#985b49', '#f6ece6'], // 陶土红
+  ['#354e6b', '#e8edf3'], // 藏青
+  ['#706078', '#f0ebf2'], // 灰紫
+  ['#51575b', '#eceff0'], // 石墨灰
+] as const
+const tone = computed(() => {
+  // FNV-1a: keep each book's colors stable without depending on its title or position.
+  const hash = [...props.project.id].reduce((value, char) => Math.imul(value ^ char.charCodeAt(0), 0x01000193) >>> 0, 0x811c9dc5)
+  const [cover, backdrop] = bookTones[hash % bookTones.length]!
+  return { '--book-cover': cover, '--book-backdrop': backdrop }
+})
 let returnFocus: globalThis.HTMLElement | null = null
 function prepareMore(event: globalThis.Event) {
   returnFocus = event.currentTarget as globalThis.HTMLElement
@@ -83,7 +102,7 @@ const remove = async () => {
       >
         <div
           class="book-art relative flex h-48 items-center justify-center"
-          :class="'tone-' + tone"
+          :style="tone"
         >
           <Badge
             variant="secondary"
@@ -192,16 +211,10 @@ const remove = async () => {
 </template>
 
 <style scoped>
-.book-art { background: #eff2ed; }
-.book-art.tone-1 { background: #f4eee7; }
-.book-art.tone-2 { background: #eaf0f3; }
-.book-art.tone-3 { background: #f2ebeb; }
-.book-jacket { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; width: 112px; height: 142px; padding: 16px 14px; border-radius: 2px 5px 5px 2px; background: #48614f; color: #fffaf0; box-shadow: 2px 1px 0 #f9f6ec, 0 8px 24px -4px #0000001f, 0 2px 6px -1px #00000014; text-align: center; }
+.book-art { background: var(--book-backdrop); }
+.book-jacket { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; width: 112px; height: 142px; padding: 16px 14px; border-radius: 2px 5px 5px 2px; background: var(--book-cover); color: #fffaf0; box-shadow: 2px 1px 0 #f9f6ec, 0 8px 24px -4px #0000001f, 0 2px 6px -1px #00000014; text-align: center; }
 .book-jacket::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 13px; border-radius: inherit; background: linear-gradient(90deg, #00000024, #ffffff17 24%, #00000012 44%, transparent); pointer-events: none; }
 .book-jacket::after { content: ''; position: absolute; inset: 2px -2px 2px auto; width: 2px; background: linear-gradient(#f9f6ec, #d9d6cf); border-radius: 0 2px 2px 0; pointer-events: none; }
-.tone-1 .book-jacket { background: #876648; }
-.tone-2 .book-jacket { background: #4b667b; }
-.tone-3 .book-jacket { background: #855960; }
 .book-jacket strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-family: var(--font-serif); font-size: 19px; line-height: 1.6; letter-spacing: 1px; }
 .book-jacket small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: inherit; }
 .book-context-menu { z-index: 50; width: 256px; max-width: calc(100vw - 24px); max-height: var(--reka-dropdown-menu-content-available-height); overflow-y: auto; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--foreground); box-shadow: 0 12px 32px -8px #202d2830, 0 2px 6px #202d2810; }
