@@ -1,6 +1,7 @@
 use super::images::{test_jpeg, test_png, test_webp, ImageProvider, ImageRequest};
 use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
+use tokio::sync::oneshot;
 
 fn image_request(base_url: String) -> ImageRequest {
     ImageRequest {
@@ -61,25 +62,43 @@ async fn call_diagnostics_record_returned_usage_timing_errors_and_cancellation_w
         .await
         .unwrap_err();
     thread.join().unwrap();
-    let (url, thread) = server(200, &body, Duration::from_millis(200));
+    let (request_received, received) = oneshot::channel();
+    let (release_response, response_released) = oneshot::channel();
+    let (url, thread) = reply_server(move |_, _| {
+        request_received.send(()).unwrap();
+        response_released.blocking_recv().unwrap();
+    });
     let mut cancelled = request;
     cancelled.base_url = url.clone();
     let provider =
         OpenAiCompatible::new(TIMEOUT, &url)
             .unwrap()
             .observed(&db, Some(&job.id), "writing");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), provider.generate(cancelled))
-            .await
-            .is_err()
-    );
-    thread.join().unwrap();
+    {
+        let mut generation = provider.generate(cancelled);
+        // Cancel only after the complete request arrives, independently of SQLite/CI speed.
+        tokio::select! {
+            result = &mut generation => panic!("request completed before cancellation: {result:?}"),
+            result = tokio::time::timeout(Duration::from_secs(5), received) => {
+                result.expect("server did not receive the request").unwrap();
+            }
+        }
+    }
+    release_response.send(()).unwrap();
+    assert!(thread
+        .join()
+        .unwrap()
+        .starts_with("POST /v1/chat/completions HTTP/1.1"));
     let calls = serde_json::to_value(db.list_model_calls().unwrap()).unwrap();
-    assert!(calls
+    let cancelled = calls
         .as_array()
         .unwrap()
         .iter()
-        .any(|v| v["status"] == "cancelled"));
+        .find(|value| value["stage"] == "writing")
+        .unwrap();
+    assert_eq!(cancelled["status"], "cancelled");
+    assert_eq!(cancelled["errorCode"], "cancelled");
+    assert!(cancelled["firstResponseMs"].is_null());
     assert!(calls
         .as_array()
         .unwrap()
