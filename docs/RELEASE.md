@@ -116,6 +116,34 @@ main 与 dev 的版本一致，但提交 SHA 不同，dev 未发布的业务改�
 
 本轮未生成安装包或执行 macOS/Linux 原生构建，四平台结果仍需新一轮 CI 确认。修复合入 main 并推送后触发新运行；重跑旧运行不会使用这次源码修改。
 
+## Windows 模型诊断取消测试修复（2026-11-04）
+
+[第68次打包运行](https://github.com/Darkerhao/shuyin-ai/actions/runs/41649699649) 的 Windows Rust 格式与 Clippy 检查已通过，失败发生在 `ai::tests::call_diagnostics_record_returned_usage_timing_errors_and_cancellation_without_secrets`，尚未进入 Tauri 安装包构建。日志为测试 HTTP 服务读取请求时出现 Windows 10060 超时，随后取消测试在加入服务线程时失败；其他三个平台已打包成功，版本同步与发布跳过。
+
+根因是取消测试把同步写入 SQLite 诊断记录、建立连接和发送请求都放在固定30毫秒窗口内。诊断入库变慢时，请求可能尚未完整发送就被取消，服务线程仍在等待剩余请求。已在隔离测试数据库中临时增加仅作用于 writing 阶段的慢 INSERT 触发器，原测试稳定复现相同10060错误；触发器只用于本机复现，运行后恢复测试源码，没有业务数据库或迁移变更。
+
+测试现在通过现有 Tokio oneshot 通道等待服务确认收到完整请求，同时阻止服务提前响应；随后丢弃生成 Future，显式释放并加入服务线程。五秒仅作为等待收件的失败上限，取消时机由实际收件决定。断言进一步核对 writing 阶段的 cancelled 状态、错误码、无首响应记录及实际请求路径，保留原用量、错误、隐私与重启持久化校验。应用 Provider、300秒超时、工作流检查、依赖和版本号均不变，本次为 fix/patch。
+
+本机 Windows / Rust 1.99.1 验证：
+
+| 实际命令或复现场景 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib ai::tests::call_diagnostics_record_returned_usage_timing_errors_and_cancellation_without_secrets -- --exact --nocapture` | 1项通过 |
+| `& ./output/build-diagnosis/diagnostics-slow-insert.ps1` | 相同慢入库场景修复后通过；原实现复现10060超时；临时夹具已移除 |
+| 慢入库测试二进制24进程并发复测 | 24项全部通过；证据为忽略目录内的 `diagnostics-slow-insert-stress-after.json` |
+| `npm run check:rust` | fmt、Clippy通过，保留 `-D warnings` |
+| `npm run test:rust` | 206项通过，2项原有专项默认忽略 |
+| `node --test tests/release-assets.test.mjs tests/audio-package.test.mjs tests/audio-page.test.mjs` | 60项通过，1项macOS专属检查跳过 |
+| `npm run lint` | 通过 |
+| `npm run build` | TypeScript与Vite生产构建通过；保留现有主包体积提示 |
+| `npm run desktop:build -- --bundles nsis -- --locked` | Windows release编译、NSIS安装器及更新签名生成成功；安装器6,232,327字节（5.94MiB） |
+| CI的Windows包检查同等PowerShell断言 | 应用二进制、NSIS脚本及清理hook存在，安装器与签名均非空 |
+| `git diff --check` | 通过 |
+
+本地安装器：`src-tauri/target/release/bundle/nsis/书引 AI_0.45.0_x64-setup.exe`，更新签名为相邻`.exe.sig`；仅用于本轮构建验证，版本沿用0.45.0。本轮未安装或升级正式桌面版。
+
+修复需要合入 main 并推送，才能由新运行验证 GitHub Windows runner；重跑第68次旧运行仍使用旧测试。本地结果不代替四平台新CI、安装升级或外部模型验收；本轮未提交、推送或修改版本。
+
 ## 本地验证
 
 ```powershell
