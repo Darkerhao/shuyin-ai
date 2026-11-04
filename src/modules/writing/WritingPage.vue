@@ -11,7 +11,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter, useRoute } from 'vue-router'
 import * as api from '../../services/ai'
 import * as audioApi from '../../services/audio'
-import { chooseAudio, chooseSourceDocument, getProject, isDesktop, linkAsset, listAssets, openAsset } from '../../services/projects'
+import { chooseAudio, chooseSourceDocument, getProject, isDesktop, linkAsset, listAssets } from '../../services/projects'
 import { errorMessage } from '../../services/verification'
 import { emptyPublishing, type GenerationTextPreview, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type PublishingTextField, type WritingVersion } from '../../types/ai'
 import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
@@ -22,6 +22,7 @@ import { useQueryState } from '../../composables/useQueryState'
 import { useEditorDraft } from '../../composables/useEditorDraft'
 import { readDraft } from '../../services/drafts'
 import AppIcon from '../../components/AppIcon.vue'
+import AudioPlayer from '../../components/AudioPlayer.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OperationFeedback from '../../components/OperationFeedback.vue'
@@ -122,6 +123,8 @@ const activeAudioJob = computed(() => {
 })
 const otherActiveAudioJob = computed(() => activeAudioJob.value && activeAudioJob.value.projectId !== props.id ? activeAudioJob.value : null)
 const shownAudioJob = computed(() => route.query.audioJob && audioJob.value ? audioJob.value : otherActiveAudioJob.value ?? audioJob.value)
+const completedAudioId = computed(() => shownAudioJob.value?.projectId === props.id && shownAudioJob.value.status === 'succeeded' ? shownAudioJob.value.assetId : null)
+const completedPlayer = ref<InstanceType<typeof AudioPlayer>>()
 const selectedDocument = computed(() => documents.value.find(item => `asset:${item.id}` === audioSourceKey.value) ?? null)
 const audioSourceReady = computed(() => audioSourceKey.value === 'text'
   ? !!sourceNotes.value.trim()
@@ -315,7 +318,10 @@ const importAudio = () => run(async () => {
   await refreshAudioAssets()
   message.value = '音频已导入。可在视频制作中识别字幕并生成原声 MG 视频，也可使用外部剪辑工具。'
 })
-const playAudio = (id: string) => run(() => openAsset(id))
+function playCompletedAudio() {
+  completedPlayer.value?.$el.scrollIntoView?.({ block: 'center' })
+  void completedPlayer.value?.play()
+}
 async function persistDuration() {
   if (!durationValid.value) throw new Error('音频目标时长须为 1—1440 分钟的整数。')
   const seconds = Number(durationMinutes.value) * 60
@@ -1067,9 +1073,20 @@ onMounted(async () => {
                 v-if="shownAudioJob.status === 'succeeded'"
                 class="muted"
               >
-                音频已保存到本书，可在下方音频列表打开。
+                音频已保存到本书，点击下方播放器即可试听。
                 <span v-if="shownAudioJob.outputSize"> 文件大小：{{ (shownAudioJob.outputSize / 1024 / 1024).toFixed(2) }} MB。</span>
               </p>
+              <AudioPlayer
+                v-if="completedAudioId"
+                ref="completedPlayer"
+                :project-id="id"
+                :asset-id="completedAudioId"
+                :title="shownAudioJob.projectTitle"
+                :format="audioAssets.find(asset => asset.id === completedAudioId)?.originalName.split('.').pop()?.toUpperCase()"
+                subtitle="已归档音频 · 本地原声"
+                aria-label="已下载音频播放器"
+                :disabled="activeTab !== 'audio'"
+              />
               <p
                 v-if="shownAudioJob.status === 'cancelled'"
                 class="notice"
@@ -1166,15 +1183,6 @@ onMounted(async () => {
                 >
                   停止跟进
                 </Button>
-                <Button
-                  v-if="shownAudioJob.status === 'succeeded' && shownAudioJob.assetId"
-                  type="button"
-                  variant="outline"
-                  :disabled="busy"
-                  @click="playAudio(shownAudioJob.assetId)"
-                >
-                  打开音频
-                </Button>
               </div>
             </article>
           </section>
@@ -1225,14 +1233,25 @@ onMounted(async () => {
               <p :class="asset.existsStatus === 'available' ? 'muted' : 'error'">
                 {{ asset.existsStatus === 'available' ? '文件可用' : '文件已丢失，请到发布准备页重新定位' }} · {{ (asset.fileSize / 1024 / 1024).toFixed(2) }} MB
               </p>
+              <AudioPlayer
+                v-if="asset.existsStatus === 'available' && asset.id !== completedAudioId"
+                :project-id="id"
+                :asset-id="asset.id"
+                :title="title"
+                :format="asset.originalName.split('.').pop()?.toUpperCase()"
+                :subtitle="`${asset.originalName.split('.').pop()?.toUpperCase()} · ${(asset.fileSize / 1024 / 1024).toFixed(2)} MB · 本地原声`"
+                :aria-label="`音频成品播放器：${asset.originalName}`"
+                :disabled="activeTab !== 'audio'"
+              />
               <div class="actions">
                 <Button
+                  v-if="asset.id === completedAudioId"
                   type="button"
                   variant="outline"
-                  :disabled="busy || asset.existsStatus !== 'available'"
-                  @click="playAudio(asset.id)"
+                  :disabled="asset.existsStatus !== 'available'"
+                  @click="playCompletedAudio"
                 >
-                  打开音频
+                  <AppIcon name="headphones" />试听音频
                 </Button>
                 <Button
                   type="button"

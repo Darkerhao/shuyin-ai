@@ -18,7 +18,6 @@ export const executeSceneRevision = (id: string) => invoke<VideoScene>('execute_
 export const subtitles = (id: string) => invoke<string>('video_subtitles', { id })
 export const originalCues = (id: string) => invoke<VideoCue[]>('original_video_cues', { id })
 export const exportSubtitles = (id: string) => invoke<string>('export_video_subtitles', { id })
-export const mediaSource = async (projectId: string, assetId: string) => convertFileSrc(await invoke<string>('media_asset_path', { projectId, assetId }))
 export const chooseRuntimePath = (directory: boolean) => open({ title: directory ? '选择独立引擎或本地模型目录' : '选择 Node / Python 可执行文件', directory, multiple: false, ...(directory ? {} : { filters: [{ name: 'Windows 程序', extensions: ['exe'] }] }) })
 
 export const chooseImage = () => open({ title: '导入本书视频图片', multiple: false, filters: [{ name: '静态图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })

@@ -5,21 +5,25 @@ import VideoPage from '../src/modules/video/VideoPage.vue'
 import * as api from '../src/services/video'
 import * as projects from '../src/services/projects'
 import * as ai from '../src/services/ai'
+import { loadWaveform } from '../src/services/audioWaveform'
 import { emptyProject } from '../src/types/project'
 import { emptyProvider } from '../src/types/ai'
-import { chooseSelect } from './ui'
+import { chooseSelect, mockResizeObserver } from './ui'
 import type { VideoJob } from '../src/types/video'
 import VideoSceneRevision from '../src/modules/video/VideoSceneRevision.vue'
 import VideoSubtitleEditor from '../src/modules/video/VideoSubtitleEditor.vue'
 import * as drafts from '../src/services/drafts'
 vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
-vi.mock('../src/services/video', () => ({ originalCues: vi.fn(), settings: vi.fn(), saveSettings: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), mediaSource: vi.fn(), chooseRuntimePath: vi.fn(), chooseImage: vi.fn(), importImage: vi.fn(), readImage: vi.fn(), startIllustration: vi.fn(), executeIllustration: vi.fn() }))
-vi.mock('../src/services/projects', () => ({ isDesktop: () => true, getProject: vi.fn(), listAssets: vi.fn(), openAsset: vi.fn(), openProjectDirectory: vi.fn() }))
+vi.mock('../src/services/video', () => ({ originalCues: vi.fn(), settings: vi.fn(), saveSettings: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), chooseRuntimePath: vi.fn(), chooseImage: vi.fn(), importImage: vi.fn(), readImage: vi.fn(), startIllustration: vi.fn(), executeIllustration: vi.fn() }))
+vi.mock('../src/services/projects', () => ({ isDesktop: () => true, getProject: vi.fn(), listAssets: vi.fn(), mediaSource: vi.fn(), openAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn() }))
+vi.mock('../src/services/audioWaveform', () => ({ loadWaveform: vi.fn().mockResolvedValue([.2, .6, .8, .1]) }))
 const job: VideoJob = { id: 'j1', projectId: 'p1', audioAssetId: 'a1', sourceSubtitleId: null, providerId: 'm1', status: 'awaiting_confirmation', stage: 'storyboard', runId: 1, plan: { title: '原书', audioSha256: 'hash', duration: 8, cues: [{ start: 0, end: 7, text: '原声字幕' }], scenes: [{ first: 0, last: 0, kind: 'opening', title: '观点', beats: [{ cue: 0, object: 'book', action: 'draw', label: '一本书' }] }] }, error: '', subtitleAssetId: 's1', videoAssetId: null, createdAt: '', updatedAt: '' }
 const mounted: ReturnType<typeof mount>[] = []
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(loadWaveform).mockResolvedValue([.2, .6, .8, .1])
+  mockResizeObserver()
   vi.mocked(drafts.readDraft).mockResolvedValue(null)
   vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   vi.mocked(api.originalCues).mockResolvedValue(job.plan.cues)
@@ -29,9 +33,9 @@ beforeEach(() => {
   vi.mocked(api.settings).mockResolvedValue({ engineRoot: 'D:/engine', nodePath: 'D:/node.exe', pythonPath: 'D:/python.exe', modelPath: 'D:/model' })
   vi.mocked(api.listJobs).mockResolvedValue([structuredClone(job)])
   vi.mocked(api.subtitles).mockResolvedValue('1\n00:00:00,000 --> 00:00:07,000\n原声字幕\n')
-  vi.mocked(api.mediaSource).mockResolvedValue('http://asset.localhost/audio.m4a')
+  vi.mocked(projects.mediaSource).mockResolvedValue('http://asset.localhost/audio.m4a')
 })
-afterEach(() => { mounted.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; vi.useRealTimers() })
+afterEach(() => { mounted.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals() })
 async function render(onStoryboardUpdate?: () => void) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/projects/:id/video', component: VideoPage, props: true }, { path: '/:pathMatch(.*)*', component: { template: '<p>其他页面</p>' } }] })
   await router.push('/projects/p1/video?audio=a1'); await router.isReady()
@@ -119,7 +123,7 @@ it('flushes the old task before switching, then restores the other task without 
 it('keeps task audition bound to its source when the new-task audio selector changes', async () => {
   const wrapper = await render()
   const selector = wrapper.findAllComponents({ name: 'UiSelect' }).find(select => select.find('#video-audio').exists())!
-  vi.mocked(api.mediaSource).mockResolvedValue('http://asset.localhost/another-audio.m4a')
+  vi.mocked(projects.mediaSource).mockResolvedValue('http://asset.localhost/another-audio.m4a')
   selector.vm.$emit('update:modelValue', 'a2'); await flushPromises()
   expect(wrapper.get('audio[aria-label="所选原声音频"]').attributes('src')).toContain('another-audio')
   expect(wrapper.get('audio[aria-label="当前视频任务原声"]').attributes('src')).toBe('http://asset.localhost/audio.m4a')

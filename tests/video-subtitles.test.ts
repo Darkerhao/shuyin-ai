@@ -1,20 +1,25 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, ref } from 'vue'
 import VideoSubtitleEditor from '../src/modules/video/VideoSubtitleEditor.vue'
 import { initialPosition, replaceSubtitleText, subtitleRows } from '../src/modules/video/subtitles'
+import { mediaSource } from '../src/services/projects'
+import { mockResizeObserver } from './ui'
+vi.mock('../src/services/projects', () => ({ mediaSource: vi.fn() }))
+vi.mock('../src/services/audioWaveform', () => ({ loadWaveform: vi.fn().mockResolvedValue([.2, .6, .8, .1]) }))
 
 const srt = '1\r\n00:00:01,200 --> 00:00:02,800\r\n孔字\r\n\r\n2\r\n00:00:03,000 --> 00:00:05,000\r\n原声\r\n'
 const originals = [{ start: 1.2, end: 2.8, text: '孔子' }, { start: 3, end: 5, text: '原声' }]
 const mounted: ReturnType<typeof mount>[] = []
-afterEach(() => { mounted.splice(0).forEach(wrapper => wrapper.unmount()); vi.restoreAllMocks(); vi.useRealTimers() })
-function render() {
+beforeEach(() => { mockResizeObserver(); vi.mocked(mediaSource).mockResolvedValue('http://asset.localhost/task-audio.m4a') })
+afterEach(() => { mounted.splice(0).forEach(wrapper => wrapper.unmount()); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals() })
+async function render() {
   const wrapper = mount(defineComponent({
     components: { VideoSubtitleEditor },
     setup: () => ({ text: ref(srt), position: ref(initialPosition()), originals }),
-    template: '<VideoSubtitleEditor v-model="text" v-model:position="position" :originals="originals" original-error="" audio-src="http://asset.localhost/task-audio.m4a" :disabled="false" />',
+    template: '<VideoSubtitleEditor v-model="text" v-model:position="position" :originals="originals" original-error="" project-id="p1" audio-asset-id="task-audio" :disabled="false" />',
   }))
-  mounted.push(wrapper); return wrapper
+  mounted.push(wrapper); await flushPromises(); return wrapper
 }
 it('replaces only the chosen sentence and preserves BOM, CRLF and every timecode', () => {
   const input = `\uFEFF${srt}`
@@ -26,7 +31,7 @@ it('replaces only the chosen sentence and preserves BOM, CRLF and every timecode
   expect(subtitleRows(srt.replace('00:00:03,000', '00:60:03,000'))).toEqual([])
 })
 it('filters real differences and restores one sentence without changing another sentence or timestamps', async () => {
-  const wrapper = render()
+  const wrapper = await render()
   await wrapper.findAll('button').find(button => button.text().startsWith('只看修改项'))!.trigger('click')
   expect(wrapper.findAll('.subtitle-row')).toHaveLength(1)
   await wrapper.get('[aria-label="恢复第1句原文"]').trigger('click')
@@ -37,7 +42,7 @@ it('seeks the task audio to the cue, tolerates buffering, stops at the end and p
   vi.useFakeTimers()
   const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
   const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
-  const wrapper = render()
+  const wrapper = await render()
   await wrapper.get('[aria-label="试听第1句"]').trigger('click'); await flushPromises()
   const audio = wrapper.get('audio').element as HTMLAudioElement
   expect(audio.currentTime).toBe(1.2)
@@ -53,7 +58,7 @@ it('seeks the task audio to the cue, tolerates buffering, stops at the end and p
   expect(pause).toHaveBeenCalledTimes(2)
 })
 it('keeps the new sentence boundary when an earlier playback emits a delayed pause event', async () => {
-  const wrapper = render()
+  const wrapper = await render()
   const audio = wrapper.get('audio').element as HTMLAudioElement
   let paused = true
   vi.spyOn(audio, 'paused', 'get').mockImplementation(() => paused)
@@ -78,18 +83,18 @@ it('keeps the new sentence boundary when an earlier playback emits a delayed pau
 it('reports a playback failure without changing text or starting another playback', async () => {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockRejectedValue(new Error('missing'))
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
-  const wrapper = render()
+  const wrapper = await render()
   await wrapper.get('[aria-label="试听第1句"]').trigger('click'); await flushPromises()
-  expect(wrapper.get('[role="alert"]').text()).toContain('原声无法播放')
+  expect(wrapper.get('[role="alert"]').text()).toContain('音频无法播放')
   expect(wrapper.getComponent(VideoSubtitleEditor).props('modelValue')).toBe(srt)
 })
 it('plays continuously across cue boundaries with one audio element and preserves the saved editing position', async () => {
-  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) { this.dispatchEvent(new Event('play')); return Promise.resolve() })
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
-  const wrapper = render()
+  const wrapper = await render()
   const editor = wrapper.getComponent(VideoSubtitleEditor)
   const before = { ...editor.props('position') }
-  await wrapper.findAll('button').find(item => item.text() === '连续播放原声')!.trigger('click'); await flushPromises()
+  await wrapper.get('[aria-label="播放音频"]').trigger('click'); await flushPromises()
   const audio = wrapper.get('audio').element as HTMLAudioElement
   audio.currentTime = 3.5; await wrapper.get('audio').trigger('timeupdate')
   expect(wrapper.findAll('audio')).toHaveLength(1)
@@ -98,10 +103,10 @@ it('plays continuously across cue boundaries with one audio element and preserve
   expect(editor.props('position')).toEqual(before)
   expect(editor.props('modelValue')).toBe(srt)
 })
-it('restores the current cue indication after pausing and resuming the native player', async () => {
+it('restores the current cue indication after pausing and resuming the shared player', async () => {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
-  const wrapper = render()
+  const wrapper = await render()
   const editor = wrapper.getComponent(VideoSubtitleEditor)
   const audio = wrapper.get('audio').element as HTMLAudioElement
   await wrapper.get('audio').trigger('play')
@@ -115,7 +120,7 @@ it('restores the current cue indication after pausing and resuming the native pl
 it('follows playback across pages without replacing an actively edited subtitle or saving a new editing position', async () => {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
-  const wrapper = render()
+  const wrapper = await render()
   const editor = wrapper.getComponent(VideoSubtitleEditor)
   const longText = Array.from({ length: 30 }, (_, index) => `${index + 1}\n00:00:${String(index).padStart(2, '0')},000 --> 00:00:${String(index + 1).padStart(2, '0')},000\n字幕${index + 1}\n`).join('\n')
   editor.vm.$emit('update:modelValue', longText); await flushPromises()

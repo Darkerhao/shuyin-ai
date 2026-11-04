@@ -1,5 +1,16 @@
 import { DOMWrapper, flushPromises, type VueWrapper } from '@vue/test-utils'
-import { expect } from 'vitest'
+import { expect, vi } from 'vitest'
+
+// jsdom has no layout observer; media/slider behavior is checked separately in a real browser.
+export function mockResizeObserver() {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: IntersectionObserverCallback) {}
+    observe(target: Element) { this.callback([{ target, isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver) }
+    unobserve() {}
+    disconnect() {}
+  })
+}
 
 export async function openSelect(wrapper: VueWrapper, selector: string) {
   const trigger = wrapper.find(selector).exists() ? wrapper.get(selector) : dialog().get(selector)

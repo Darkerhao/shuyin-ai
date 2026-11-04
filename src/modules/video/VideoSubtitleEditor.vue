@@ -6,19 +6,20 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import type { VideoCue } from '../../types/video'
 import { cueKey, replaceSubtitleText, subtitleClock, subtitleRows, type VideoEditorPosition } from './subtitles'
 import { revealInScroller } from '../../lib/scroll'
+import AudioPlayer from '../../components/AudioPlayer.vue'
 
-const props = defineProps<{ originals: VideoCue[]; originalError: string; audioSrc: string; disabled: boolean }>()
+const props = defineProps<{ originals: VideoCue[]; originalError: string; projectId: string; audioAssetId: string | null; disabled: boolean }>()
 const emit = defineEmits<{ playback: [index: number, follow: boolean] }>()
 const text = defineModel<string>({ required: true })
 const position = defineModel<VideoEditorPosition>('position', { required: true })
 const editorRoot = ref<globalThis.HTMLElement>()
-const audio = ref<globalThis.HTMLAudioElement>()
+const player = ref<InstanceType<typeof AudioPlayer>>()
+const audio = computed(() => player.value?.media)
 const playing = ref<number | null>(null)
 const isPlaying = ref(false)
 const playbackCue = ref(-1)
 const playbackTime = ref(0)
 const followPlayback = ref(false)
-const playbackError = ref('')
 let stopTimer: ReturnType<typeof globalThis.setTimeout> | undefined
 let playRevision = 0
 const rows = computed(() => subtitleRows(text.value))
@@ -39,7 +40,7 @@ function select(index: number) { position.value = { ...position.value, section: 
 function stop() {
   playRevision++
   globalThis.clearTimeout(stopTimer)
-  if (playing.value !== null || isPlaying.value) audio.value?.pause()
+  if (playing.value !== null || isPlaying.value) player.value?.pause()
   isPlaying.value = false
   playbackCue.value = -1
   emit('playback', -1, false)
@@ -71,35 +72,23 @@ function toggleFollow() {
   followPlayback.value = !followPlayback.value
   emit('playback', playbackCue.value, followPlayback.value)
 }
-async function playAll() {
-  stop(); playbackError.value = ''
-  if (!audio.value) return
-  const revision = playRevision
-  isPlaying.value = true
-  try { await audio.value.play(); if (revision === playRevision) isPlaying.value = true }
-  catch { if (revision === playRevision) { stop(); playbackError.value = '原声无法播放，请核对音频文件后重试。' } }
-}
 function checkPlayback() {
   stopAtEnd()
   if (playing.value !== null) stopTimer = globalThis.setTimeout(checkPlayback, 50)
 }
 async function play(index: number) {
   const row = rows.value[index]
-  stop(); select(index); playbackError.value = ''
+  stop(); select(index)
   if (!audio.value || !row) return
   const revision = playRevision
-  try {
-    audio.value.currentTime = row.start
-    playing.value = index
-    isPlaying.value = true
-    await audio.value.play()
-    if (revision !== playRevision) return
-    checkPlayback()
-  } catch {
-    if (revision !== playRevision) return
-    stop(); playbackError.value = '原声无法播放，请核对音频文件后重试。'
-  }
+  playing.value = index
+  isPlaying.value = true
+  const started = await player.value!.play(row.start)
+  if (revision !== playRevision) return
+  if (started) checkPlayback()
+  else stop()
 }
+function clearBoundary() { playing.value = null; globalThis.clearTimeout(stopTimer) }
 function edit(index: number, value: string) {
   const row = rows.value[index]
   if (row) { select(index); text.value = replaceSubtitleText(text.value, row, value) }
@@ -121,8 +110,8 @@ function restorePosition() {
     editorRoot.value?.querySelector(`#subtitle-row-${position.value.index}`)?.scrollIntoView?.({ block: 'center' })
   }
 }
-defineExpose({ restorePosition, play })
-watch(() => props.audioSrc, stop)
+defineExpose({ restorePosition, play, audio })
+watch(() => props.audioAssetId, stop)
 watch(() => props.disabled, disabled => { if (disabled) stop() })
 onBeforeUnmount(stop)
 </script>
@@ -135,16 +124,9 @@ onBeforeUnmount(stop)
   >
     <div class="actions">
       <Button
-        variant="outline"
-        :disabled="disabled || !audioSrc"
-        @click="playAll"
-      >
-        连续播放原声
-      </Button>
-      <Button
         variant="ghost"
         :aria-pressed="followPlayback"
-        :disabled="disabled || !audioSrc"
+        :disabled="disabled || !audio"
         @click="toggleFollow"
       >
         跟随播放
@@ -173,35 +155,31 @@ onBeforeUnmount(stop)
     >
       {{ originalError }}
     </p>
-    <p
-      v-if="playbackError"
-      class="notice"
-      role="alert"
-    >
-      {{ playbackError }}
-    </p>
-    <audio
-      v-if="audioSrc"
-      ref="audio"
-      :src="audioSrc"
-      preload="metadata"
-      controls
+    <AudioPlayer
+      v-if="audioAssetId"
+      ref="player"
+      :project-id="projectId"
+      :asset-id="audioAssetId"
+      title="字幕与分镜试听"
+      subtitle="当前任务原声 · 按原时间码核对"
+      :disabled="disabled"
       aria-label="当前视频任务原声"
       @timeupdate="updatePlayback"
       @play="isPlaying = true"
       @pause="pausePlayback"
       @ended="stop"
-      @error="stop(); playbackError = '原声读取失败，请在素材管理中核对音频。'"
+      @seek="clearBoundary"
+      @error="stop"
     />
     <p
-      v-if="audioSrc"
+      v-if="audioAssetId"
       class="muted playback-status"
       role="status"
     >
       原声 {{ subtitleClock(playbackTime) }}{{ isPlaying && playbackCue >= 0 ? ` · 第 ${playbackCue + 1} 句` : '' }}
     </p>
     <p
-      v-if="!audioSrc"
+      v-if="!audioAssetId"
       class="muted"
     >
       此任务的原声暂不可试听，请核对音频素材。
@@ -229,7 +207,7 @@ onBeforeUnmount(stop)
         <div class="actions">
           <Button
             variant="ghost"
-            :disabled="disabled || !audioSrc"
+            :disabled="disabled || !audio"
             :aria-label="`试听第${row.index + 1}句`"
             @click="play(row.index)"
           >
@@ -319,7 +297,6 @@ onBeforeUnmount(stop)
 .subtitle-row { padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; min-width: 0; }
 .subtitle-row-active { border-color: var(--primary); }
 .subtitle-row-playing { background: var(--accent); box-shadow: inset 3px 0 var(--primary); }
-.subtitle-review audio { width: 100%; }
 .playback-status { margin: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
 .subtitle-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 .subtitle-columns > div { min-width: 0; }
