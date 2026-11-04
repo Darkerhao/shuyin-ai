@@ -16,6 +16,8 @@
 
 主窗口`onDragDropEvent`仅在书架接收单文件，将原始路径通过source查询参数带入原添加表单；保存复用`save_project`事务，取消不写库。侧栏显隐使用既有app_settings，数据库仍为v17。Vite预优化限定index.html，避免扫描本地验收输出。实现与运行边界见[本轮验收](UI-UX-REFINEMENT-VERIFICATION.md)。
 
+视频进度区视觉收尾（2026-11-04）：`VideoJobProgress`直接使用共享主题变量，移除旧深色配色、局部渐变、装饰光晕和循环流光；进度环及共用`Progress`数值过渡为180ms，未知进度的等待指示与减少动态效果规则保留。没有新增进度状态或修改任务数据。Windows安装版三档真实缩放、原生另存及覆盖安装边界见[补充验收](WINDOWS-VISUAL-ACCEPTANCE.md)。
+
 ## 已选合集名称回读（2026-11-03）
 
 官方合集选择值将名称放在 `selected-item-title-*`，作品数放在相邻 `selected-item-extra-text-*`，读取整个 `.semi-select-selection-text.textContent` 会把二者拼接，造成任务目标与网页选择不一致。`douyin_editor.js` 的合集动作统一从名称节点读取；已选值和列表选项共用同一名称提取函数，仍支持官方仅显示文本标签的状态，不靠正则删去名称的一部分。
