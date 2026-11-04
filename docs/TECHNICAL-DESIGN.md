@@ -43,6 +43,8 @@ TypeScript `PublishingContent/emptyPublishing`同步该字符串；WritingPage�
 
 发布页一次明确核对后先验证选中PNG，再复用保存/任务包/辅助发布流程。元信息查询保留当前请求Promise，辅助接续在核验前等待同一查询完成；无音轨或读取失败继续阻止启动并保留输入，不额外请求或自动重试。`video_asset_metadata`及`export_video_asset`复用已有按书籍/素材/类型校验的`video_asset_path`，在线程池检查元信息；另存使用create_new拒绝覆盖，失败只清理本次新文件。新增能力仅授权主窗口，文件选择增加dialog:allow-save，未提供任意Shell或文件删除接口。
 
+2026-11-04发布确认入口修复：自检卡显式说明标题和双封面通过同一次操作确认并保存。检查清单区分标题待填写与待确认，已填写标题和封面确认项的「去确认」定位到现有确认按钮；素材不齐时定位到确认说明，保留禁用与缺项提示。任务包项定位到导出操作。复用原确认字段，不增加确认状态或调用路径。
+
 主窗口`onDragDropEvent`仅在书架接收单文件，将原始路径通过source查询参数带入原添加表单；保存复用`save_project`事务，取消不写库。侧栏显隐使用既有app_settings，数据库仍为v17。Vite预优化限定index.html，避免扫描本地验收输出。实现与运行边界见[本轮验收](UI-UX-REFINEMENT-VERIFICATION.md)。
 
 视频进度区视觉收尾（2026-11-04）：`VideoJobProgress`直接使用共享主题变量，移除旧深色配色、局部渐变、装饰光晕和循环流光；进度环及共用`Progress`数值过渡为180ms，未知进度的等待指示与减少动态效果规则保留。没有新增进度状态或修改任务数据。Windows安装版三档真实缩放、原生另存及覆盖安装边界见[补充验收](WINDOWS-VISUAL-ACCEPTANCE.md)。

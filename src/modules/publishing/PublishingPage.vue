@@ -179,10 +179,14 @@ async function persistReviewed() {
   draft.value.titleConfirmed = true; draft.value.coversConfirmed = true
   return persist()
 }
+function isConfirmationCheck(key: string) { return key === 'covers' || (key === 'title' && !!draft.value.title.trim()) }
 function locateMissing(key: string) {
-  const fields: Record<string, string> = { title: 'publish-title', description: 'publish-description', audio: 'publish-audio', video: 'publish-video', landscape: 'publish-landscape', portrait: 'publish-portrait', covers: 'publish-confirm', package: 'publish-export' }
-  if (key === 'package' || key === 'covers') globalThis.document.getElementById('publish-preflight')?.scrollIntoView({ block: 'start' })
-  globalThis.document.getElementById(fields[key] ?? 'publish-title')?.focus()
+  const fields: Record<string, string> = { title: 'publish-title', description: 'publish-description', audio: 'publish-audio', video: 'publish-video', landscape: 'publish-landscape', portrait: 'publish-portrait', package: 'publish-export' }
+  const confirmation = isConfirmationCheck(key)
+  const target = confirmation ? 'publish-confirm' : fields[key] ?? 'publish-title'
+  const action = confirmation || key === 'package'
+  if (action) globalThis.document.getElementById('publish-preflight')?.scrollIntoView({ block: 'start' })
+  globalThis.document.getElementById(action && !canReview.value ? 'publish-confirmation-help' : target)?.focus()
 }
 function resetReview() { draft.value.titleConfirmed = false; draft.value.coversConfirmed = false }
 async function showAssets() {
@@ -691,8 +695,16 @@ onMounted(() => { if (desktop) void loadTask() })
         </figure>
       </div>
       <template v-if="!published">
+        <p
+          id="publish-confirmation-help"
+          class="notice"
+          tabindex="-1"
+        >
+          <strong class="block">确认发布标题和两张封面</strong>
+          核对本次标题、内容、成片与横竖两张封面后，点击「确认并开始辅助发布」或「确认并导出任务包」，即可一并确认并保存。
+        </p>
         <p class="muted">
-          点击下方操作，表示已核对本次文案、成片与两张封面。应用辅助上传和填写，最终由你在抖音页面发布。
+          应用辅助上传和填写，最终由你在抖音页面发布。
         </p>
         <p
           v-if="!canReview"
@@ -703,6 +715,7 @@ onMounted(() => { if (desktop) void loadTask() })
         <div class="actions">
           <Button
             id="publish-confirm"
+            aria-describedby="publish-confirmation-help"
             :disabled="busy || recordOpen || !canReview"
             @click="assistant?.start()"
           >
@@ -710,6 +723,7 @@ onMounted(() => { if (desktop) void loadTask() })
           </Button>
           <Button
             id="publish-export"
+            aria-describedby="publish-confirmation-help"
             variant="outline"
             :disabled="busy || recordOpen || !canReview"
             @click="prepare"
@@ -748,7 +762,7 @@ onMounted(() => { if (desktop) void loadTask() })
                 :disabled="busy || recordOpen"
                 @click="locateMissing(item.key)"
               >
-                {{ item.key === 'package' || item.key === 'covers' ? '去核对' : '去补齐' }}
+                {{ isConfirmationCheck(item.key) ? '去确认' : item.key === 'package' ? '去准备任务包' : '去补齐' }}
               </Button>
             </li>
           </ul>

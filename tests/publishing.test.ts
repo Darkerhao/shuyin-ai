@@ -69,6 +69,33 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 
 describe('M4 publish preparation', () => {
+  it.each(['title', 'covers'])('takes pending confirmation (%s) to an actionable confirmation button', async key => {
+    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, titleConfirmed: false, coversConfirmed: false, status: 'draft', taskDirectory: null, checklist: [{ key, label: '待确认', passed: false }] }])
+    const { wrapper } = await render()
+    wrapper.get('#publish-preflight').element.scrollIntoView = vi.fn()
+    expect(wrapper.get('.publish-checklist button').text()).toBe('去确认')
+    await wrapper.get('.publish-checklist button').trigger('click'); await flushPromises()
+    const confirm = button(wrapper, '确认并开始辅助发布')
+    expect(document.activeElement).toBe(confirm.element)
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+    await button(wrapper, '确认并导出任务包').trigger('click'); await flushPromises()
+    expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ titleConfirmed: true, coversConfirmed: true }))
+    expect(api.preparePublishTask).toHaveBeenCalledWith('t1')
+    expect(api.recordPublishSuccess).not.toHaveBeenCalled()
+  })
+  it.each(['title', 'covers', 'package'])('shows confirmation guidance when missing materials prevent completing %s', async key => {
+    vi.mocked(projects.listAssets).mockResolvedValue([])
+    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, titleConfirmed: false, coversConfirmed: false, status: 'draft', taskDirectory: null, checklist: [{ key, label: '待处理', passed: false }] }])
+    const { wrapper } = await render()
+    wrapper.get('#publish-preflight').element.scrollIntoView = vi.fn()
+    await wrapper.get('.publish-checklist button').trigger('click'); await flushPromises()
+    expect(document.activeElement).toBe(wrapper.get('#publish-confirmation-help').element)
+    expect(wrapper.get('#publish-confirmation-help').text()).toContain('确认发布标题和两张封面')
+    expect(button(wrapper, '确认并开始辅助发布').element.disabled).toBe(true)
+    expect(button(wrapper, '确认并导出任务包').element.disabled).toBe(true)
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+    expect(api.preparePublishTask).not.toHaveBeenCalled()
+  })
   it('confirms the displayed combination once, validates cover files and never records publication automatically', async () => {
     const { wrapper } = await render()
     await wrapper.get('#publish-title').setValue('本次核对标题')
@@ -109,7 +136,7 @@ describe('M4 publish preparation', () => {
   })
   it('links directly to audio production and focuses the field for a missing check', async () => {
     vi.mocked(projects.listAssets).mockResolvedValue([])
-    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, checklist: [{ key: 'title', label: '标题待确认', passed: false }] }])
+    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, title: '', titleConfirmed: false, checklist: [{ key: 'title', label: '标题待填写', passed: false }] }])
     const { wrapper } = await render()
     expect(wrapper.findAll('a').find(link => link.text() === '音频制作')!.attributes('href')).toBe('/projects/p1/writing?tab=audio')
     await button(wrapper, '去补齐').trigger('click')

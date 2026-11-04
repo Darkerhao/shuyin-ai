@@ -1,5 +1,24 @@
 # 书引 AI 开发计划与验收标准
 
+## 发布标题与双封面确认入口修复（2026-11-04）
+
+改版将人工确认收敛到「确认并开始辅助发布」与「确认并导出任务包」，但已填写标题的检查入口仍定位到输入框，用户指南也保留了旧勾选步骤。已在发布自检卡明确两项确认方式，将已填写标题与封面的待处理入口改为「去确认」，任务包入口改为「去准备任务包」。标题为空时定位输入框；素材不齐时确认和任务包入口定位到说明与缺项提示，操作继续禁用。
+
+复用原确认字段与保存、封面验证、任务包、辅助发布流程。点击定位入口不保存或确认；明确导出/开始操作才确认当前组合。无数据库迁移、依赖或权限变更，schema仍为v17，影响为fix/patch。修改发布页、发布测试、技术设计、用户指南与本计划。
+
+实际验证：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npx vitest run tests/publishing.test.ts -t 'takes pending confirmation'`（修复前） | 1失败、1通过；已填写标题的入口错误聚焦输入框，复现用户反馈 |
+| `npx vitest run tests/publishing.test.ts tests/publish-queue.test.ts tests/douyin.test.ts --maxWorkers=2 --reporter=json --outputFile=output/playwright/publish-confirmation/unit-tests.json` | 48项通过，含标题/封面确认定位、三类缺素材入口、确认保存和原失败保稿回归 |
+| `npm run lint` | 通过 |
+| `npm run build` | 通过，包含TypeScript检查；保留既有大于500kB的块大小提示 |
+| `node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=publish-confirmation run-code --filename output/playwright/publish-confirmation/check.cjs --json` | 生产预览18592：1440、1366、1120、800、375px共5档通过，无横向溢出；标题/封面入口正确聚焦，导出后确认与保存检查同步，空标题和缺素材正确阻止，减少动态效果下通过，页面异常0 |
+| `git diff --check` | 通过 |
+
+浏览器使用隔离的内存Tauri IPC及本地示例封面；报告和截图保存在`output/playwright/publish-confirmation/`。本轮未更新安装包、操作真实抖音账号或验证Windows原生窗口/SQLite；未修改正式用户任务，未提交或发布。下一步在包含修复的Windows构建打开现有任务，核对实际标题和两张封面，再用上述确认按钮准备发布。
+
 ## 原声波形播放器（2026-11-04）
 
 按用户提供的现代播放器HTML与截图，实现共用玻璃面板、深墨绿/OLED配色、真实幅度波形、悬停与拖动寻迹、发光指针、EQ徽标及完整播放控制。下载成功任务卡直接试听，手动导入与历史成品列表、视频制作和逐句/分镜校对复用同一组件。保留本书素材校验、原声时间码与自动草稿；没有新依赖、IPC或SQL迁移，schema17。新增就地试听及波形控制属于feat/minor，不手动升版、提交或发布。
