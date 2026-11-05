@@ -1,5 +1,11 @@
 # 书引 AI 技术设计文档
 
+## 视频制作样式对齐（2026-11-05）
+
+`VideoPage` 复用原任务/草稿状态，将输入、环境、任务、字幕校对、试片、提醒和分镜分成独立视觉区域。任务容器仍持有唯一 `jobPanel`，确保开始渲染后的滚动和分镜定位有效；`VideoJobProgress` 使用操作与媒体插槽承接原按钮/播放器，按真实状态切换颜色，集中展示错误详情，移除重复错误呈现和旧圆环装饰。百分比、更新时效、渲染子步骤及计时计算保持不变。
+
+`VideoSubtitleEditor` 与 `VideoSceneEditor` 仅重排控件和样式；共享 `AudioPlayer` / `AudioWaveform` 通过视频模块内样式调整边框、色彩与高度，保留原声解码和播放控制。App 及现有导航使用同一路由补齐视频入口；紫色token在 `style.css` 统一定义。没有新增组件库、服务、状态存储、IPC或SQL迁移。设计与验证见[视频页面验收](VIDEO-STYLE-VERIFICATION.md)。
+
 ## 第二版页面落地（2026-11-05）
 
 `ai-2.html` 的新增布局增量接入现有 CoversPage、PublishQueuePage、ModelsPage、SettingsPage 与 ModelDiagnostics。共享主题新增封面强调色，ProjectNavigation 按步骤显示图标颜色，App 增加使用当前书籍 ID 的封面入口。页面样式分别由原组件维护，替换原局部样式；不增加 UI 库、路由、业务服务或主题存储。

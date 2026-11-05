@@ -324,603 +324,716 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 </script>
 
 <template>
-  <header class="page-heading">
-    <div>
+  <div class="video-page">
+    <div class="video-backbar">
       <RouterLink
         class="back-link"
-        :to="`/projects/${id}/writing?tab=audio`"
+        :to="`/projects/${id}/covers`"
       >
-        <AppIcon name="back" />{{ title || '书籍音频' }}
-      </RouterLink><h1>视频制作</h1><p class="muted">
-        让书中的观点动起来，保留原来的声音。
-      </p>
-    </div>
-    <Button
-      variant="outline"
-      :disabled="busy || !loaded"
-      @click="showDirectory"
-    >
-      <AppIcon name="folder" />打开书籍目录
-    </Button>
-  </header>
-  <ProjectNavigation
-    :id="id"
-    :editing="dirty"
-    :busy="busy"
-  />
-  <OperationFeedback
-    :error="error || autosave.error.value"
-    :message="message"
-    @dismiss="message = ''"
-  />
-  <OperationFeedback :error="selected?.error || mediaError" />
-  <VideoSceneRevision
-    v-if="sceneRevision"
-    :input="sceneRevision"
-    :providers="providers"
-    @adopt="adoptScene"
-    @close="sceneRevision = undefined"
-  />
-  <p
-    v-if="!desktop"
-    class="notice"
-  >
-    请在 Windows 桌面应用中制作原声 MG 视频。
-  </p>
-  <Button
-    v-else-if="!loaded"
-    :disabled="busy"
-    @click="load"
-  >
-    {{ busy ? '正在读取…' : '重新读取' }}
-  </Button>
-  <div
-    v-else
-    class="video-workspace"
-  >
-    <section class="panel video-inputs">
-      <h2>从本书音频开始</h2><p class="muted">
-        横屏 1920 × 1080 · 24 fps · 同款书卷手绘。支持两小时以内音频，具体物体逐笔绘制；不重新配音、不加配乐。
-      </p>
-      <div class="video-form-grid">
-        <div class="video-field">
-          <label for="video-audio">制作音频</label><Select
-            v-model="audioId"
-            :disabled="running || busy"
-          >
-            <SelectTrigger
-              id="video-audio"
-              class="w-full min-w-0"
-            >
-              <SelectValue placeholder="选择本书音频" />
-            </SelectTrigger><SelectContent>
-              <SelectItem
-                v-for="asset in audios"
-                :key="asset.id"
-                :value="asset.id"
-              >
-                {{ asset.originalName }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div class="video-field">
-          <label for="video-provider">字幕校对与分镜模型</label><Select
-            v-model="providerId"
-            :disabled="running || busy"
-          >
-            <SelectTrigger
-              id="video-provider"
-              class="w-full min-w-0"
-            >
-              <SelectValue placeholder="选择已启用的文本模型" />
-            </SelectTrigger><SelectContent>
-              <SelectItem
-                v-for="provider in providers"
-                :key="provider.id"
-                :value="provider.id"
-              >
-                {{ provider.name }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div class="video-field">
-          <label for="video-subtitle-source">字幕来源</label><Select
-            v-model="subtitleId"
-            :disabled="running || busy"
-          >
-            <SelectTrigger
-              id="video-subtitle-source"
-              class="w-full min-w-0"
-            >
-              <SelectValue />
-            </SelectTrigger><SelectContent>
-              <SelectItem value="auto">
-                从原声自动识别
-              </SelectItem><SelectItem
-                v-for="asset in subtitles"
-                :key="asset.id"
-                :value="asset.id"
-              >
-                {{ asset.originalName }}
-              </SelectItem>
-            </SelectContent>
-          </Select><p class="muted">
-            已有 SRT 可在发布准备的素材管理中关联；使用已有字幕不需要语音模型。
-          </p>
-        </div>
-      </div>
-      <AudioPlayer
-        v-if="audioId"
-        :project-id="id"
-        :asset-id="audioId"
-        :title="title"
-        :format="audios.find(asset => asset.id === audioId)?.originalName.split('.').pop()?.toUpperCase()"
-        subtitle="制作原声 · 本地音频"
-        aria-label="所选原声音频"
-      />
-      <p
-        v-if="!audios.length"
-        class="notice"
-      >
-        尚无可用音频。请先在音频制作中生成或导入成品。
-      </p>
-      <p
-        v-if="!providers.length"
-        class="notice"
-      >
-        请先在模型设置中配置可用的文本模型，用于字幕校对和生成分镜。
-      </p>
+        <AppIcon name="back" />返回封面工坊<span v-if="title"> · {{ title }}</span>
+      </RouterLink>
       <Button
-        :disabled="running || busy || !audioId || !providerId || !config.engineRoot || !config.nodePath"
-        @click="create"
+        variant="outline"
+        :disabled="busy || !loaded"
+        @click="showDirectory"
       >
-        <AppIcon name="sparkle" />生成字幕与分镜
+        <AppIcon name="folder" />打开书籍目录
       </Button>
-    </section>
-
-    <Collapsible
-      class="panel video-runtime"
-      :default-open="!config.engineRoot || !config.nodePath"
-      :unmount-on-hide="false"
+    </div>
+    <header class="video-heading">
+      <div class="video-title-row">
+        <h1>视频制作</h1>
+        <span
+          v-if="loaded"
+          class="video-environment-badge"
+        >{{ config.engineRoot && config.nodePath ? 'Frametell · 已配置路径' : '视频环境待配置' }}</span>
+      </div>
+      <p class="muted">
+        让书中的观点动起来，逐笔手绘书卷动态，保留原汁原味的声音与思考。
+      </p>
+    </header>
+    <ProjectNavigation
+      :id="id"
+      :editing="dirty"
+      :busy="busy"
+    />
+    <OperationFeedback
+      :error="error || autosave.error.value"
+      :message="message"
+      @dismiss="message = ''"
+    />
+    <OperationFeedback :error="mediaError" />
+    <VideoSceneRevision
+      v-if="sceneRevision"
+      :input="sceneRevision"
+      :providers="providers"
+      @adopt="adoptScene"
+      @close="sceneRevision = undefined"
+    />
+    <p
+      v-if="!desktop"
+      class="notice"
     >
-      <CollapsibleTrigger class="disclosure-trigger">
-        视频运行环境 <span class="muted">首次使用时配置</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent class="video-runtime-content">
-        <p class="muted">
-          独立安装的引擎还需要 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘；不自动下载。字幕生成后自动分批校对，再生成分镜，会增加文本模型用量与等待时间。仅发送字幕、书名、作者及已保存音频提示词的首尾参考，不发送音频。
+      请在 Windows 桌面应用中制作原声 MG 视频。
+    </p>
+    <Button
+      v-else-if="!loaded"
+      :disabled="busy"
+      @click="load"
+    >
+      {{ busy ? '正在读取…' : '重新读取' }}
+    </Button>
+    <div
+      v-else
+      class="video-workspace"
+    >
+      <section class="panel video-inputs">
+        <h2 class="video-section-title">
+          从本书音频开始
+        </h2><p class="muted">
+          横屏 1920 × 1080 · 24 fps · 同款书卷手绘。支持两小时以内音频，具体物体逐笔绘制；不重新配音、不加配乐。
         </p>
         <div class="video-form-grid">
-          <div
-            v-for="field in runtimeFields"
-            :key="field.key"
-            class="video-field"
-          >
-            <label :for="`video-${field.key}`">{{ field.label }}</label><div class="video-path">
-              <Input
-                :id="`video-${field.key}`"
-                v-model="config[field.key]"
-                :disabled="busy || running"
-                :aria-describedby="`hint-${field.key}`"
-              /><Button
-                variant="outline"
-                :disabled="busy || running"
-                :aria-label="`选择${field.label}`"
-                @click="choosePath(field.key, field.directory)"
-              >
-                选择
-              </Button>
-            </div><p
-              :id="`hint-${field.key}`"
-              class="muted"
+          <div class="video-field">
+            <label for="video-audio">制作音频</label><Select
+              v-model="audioId"
+              :disabled="running || busy"
             >
-              {{ field.hint }}
+              <SelectTrigger
+                id="video-audio"
+                class="w-full min-w-0"
+              >
+                <SelectValue placeholder="选择本书音频" />
+              </SelectTrigger><SelectContent>
+                <SelectItem
+                  v-for="asset in audios"
+                  :key="asset.id"
+                  :value="asset.id"
+                >
+                  {{ asset.originalName }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div class="video-field">
+            <label for="video-provider">字幕校对与分镜模型</label><Select
+              v-model="providerId"
+              :disabled="running || busy"
+            >
+              <SelectTrigger
+                id="video-provider"
+                class="w-full min-w-0"
+              >
+                <SelectValue placeholder="选择已启用的文本模型" />
+              </SelectTrigger><SelectContent>
+                <SelectItem
+                  v-for="provider in providers"
+                  :key="provider.id"
+                  :value="provider.id"
+                >
+                  {{ provider.name }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div class="video-field video-subtitle-source">
+            <label for="video-subtitle-source">字幕来源</label><Select
+              v-model="subtitleId"
+              :disabled="running || busy"
+            >
+              <SelectTrigger
+                id="video-subtitle-source"
+                class="w-full min-w-0"
+              >
+                <SelectValue />
+              </SelectTrigger><SelectContent>
+                <SelectItem value="auto">
+                  从原声自动识别
+                </SelectItem><SelectItem
+                  v-for="asset in subtitles"
+                  :key="asset.id"
+                  :value="asset.id"
+                >
+                  {{ asset.originalName }}
+                </SelectItem>
+              </SelectContent>
+            </Select><p class="muted">
+              已有 SRT 可在发布准备的素材管理中关联；使用已有字幕不需要语音模型。
             </p>
           </div>
         </div>
-        <div class="actions">
-          <Button
-            :disabled="busy || running"
-            @click="saveConfig"
-          >
-            保存运行环境
-          </Button><Button
-            variant="ghost"
-            :disabled="busy || !configDirty"
-            @click="config = JSON.parse(savedConfig)"
-          >
-            还原配置
-          </Button>
-        </div>
-        <VideoEnvironmentCheck
-          :settings="config"
-          :has-subtitles="subtitleId !== 'auto' || !!selected?.plan.cues.length"
-          :disabled="busy || running"
-          @working="environmentWorking = $event"
-          @apply="config = $event"
-          @choose="choosePath($event, $event === 'engineRoot' || $event === 'modelPath')"
-        />
-        <p class="muted">
-          Frametell 为 AGPL-3.0 引擎，当前不随书引捆绑分发；首次准备步骤见 MG 视频使用文档。
-        </p>
-      </CollapsibleContent>
-    </Collapsible>
-
-    <section
-      v-if="jobs.length"
-      ref="jobPanel"
-      class="panel video-job"
-    >
-      <div class="video-job-heading">
-        <h2>任务与成片</h2><Select
-          :model-value="selectedId"
-          :disabled="busy"
-          @update:model-value="switchJob"
-        >
-          <SelectTrigger aria-label="选择视频历史任务">
-            <SelectValue>{{ selected ? jobLabel(selected) : '选择视频任务' }}</SelectValue>
-          </SelectTrigger><SelectContent>
-            <SelectItem
-              v-for="job in jobs"
-              :key="job.id"
-              :value="job.id"
-            >
-              {{ jobLabel(job) }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <template v-if="selected">
-        <VideoJobProgress
-          :job="selected"
-          :sync-error="selected.status === 'running' ? progressError : ''"
+        <AudioPlayer
+          v-if="audioId"
+          :project-id="id"
+          :asset-id="audioId"
+          :title="title"
+          :format="audios.find(asset => asset.id === audioId)?.originalName.split('.').pop()?.toUpperCase()"
+          subtitle="制作原声 · 本地音频"
+          aria-label="所选原声音频"
         />
         <p
-          v-if="selected.error"
-          class="notice video-error"
+          v-if="!audios.length"
+          class="notice"
         >
-          {{ selected.error }}
+          尚无可用音频。请先在音频制作中生成或导入成品。
         </p>
-        <div class="actions">
-          <Button
-            v-if="selected.plan.cues.length"
-            variant="outline"
-            :disabled="busy || !!dirty"
-            @click="exportSrt"
-          >
-            导出已保存 SRT
-          </Button>
-          <Button
-            v-if="selected.status === 'running'"
-            variant="outline"
-            :disabled="busy"
-            @click="stop"
-          >
-            停止当前任务
-          </Button>
-          <Button
-            v-if="['draft', 'failed', 'cancelled'].includes(selected.status)"
-            :disabled="busy || running || legacyPlan || !providerId"
-            @click="resume(false)"
-          >
-            继续准备字幕与分镜
-          </Button>
-          <Button
-            v-if="selected.status === 'succeeded' && selected.audioAssetId && selected.subtitleAssetId"
-            variant="outline"
-            :disabled="busy || running || !providerId"
-            @click="remake"
-          >
-            用原字幕制作新版手绘
-          </Button>
-          <Button
-            v-if="selected.subtitleAssetId"
-            variant="outline"
-            :disabled="busy"
-            @click="showAsset(selected.subtitleAssetId, true)"
-          >
-            <AppIcon name="folder" />打开 SRT 所在目录
-          </Button>
-          <Button
-            v-if="selected.videoAssetId"
-            variant="outline"
-            :disabled="busy"
-            @click="showAsset(selected.videoAssetId)"
-          >
-            用系统播放器打开
-          </Button>
-          <Button
-            v-if="selected.status === 'succeeded' && selected.videoAssetId"
-            as-child
-          >
-            <RouterLink :to="{ path: `/projects/${id}/publishing`, query: { task: 'new', videoJob: selected.id } }">
-              用于发布<AppIcon name="arrow" />
-            </RouterLink>
-          </Button>
-        </div>
-        <video
-          v-if="videoUrl"
-          :src="videoUrl"
-          controls
-          preload="metadata"
-          aria-label="原声 MG 视频成片"
-          @error="mediaError = '成片预览失败，请刷新任务或使用系统播放器。'"
-        />
-        <Button
-          v-if="editorJobId !== selected.id && !['running', 'succeeded'].includes(selected.status)"
-          variant="outline"
-          :disabled="busy"
-          @click="run(async () => { await adopt(selected) })"
+        <p
+          v-if="!providers.length"
+          class="notice"
         >
-          重新读取字幕与草稿
+          请先在模型设置中配置可用的文本模型，用于字幕校对和生成分镜。
+        </p>
+        <Button
+          class="video-primary-action"
+          :disabled="running || busy || !audioId || !providerId || !config.engineRoot || !config.nodePath"
+          @click="create"
+        >
+          <AppIcon name="bolt" />生成字幕与分镜
         </Button>
-        <template v-if="editable && selected.plan.cues.length">
-          <div class="video-editor-heading">
-            <h3>字幕与分镜校对</h3><p class="muted">
-              以实际原声为准，AI 校对后仍需试听人名和外语；每条字幕最多32字。“保存字幕并重新生成分镜”会先重新校对全文。原始 SRT 保留在本书素材中。
-            </p>
-          </div>
-          <p
-            v-if="legacyPlan"
-            class="notice"
-          >
-            当前是旧版文字图解分镜，不会按旧模板继续渲染。请保留字幕并升级手绘分镜，原音频和历史成片不变。
+      </section>
+
+      <Collapsible
+        class="panel video-runtime"
+        :default-open="!config.engineRoot || !config.nodePath"
+        :unmount-on-hide="false"
+      >
+        <CollapsibleTrigger class="disclosure-trigger video-runtime-trigger">
+          <span>
+            <span class="video-section-title">视频运行环境 · 首次使用时配置</span>
+            <span class="muted">独立安装的引擎还需 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘。</span>
+          </span>
+          <AppIcon name="chevron" />
+        </CollapsibleTrigger>
+        <CollapsibleContent class="video-runtime-content">
+          <p class="muted">
+            独立安装的引擎还需要 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘；不自动下载。字幕生成后自动分批校对，再生成分镜，会增加文本模型用量与等待时间。仅发送字幕、书名、作者及已保存音频提示词的首尾参考，不发送音频。
           </p>
-          <div class="actions">
-            <p
-              role="status"
-              aria-live="polite"
-              class="muted"
+          <div class="video-form-grid">
+            <div
+              v-for="field in runtimeFields"
+              :key="field.key"
+              class="video-field"
             >
-              {{ autosave.error.value || autosave.status.value || '编辑会自动暂存；正式保存后才用于制作。' }}
-            </p>
-            <Button
-              v-if="autosave.error.value"
-              variant="outline"
-              :disabled="busy"
-              @click="run(() => autosave.flush())"
-            >
-              重试暂存
-            </Button>
+              <label :for="`video-${field.key}`">{{ field.label }}</label><div class="video-path">
+                <Input
+                  :id="`video-${field.key}`"
+                  v-model="config[field.key]"
+                  :disabled="busy || running"
+                  :aria-describedby="`hint-${field.key}`"
+                /><Button
+                  variant="outline"
+                  :disabled="busy || running"
+                  :aria-label="`选择${field.label}`"
+                  @click="choosePath(field.key, field.directory)"
+                >
+                  选择
+                </Button>
+              </div><p
+                :id="`hint-${field.key}`"
+                class="muted"
+              >
+                {{ field.hint }}
+              </p>
+            </div>
           </div>
-          <VideoSubtitleEditor
-            :key="selected.id"
-            ref="subtitleEditor"
-            v-model="subtitleText"
-            v-model:position="position"
-            :originals="originalCues"
-            :original-error="originalError"
-            :project-id="id"
-            :audio-asset-id="selected.audioAssetId"
-            :disabled="busy"
-            @playback="onPlayback"
-          />
           <div class="actions">
             <Button
-              variant="outline"
-              :disabled="busy || !dirty || !completePlan"
-              @click="saveEditor"
+              :disabled="busy || running"
+              @click="saveConfig"
             >
-              保存校对
-            </Button>
-            <Button
-              variant="outline"
-              :disabled="busy || running || !providerId"
-              @click="regenerate"
-            >
-              {{ legacyPlan ? '保留字幕并升级手绘分镜' : '保存字幕并重新生成分镜' }}
+              保存运行环境
             </Button><Button
               variant="ghost"
-              :disabled="busy || !dirty"
-              @click="resetEditor"
+              :disabled="busy || !configDirty"
+              @click="config = JSON.parse(savedConfig)"
             >
-              还原未保存修改
+              还原配置
             </Button>
           </div>
-          <section
-            v-if="completePlan"
-            class="video-preview"
-            aria-label="原声试片"
-          >
-            <div class="video-editor-heading">
-              <h3>先看一小段，再做整片</h3>
+          <VideoEnvironmentCheck
+            :settings="config"
+            :has-subtitles="subtitleId !== 'auto' || !!selected?.plan.cues.length"
+            :disabled="busy || running"
+            @working="environmentWorking = $event"
+            @apply="config = $event"
+            @choose="choosePath($event, $event === 'engineRoot' || $event === 'modelPath')"
+          />
+          <p class="muted">
+            Frametell 为 AGPL-3.0 引擎，当前不随书引捆绑分发；首次准备步骤见 MG 视频使用文档。
+          </p>
+        </CollapsibleContent>
+      </Collapsible>
+
+      <div
+        v-if="jobs.length"
+        ref="jobPanel"
+        class="video-task-workspace"
+      >
+        <section class="panel video-job">
+          <div class="video-job-heading">
+            <div>
+              <h2 class="video-section-title">
+                任务与成片
+              </h2>
               <p class="muted">
-                使用当前校对和同一绘图流程。试片不是正式成片，不会登记到发布素材。
+                当前任务进度、错误诊断与本地渲染产物
               </p>
-            </div>
-            <div class="video-preview-controls">
-              <div class="video-field">
-                <label for="preview-first-scene">从哪一镜开始</label>
-                <Select
-                  v-model="previewFirstScene"
-                  :disabled="busy || running"
+            </div><Select
+              :model-value="selectedId"
+              :disabled="busy"
+              @update:model-value="switchJob"
+            >
+              <SelectTrigger aria-label="选择视频历史任务">
+                <SelectValue>{{ selected ? jobLabel(selected) : '选择视频任务' }}</SelectValue>
+              </SelectTrigger><SelectContent>
+                <SelectItem
+                  v-for="job in jobs"
+                  :key="job.id"
+                  :value="job.id"
                 >
-                  <SelectTrigger id="preview-first-scene">
-                    <SelectValue>第 {{ Number(previewFirstScene) + 1 }} 镜 · {{ scenes[Number(previewFirstScene)]?.title }}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem
-                      v-for="(scene, index) in scenes"
-                      :key="index"
-                      :value="String(index)"
-                    >
-                      第 {{ index + 1 }} 镜 · {{ scene.title }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div class="video-field">
-                <label for="preview-seconds">片段时长</label>
-                <Select
-                  v-model="previewSeconds"
-                  :disabled="busy || running"
-                >
-                  <SelectTrigger id="preview-seconds">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="30">
-                      30秒
-                    </SelectItem><SelectItem value="60">
-                      60秒
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button
-                data-test="preview-video"
-                variant="outline"
-                :disabled="busy || running"
-                @click="preview"
-              >
-                <AppIcon name="video" />生成{{ previewSeconds }}秒试片
-              </Button>
-            </div>
-            <p class="muted">
-              从所选分镜的原声位置截取，片尾不足时使用剩余时长；原音频、字幕和已有成片保持不变。
-            </p>
-            <template v-if="previewKey && selected.preview">
-              <p class="video-preview-caption">
-                本次试片：原声 {{ selected.preview.start.toFixed(2) }}—{{ selected.preview.end.toFixed(2) }} 秒。检查完仍需确认完整视频。
-              </p>
-              <video
-                v-if="previewUrl"
-                :src="previewUrl"
-                controls
-                preload="metadata"
-                aria-label="原声试片（非正式成片）"
-                @error="mediaError = '试片无法播放，请重新生成试片。'"
-              />
-              <p
-                v-else
-                class="muted"
-                role="status"
-              >
-                正在读取本次试片…
-              </p>
-              <div class="video-thumbnails">
+                  {{ jobLabel(job) }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <VideoJobProgress
+            v-if="selected"
+            :job="selected"
+            :sync-error="selected.status === 'running' ? progressError : ''"
+          >
+            <template #actions>
+              <div class="actions video-job-actions">
                 <Button
-                  v-for="frame in previewFrames"
-                  :key="frame.sceneIndex"
-                  type="button"
+                  v-if="selected.plan.cues.length"
                   variant="outline"
-                  class="video-thumbnail h-auto whitespace-normal"
-                  :aria-label="`查看第${frame.sceneIndex + 1}镜校对`"
-                  @click="focusScene(frame.sceneIndex)"
+                  :disabled="busy || !!dirty"
+                  @click="exportSrt"
                 >
-                  <img
-                    :src="frame.src"
-                    :alt="`第${frame.sceneIndex + 1}镜渲染缩略图`"
-                    loading="lazy"
-                    width="1920"
-                    height="1080"
+                  导出已保存 SRT
+                </Button>
+                <Button
+                  v-if="selected.status === 'running'"
+                  variant="outline"
+                  class="video-stop-action"
+                  :disabled="busy"
+                  @click="stop"
+                >
+                  停止当前任务
+                </Button>
+                <Button
+                  v-if="['draft', 'failed', 'cancelled'].includes(selected.status)"
+                  :disabled="busy || running || legacyPlan || !providerId"
+                  @click="resume(false)"
+                >
+                  继续准备字幕与分镜
+                </Button>
+                <Button
+                  v-if="selected.status === 'succeeded' && selected.audioAssetId && selected.subtitleAssetId"
+                  variant="outline"
+                  :disabled="busy || running || !providerId"
+                  @click="remake"
+                >
+                  用原字幕制作新版手绘
+                </Button>
+                <Button
+                  v-if="selected.subtitleAssetId"
+                  variant="outline"
+                  :disabled="busy"
+                  @click="showAsset(selected.subtitleAssetId, true)"
+                >
+                  <AppIcon name="folder" />打开 SRT 所在目录
+                </Button>
+                <Button
+                  v-if="selected.videoAssetId"
+                  variant="outline"
+                  :disabled="busy"
+                  @click="showAsset(selected.videoAssetId)"
+                >
+                  用系统播放器打开
+                </Button>
+                <Button
+                  v-if="selected.status === 'succeeded' && selected.videoAssetId"
+                  class="video-publish-action"
+                  as-child
+                >
+                  <RouterLink :to="{ path: `/projects/${id}/publishing`, query: { task: 'new', videoJob: selected.id } }">
+                    用于发布<AppIcon name="arrow" />
+                  </RouterLink>
+                </Button>
+              </div>
+            </template>
+            <video
+              v-if="videoUrl"
+              :src="videoUrl"
+              controls
+              preload="metadata"
+              aria-label="原声 MG 视频成片"
+              @error="mediaError = '成片预览失败，请刷新任务或使用系统播放器。'"
+            />
+          </VideoJobProgress>
+        </section>
+        <template v-if="selected">
+          <Button
+            v-if="editorJobId !== selected.id && !['running', 'succeeded'].includes(selected.status)"
+            variant="outline"
+            :disabled="busy"
+            @click="run(async () => { await adopt(selected) })"
+          >
+            重新读取字幕与草稿
+          </Button>
+          <template v-if="editable && selected.plan.cues.length">
+            <section class="panel video-proofread">
+              <div class="video-editor-heading">
+                <h2 class="video-section-title">
+                  字幕与分镜校对
+                </h2><p class="muted">
+                  以实际原声为准，AI 校对后仍需试听人名和外语；每条字幕最多32字。“保存字幕并重新生成分镜”会先重新校对全文。原始 SRT 保留在本书素材中。
+                </p>
+              </div>
+              <p
+                v-if="legacyPlan"
+                class="notice"
+              >
+                当前是旧版文字图解分镜，不会按旧模板继续渲染。请保留字幕并升级手绘分镜，原音频和历史成片不变。
+              </p>
+              <div class="actions video-draft-status">
+                <p
+                  role="status"
+                  aria-live="polite"
+                  class="muted"
+                >
+                  {{ autosave.error.value || autosave.status.value || '编辑会自动暂存；正式保存后才用于制作。' }}
+                </p>
+                <Button
+                  v-if="autosave.error.value"
+                  variant="outline"
+                  :disabled="busy"
+                  @click="run(() => autosave.flush())"
+                >
+                  重试暂存
+                </Button>
+              </div>
+              <VideoSubtitleEditor
+                :key="selected.id"
+                ref="subtitleEditor"
+                v-model="subtitleText"
+                v-model:position="position"
+                :originals="originalCues"
+                :original-error="originalError"
+                :project-id="id"
+                :audio-asset-id="selected.audioAssetId"
+                :disabled="busy"
+                @playback="onPlayback"
+              />
+              <div class="actions video-editor-actions">
+                <Button
+                  variant="outline"
+                  :disabled="busy || !dirty || !completePlan"
+                  @click="saveEditor"
+                >
+                  保存校对
+                </Button>
+                <Button
+                  :disabled="busy || running || !providerId"
+                  @click="regenerate"
+                >
+                  {{ legacyPlan ? '保留字幕并升级手绘分镜' : '保存字幕并重新生成分镜' }}
+                </Button><Button
+                  variant="ghost"
+                  :disabled="busy || !dirty"
+                  @click="resetEditor"
+                >
+                  还原未保存修改
+                </Button>
+              </div>
+            </section>
+            <section
+              v-if="completePlan"
+              class="panel video-preview"
+              aria-label="原声试片"
+            >
+              <div class="video-editor-heading">
+                <h2 class="video-section-title">
+                  先看一小段，再做整片
+                </h2>
+                <p class="muted">
+                  使用当前校对和同一绘图流程。试片不是正式成片，不会登记到发布素材。
+                </p>
+              </div>
+              <div class="video-preview-controls">
+                <div class="video-field">
+                  <label for="preview-first-scene">从哪一镜开始</label>
+                  <Select
+                    v-model="previewFirstScene"
+                    :disabled="busy || running"
                   >
-                  <span>第 {{ frame.sceneIndex + 1 }} 镜 · {{ scenes[frame.sceneIndex]?.title }}</span>
+                    <SelectTrigger id="preview-first-scene">
+                      <SelectValue>第 {{ Number(previewFirstScene) + 1 }} 镜 · {{ scenes[Number(previewFirstScene)]?.title }}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="(scene, index) in scenes"
+                        :key="index"
+                        :value="String(index)"
+                      >
+                        第 {{ index + 1 }} 镜 · {{ scene.title }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div class="video-field">
+                  <label for="preview-seconds">片段时长</label>
+                  <Select
+                    v-model="previewSeconds"
+                    :disabled="busy || running"
+                  >
+                    <SelectTrigger id="preview-seconds">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="30">
+                        30秒
+                      </SelectItem><SelectItem value="60">
+                        60秒
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  data-test="preview-video"
+                  variant="outline"
+                  :disabled="busy || running"
+                  @click="preview"
+                >
+                  <AppIcon name="video" />生成{{ previewSeconds }}秒试片
                 </Button>
               </div>
               <p class="muted">
-                缩略图来自本次试片，最多展示12镜。点击可定位校对；修改后需重新生成试片。
+                从所选分镜的原声位置截取，片尾不足时使用剩余时长；原音频、字幕和已有成片保持不变。
               </p>
-            </template>
-          </section>
-          <aside
-            v-if="storyboardNotes.length"
-            class="video-storyboard-notes"
-            aria-label="分镜观看提醒"
-          >
-            <h3>观看提醒</h3><p class="muted">
-              不是格式错误，也不会自动改稿。请结合原声判断，必要的停留和回扣可以保留。
-            </p>
-            <ul>
-              <li
-                v-for="note in storyboardNotes"
-                :key="`${note.sceneIndex}-${note.code}`"
-              >
-                <Button
-                  variant="link"
-                  @click="focusScene(note.sceneIndex)"
+              <template v-if="previewKey && selected.preview">
+                <p class="video-preview-caption">
+                  本次试片：原声 {{ selected.preview.start.toFixed(2) }}—{{ selected.preview.end.toFixed(2) }} 秒。检查完仍需确认完整视频。
+                </p>
+                <video
+                  v-if="previewUrl"
+                  :src="previewUrl"
+                  controls
+                  preload="metadata"
+                  aria-label="原声试片（非正式成片）"
+                  @error="mediaError = '试片无法播放，请重新生成试片。'"
+                />
+                <p
+                  v-else
+                  class="muted"
+                  role="status"
                 >
-                  第{{ note.sceneIndex + 1 }}镜
-                </Button><span>{{ note.message }}</span>
-              </li>
-            </ul>
-          </aside>
-          <div class="video-scenes">
-            <VideoSceneEditor
-              v-for="(scene, index) in scenes"
-              :key="index"
-              :project-id="id"
-              :scene-index="index"
-              :scene="scene"
-              :cues="selected.plan.cues"
-              :assets="assets"
-              :providers="imageProviders"
-              :disabled="busy"
-              :image-disabled="busy || running || !completePlan"
-              :revision-disabled="running || !completePlan || !providerId"
-              :playing="playbackScene === index"
-              :audio-available="!!subtitleEditor?.audio"
-              @play="subtitleEditor?.play(scene.first)"
-              @revise="reviseScene(index)"
-              @focusin="position = { ...position, section: 'scene', index }"
-              @update:scene="scenes[index] = $event"
-              @refresh-assets="refreshImages"
-              @working="imageWorking = $event"
-            />
-          </div>
-          <div class="video-render-action">
-            <p class="muted">
-              共{{ Object.keys(visualCatalog.objects).length }}种手绘物体，每镜最多3个主体。场景只作环境示意，特写突出首个主体，对照保持等权；“重点物体＋特写”在时长允许时轻推近一次。请先看试片，确认后再生成整片，原音频与旧成片保留。
-            </p><Button
-              data-test="render-video"
-              :disabled="busy || running || !completePlan"
-              @click="resume(true)"
+                  正在读取本次试片…
+                </p>
+                <div class="video-thumbnails">
+                  <Button
+                    v-for="frame in previewFrames"
+                    :key="frame.sceneIndex"
+                    type="button"
+                    variant="outline"
+                    class="video-thumbnail h-auto whitespace-normal"
+                    :aria-label="`查看第${frame.sceneIndex + 1}镜校对`"
+                    @click="focusScene(frame.sceneIndex)"
+                  >
+                    <img
+                      :src="frame.src"
+                      :alt="`第${frame.sceneIndex + 1}镜渲染缩略图`"
+                      loading="lazy"
+                      width="1920"
+                      height="1080"
+                    >
+                    <span>第 {{ frame.sceneIndex + 1 }} 镜 · {{ scenes[frame.sceneIndex]?.title }}</span>
+                  </Button>
+                </div>
+                <p class="muted">
+                  缩略图来自本次试片，最多展示12镜。点击可定位校对；修改后需重新生成试片。
+                </p>
+              </template>
+            </section>
+            <aside
+              v-if="storyboardNotes.length"
+              class="video-storyboard-notes"
+              aria-label="分镜观看提醒"
             >
-              <AppIcon name="video" />确认并生成视频
-            </Button>
-          </div>
+              <h2 class="video-section-title">
+                观看提醒
+              </h2><p class="muted">
+                不是格式错误，也不会自动改稿。请结合原声判断，必要的停留和回扣可以保留。
+              </p>
+              <ul>
+                <li
+                  v-for="note in storyboardNotes"
+                  :key="`${note.sceneIndex}-${note.code}`"
+                >
+                  <Button
+                    variant="link"
+                    @click="focusScene(note.sceneIndex)"
+                  >
+                    第{{ note.sceneIndex + 1 }}镜
+                  </Button><span>{{ note.message }}</span>
+                </li>
+              </ul>
+            </aside>
+            <section class="panel video-refinement">
+              <header class="video-refinement-heading">
+                <h2 class="video-section-title">
+                  可视化动画分镜精修台
+                </h2>
+                <span class="muted">共 {{ scenes.length }} 镜分镜 · 按原声时间码调整</span>
+              </header>
+              <div class="video-scenes">
+                <VideoSceneEditor
+                  v-for="(scene, index) in scenes"
+                  :key="index"
+                  :project-id="id"
+                  :scene-index="index"
+                  :scene="scene"
+                  :cues="selected.plan.cues"
+                  :assets="assets"
+                  :providers="imageProviders"
+                  :disabled="busy"
+                  :image-disabled="busy || running || !completePlan"
+                  :revision-disabled="running || !completePlan || !providerId"
+                  :playing="playbackScene === index"
+                  :audio-available="!!subtitleEditor?.audio"
+                  @play="subtitleEditor?.play(scene.first)"
+                  @revise="reviseScene(index)"
+                  @focusin="position = { ...position, section: 'scene', index }"
+                  @update:scene="scenes[index] = $event"
+                  @refresh-assets="refreshImages"
+                  @working="imageWorking = $event"
+                />
+              </div>
+              <div class="video-render-action">
+                <p class="muted">
+                  共{{ Object.keys(visualCatalog.objects).length }}种手绘物体，每镜最多3个主体。场景只作环境示意，特写突出首个主体，对照保持等权；“重点物体＋特写”在时长允许时轻推近一次。请先看试片，确认后再生成整片，原音频与旧成片保留。
+                </p><Button
+                  data-test="render-video"
+                  class="video-primary-action"
+                  :disabled="busy || running || !completePlan"
+                  @click="resume(true)"
+                >
+                  <AppIcon name="video" />确认并生成视频
+                </Button>
+              </div>
+            </section>
+          </template>
         </template>
-      </template>
-    </section>
+      </div>
+      <section
+        v-else
+        class="panel video-empty"
+      >
+        <AppIcon name="video" />
+        <h2>还没有视频任务</h2>
+        <p class="muted">
+          选择本书音频和文本模型，生成字幕与分镜后，在这里查看进度和成片。
+        </p>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.video-workspace { display: grid; gap: 24px; }
-.video-inputs, .video-job, .video-runtime { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 24px; }
-.video-job > .actions { margin-top: 0; }
-.video-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
-.video-field { display: grid; align-content: start; gap: 8px; min-width: 0; }
+.video-page, .video-workspace, .video-task-workspace { display: grid; gap: 24px; min-width: 0; }
+.video-backbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
+.video-backbar .back-link { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; font: 400 12px/18px var(--font-mono); }
+.video-backbar .back-link:hover, .video-backbar button .app-icon { color: var(--video-accent); }
+.video-backbar button { min-height: 30px; height: auto; padding: 6px 14px; flex-shrink: 0; font: 400 12px/16px var(--font-mono); }
+.video-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.video-heading h1 { margin: 0; font-size: 30px; line-height: 36px; font-weight: 900; letter-spacing: -.75px; }
+.video-heading p { margin: 4px 0 0; font-size: 14px; line-height: 20px; }
+.video-environment-badge { padding: 2px 10px; border: 1px solid var(--video-border); border-radius: 999px; background: var(--video-surface); color: #d8b4fe; font: 400 12px/16px var(--font-mono); }
+.video-page :deep(.project-navigation) { margin: 0; }
+.video-page :deep(.project-navigation a:not(.is-current) .app-icon) { display: none; }
+.video-inputs, .video-job, .video-proofread, .video-refinement, .video-preview { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; padding: 24px; min-width: 0; }
+.video-inputs { gap: 20px; }
+.video-workspace .panel { margin: 0; background: rgba(15, 22, 38, .72); box-shadow: var(--panel-shadow); }
+.video-workspace .muted { margin: 0; font: 400 12px/1.65 var(--font-mono); }
+.video-inputs > .muted { line-height: 16px; }
+.video-workspace :deep(button), .video-workspace :deep(input), .video-workspace :deep(textarea) { font-family: var(--font-mono); font-size: 12px; }
+.video-workspace :deep(label) { margin: 0; }
+.video-workspace :deep([data-slot='select-trigger']) { background: var(--input-surface); }
+.video-section-title { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--foreground); font-size: 16px; line-height: 24px; font-weight: 700; letter-spacing: .4px; }
+.video-section-title::before { content: ''; width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%; background: var(--video-accent); box-shadow: 0 0 8px var(--video-accent); }
+.video-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 16px; }
+.video-field { display: grid; align-content: start; gap: 6px; min-width: 0; }
+.video-field label { color: var(--muted-foreground); font: 700 12px/16px var(--font-mono); }
 .video-field [role='combobox'] { width: 100%; min-width: 0; }
-.video-workspace :deep([data-slot='select-value']) { min-width: 0; text-align: left; }
-.video-field .muted { margin: 4px 0 0; }
+.video-inputs [role='combobox'] { height: 42px; padding: 12px; }
+#video-audio { color: #d8b4fe; }
+#video-provider { color: var(--primary); }
+.video-subtitle-source { grid-column: 1 / -1; }
+.video-workspace :deep([data-slot='select-value']) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.video-field .muted { font-size: 11px; line-height: 16.5px; }
+.video-inputs :deep(.audio-player:not([data-theme='oled'])) { background: #0a121a; border-color: #064e3b66; }
+.video-workspace :deep(.audio-waveform) { padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: #020617cc; }
+.video-workspace :deep(.waveform-surface), .video-workspace :deep(.waveform-image) { height: 48px; }
+.video-workspace :deep(.player-times) { padding-top: 8px; border-top: 1px solid #0f172a; margin: 4px 0 0; font-size: 10px; line-height: 15px; }
+.video-workspace :deep(.player-times > span:first-child) { color: var(--player-muted); }
+.video-workspace :deep(.player-tools) { padding: 0; border: 0; margin-top: 16px; }
+.video-workspace :deep(.player-art) { background: color-mix(in srgb, var(--player-accent) 10%, transparent); border-color: color-mix(in srgb, var(--player-accent) 30%, transparent); }
+.video-workspace :deep(.player-state) { padding: 4px 12px; border: 1px solid color-mix(in srgb, var(--player-accent) 30%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--player-accent) 10%, transparent); }
+.video-workspace :deep(.player-jump) { width: auto; gap: 4px; background: var(--input-surface); }
+.video-workspace :deep(.player-jump span) { display: inline; font-size: 10px; }
+.video-primary-action { height: auto; min-height: 44px; padding: 12px 24px; border: 0; border-radius: 12px; color: #020617; font-weight: 900; background: linear-gradient(to right, #10b981, #2dd4bf, #a855f7); box-shadow: var(--primary-glow); }
+.video-primary-action:hover:not(:disabled) { background: linear-gradient(to right, #34d399, #5eead4, #c084fc); }
+.video-inputs > .video-primary-action { width: 100%; }
+.video-runtime { padding: 0; overflow: hidden; }
+.video-runtime-trigger { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 16px; padding: 20px; text-align: left; }
+.video-runtime-trigger > span { display: grid; gap: 4px; min-width: 0; }
+.video-runtime-trigger .video-section-title { font-size: 14px; }
+.video-runtime-trigger .video-section-title::before { background: var(--info); box-shadow: 0 0 8px var(--info); }
+.video-runtime-trigger .muted { padding-left: 20px; font-size: 11px; }
+.video-runtime-trigger > .app-icon { transform: rotate(90deg); transition: transform 180ms; }
+.video-runtime-trigger::after { display: none; }
+.video-runtime-trigger[data-state='open'] > .app-icon { transform: rotate(-90deg); }
+.video-runtime-trigger:hover { background: #1e293b66; }
+.video-runtime-content { display: grid; gap: 20px; padding: 20px 24px 24px; border-top: 1px solid var(--border); }
 .video-path { display: flex; gap: 8px; min-width: 0; }
 .video-path input { min-width: 0; }
-.video-preview { display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
-.video-preview .video-editor-heading { margin-top: 0; }
+.video-job-heading, .video-refinement-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.video-job-heading > div { min-width: 0; }
+.video-job-heading p { margin-top: 4px; padding-left: 20px; font-size: 11px; }
+.video-job-heading [role='combobox'] { width: auto; min-width: 0; max-width: 360px; }
+.video-task-workspace { scroll-margin-top: calc(var(--workspace-sticky-top) + 20px); }
+.video-job-actions { gap: 12px; margin: 0; }
+.video-stop-action { color: var(--destructive); border-color: #f8717155; }
+.video-publish-action { margin-left: auto; }
+.video-proofread .video-section-title::before, .video-refinement .video-section-title::before { background: var(--primary); box-shadow: 0 0 8px var(--primary); }
+.video-editor-heading { display: grid; gap: 6px; }
+.video-draft-status { margin: -12px 0 0; }
+.video-draft-status p { font-size: 11px; }
+.video-editor-actions { margin: 0; padding-top: 16px; border-top: 1px solid var(--border); gap: 12px; }
 .video-preview-controls { display: grid; grid-template-columns: minmax(0, 2fr) minmax(100px, 1fr) auto; gap: 16px; align-items: end; }
-.video-preview-caption { color: var(--primary); font-size: 14px; }
+.video-preview .video-section-title::before { background: var(--info); box-shadow: 0 0 8px var(--info); }
+.video-preview-caption { margin: 0; color: var(--primary); font: 400 12px/1.65 var(--font-mono); }
 .video-thumbnails { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .video-thumbnail { display: grid; gap: 8px; text-align: left; border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--card); min-width: 0; }
 .video-thumbnail img { width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 4px; }
-.video-thumbnail span { font-size: 13px; overflow-wrap: anywhere; }
-.video-storyboard-notes { padding: 16px; border-left: 3px solid var(--primary); background: var(--accent); border-radius: 6px; }
+.video-thumbnail span { font-size: 12px; overflow-wrap: anywhere; }
+.video-storyboard-notes { display: grid; gap: 10px; padding: 20px; border: 1px solid #00ff9d4d; background: #022c222e; border-radius: 16px; box-shadow: var(--panel-shadow); }
+.video-storyboard-notes .video-section-title { color: var(--primary); font-size: 14px; }
+.video-storyboard-notes .video-section-title::before { width: 6px; height: 6px; background: currentColor; box-shadow: none; }
 .video-storyboard-notes ul { padding: 0; margin: 8px 0 0; max-height: 220px; overflow-y: auto; }
-.video-storyboard-notes li { display: flex; gap: 10px; align-items: baseline; margin-top: 6px; font-size: 13px; }
-.video-storyboard-notes button { padding: 0; height: auto; }
-.video-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.video-job-heading [role='combobox'] { width: 100%; min-width: 0; max-width: 360px; }
-.video-job { scroll-margin-top: calc(var(--workspace-sticky-top) + 20px); }
-.video-runtime-content { display: grid; gap: 18px; }
-.video-scenes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-height: 560px; overflow: auto; padding: 2px; }
-.video-editor-heading { margin-top: 12px; }
-.video-render-action { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
-.video-render-action .muted { max-width: 600px; }
-.video-error { overflow-wrap: anywhere; white-space: pre-wrap; }
-video { display: block; width: 100%; max-height: 640px; background: #151d18; border-radius: 10px; }
-@media (max-width: 980px) { .video-form-grid, .video-scenes { grid-template-columns: minmax(0, 1fr); } .video-render-action, .video-job-heading { align-items: stretch; flex-direction: column; } .video-job-heading [role='combobox'] { max-width: none; } }
-@media (max-width: 520px) { .video-inputs, .video-job, .video-runtime { padding: 16px; } }
-@media (max-width: 720px) { .video-preview-controls, .video-thumbnails { grid-template-columns: minmax(0, 1fr); } .video-preview { padding: 14px; } }
+.video-storyboard-notes li { display: flex; gap: 10px; align-items: baseline; margin-top: 6px; font: 400 12px/1.7 var(--font-mono); }
+.video-storyboard-notes button { padding: 0; height: auto; color: var(--primary); flex-shrink: 0; }
+.video-scenes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 20px; max-height: 760px; overflow: auto; padding: 3px; }
+.video-render-action { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: 1px solid var(--border); padding-top: 16px; }
+.video-render-action .muted { max-width: 640px; }
+.video-render-action button { flex-shrink: 0; }
+.video-empty { display: grid; justify-items: center; gap: 12px; padding: 40px 24px; text-align: center; }
+.video-empty > .app-icon { width: 32px; height: 32px; color: var(--video-accent); }
+.video-empty h2 { margin: 0; font-size: 16px; }
+video { display: block; width: 100%; max-height: 640px; aspect-ratio: 16 / 9; background: #020617; border: 1px solid var(--input-border); border-radius: 16px; }
+@media (max-width: 1100px) { .video-job-heading, .video-refinement-heading, .video-render-action { align-items: stretch; flex-direction: column; gap: 12px; } .video-job-heading [role='combobox'] { width: 100%; max-width: none; } }
+@media (max-width: 980px) { .video-form-grid, .video-scenes, .video-preview-controls { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) { .video-backbar { align-items: flex-start; flex-direction: column; gap: 12px; } .video-backbar button { align-self: flex-end; } .video-publish-action { margin-left: 0; } .video-thumbnails { grid-template-columns: minmax(0, 1fr); } .video-job-actions, .video-editor-actions { align-items: stretch; flex-direction: column; } }
+@media (max-width: 520px) { .video-inputs, .video-job, .video-proofread, .video-refinement, .video-preview { padding: 16px; } .video-runtime-content { padding: 16px; } .video-runtime-trigger { padding: 16px; } .video-runtime-trigger .muted { display: none; } }
+@media (prefers-reduced-transparency: reduce) { .video-workspace .panel { background: var(--card); } }
 </style>
