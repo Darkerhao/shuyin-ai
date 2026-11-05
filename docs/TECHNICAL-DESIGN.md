@@ -1,5 +1,11 @@
 # 书引 AI 技术设计文档
 
+## 工作台导航固定与滚动边界修复（2026-11-05）
+
+页面继续由文档滚动，`.app-workspace` 不创建额外滚动容器，使现有 `.app-topbar` 的 `position: sticky; top: 0` 相对视口生效。科技主题改版曾给未限高的工作区设置 `overflow-y: auto`，顶栏因此吸附到不实际滚动的祖先，随文档一起移出窗口。
+
+`.app-sidebar` 恢复 `sticky/top: 0`，高度为 `100dvh`；菜单超过窗口高度时在侧栏内部滚动，`overscroll-behavior-y: contain` 避免侧栏滚到底后带动正文。删除原仅在低高度下设置侧栏 overflow 的重复规则。继续使用原两列网格、256px/64px响应式宽度、顶部留白及页面内吸顶偏移，不新增监听、状态或路由滚动实现。验证命令与范围见[开发计划](DEVELOPMENT-PLAN.md)中的同日修复记录。
+
 ## 关于与更新样式对齐（2026-11-05）
 
 `AboutPage.vue` 在原组件中重排三张卡片并维护 scoped 样式，复用共享主题、本地 Inter/JetBrains Mono、Button、Progress 和 ConfirmAction。自动更新改为带 `role="switch"`、`aria-checked`、关联标签和说明的原生按钮，直接调用原 `setAutomatic`，没有新增偏好状态。检查中禁用检查按钮，下载与安装状态沿用唯一 `useAppUpdates`；错误详情继续由 App 的 OperationFeedback 提示。
