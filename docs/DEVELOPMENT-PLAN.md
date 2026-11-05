@@ -1,5 +1,17 @@
 # 书引 AI 开发计划与验收标准
 
+## dev 分支评审问题修复
+
+浏览器预览测试原先要求整个 App 的全部按钮禁用，新增仅操作本机显示偏好的主题按钮后，该断言不再符合功能边界。现将禁用检查限定为主内容区的桌面业务操作，并验证主题按钮可点击且不会调用项目读取、保存或工作目录查询。保留原有数据库隔离断言，不禁用主题功能。
+
+封面顶部就绪提示只检查当前尺寸的排版和背景，因此将「全尺寸排版就绪」改为「当前尺寸排版就绪」。其他尺寸背景失效时，批量导出仍保持禁用；切换到失效尺寸后仍显示「排版待核对」。在已有缺失背景测试中补充这两种状态，无新增状态或渲染路径。
+
+修改 `src/modules/covers/CoversPage.vue`、`tests/projects.test.ts`、`tests/covers.test.ts` 和本计划。无数据库、依赖、权限或版本号变更；属于 `fix` / patch。
+
+已先运行两项定向用例确认原问题失败，修复后 `npx vitest run tests/projects.test.ts tests/covers.test.ts tests/theme.test.ts tests/ui-refinement.test.ts --maxWorkers=2` 为99项通过；`npm run lint`、`npm run build`（含TypeScript）通过。生产构建浏览器复验通过：预览模式的桌面按钮禁用、主题切换有效、其他尺寸背景失效时当前尺寸提示准确，以及切到失效尺寸后提示待核对；页面异常0。浏览器使用隔离IPC，未操作正式业务库。
+
+完整验证在本次PowerShell进程将 `D:/MyWork/software/shuyin-video-node/v24.22.2` 临时放在PATH首位，并设置 `VITEST_MAX_WORKERS=2` 后执行 `npm test`：前端404项、视频39项、发布脚本78项、队列19项全部通过，另1项macOS专属检查按原设置跳过；未修改系统Node配置。`git -c core.safecrlf=false diff --check` 通过。构建保留已有大分块提示；本轮无Rust检查、数据库迁移测试、原生WebView2或安装升级验收。按用户要求生成中文修复提交并提交到本地dev，不推送。
+
 ## 浅色主题切换（2026-11-05）
 
 按用户浅色HTML参考完成共享明暗主题、右上角切换、本机偏好恢复、全页面和浮层适配；播放器默认跟随主题，保留独立OLED配色。切换不重挂载页面、清空输入、改变封面画布或打断音频。清理原局部深色硬编码并复用原组件；主题不写业务库，无schema、依赖或权限变更。
