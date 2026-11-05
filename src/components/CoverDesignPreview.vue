@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import type { CoverDesign } from '../types/cover'
-defineProps<{ design: CoverDesign }>()
+defineProps<{ design: CoverDesign; compact?: boolean }>()
 </script>
 
 <template>
-  <div class="space-y-3">
+  <div
+    class="space-y-3"
+    :class="{ 'design-compact': compact }"
+  >
     <div
       class="rounded-lg border border-input p-6"
       :style="{ backgroundColor: design.backgroundColor }"
@@ -21,7 +24,8 @@ defineProps<{ design: CoverDesign }>()
         让好故事被看见
       </p>
       <p
-        class="!mb-0 !mt-1 text-sm font-medium"
+        class="!mb-0 text-sm font-medium"
+        :class="compact ? '!mt-0' : '!mt-1'"
         :style="{ color: design.subtitleColor }"
       >
         书名与看点，清晰分层
@@ -46,3 +50,15 @@ defineProps<{ design: CoverDesign }>()
     </slot>
   </div>
 </template>
+
+<style scoped>
+.design-compact > [aria-label='AI 推荐配色示意'] { padding: 12px; }
+.design-compact > [aria-label='AI 推荐配色示意'] > span { width: 32px; height: 4px; margin-bottom: 6px; }
+.design-compact > [aria-label='AI 推荐配色示意'] > p:first-of-type { font-size: 14px; line-height: 20px; }
+.design-compact > [aria-label='AI 推荐配色示意'] > p:last-of-type { font-size: 10px; line-height: 15px; }
+.design-compact > .grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-bottom: 0; font-size: 10px; line-height: 15px; }
+.design-compact > .grid > span { display: block; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.design-compact > .grid > span > i { display: none; }
+.design-compact > .grid > span > span > span { display: inline; font-size: 10px; line-height: 15px; }
+.design-compact > .grid > span > span > span + span { margin-left: 4px; font-weight: 700; }
+</style>
