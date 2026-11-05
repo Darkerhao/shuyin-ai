@@ -31,6 +31,28 @@ beforeEach(() => {
 afterEach(() => wrappers.splice(0).forEach(w => w.unmount()))
 
 describe('single host-owned Douyin workflow', () => {
+  it('keeps the embedded assistant idle until progress arrives and restores a waiting session', async () => {
+    const w = render({ hideStart: true })
+    await flushPromises()
+    expect(w.get('section').isVisible()).toBe(false)
+    progress(state({ taskId: 'other-task' })); await flushPromises()
+    expect(w.get('section').isVisible()).toBe(false)
+    progress(state()); await flushPromises()
+    expect(w.get('section').isVisible()).toBe(true)
+    expect(w.get('#douyin-account-name').element).toHaveProperty('value', '甲子')
+    expect(api.startDouyinTask).not.toHaveBeenCalled()
+    vi.mocked(api.getDouyinSession).mockResolvedValue(state())
+    const restored = render({ hideStart: true }); await flushPromises()
+    expect(restored.get('section').isVisible()).toBe(true)
+    expect(restored.emitted('working')?.at(-1)).toEqual([true])
+  })
+  it('reveals an embedded assistant when reading the host session fails', async () => {
+    vi.mocked(api.getDouyinSession).mockRejectedValue(new Error('读取辅助发布会话失败'))
+    const w = render({ hideStart: true }); await flushPromises()
+    expect(w.get('section').isVisible()).toBe(true)
+    expect(document.body.textContent).toContain('读取辅助发布会话失败')
+    expect(api.startDouyinTask).not.toHaveBeenCalled()
+  })
   it('prepares local changes before starting and confirms the account through the current run', async () => {
     const prepareTask = vi.fn(async () => task)
     const w = render({ prepareTask })

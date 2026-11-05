@@ -69,6 +69,23 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 
 describe('M4 publish preparation', () => {
+  it('counts the current text and distinguishes unsaved edits from saved checks', async () => {
+    const { wrapper } = await render()
+    expect(wrapper.get('.preflight-status').text()).toBe('已保存检查全部通过')
+    await wrapper.get('#publish-title').setValue('阅读📖')
+    await wrapper.get('#publish-description').setValue('第一行\n第二行')
+    expect(wrapper.get('#publish-title-count').text()).toBe('3 / 30')
+    expect(wrapper.get('#publish-description-count').text()).toBe('7 / 1000')
+    expect(wrapper.get('.preflight-status').text()).toBe('当前修改待保存')
+    expect(wrapper.get('.publish-assistant').isVisible()).toBe(false)
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+  })
+  it('does not claim that an empty saved checklist passed', async () => {
+    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, checklist: [] }])
+    const { wrapper } = await render()
+    expect(wrapper.get('.preflight-status').text()).toBe('素材已选齐，待确认')
+    expect(wrapper.get('.preflight-details').text()).not.toContain('已通过')
+  })
   it.each(['title', 'covers'])('takes pending confirmation (%s) to an actionable confirmation button', async key => {
     vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, titleConfirmed: false, coversConfirmed: false, status: 'draft', taskDirectory: null, checklist: [{ key, label: '待确认', passed: false }] }])
     const { wrapper } = await render()
