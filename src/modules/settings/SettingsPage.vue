@@ -18,6 +18,8 @@ import ModelDiagnostics from './ModelDiagnostics.vue'
 import { lastBackup, backupDue, type BackupRecord } from '../../services/maintenance'
 import { useInterfacePreferences } from '../../composables/useInterfacePreferences'
 import { isTauri } from '@tauri-apps/api/core'
+import { RouterLink } from 'vue-router'
+import AppIcon from '../../components/AppIcon.vue'
 const preferences = useInterfacePreferences()
 const desktop = api.isDesktop()
 const settings = ref<WorkspaceSettings | null>(null)
@@ -68,215 +70,259 @@ const restore = () => run(async () => {
 onMounted(() => { if (desktop) void load() })
 </script>
 <template>
-  <header class="page-heading">
-    <div>
-      <p class="eyebrow">
-        本地数据与文件
-      </p><h1>工作目录与备份</h1><p class="muted">
-        将项目资料保存在本机，定期备份资料与素材。
-      </p>
+  <div class="settings-page">
+    <div class="page-return-row">
+      <RouterLink
+        to="/projects"
+        class="back-link"
+      >
+        <AppIcon name="back" />返回我的书籍
+      </RouterLink>
+      <span class="settings-local"><AppIcon name="shield" />资料保存在本机</span>
     </div>
-  </header>
-  <p
-    v-if="!desktop"
-    class="notice"
-  >
-    请在桌面应用中管理目录和备份。
-  </p>
-  <OperationFeedback
-    :error="error"
-    :message="message"
-  />
-  <OperationFeedback :error="loading.error.value || closeGuard.error.value" />
-  <section
-    v-if="operationBusy || message || error"
-    class="panel workspace-result"
-    aria-label="最近一次数据操作"
-    aria-live="polite"
-  >
-    <h2>{{ operationBusy ? '数据操作进行中' : error ? '操作未完成' : '最近一次操作结果' }}</h2>
+    <header class="page-heading">
+      <div>
+        <h1>工作目录与备份</h1><p class="muted">
+          将项目资料保存在本机，定期备份资料与素材。
+        </p>
+      </div>
+    </header>
     <p
-      v-if="operationBusy"
-      role="status"
-    >
-      {{ operation }}
-    </p>
-    <p
-      v-else
-      :class="error ? 'error' : 'file-path'"
-    >
-      {{ displayPath(error || message) }}
-    </p>
-    <p
-      v-if="operationBusy"
-      class="muted"
-    >
-      完成后可离开此页，返回仍可查看本次结果。
-    </p>
-  </section>
-  <section class="panel">
-    <h2>默认工作目录</h2><p class="muted">
-      新项目会在此目录下创建独立文件夹。修改默认目录不会移动已有项目。
-    </p><p
-      v-if="settings"
-      class="file-path"
-    >
-      {{ displayPath(settings.root) }}
-    </p><div class="actions">
-      <Button
-        :disabled="!desktop || busy"
-        type="button"
-        @click="chooseRoot"
-      >
-        选择工作目录
-      </Button><Button
-        :disabled="!desktop || busy"
-        variant="outline"
-        type="button"
-        @click="load"
-      >
-        重新读取
-      </Button>
-    </div><dl v-if="settings">
-      <dt>数据库位置</dt><dd>{{ displayPath(settings.databasePath) }}</dd>
-    </dl>
-  </section>
-  <section class="panel backup-primary">
-    <h2>完整备份与恢复</h2>
-    <p v-if="backupRecord">
-      最近成功备份：{{ new Date(backupRecord.completedAt).toLocaleString() }} · {{ backupRecord.kind === 'full' ? '完整备份' : '仅数据库' }}
-    </p>
-    <p
-      v-if="backupDue(backupRecord)"
+      v-if="!desktop"
       class="notice"
-      role="status"
     >
-      {{ backupRecord ? '距离上次备份已超过7天，建议备份近期修改。' : '尚无成功备份记录，建议创建一次完整备份。' }}
+      请在桌面应用中管理目录和备份。
     </p>
-    <p class="muted">
-      备份数据库、自动草稿、个人样式、已关联图片和文档、已导出封面以及已登记任务包。备份是一个目录，请整体保管或搬移；不包含 API Key。文件缺失或校验失败时明确中止。
-    </p>
-    <label class="my-4 flex items-center gap-2 text-sm">
-      <Checkbox
-        v-model="includeVideos"
-        :disabled="!desktop || busy"
-      />同时包含已关联的原始视频（可能较大）
-    </label>
-    <div class="actions wrap">
-      <Button
-        type="button"
-        :disabled="!desktop || busy"
-        @click="backupAll"
-      >
-        创建完整备份
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        :disabled="!desktop || busy"
-        @click="chooseFullRestore"
-      >
-        选择完整备份恢复
-      </Button>
-    </div>
-    <p class="muted">
-      不勾选视频时只保留原路径，换电脑后可能需要重新定位。未登记到应用的文件不在备份范围。
-    </p>
-  </section>
-  <ConfirmAction
-    v-if="fullRestore"
-    title="确认恢复完整备份？"
-    confirm-label="确认完整恢复"
-    :busy="operationBusy"
-    :disabled="!restoreDirectory"
-    @confirm="restoreAll"
-    @cancel="fullRestore = null"
-  >
-    <p class="file-path">
-      {{ displayPath(fullRestore.manifestPath) }}
-    </p>
-    <p>{{ fullRestore.fileCount }} 个文件 · {{ (fullRestore.totalBytes / 1024 / 1024).toFixed(1) }} MB · 未包含 {{ fullRestore.omittedVideos }} 个视频。</p>
-    <p>将替换当前数据库，并在所选目录内新建恢复文件夹、重建素材和任务包引用；现有文件保留，替换前自动备份当前数据库。密钥需在模型设置核验。</p>
-    <p
-      v-if="restoreDirectory"
-      class="file-path"
+    <OperationFeedback
+      :error="error"
+      :message="message"
+    />
+    <OperationFeedback :error="loading.error.value || closeGuard.error.value" />
+    <section
+      v-if="operationBusy || message || error"
+      class="panel workspace-result"
+      aria-label="最近一次数据操作"
+      aria-live="polite"
     >
-      恢复位置：{{ displayPath(restoreDirectory) }}
-    </p>
-    <template #actions>
-      <Button
-        type="button"
-        variant="outline"
-        :disabled="busy"
-        @click="chooseRestoreDirectory"
+      <h2>{{ operationBusy ? '数据操作进行中' : error ? '操作未完成' : '最近一次操作结果' }}</h2>
+      <p
+        v-if="operationBusy"
+        role="status"
       >
-        选择恢复目录
-      </Button>
-    </template>
-  </ConfirmAction>
-  <section
-    v-if="desktop"
-    class="panel"
-    aria-label="界面偏好"
-  >
-    <h2>界面偏好</h2>
-    <label
-      class="check-label"
-      for="sidebar-prompt-visible"
-    ><Checkbox
-      id="sidebar-prompt-visible"
-      :model-value="preferences.sidebarPrompt.value"
-      :disabled="!isTauri() || preferences.busy.value"
-      @update:model-value="preferences.setPrompt($event === true)"
-    />显示侧栏创作提示</label>
-    <OperationFeedback :error="preferences.error.value" />
-  </section>
-  <StorageManager
-    v-if="desktop"
-    :disabled="operationBusy || loading.busy.value"
-    @working="storageWorking = $event"
-  />
-  <ModelDiagnostics v-if="desktop" />
-  <Collapsible
-    class="history-panel"
-    :unmount-on-hide="false"
-  >
-    <CollapsibleTrigger class="disclosure-trigger">
-      高级维护 · 仅备份或恢复数据库
-    </CollapsibleTrigger>
-    <CollapsibleContent>
-      <section class="mt-5">
-        <h2>数据库备份与恢复</h2><p class="muted">
-          备份包含项目资料、创作版本、模型配置、素材路径和普通设置，不包含 API Key，也不复制视频、图片或工作目录内的文件。恢复后请在模型设置中检查并重新输入缺失的密钥。
-        </p><div class="actions">
+        {{ operation }}
+      </p>
+      <p
+        v-else
+        :class="error ? 'error' : 'file-path'"
+      >
+        {{ displayPath(error || message) }}
+      </p>
+      <p
+        v-if="operationBusy"
+        class="muted"
+      >
+        完成后可离开此页，返回仍可查看本次结果。
+      </p>
+    </section>
+    <section class="panel workspace-directory">
+      <h2><AppIcon name="folder" />默认工作目录</h2><p class="muted">
+        新项目会在此目录下创建独立文件夹。修改默认目录不会移动已有项目。
+      </p><p
+        v-if="settings"
+        class="file-path workspace-path"
+      >
+        {{ displayPath(settings.root) }}
+      </p><div class="actions">
+        <Button
+          :disabled="!desktop || busy"
+          type="button"
+          variant="outline"
+          @click="chooseRoot"
+        >
+          选择工作目录
+        </Button><Button
+          :disabled="!desktop || busy"
+          variant="outline"
+          type="button"
+          @click="load"
+        >
+          重新读取
+        </Button>
+      </div><dl v-if="settings">
+        <dt>数据库位置</dt><dd>{{ displayPath(settings.databasePath) }}</dd>
+      </dl>
+    </section>
+    <section class="panel backup-primary">
+      <h2><AppIcon name="shield" />完整备份与恢复</h2>
+      <p v-if="backupRecord">
+        最近成功备份：{{ new Date(backupRecord.completedAt).toLocaleString() }} · {{ backupRecord.kind === 'full' ? '完整备份' : '仅数据库' }}
+      </p>
+      <p
+        v-if="backupDue(backupRecord)"
+        class="notice"
+        role="status"
+      >
+        {{ backupRecord ? '距离上次备份已超过7天，建议备份近期修改。' : '尚无成功备份记录，建议创建一次完整备份。' }}
+      </p>
+      <p class="muted">
+        备份数据库、自动草稿、个人样式、已关联图片和文档、已导出封面以及已登记任务包。备份是一个目录，请整体保管或搬移；不包含 API Key。文件缺失或校验失败时明确中止。
+      </p>
+      <div class="backup-options">
+        <div class="backup-copy">
+          <h3>保存资料与素材</h3><p class="muted">
+            选择目录，创建一份完整备份。
+          </p>
+          <label class="my-4 flex items-center gap-2 text-sm">
+            <Checkbox
+              v-model="includeVideos"
+              :disabled="!desktop || busy"
+            />同时包含已关联的原始视频（可能较大）
+          </label>
           <Button
-            :disabled="!desktop || busy"
             type="button"
-            @click="backup"
-          >
-            创建备份
-          </Button><Button
             :disabled="!desktop || busy"
-            variant="outline"
-            type="button"
-            @click="chooseRestore"
+            @click="backupAll"
           >
-            选择备份恢复
+            <AppIcon name="download" />创建完整备份
           </Button>
         </div>
-      </section>
-      <ConfirmAction
-        v-if="restorePath"
-        title="确认替换当前项目数据？"
-        confirm-label="确认恢复"
-        :busy="operationBusy"
-        @confirm="restore"
-        @cancel="restorePath = ''"
+        <div class="backup-recovery">
+          <h3>从备份恢复</h3><p class="muted">
+            先查看并核对备份，再确认恢复位置。
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            :disabled="!desktop || busy"
+            @click="chooseFullRestore"
+          >
+            <AppIcon name="folder" />选择完整备份恢复
+          </Button>
+        </div>
+      </div>
+      <p class="muted">
+        不勾选视频时只保留原路径，换电脑后可能需要重新定位。未登记到应用的文件不在备份范围。
+      </p>
+    </section>
+    <ConfirmAction
+      v-if="fullRestore"
+      title="确认恢复完整备份？"
+      confirm-label="确认完整恢复"
+      :busy="operationBusy"
+      :disabled="!restoreDirectory"
+      @confirm="restoreAll"
+      @cancel="fullRestore = null"
+    >
+      <p class="file-path">
+        {{ displayPath(fullRestore.manifestPath) }}
+      </p>
+      <p>{{ fullRestore.fileCount }} 个文件 · {{ (fullRestore.totalBytes / 1024 / 1024).toFixed(1) }} MB · 未包含 {{ fullRestore.omittedVideos }} 个视频。</p>
+      <p>将替换当前数据库，并在所选目录内新建恢复文件夹、重建素材和任务包引用；现有文件保留，替换前自动备份当前数据库。密钥需在模型设置核验。</p>
+      <p
+        v-if="restoreDirectory"
+        class="file-path"
       >
-        <p class="file-path">
-          {{ displayPath(restorePath) }}
-        </p><p>恢复将替换全部项目、创作版本、模型配置、任务、素材关联和普通设置。系统会先校验备份并自动保存当前数据库；原始素材文件保持原位，失效路径可在项目内重新定位。密钥不随备份恢复。</p>
-      </ConfirmAction>
-    </CollapsibleContent>
-  </Collapsible>
+        恢复位置：{{ displayPath(restoreDirectory) }}
+      </p>
+      <template #actions>
+        <Button
+          type="button"
+          variant="outline"
+          :disabled="busy"
+          @click="chooseRestoreDirectory"
+        >
+          选择恢复目录
+        </Button>
+      </template>
+    </ConfirmAction>
+    <section
+      v-if="desktop"
+      class="panel"
+      aria-label="界面偏好"
+    >
+      <h2>界面偏好</h2>
+      <label
+        class="check-label"
+        for="sidebar-prompt-visible"
+      ><Checkbox
+        id="sidebar-prompt-visible"
+        :model-value="preferences.sidebarPrompt.value"
+        :disabled="!isTauri() || preferences.busy.value"
+        @update:model-value="preferences.setPrompt($event === true)"
+      />显示侧栏创作提示</label>
+      <OperationFeedback :error="preferences.error.value" />
+    </section>
+    <StorageManager
+      v-if="desktop"
+      :disabled="operationBusy || loading.busy.value"
+      @working="storageWorking = $event"
+    />
+    <ModelDiagnostics v-if="desktop" />
+    <Collapsible
+      class="history-panel"
+      :unmount-on-hide="false"
+    >
+      <CollapsibleTrigger class="disclosure-trigger">
+        高级维护 · 仅备份或恢复数据库
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <section class="mt-5">
+          <h2>数据库备份与恢复</h2><p class="muted">
+            备份包含项目资料、创作版本、模型配置、素材路径和普通设置，不包含 API Key，也不复制视频、图片或工作目录内的文件。恢复后请在模型设置中检查并重新输入缺失的密钥。
+          </p><div class="actions">
+            <Button
+              :disabled="!desktop || busy"
+              type="button"
+              @click="backup"
+            >
+              创建备份
+            </Button><Button
+              :disabled="!desktop || busy"
+              variant="outline"
+              type="button"
+              @click="chooseRestore"
+            >
+              选择备份恢复
+            </Button>
+          </div>
+        </section>
+        <ConfirmAction
+          v-if="restorePath"
+          title="确认替换当前项目数据？"
+          confirm-label="确认恢复"
+          :busy="operationBusy"
+          @confirm="restore"
+          @cancel="restorePath = ''"
+        >
+          <p class="file-path">
+            {{ displayPath(restorePath) }}
+          </p><p>恢复将替换全部项目、创作版本、模型配置、任务、素材关联和普通设置。系统会先校验备份并自动保存当前数据库；原始素材文件保持原位，失效路径可在项目内重新定位。密钥不随备份恢复。</p>
+        </ConfirmAction>
+      </CollapsibleContent>
+    </Collapsible>
+  </div>
 </template>
+
+<style scoped>
+.settings-local { display: flex; align-items: center; gap: 6px; color: var(--primary); font: 400 12px/16px var(--font-mono); }
+.settings-page > .panel, .settings-page :deep(.panel), .settings-page > .history-panel { padding: 24px; box-shadow: var(--panel-shadow); margin-bottom: 24px; }
+.settings-page h2 { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.settings-page h2 > .app-icon { color: var(--info); }
+.workspace-path { margin-block: 16px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; color: var(--primary); background: #020617; font: 400 12px/18px var(--font-mono); }
+.workspace-directory .actions { margin-top: 16px; }
+.workspace-directory dl { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding-top: 16px; margin: 16px 0 0; border-top: 1px solid var(--border); font: 400 11px/18px var(--font-mono); color: var(--muted-foreground); }
+.workspace-directory dt { flex-shrink: 0; }
+.workspace-directory dd { min-width: 0; overflow-wrap: anywhere; margin: 0; }
+.backup-primary h2 > .app-icon { color: var(--primary); }
+.backup-primary > p:not(.notice) { font-size: 12px; }
+.backup-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 20px; }
+.backup-options > div { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: #02061780; }
+.backup-options h3 { margin: 0; color: #fff; font-size: 13px; }
+.backup-options label { font-size: 12px; line-height: 20px; }
+.backup-options > .backup-copy { border-color: var(--active-border); }
+.backup-recovery button { margin-top: 16px; color: var(--info); border-color: #00e5ff66; }
+.settings-page :deep([aria-label='缓存管理'] h2) { font-size: 14px; }
+.settings-page :deep([aria-label='缓存管理'] .actions) { gap: 8px; }
+.settings-page :deep([aria-label='缓存管理'] .file-path) { background: #020617; padding: 12px; border-radius: 12px; }
+@media (max-width: 600px) { .settings-page > .panel, .settings-page :deep(.panel), .settings-page > .history-panel { padding: 16px; } .backup-options { grid-template-columns: minmax(0, 1fr); } .backup-options > div { padding: 16px; } .settings-local { font-size: 11px; } }
+</style>

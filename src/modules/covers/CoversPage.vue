@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { displayPath } from '@/lib/displayPath'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Slider } from '@/components/ui/slider'
@@ -13,7 +14,7 @@ import * as api from '../../services/covers'
 import { listProviders, listVersions, cancelGeneration } from '../../services/ai'
 import { emptyPublishing, type ModelProvider, type PublishingContent } from '../../types/ai'
 import { getProject, isDesktop, linkAsset, listAssets, openProjectDirectory } from '../../services/projects'
-import { backgroundRect, coverFonts, coverPng, decodeBackground, renderCover, type CoverTextBounds } from '../../services/coverRenderer'
+import { backgroundRect, coverPng, decodeBackground, renderCover, type CoverTextBounds } from '../../services/coverRenderer'
 import { coverSizes, coverTemplates, newCover, coverWorkspace, recoverCoverWorkspace, normalizeCover, coverSizeIndex, type CoverWorkspace, type CoverConfig, type CoverVersion, type CoverPreset } from '../../types/cover'
 import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
@@ -54,7 +55,14 @@ const backgroundTasks = new Map<string, Promise<void>>()
 const background = computed(() => backgrounds.value[draft.value.backgroundAssetId ?? '']?.image ?? null)
 const backgroundLoading = computed(() => !!draft.value.backgroundAssetId && !backgrounds.value[draft.value.backgroundAssetId])
 const backgroundError = computed(() => backgrounds.value[draft.value.backgroundAssetId ?? '']?.error ?? '')
-const allBackgroundsReady = computed(() => editor.value.covers.every(config => !config.backgroundAssetId || backgrounds.value[config.backgroundAssetId]?.image))
+const exportIndexes = ref(coverSizes.map((_, index) => index))
+const exportReady = computed(() => exportIndexes.value.length > 0 && exportIndexes.value.every(index => {
+  const config = editor.value.covers[index]!
+  return !config.backgroundAssetId || backgrounds.value[config.backgroundAssetId]?.image
+}))
+function selectExport(index: number, checked: boolean) {
+  exportIndexes.value = checked ? [...exportIndexes.value, index] : exportIndexes.value.filter(value => value !== index)
+}
 const previewError = ref('')
 const actualSizes = ref<{ titleSize: number; subtitleSize: number; bounds: Record<'title' | 'subtitle', CoverTextBounds> | null }>({ titleSize: 112, subtitleSize: 44, bounds: null })
 const inlineField = ref<'title' | 'subtitle' | null>(null)
@@ -111,12 +119,20 @@ watch(canvas, element => {
 }, { flush: 'post' })
 onBeforeUnmount(() => { resizeObserver?.disconnect(); previewAnimation?.cancel() })
 const { busy, error, message, operation, run } = useOperation()
-const useAi = ref(false)
-const activeTab = useQueryState('tab', 'text', ['text', 'style', 'background'])
+const activeTab = useQueryState('tab', 'background', ['text', 'style', 'background'])
+const useAi = ref(activeTab.value === 'background')
 const coverView = ref('edit')
 const tabs = [{ value: 'text', label: '文字内容' }, { value: 'style', label: '排版样式' }, { value: 'background', label: '背景图片' }]
 const imageModels = ref<ModelProvider[]>([])
 const providerId = ref('')
+const selectedImageModel = computed(() => imageModels.value.find(model => model.id === providerId.value))
+const previewWidth = computed(() => [480, 300, 520][editor.value.activeSize]!)
+const backgroundOffset = computed(() => {
+  if (!background.value) return { x: 0, y: 0 }
+  const rect = backgroundRect(draft.value, background.value)
+  const scale = previewWidth.value / draft.value.width
+  return { x: Math.round((rect.x - (draft.value.width - rect.width) / 2) * scale), y: Math.round((rect.y - (draft.value.height - rect.height) / 2) * scale) }
+})
 const description = computed({ get: () => draft.value.backgroundPrompt, set: value => { draft.value.backgroundPrompt = value } })
 const writing = ref<PublishingContent | null>(null)
 const writingError = ref('')
@@ -190,9 +206,9 @@ function applyWritingDesign() {
   presetId.value = null
   message.value = '已应用 AI 推荐字号、主副标题配色、点缀色和蒙层。可继续调整，确认预览后保存或导出。'
 }
-async function copyPrompt() {
+async function copyText(text: string, label: string) {
   error.value = ''; message.value = ''
-  try { await globalThis.navigator.clipboard.writeText(suggestedPrompt.value); message.value = '已复制封面提示词。'; error.value = '' }
+  try { await globalThis.navigator.clipboard.writeText(text); message.value = `已复制${label}。`; error.value = '' }
   catch { error.value = '复制失败，请选中文本后手动复制。' }
 }
 function usePrompt() {
@@ -340,10 +356,11 @@ async function cancelImage() {
   finally { cancelling.value = false }
 }
 const save = (exportPng = false, currentOnly = false) => run(async () => {
+  if (exportPng && !currentOnly && !exportIndexes.value.length) return
   operation.value = '正在暂存编辑…'
   await autosave.flush()
   const source = { ...draft.value }
-  const configs = (currentOnly ? [source] : editor.value.covers).map(config => ({ ...config }))
+  const configs = (currentOnly ? [source] : editor.value.covers.filter((_, index) => !exportPng || exportIndexes.value.includes(index))).map(config => ({ ...config }))
   // Render all ratios before writing any file so layout failures keep the whole draft.
   operation.value = exportPng ? '正在读取背景并渲染…' : '正在保存全部编辑配置…'
   const outputs = await Promise.all(configs.map(async config => {
@@ -389,493 +406,520 @@ onBeforeUnmount(() => globalThis.removeEventListener('keydown', saveShortcut))
 onMounted(async () => {
   await globalThis.document.fonts.ready
   fontsReady = true
-  if (desktop && !disposed) void load()
+  if (desktop && !disposed) {
+    await load()
+    if (ready.value && useAi.value && !disposed) void loadImageModels()
+  }
 })
 </script>
 
 <template>
-  <header class="page-heading">
-    <div>
+  <div class="covers-page">
+    <div class="page-return-row">
       <RouterLink
         class="back-link"
         :to="`/projects/${id}/writing`"
       >
-        <AppIcon name="back" />{{ bookTitle || '书籍内容' }}
-      </RouterLink><h1>封面工坊</h1><p class="muted">
-        让故事的第一眼，就有吸引力。
-      </p>
-    </div>
-    <Button
-      variant="outline"
-      as-child
-    >
-      <RouterLink
-        :to="`/projects/${id}/publishing`"
-      >
-        发布准备<AppIcon name="arrow" />
+        <AppIcon name="back" />返回内容创作 · {{ bookTitle || '书籍内容' }}
       </RouterLink>
-    </Button>
-  </header>
-  <ProjectNavigation
-    :id="id"
-    :editing="dirty"
-    :busy="busy"
-  />
-  <p
-    v-if="!desktop"
-    class="notice"
-  >
-    请在桌面应用中制作封面。
-  </p>
-  <OperationFeedback
-    :error="error"
-    :message="message"
-    @dismiss="message = ''"
-  />
-  <OperationFeedback :error="autosave.error.value" />
-  <OperationFeedback
-    :message="writingError"
-    variant="warning"
-  />
-  <Button
-    v-if="!ready && desktop"
-    :disabled="busy"
-    type="button"
-    @click="load"
-  >
-    <AppIcon
-      name="refresh"
-      :class="{ spin: busy }"
-    />{{ busy ? '读取中…' : '重新读取' }}
-  </Button>
-  <ConfirmAction
-    v-if="deletingPreset && selectedPreset"
-    :title="`删除个人样式「${selectedPreset.name}」？`"
-    :busy="busy"
-    @confirm="deletePreset"
-    @cancel="deletingPreset = false"
-  >
-    <p>删除后无法恢复此个人样式，当前封面和已保存的封面历史保持原样。</p>
-  </ConfirmAction>
-  <template v-if="ready">
-    <section
-      class="panel space-y-3"
-      aria-label="封面尺寸设置"
-    >
-      <label
-        for="cover-size"
-      >当前编辑尺寸</label><Select
-        :model-value="editor.activeSize"
-        :disabled="busy"
-        @update:model-value="changeSize"
-      >
-        <SelectTrigger
-          id="cover-size"
-          class="w-full min-w-0 sm:w-72"
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem
-            v-for="(size, index) in coverSizes"
-            :key="index"
-            :value="index"
-          >
-            {{ size.label }}
-          </SelectItem>
-        </SelectContent>
-      </Select>
-
-      <p class="muted">
-        文字、排版、背景和画面描述只修改当前尺寸。需要共用时主动应用，之后仍可分别调整。
-      </p>
-      <div class="actions wrap">
-        <Button
-          type="button"
-          variant="outline"
-          :disabled="busy"
-          @click="shareCover(true)"
-        >
-          仅共用当前背景
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          :disabled="busy"
-          @click="shareCover(false)"
-        >
-          将当前封面应用到全部尺寸
-        </Button>
-      </div>
-    </section>
-    <div class="cover-jump actions">
       <Button
         variant="outline"
-        :aria-pressed="coverView === 'preview'"
-        @click="showPreview"
+        as-child
       >
-        查看实时预览
-      </Button>
-      <Button
-        variant="ghost"
-        :aria-pressed="coverView === 'edit'"
-        @click="showEditor"
-      >
-        返回编辑
+        <RouterLink :to="`/projects/${id}/publishing`">
+          发布准备<AppIcon name="arrow" />
+        </RouterLink>
       </Button>
     </div>
+    <header class="page-heading">
+      <div>
+        <div class="cover-page-title">
+          <h1>封面工坊</h1><Badge variant="outline">
+            {{ !ready || previewError || backgroundError || backgroundLoading ? '排版待核对' : '全尺寸排版就绪' }}
+          </Badge>
+        </div><p class="muted">
+          让故事的第一眼，在全网信息流中拥有强烈的视觉抓力。
+        </p>
+      </div>
+    </header>
+    <ProjectNavigation
+      :id="id"
+      :editing="dirty"
+      :busy="busy"
+    />
     <p
-      v-if="writingError"
+      v-if="!desktop"
       class="notice"
     >
-      {{ writingError }}<Button
-        :disabled="busy"
-        variant="outline"
-        type="button"
-        @click="loadWriting"
-      >
-        重新读取
-      </Button>
+      请在桌面应用中制作封面。
     </p>
-    <div
-      class="cover-workbench"
-      :data-view="coverView"
+    <OperationFeedback
+      :error="error"
+      :message="message"
+      @dismiss="message = ''"
+    />
+    <OperationFeedback :error="autosave.error.value" />
+    <OperationFeedback
+      :message="writingError"
+      variant="warning"
+    />
+    <Button
+      v-if="!ready && desktop"
+      :disabled="busy"
+      type="button"
+      @click="load"
     >
-      <div class="cover-controls panel">
-        <div class="section-heading">
-          <h2><AppIcon name="settings" /> 编辑封面</h2><Badge
-            :class="{ 'save-status is-dirty': dirty }"
-            variant="secondary"
+      <AppIcon
+        name="refresh"
+        :class="{ spin: busy }"
+      />{{ busy ? '读取中…' : '重新读取' }}
+    </Button>
+    <ConfirmAction
+      v-if="deletingPreset && selectedPreset"
+      :title="`删除个人样式「${selectedPreset.name}」？`"
+      :busy="busy"
+      @confirm="deletePreset"
+      @cancel="deletingPreset = false"
+    >
+      <p>删除后无法恢复此个人样式，当前封面和已保存的封面历史保持原样。</p>
+    </ConfirmAction>
+    <template v-if="ready">
+      <section
+        class="panel cover-size-bar"
+        aria-label="封面尺寸设置"
+      >
+        <div class="cover-size-description">
+          <label
+            for="cover-size"
+          >当前编辑尺寸</label><Select
+            :model-value="editor.activeSize"
+            :disabled="busy"
+            @update:model-value="changeSize"
           >
-            {{ dirty ? '未保存' : '已保存' }}
-          </Badge>
-        </div>
-        <Tabs
-          v-model="activeTab"
-          :unmount-on-hide="false"
-        >
-          <TabsList
-            class="w-full"
-            aria-label="封面编辑"
-          >
-            <TabsTrigger
-              v-for="tab in tabs"
-              :key="tab.value"
-              :value="tab.value"
+            <SelectTrigger
+              id="cover-size"
+              class="w-full min-w-0 sm:w-64"
             >
-              {{ tab.label }}
-            </TabsTrigger>
-          </TabsList>
-          <form
-            id="cover-edit-form"
-            @submit.prevent="save(false)"
-          >
-            <fieldset :disabled="busy">
-              <TabsContent value="text">
-                <label for="cover-title">主标题 *</label><Textarea
-                  id="cover-title"
-                  v-model="draft.title"
-                  rows="3"
-                  maxlength="200"
-                  required
-                  placeholder="一句话，让人想了解这本书"
-                />
-                <label for="cover-subtitle">副标题</label><Textarea
-                  id="cover-subtitle"
-                  v-model="draft.subtitle"
-                  rows="2"
-                  maxlength="300"
-                  placeholder="补充书名或这一期的看点"
-                />
-                <label for="cover-brand">品牌标识</label><Input
-                  id="cover-brand"
-                  v-model="draft.brand"
-                  maxlength="60"
-                  placeholder="你的名字或栏目名称"
-                />
-                <Collapsible
-                  class="cover-suggestions"
-                  :unmount-on-hide="false"
-                >
-                  <CollapsibleTrigger class="disclosure-trigger">
-                    <AppIcon name="sparkle" /> 使用本书生成的封面文案
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <section aria-label="本书封面素材">
-                      <template v-if="writing?.coverTitle && writing.coverSubtitle">
-                        <p>{{ writing.coverTitle }}</p><p class="muted">
-                          {{ writing.coverSubtitle }}
-                        </p><Button
-                          type="button"
-                          :disabled="busy"
-                          variant="outline"
-                          @click="applyWritingTitles"
-                        >
-                          使用这组主副标题
-                        </Button>
-                      </template>
-                      <p
-                        v-else
-                        class="muted"
-                      >
-                        还没有封面文案，可前往 <RouterLink :to="`/projects/${id}/writing`">
-                          书籍内容
-                        </RouterLink> 一键生成，也可以直接填写。
-                      </p>
-                    </section>
-                  </CollapsibleContent>
-                </Collapsible>
-              </TabsContent>
-              <TabsContent value="style">
-                <section
-                  v-if="writing?.coverDesign"
-                  class="mb-5 space-y-3 rounded-xl border p-4"
-                  aria-label="AI 推荐排版"
-                >
-                  <h3 class="text-sm font-semibold">
-                    AI 为这本书推荐
-                  </h3>
-                  <CoverDesignPreview :design="writing.coverDesign" />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    :disabled="busy"
-                    @click="applyWritingDesign"
-                  >
-                    应用 AI 推荐排版
-                  </Button>
-                </section>
-                <p
-                  v-else
-                  class="muted"
-                >
-                  一键生成内容时会同时推荐字号与配色；也可直接选择下方样式。
-                </p>
-                <label for="cover-preset">我的封面样式</label>
-                <Select
-                  :model-value="presetId"
-                  :disabled="busy"
-                  @update:model-value="applyPreset"
-                >
-                  <SelectTrigger
-                    id="cover-preset"
-                    class="w-full min-w-0"
-                  >
-                    <SelectValue placeholder="选择个人样式" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem
-                      v-for="preset in presets"
-                      :key="preset.id"
-                      :value="preset.id"
-                    >
-                      {{ preset.name }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <div class="mt-3 flex flex-wrap items-center gap-3">
-                  <Input
-                    v-model="presetName"
-                    aria-label="新样式名称"
-                    placeholder="给当前样式起个名字"
-                    maxlength="60"
-                    class="min-w-0 flex-1 basis-40"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    :disabled="busy || !presetName.trim()"
-                    @click="savePreset"
-                  >
-                    保存为我的样式
-                  </Button>
-                  <Button
-                    v-if="presetId"
-                    type="button"
-                    variant="outline"
-                    :disabled="busy"
-                    @click="deletingPreset = true"
-                  >
-                    删除样式
-                  </Button>
-                </div>
-                <p class="muted">
-                  复用品牌文字、字体、字号、颜色和布局；每本书的标题、背景与裁切单独保留。
-                </p>
-                <h3 class="mb-3 mt-6 text-sm font-semibold">
-                  推荐样式
-                </h3>
-                <div
-                  class="grid grid-cols-2 gap-3"
-                  aria-label="默认封面样式"
-                >
-                  <Button
-                    v-for="(template, key) in coverTemplates"
-                    :key="key"
-                    type="button"
-                    variant="outline"
-                    class="style-card block h-auto whitespace-normal rounded-xl p-3 text-left"
-                    :aria-label="template.label"
-                    :aria-pressed="isTemplateApplied(key)"
-                    :disabled="busy"
-                    @click="applyTemplate(key)"
-                  >
-                    <span
-                      class="block rounded-lg px-3 py-4"
-                      :style="{ backgroundColor: template.style.backgroundColor, textAlign: template.style.align }"
-                      aria-hidden="true"
-                    >
-                      <span
-                        class="mb-2 block h-1 w-6 rounded"
-                        :style="{ backgroundColor: template.style.accentColor, marginInline: template.style.align === 'center' ? 'auto' : undefined }"
-                      />
-                      <strong
-                        class="block text-lg"
-                        :style="{ color: template.style.textColor, fontFamily: coverFonts[template.style.fontFamily] }"
-                      >故事有引力</strong>
-                      <span
-                        class="mt-1 block text-xs"
-                        :style="{ color: template.style.subtitleColor }"
-                      >一本书，一种新视角</span>
-                    </span>
-                    <strong class="mt-2 block text-sm">{{ template.label }}</strong>
-                    <span class="muted text-xs">{{ template.description }}</span>
-                  </Button>
-                </div>
-                <p class="muted">
-                  一键应用字号、主副标题配色、点缀色、蒙层与布局，保留本书文字和背景。
-                </p>
-                <div class="form-grid">
-                  <div>
-                    <label for="cover-font">字体</label><Select
-                      v-model="draft.fontFamily"
-                      :disabled="busy"
-                    >
-                      <SelectTrigger
-                        id="cover-font"
-                        class="w-full min-w-0"
-                      >
-                        <SelectValue placeholder="请选择" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="serif">
-                          宋体 / 系统衬线
-                        </SelectItem><SelectItem value="sans">
-                          黑体 / 系统无衬线
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label for="cover-align">对齐方式</label><Select
-                      v-model="draft.align"
-                      :disabled="busy"
-                    >
-                      <SelectTrigger
-                        id="cover-align"
-                        class="w-full min-w-0"
-                      >
-                        <SelectValue placeholder="请选择" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="left">
-                          左对齐
-                        </SelectItem><SelectItem value="center">
-                          居中
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label for="cover-title-size">标题字号</label><Input
-                      id="cover-title-size"
-                      v-model.number="draft.titleSize"
-                      type="number"
-                      min="40"
-                      max="160"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label for="cover-subtitle-size">副标题字号</label><Input
-                      id="cover-subtitle-size"
-                      v-model.number="draft.subtitleSize"
-                      type="number"
-                      min="24"
-                      max="80"
-                      required
-                    />
-                  </div>
-                </div>
-                <label for="cover-position">文字位置</label><Select
-                  v-model="draft.position"
-                  :disabled="busy"
-                >
-                  <SelectTrigger
-                    id="cover-position"
-                    class="w-full min-w-0"
-                  >
-                    <SelectValue placeholder="请选择" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="top">
-                      靠上
-                    </SelectItem><SelectItem value="center">
-                      居中
-                    </SelectItem><SelectItem value="bottom">
-                      靠下
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <div class="cover-colors">
-                  <div>
-                    <label for="cover-bg-color">底色</label><Input
-                      id="cover-bg-color"
-                      v-model="draft.backgroundColor"
-                      type="color"
-                      class="cursor-pointer p-1"
-                    />
-                  </div>
-                  <div>
-                    <label for="cover-text-color">主标题色</label><Input
-                      id="cover-text-color"
-                      v-model="draft.textColor"
-                      type="color"
-                      class="cursor-pointer p-1"
-                    />
-                  </div>
-                  <div>
-                    <label for="cover-subtitle-color">副标题色</label><Input
-                      id="cover-subtitle-color"
-                      v-model="draft.subtitleColor"
-                      type="color"
-                      class="cursor-pointer p-1"
-                    />
-                  </div>
-                  <div>
-                    <label for="cover-accent-color">点缀色</label><Input
-                      id="cover-accent-color"
-                      v-model="draft.accentColor"
-                      type="color"
-                      class="cursor-pointer p-1"
-                    />
-                  </div>
-                </div>
-              </TabsContent>
-            </fieldset>
-          </form>
-          <TabsContent value="background">
-            <fieldset :disabled="busy">
-              <div
-                class="local-background"
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem
+                v-for="(size, index) in coverSizes"
+                :key="index"
+                :value="index"
               >
-                <label for="cover-background">背景来源</label><Select
+                {{ size.label }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+
+          <p class="muted">
+            文字、排版、背景和画面描述只修改当前尺寸。需要共用时主动应用，之后仍可分别调整。
+          </p>
+        </div>
+        <div class="actions wrap">
+          <Button
+            type="button"
+            variant="outline"
+            :disabled="busy"
+            @click="shareCover(true)"
+          >
+            仅共用当前背景
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            :disabled="busy"
+            @click="shareCover(false)"
+          >
+            将当前封面应用到全部尺寸
+          </Button>
+        </div>
+      </section>
+      <div class="cover-jump actions">
+        <Button
+          variant="outline"
+          :aria-pressed="coverView === 'preview'"
+          @click="showPreview"
+        >
+          查看实时预览
+        </Button>
+        <Button
+          variant="ghost"
+          :aria-pressed="coverView === 'edit'"
+          @click="showEditor"
+        >
+          返回编辑
+        </Button>
+      </div>
+      <p
+        v-if="writingError"
+        class="notice"
+      >
+        {{ writingError }}<Button
+          :disabled="busy"
+          variant="outline"
+          type="button"
+          @click="loadWriting"
+        >
+          重新读取
+        </Button>
+      </p>
+      <div
+        class="cover-workbench"
+        :data-view="coverView"
+      >
+        <div class="cover-controls panel">
+          <div class="studio-editor-heading">
+            <h2><AppIcon name="sliders" /> 编辑封面</h2><Badge
+              class="editor-save-status"
+              :data-dirty="dirty"
+              variant="secondary"
+            >
+              {{ dirty ? '未保存' : '已保存' }}
+            </Badge>
+          </div>
+          <Tabs
+            v-model="activeTab"
+            :unmount-on-hide="false"
+          >
+            <TabsList
+              class="w-full"
+              aria-label="封面编辑"
+            >
+              <TabsTrigger
+                v-for="tab in tabs"
+                :key="tab.value"
+                :value="tab.value"
+              >
+                {{ tab.label }}
+              </TabsTrigger>
+            </TabsList>
+            <form
+              id="cover-edit-form"
+              @submit.prevent="save(false)"
+            >
+              <fieldset :disabled="busy">
+                <TabsContent value="text">
+                  <label for="cover-title">主标题 *</label><Textarea
+                    id="cover-title"
+                    v-model="draft.title"
+                    rows="2"
+                    maxlength="200"
+                    required
+                    placeholder="一句话，让人想了解这本书"
+                  />
+                  <label for="cover-subtitle">副标题</label><Textarea
+                    id="cover-subtitle"
+                    v-model="draft.subtitle"
+                    rows="2"
+                    maxlength="300"
+                    placeholder="补充书名或这一期的看点"
+                  />
+                  <label for="cover-brand">品牌标识</label><Input
+                    id="cover-brand"
+                    v-model="draft.brand"
+                    maxlength="60"
+                    placeholder="你的名字或栏目名称"
+                  />
+                  <Collapsible
+                    class="cover-suggestions"
+                    :unmount-on-hide="false"
+                  >
+                    <CollapsibleTrigger class="disclosure-trigger">
+                      <AppIcon name="sparkle" /> 使用本书生成的封面文案
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <section aria-label="本书封面素材">
+                        <template v-if="writing?.coverTitle && writing.coverSubtitle">
+                          <p>{{ writing.coverTitle }}</p><p class="muted">
+                            {{ writing.coverSubtitle }}
+                          </p><Button
+                            type="button"
+                            :disabled="busy"
+                            variant="outline"
+                            @click="applyWritingTitles"
+                          >
+                            使用这组主副标题
+                          </Button>
+                        </template>
+                        <p
+                          v-else
+                          class="muted"
+                        >
+                          还没有封面文案，可前往 <RouterLink :to="`/projects/${id}/writing`">
+                            书籍内容
+                          </RouterLink> 一键生成，也可以直接填写。
+                        </p>
+                      </section>
+                    </CollapsibleContent>
+                  </Collapsible>
+                </TabsContent>
+                <TabsContent value="style">
+                  <section
+                    v-if="writing?.coverDesign"
+                    class="cover-recommendation"
+                    aria-label="AI 推荐排版"
+                  >
+                    <h3>
+                      <AppIcon name="sparkle" />AI 为本书推荐排版方案
+                    </h3>
+                    <CoverDesignPreview
+                      :design="writing.coverDesign"
+                      compact
+                    >
+                      <template #hint>
+                        <span class="sr-only">推荐底色蒙层 {{ Math.round(writing.coverDesign.overlayOpacity * 100) }}%</span>
+                      </template>
+                    </CoverDesignPreview>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      :disabled="busy"
+                      @click="applyWritingDesign"
+                    >
+                      应用 AI 推荐排版
+                    </Button>
+                  </section>
+                  <p
+                    v-else
+                    class="muted"
+                  >
+                    一键生成内容时会同时推荐字号与配色；也可直接选择下方样式。
+                  </p>
+                  <h3 class="preset-heading">
+                    精选推荐样式
+                  </h3>
+                  <div
+                    class="preset-grid"
+                    aria-label="默认封面样式"
+                  >
+                    <Button
+                      v-for="(template, key) in coverTemplates"
+                      v-show="key !== 'ocean'"
+                      :key="key"
+                      type="button"
+                      variant="ghost"
+                      class="style-card"
+                      :style="{ backgroundColor: template.style.backgroundColor, color: template.style.textColor }"
+                      :aria-label="template.label"
+                      :aria-pressed="isTemplateApplied(key)"
+                      :disabled="busy"
+                      @click="applyTemplate(key)"
+                    >
+                      <span
+                        class="preset-accent"
+                        :style="{ backgroundColor: template.style.accentColor }"
+                      />
+                      <strong>故事有引力</strong><span :style="{ color: template.style.subtitleColor }">一本书，一种新视角</span><b>{{ template.label }} · {{ template.description.split(' · ')[0] }}</b>
+                    </Button>
+                  </div>
+                  <div class="typography-controls">
+                    <div class="form-grid">
+                      <div>
+                        <label for="cover-font">字体</label><Select
+                          v-model="draft.fontFamily"
+                          :disabled="busy"
+                        >
+                          <SelectTrigger
+                            id="cover-font"
+                            class="w-full min-w-0"
+                          >
+                            <SelectValue placeholder="请选择" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="serif">
+                              宋体 / 系统衬线
+                            </SelectItem><SelectItem value="sans">
+                              黑体 / 系统无衬线
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <label for="cover-align">对齐方式</label><Select
+                          v-model="draft.align"
+                          :disabled="busy"
+                        >
+                          <SelectTrigger
+                            id="cover-align"
+                            class="w-full min-w-0"
+                          >
+                            <SelectValue placeholder="请选择" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="left">
+                              左对齐
+                            </SelectItem><SelectItem value="center">
+                              居中
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <label for="cover-title-size">标题字号</label><Input
+                          id="cover-title-size"
+                          v-model.number="draft.titleSize"
+                          type="number"
+                          min="40"
+                          max="160"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label for="cover-subtitle-size">副标题字号</label><Input
+                          id="cover-subtitle-size"
+                          v-model.number="draft.subtitleSize"
+                          type="number"
+                          min="24"
+                          max="80"
+                          required
+                        />
+                      </div>
+                    </div>
+                    <div class="cover-colors">
+                      <div>
+                        <label for="cover-text-color">主标题色</label><Input
+                          id="cover-text-color"
+                          v-model="draft.textColor"
+                          type="color"
+                          class="cursor-pointer p-1"
+                        />
+                      </div>
+                      <div>
+                        <label for="cover-subtitle-color">副标题色</label><Input
+                          id="cover-subtitle-color"
+                          v-model="draft.subtitleColor"
+                          type="color"
+                          class="cursor-pointer p-1"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <Collapsible
+                    class="cover-suggestions"
+                    :unmount-on-hide="false"
+                  >
+                    <CollapsibleTrigger class="disclosure-trigger">
+                      更多排版设置与个人样式
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <label for="cover-position">文字位置</label><Select
+                        v-model="draft.position"
+                        :disabled="busy"
+                      >
+                        <SelectTrigger
+                          id="cover-position"
+                          class="w-full min-w-0"
+                        >
+                          <SelectValue placeholder="请选择" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="top">
+                            靠上
+                          </SelectItem><SelectItem value="center">
+                            居中
+                          </SelectItem><SelectItem value="bottom">
+                            靠下
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <div class="cover-colors">
+                        <div>
+                          <label for="cover-bg-color">底色</label><Input
+                            id="cover-bg-color"
+                            v-model="draft.backgroundColor"
+                            type="color"
+                            class="cursor-pointer p-1"
+                          />
+                        </div>
+                        <div>
+                          <label for="cover-accent-color">点缀色</label><Input
+                            id="cover-accent-color"
+                            v-model="draft.accentColor"
+                            type="color"
+                            class="cursor-pointer p-1"
+                          />
+                        </div>
+                      </div>
+                      <label for="cover-preset">我的封面样式</label>
+                      <Select
+                        :model-value="presetId"
+                        :disabled="busy"
+                        @update:model-value="applyPreset"
+                      >
+                        <SelectTrigger
+                          id="cover-preset"
+                          class="w-full min-w-0"
+                        >
+                          <SelectValue placeholder="选择个人样式" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem
+                            v-for="preset in presets"
+                            :key="preset.id"
+                            :value="preset.id"
+                          >
+                            {{ preset.name }}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <div class="mt-3 flex flex-wrap items-center gap-3">
+                        <Input
+                          v-model="presetName"
+                          aria-label="新样式名称"
+                          placeholder="给当前样式起个名字"
+                          maxlength="60"
+                          class="min-w-0 flex-1 basis-40"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          :disabled="busy || !presetName.trim()"
+                          @click="savePreset"
+                        >
+                          保存为我的样式
+                        </Button>
+                        <Button
+                          v-if="presetId"
+                          type="button"
+                          variant="outline"
+                          :disabled="busy"
+                          @click="deletingPreset = true"
+                        >
+                          删除样式
+                        </Button>
+                      </div>
+                      <p class="muted">
+                        复用品牌文字、字体、字号、颜色和布局；每本书的标题、背景与裁切单独保留。
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        :disabled="busy"
+                        @click="applyTemplate('ocean')"
+                      >
+                        蓝调纪实
+                      </Button>
+                    </CollapsibleContent>
+                  </Collapsible>
+                </TabsContent>
+              </fieldset>
+            </form>
+            <TabsContent
+              value="background"
+              class="background-panel"
+            >
+              <div class="background-source">
+                <label for="cover-background">背景来源</label>
+                <Select
                   v-model="draft.backgroundAssetId"
                   :disabled="busy"
                 >
                   <SelectTrigger
                     id="cover-background"
-                    class="w-full min-w-0"
+                    class="w-full"
+                    :title="images.find(image => image.id === draft.backgroundAssetId)?.originalName"
                   >
                     <SelectValue placeholder="纯色背景" />
                   </SelectTrigger>
@@ -884,7 +928,7 @@ onMounted(async () => {
                       纯色背景
                     </SelectItem>
                     <SelectItem
-                      v-if="draft.backgroundAssetId && !images.some(a => a.id === draft.backgroundAssetId)"
+                      v-if="draft.backgroundAssetId && !images.some(image => image.id === draft.backgroundAssetId)"
                       :value="draft.backgroundAssetId"
                     >
                       背景关联已失效，请重新选择
@@ -898,55 +942,78 @@ onMounted(async () => {
                     </SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                class="choose-image"
+                :disabled="busy"
+                title="支持 PNG、JPEG、WebP"
+                @click="chooseImage"
+              >
+                <AppIcon name="download" />选择本地图片替换
+              </Button>
+              <div
+                v-if="draft.backgroundAssetId"
+                class="cover-mask"
+              >
+                <div class="studio-field-heading">
+                  <label for="cover-overlay">底色蒙层遮罩</label><strong>{{ Math.round(draft.overlayOpacity * 100) }}%</strong>
+                </div>
+                <Slider
+                  id="cover-overlay"
+                  aria-label="底色蒙层"
+                  :model-value="[draft.overlayOpacity]"
+                  :min="0"
+                  :max="0.85"
+                  :step="0.05"
+                  :disabled="busy"
+                  @update:model-value="draft.overlayOpacity = $event![0]!"
+                />
+              </div>
+              <div class="background-actions">
                 <Button
                   type="button"
                   variant="outline"
-                  class="choose-image"
-                  @click="chooseImage"
+                  :disabled="busy || backgroundLoading || !draft.backgroundAssetId"
+                  @click="loadBackground(draft.backgroundAssetId)"
                 >
-                  <AppIcon name="upload" />选择本地图片
+                  重新读取背景
                 </Button>
-                <p class="muted">
-                  支持 PNG、JPEG、WebP，可在预览画布拖动和缩放背景。
-                </p>
-                <template v-if="draft.backgroundAssetId">
-                  <label for="cover-overlay">底色蒙层 <span class="optional">· {{ Math.round(draft.overlayOpacity * 100) }}%</span></label><Slider
-                    id="cover-overlay"
-                    aria-label="底色蒙层"
-                    :model-value="[draft.overlayOpacity]"
-                    :min="0"
-                    :max="0.85"
-                    :step="0.05"
-                    :disabled="busy"
-                    class="my-4"
-                    @update:model-value="draft.overlayOpacity = $event![0]!"
-                  />
+                <Button
+                  type="button"
+                  variant="outline"
+                  class="ai-toggle"
+                  :disabled="busy"
+                  :aria-expanded="useAi"
+                  @click="toggleAi"
+                >
+                  <AppIcon name="sparkle" />{{ useAi ? '收起 AI 背景' : '使用 AI 生成背景（可选）' }}
+                </Button>
+              </div>
+              <section
+                v-if="useAi"
+                class="ai-background"
+                aria-label="可选 AI 背景"
+              >
+                <div class="ai-heading">
+                  <h3>
+                    <i
+                      class="status-dot animate-pulse"
+                      aria-hidden="true"
+                    />AI 神经生图终端
+                  </h3>
                   <Button
                     type="button"
-                    :disabled="backgroundLoading"
                     variant="outline"
-                    @click="loadBackground(draft.backgroundAssetId)"
+                    class="ai-collapse"
+                    aria-label="收起 AI 背景面板"
+                    :disabled="busy"
+                    @click="useAi = false"
                   >
-                    重新读取背景
+                    <AppIcon name="sparkle" />收起 AI 背景
                   </Button>
-                </template>
-              </div>
-            </fieldset>
-            <section
-              class="ai-background"
-              aria-label="可选 AI 背景"
-            >
-              <Button
-                type="button"
-                :disabled="busy"
-                :aria-expanded="useAi"
-                variant="outline"
-                class="ai-toggle"
-                @click="toggleAi"
-              >
-                <AppIcon name="sparkle" />{{ useAi ? '收起 AI 背景' : '使用 AI 生成背景（可选）' }}
-              </Button>
-              <template v-if="useAi">
+                </div>
                 <p
                   v-if="!imageModels.length"
                   class="notice"
@@ -957,404 +1024,598 @@ onMounted(async () => {
                 </p>
                 <form @submit.prevent="generateBackground">
                   <fieldset :disabled="busy || !imageModels.length">
-                    <label for="cover-model">图片模型</label><Select
-                      v-model="providerId"
-                      required
-                      :disabled="busy || !imageModels.length"
-                    >
-                      <SelectTrigger
-                        id="cover-model"
-                        class="w-full min-w-0"
+                    <div class="ai-model-field">
+                      <label for="cover-model">图片模型</label>
+                      <Select
+                        v-model="providerId"
+                        required
+                        :disabled="busy || !imageModels.length"
                       >
-                        <SelectValue placeholder="请选择图片模型" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem
-                          v-for="model in imageModels"
-                          :key="model.id"
-                          :value="model.id"
+                        <SelectTrigger
+                          id="cover-model"
+                          class="w-full"
                         >
-                          {{ model.name }}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <label for="cover-description">画面描述</label><Textarea
-                      id="cover-description"
-                      v-model="description"
-                      rows="5"
-                      maxlength="2000"
-                      required
-                    />
-                    <p class="muted">
-                      仅为 {{ currentSize.label }} 生成无字背景，中文由本地排版。图片服务按横竖方向生成，最终按目标尺寸裁切。书名、作者和画面描述会发送至所选服务，可能产生费用。
+                          <SelectValue placeholder="请选择图片模型">
+                            <i
+                              v-if="selectedImageModel"
+                              class="status-dot"
+                            /><span>{{ selectedImageModel ? `${selectedImageModel.name} (${selectedImageModel.modelName})` : '请选择图片模型' }}</span>
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem
+                            v-for="model in imageModels"
+                            :key="model.id"
+                            :value="model.id"
+                          >
+                            {{ model.name }} ({{ model.modelName }})
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div class="ai-description-field">
+                      <div class="studio-field-heading">
+                        <label for="cover-description">画面描述</label><Button
+                          type="button"
+                          variant="ghost"
+                          :disabled="!description.trim()"
+                          @click="copyText(description, '画面描述')"
+                        >
+                          复制描述
+                        </Button>
+                      </div>
+                      <Textarea
+                        id="cover-description"
+                        v-model="description"
+                        rows="4"
+                        maxlength="2000"
+                        required
+                        :placeholder="suggestedPrompt || '描述画面主体、场景、氛围和文字留白区域'"
+                      />
+                    </div>
+                    <p class="ai-usage">
+                      仅为 <strong>{{ currentSize.label }}</strong> 生成无文字背景，中文由本地排版。图片服务按横竖方向生成，最终按目标尺寸裁切。书名、作者和画面描述会发送至所选服务，可能产生模型费用。
                     </p>
-                    <Button
-                      type="submit"
-                      :disabled="!description.trim() || !providerId"
-                    >
-                      <AppIcon name="sparkle" />生成当前尺寸背景
-                    </Button>
+                    <div class="ai-generate-actions">
+                      <Button
+                        type="submit"
+                        class="generate-background"
+                        :disabled="!description.trim() || !providerId"
+                      >
+                        <AppIcon name="bolt" />生成当前尺寸背景
+                      </Button>
+                    </div>
                   </fieldset>
                 </form>
                 <Button
                   type="button"
-                  :disabled="busy"
-                  variant="ghost"
+                  variant="outline"
                   class="refresh-models"
+                  :disabled="busy"
                   @click="loadImageModels"
                 >
                   <AppIcon name="refresh" />刷新图片模型
                 </Button>
-              </template>
-              <div
-                v-if="taskId"
-                class="notice"
-                role="status"
-              >
-                正在生成背景，最多等待 180 秒…<Button
-                  type="button"
-                  :disabled="cancelling"
-                  variant="outline"
-                  @click="cancelImage"
+                <div
+                  v-if="taskId"
+                  class="notice"
+                  role="status"
                 >
-                  {{ cancelling ? '正在取消…' : '取消生成' }}
-                </Button>
-              </div>
-            </section>
-            <Collapsible
-              class="cover-suggestions"
-              :unmount-on-hide="false"
-            >
-              <CollapsibleTrigger class="disclosure-trigger">
-                本书的画面提示词
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <p class="muted">
-                  {{ currentSize.label }} · 专属提示词
-                </p>
+                  正在生成背景，最多等待 180 秒…<Button
+                    type="button"
+                    :disabled="cancelling"
+                    variant="outline"
+                    @click="cancelImage"
+                  >
+                    {{ cancelling ? '正在取消…' : '取消生成' }}
+                  </Button>
+                </div>
+              </section>
+              <section
+                class="cover-prompt-source"
+                aria-label="本书的画面提示词"
+              >
+                <div class="studio-field-heading">
+                  <strong>{{ currentSize.label.split(' · ')[0] }} · 专属画面提示词</strong><Button
+                    type="button"
+                    variant="ghost"
+                    aria-label="复制封面提示词"
+                    :disabled="!suggestedPrompt.trim()"
+                    @click="copyText(suggestedPrompt, '封面提示词')"
+                  >
+                    复制
+                  </Button>
+                </div>
                 <p
                   v-if="!suggestedPrompt"
-                  class="notice"
+                  class="muted"
                 >
                   该尺寸暂无提示词，可在 <RouterLink :to="`/projects/${id}/writing?tab=cover`">
                     内容创作的按项调整
                   </RouterLink> 中单独生成，或自行填写画面描述。
                 </p>
-                <label for="cover-suggested-prompt">书籍专属画面提示词</label><Textarea
+                <Textarea
                   id="cover-suggested-prompt"
+                  aria-label="书籍专属画面提示词"
                   :model-value="suggestedPrompt"
-                  rows="5"
+                  rows="3"
                   readonly
                 />
-                <div class="actions wrap">
-                  <Button
-                    type="button"
-                    :disabled="!suggestedPrompt.trim()"
-                    variant="outline"
-                    @click="copyPrompt"
-                  >
-                    复制封面提示词
-                  </Button><Button
-                    type="button"
-                    :disabled="busy || !suggestedPrompt.trim()"
-                    variant="outline"
-                    @click="usePrompt"
-                  >
-                    用于 AI 背景
-                  </Button>
-                </div>
-                <p class="muted">
-                  外部工具请选择对应比例；用于 AI 背景只填入当前尺寸的画面描述，不修改其他尺寸。
-                </p>
-              </CollapsibleContent>
-            </Collapsible>
-          </TabsContent>
-        </Tabs>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  :disabled="busy || !suggestedPrompt.trim()"
+                  @click="usePrompt"
+                >
+                  用于 AI 背景
+                </Button>
+              </section>
+            </TabsContent>
+          </Tabs>
+        </div>
+        <section
+          id="cover-preview"
+          tabindex="-1"
+          class="cover-preview panel"
+          aria-label="封面预览"
+        >
+          <div class="section-heading">
+            <h2>
+              <i
+                class="status-dot animate-ping"
+                aria-hidden="true"
+              /> 实时全息预览视口
+            </h2><span class="preview-dimensions">{{ draft.width }} × {{ draft.height }}</span>
+          </div>
+          <p
+            v-if="backgroundLoading"
+            class="muted"
+            role="status"
+          >
+            正在读取背景图…
+          </p><OperationFeedback :error="backgroundError || previewError" />
+          <div class="canvas-stage">
+            <canvas
+              ref="canvas"
+              :style="{ width: `${previewWidth}px`, aspectRatio: `${draft.width} / ${draft.height}` }"
+              aria-label="当前封面画布"
+              role="img"
+              :class="{ 'cursor-grab touch-none': !!background && !busy && !inlineField }"
+              @dblclick="editAtPointer"
+              @pointerdown="startDrag"
+              @pointermove="moveDrag"
+              @pointerup="drag = null"
+              @pointercancel="drag = null"
+              @lostpointercapture="drag = null"
+            />
+            <Input
+              v-if="inlineField"
+              id="cover-inline-text"
+              class="cover-inline-editor"
+              :style="inlineStyle"
+              :model-value="draft[inlineField]"
+              :aria-label="inlineField === 'title' ? '画布主标题' : '画布副标题'"
+              :maxlength="inlineField === 'title' ? 200 : 300"
+              @update:model-value="draft[inlineField!] = String($event)"
+              @keydown="inlineKey"
+              @blur="endInline()"
+            />
+            <span
+              v-if="!inlineField && !busy"
+              class="canvas-hint"
+              aria-hidden="true"
+            >双击文字可直接在画布修改{{ background ? ' · 拖拽调整背景' : '' }}</span>
+          </div>
+          <div class="cover-inline-actions">
+            <div>
+              <Button
+                variant="ghost"
+                :disabled="busy"
+                @click="editInline('title')"
+              >
+                在画布编辑主标题
+              </Button><span>·</span><Button
+                variant="ghost"
+                :disabled="busy"
+                @click="editInline('subtitle')"
+              >
+                在画布编辑副标题
+              </Button>
+            </div>
+            <span>可双击文字 · Enter 完成 · Esc 撤销</span>
+          </div>
+          <div class="background-adjustments">
+            <div class="studio-field-heading">
+              <strong>拖动画布调整背景，也可用下方滑块精确微调</strong><Button
+                type="button"
+                variant="ghost"
+                :disabled="busy || !background"
+                @click="Object.assign(draft, { backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1 })"
+              >
+                重置背景位置
+              </Button>
+            </div>
+            <div class="adjustment-field">
+              <div class="studio-field-heading">
+                <label for="background-zoom">背景缩放</label><span>{{ draft.backgroundZoom.toFixed(2) }} 倍</span>
+              </div>
+              <Slider
+                id="background-zoom"
+                aria-label="背景缩放"
+                :model-value="[draft.backgroundZoom]"
+                :min="1"
+                :max="3"
+                :step="0.05"
+                :disabled="busy || !background"
+                @update:model-value="draft.backgroundZoom = $event?.[0] ?? 1"
+              />
+            </div>
+            <div class="adjustment-field">
+              <div class="studio-field-heading">
+                <label for="background-x">背景水平位置</label><span>{{ backgroundOffset.x }} px</span>
+              </div>
+              <Slider
+                id="background-x"
+                aria-label="背景水平位置"
+                :model-value="[draft.backgroundX]"
+                :min="0"
+                :max="1"
+                :step="0.01"
+                :disabled="busy || !background"
+                @update:model-value="draft.backgroundX = $event?.[0] ?? 0.5"
+              />
+            </div>
+            <div class="adjustment-field">
+              <div class="studio-field-heading">
+                <label for="background-y">背景垂直位置</label><span>{{ backgroundOffset.y }} px</span>
+              </div>
+              <Slider
+                id="background-y"
+                aria-label="背景垂直位置"
+                :model-value="[draft.backgroundY]"
+                :min="0"
+                :max="1"
+                :step="0.01"
+                :disabled="busy || !background"
+                @update:model-value="draft.backgroundY = $event?.[0] ?? 0.5"
+              />
+            </div>
+          </div>
+          <div class="cover-previews">
+            <div class="studio-field-heading">
+              <strong>{{ coverSizes.length }} 个独立封面 · 点击缩略图切换编辑</strong><span class="png-format"><i class="status-dot" />高清 PNG 格式</span>
+            </div>
+            <div
+              class="cover-thumbnails"
+              aria-label="三种比例并排预览"
+            >
+              <Button
+                v-for="(size, index) in coverSizes"
+                :key="size.label"
+                type="button"
+                variant="ghost"
+                class="size-preview"
+                :aria-label="`编辑${size.label}`"
+                :aria-pressed="editor.activeSize === index"
+                :disabled="busy"
+                @click="changeSize(index)"
+              >
+                <canvas
+                  :ref="el => setPreviewCanvas(el, index)"
+                  :style="{ aspectRatio: `${size.width}/${size.height}` }"
+                  :aria-label="size.label"
+                  role="img"
+                />
+                <strong>{{ size.label.split(' · ')[0] }}</strong><span>{{ size.width }} × {{ size.height }}</span>
+                <span
+                  v-if="editor.covers[index]!.backgroundAssetId && !backgrounds[editor.covers[index]!.backgroundAssetId!]?.image"
+                  class="text-destructive"
+                >背景待读取或不可用</span>
+              </Button>
+            </div>
+            <div
+              class="export-formats"
+              aria-label="批量导出尺寸"
+            >
+              <div>
+                <label
+                  v-for="(size, index) in coverSizes"
+                  :key="size.label"
+                  :for="`cover-export-${index}`"
+                ><Checkbox
+                  :id="`cover-export-${index}`"
+                  :model-value="exportIndexes.includes(index)"
+                  :disabled="busy"
+                  @update:model-value="selectExport(index, $event === true)"
+                />{{ size.label.split(' · ')[0] }}</label>
+              </div>
+              <span>批量导出选中</span>
+            </div>
+          </div>
+        </section>
       </div>
-      <section
-        id="cover-preview"
-        tabindex="-1"
-        class="cover-preview panel"
-        aria-label="封面预览"
+      <Collapsible
+        class="history-panel"
+        :unmount-on-hide="false"
       >
-        <div class="section-heading">
-          <h2><i class="status-dot" /> 实时预览</h2><span class="preview-dimensions">{{ draft.width }} × {{ draft.height }}</span>
-        </div>
-        <p
-          v-if="backgroundLoading"
-          class="muted"
-          role="status"
-        >
-          正在读取背景图…
-        </p><OperationFeedback :error="backgroundError || previewError" />
-        <div class="canvas-stage">
-          <canvas
-            ref="canvas"
-            :style="{ aspectRatio: `${draft.width} / ${draft.height}` }"
-            aria-label="当前封面画布"
-            role="img"
-            :class="{ 'cursor-grab touch-none': !!background && !busy && !inlineField }"
-            @dblclick="editAtPointer"
-            @pointerdown="startDrag"
-            @pointermove="moveDrag"
-            @pointerup="drag = null"
-            @pointercancel="drag = null"
-            @lostpointercapture="drag = null"
-          />
-          <Input
-            v-if="inlineField"
-            id="cover-inline-text"
-            class="cover-inline-editor"
-            :style="inlineStyle"
-            :model-value="draft[inlineField]"
-            :aria-label="inlineField === 'title' ? '画布主标题' : '画布副标题'"
-            :maxlength="inlineField === 'title' ? 200 : 300"
-            @update:model-value="draft[inlineField!] = String($event)"
-            @keydown="inlineKey"
-            @blur="endInline()"
-          />
-        </div>
-        <div class="actions cover-inline-actions">
-          <Button
-            variant="ghost"
-            size="sm"
-            :disabled="busy"
-            @click="editInline('title')"
-          >
-            在画布编辑主标题
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            :disabled="busy"
-            @click="editInline('subtitle')"
-          >
-            在画布编辑副标题
-          </Button>
-          <span class="text-xs text-muted-foreground">也可双击文字 · Enter 完成 · Esc 撤销</span>
-        </div>
+        <CollapsibleTrigger class="disclosure-trigger history-trigger">
+          <AppIcon name="clock" /><span>封面历史 · {{ versions.length }} 个版本</span><span class="history-expand">展开历史</span>
+        </CollapsibleTrigger>
         <div
-          v-if="draft.backgroundAssetId"
-          class="mt-4 space-y-3"
+          v-if="selected"
+          class="history-current"
         >
-          <p class="muted">
-            拖动画布调整背景，也可用下方滑块精确定位。
-          </p>
-          <label for="background-zoom">背景缩放 · {{ draft.backgroundZoom.toFixed(2) }} 倍</label>
-          <Slider
-            id="background-zoom"
-            aria-label="背景缩放"
-            :model-value="[draft.backgroundZoom]"
-            :min="1"
-            :max="3"
-            :step="0.05"
-            :disabled="busy"
-            @update:model-value="draft.backgroundZoom = $event?.[0] ?? 1"
-          />
-          <label for="background-x">背景水平位置</label>
-          <Slider
-            id="background-x"
-            aria-label="背景水平位置"
-            :model-value="[draft.backgroundX]"
-            :min="0"
-            :max="1"
-            :step="0.01"
-            :disabled="busy"
-            @update:model-value="draft.backgroundX = $event?.[0] ?? 0.5"
-          />
-          <label for="background-y">背景垂直位置</label>
-          <Slider
-            id="background-y"
-            aria-label="背景垂直位置"
-            :model-value="[draft.backgroundY]"
-            :min="0"
-            :max="1"
-            :step="0.01"
-            :disabled="busy"
-            @update:model-value="draft.backgroundY = $event?.[0] ?? 0.5"
-          />
+          <div>
+            <strong>v{{ selected.versionNo }} · {{ selected.config.width }} × {{ selected.config.height }} · {{ selected.exportedPath ? '已导出' : '编辑配置' }} · {{ new Date(selected.createdAt).toLocaleString() }}</strong><p
+              v-if="selected.exportedPath"
+              class="file-path"
+              :title="displayPath(selected.exportedPath)"
+            >
+              {{ displayPath(selected.exportedPath) }}
+            </p>
+          </div>
           <Button
             type="button"
             variant="outline"
             :disabled="busy"
-            @click="Object.assign(draft, { backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1 })"
+            @click="switchVersion(selected.id)"
           >
-            重置背景位置
+            恢复此配置
           </Button>
         </div>
-        <div
-          class="mt-5 grid grid-cols-3 items-start gap-3"
-          aria-label="三种比例并排预览"
-        >
-          <figure
-            v-for="(size, index) in coverSizes"
-            :key="size.label"
-            class="min-w-0 space-y-2"
+        <CollapsibleContent>
+          <label for="cover-history">恢复编辑配置</label><Select
+            :model-value="selected?.id ?? null"
+            :disabled="busy"
+            @update:model-value="switchVersion"
           >
-            <Button
-              type="button"
-              variant="ghost"
-              class="size-preview h-auto"
-              :aria-label="`编辑${size.label}`"
-              :aria-pressed="editor.activeSize === index"
-              :disabled="busy"
-              @click="changeSize(index)"
+            <SelectTrigger
+              id="cover-history"
+              class="w-full min-w-0"
             >
-              <canvas
-                :ref="el => setPreviewCanvas(el, index)"
-                class="w-full"
-                :style="{ aspectRatio: `${size.width}/${size.height}` }"
-                :aria-label="size.label"
-                role="img"
-              />
-            </Button>
-            <figcaption class="text-center text-xs text-muted-foreground">
-              {{ size.width }} × {{ size.height }}
-              <span
-                v-if="editor.covers[index]!.backgroundAssetId && !backgrounds[editor.covers[index]!.backgroundAssetId!]?.image"
-                class="block text-destructive"
-              >背景待读取或不可用</span>
-            </figcaption>
-          </figure>
+              <SelectValue placeholder="尚未保存" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem
+                :value="null"
+                disabled
+              >
+                尚未保存
+              </SelectItem><SelectItem
+                v-for="version in versions"
+                :key="version.id"
+                :value="version.id"
+              >
+                v{{ version.versionNo }} · {{ version.config.width }} × {{ version.config.height }} · {{ version.exportedPath ? '已导出' : '编辑配置' }} · {{ new Date(version.createdAt).toLocaleString() }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Collapsible
+            class="preview-details"
+            :unmount-on-hide="false"
+          >
+            <CollapsibleTrigger class="disclosure-trigger">
+              排版与导出信息
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <p class="muted">
+                文字自动换行，过长时缩小字号。当前标题 {{ actualSizes.titleSize }} px，副标题 {{ actualSizes.subtitleSize }} px。每次保存或导出都会新建版本。
+              </p><p class="file-path">
+                导出目录：{{ displayPath(workspace) }} / covers
+              </p><Button
+                :disabled="busy"
+                variant="outline"
+                type="button"
+                @click="run(() => openProjectDirectory(id))"
+              >
+                <AppIcon name="folder" />打开项目目录
+              </Button>
+            </CollapsibleContent>
+          </Collapsible>
+        </CollapsibleContent>
+      </Collapsible>
+      <div class="sticky-actions">
+        <span
+          class="save-status"
+          :class="{ 'is-dirty': dirty }"
+        ><i
+          class="status-dot animate-pulse"
+          aria-hidden="true"
+        />{{ operation || (dirty ? autosave.status.value || '有未保存修改' : '编辑配置已保存') }}</span>
+        <div class="actions wrap">
+          <Button
+            type="submit"
+            form="cover-edit-form"
+            :disabled="busy"
+            variant="outline"
+          >
+            <AppIcon name="save" />保存全部配置
+          </Button><Button
+            type="button"
+            :disabled="busy || backgroundLoading || !!previewError || !!backgroundError"
+            variant="outline"
+            @click="save(true, true)"
+          >
+            导出当前封面
+          </Button><Button
+            type="button"
+            :disabled="busy || !exportReady"
+            @click="save(true)"
+          >
+            <AppIcon name="download" />导出 {{ exportIndexes.length }} 张封面
+          </Button>
         </div>
-        <p class="preview-caption">
-          {{ coverSizes.length }} 个独立封面 · 点击缩略图切换编辑
-        </p>
-        <div class="export-formats">
-          <span><i class="ratio-icon landscape" />横版 4:3</span><span><i class="ratio-icon portrait" />竖版 3:4</span><span><i class="ratio-icon widescreen" />横版 16:9</span><Badge variant="secondary">
-            高清 PNG
-          </Badge>
-        </div>
-        <Collapsible
-          class="preview-details"
-          :unmount-on-hide="false"
-        >
-          <CollapsibleTrigger class="disclosure-trigger">
-            排版与导出信息
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <p class="muted">
-              文字自动换行，过长时缩小字号。当前标题 {{ actualSizes.titleSize }} px，副标题 {{ actualSizes.subtitleSize }} px。每次保存或导出都会新建版本。
-            </p><p class="file-path">
-              导出目录：{{ displayPath(workspace) }} / covers
-            </p><Button
-              :disabled="busy"
-              variant="outline"
-              type="button"
-              @click="run(() => openProjectDirectory(id))"
-            >
-              <AppIcon name="folder" />打开项目目录
-            </Button>
-          </CollapsibleContent>
-        </Collapsible>
-      </section>
-    </div>
-    <div class="sticky-actions">
-      <span
-        class="save-status"
-        :class="{ 'is-dirty': dirty }"
-      ><i class="status-dot" />{{ operation || (dirty ? autosave.status.value || '有未保存修改' : '编辑配置已保存') }}</span>
-      <div class="actions wrap">
-        <Button
-          type="submit"
-          form="cover-edit-form"
-          :disabled="busy"
-          variant="outline"
-        >
-          <AppIcon name="save" />保存全部配置
-        </Button><Button
-          type="button"
-          :disabled="busy || backgroundLoading || !!previewError || !!backgroundError"
-          variant="outline"
-          @click="save(true, true)"
-        >
-          导出当前封面
-        </Button><Button
-          type="button"
-          :disabled="busy || !allBackgroundsReady"
-          @click="save(true)"
-        >
-          <AppIcon name="download" />导出 {{ coverSizes.length }} 张封面
-        </Button>
       </div>
-    </div>
-    <Collapsible
-      class="history-panel"
-      :unmount-on-hide="false"
-    >
-      <CollapsibleTrigger class="disclosure-trigger">
-        封面历史 · {{ versions.length }} 个版本
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <label for="cover-history">恢复编辑配置</label><Select
-          :model-value="selected?.id ?? null"
-          :disabled="busy"
-          @update:model-value="switchVersion"
-        >
-          <SelectTrigger
-            id="cover-history"
-            class="w-full min-w-0"
-          >
-            <SelectValue placeholder="尚未保存" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem
-              :value="null"
-              disabled
-            >
-              尚未保存
-            </SelectItem><SelectItem
-              v-for="version in versions"
-              :key="version.id"
-              :value="version.id"
-            >
-              v{{ version.versionNo }} · {{ version.config.width }} × {{ version.config.height }} · {{ version.exportedPath ? '已导出' : '编辑配置' }} · {{ new Date(version.createdAt).toLocaleString() }}
-            </SelectItem>
-          </SelectContent>
-        </Select><p
-          v-if="selected?.exportedPath"
-          class="file-path"
-        >
-          {{ displayPath(selected.exportedPath) }}
-        </p>
-      </CollapsibleContent>
-    </Collapsible>
-  </template>
+    </template>
+  </div>
 </template>
 <style scoped>
-.cover-workbench { display: grid; grid-template-columns: minmax(310px, .85fr) minmax(0, 1.15fr); gap: 23px; align-items: start; }
-.cover-controls, .cover-preview { padding: 22px; margin-bottom: 0; }
-.cover-controls label { margin-top: 16px; }
-.cover-controls .muted { font-size: 13px; }
-.cover-controls .form-grid { gap: 0 12px; }
-.cover-colors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
-.size-preview { display: block; width: 100%; padding: 4px; border: 2px solid transparent; border-radius: 6px; cursor: pointer; }
-.size-preview[aria-pressed="true"] { border-color: var(--primary); }
-.size-preview:disabled { cursor: wait; }
-.style-card { min-width: 0; transition: border-color .15s; }
-.style-card:hover, .style-card[aria-pressed="true"] { border-color: var(--primary); }
-.style-card[aria-pressed="true"] { box-shadow: 0 0 0 1px var(--primary); }
-.cover-preview { position: sticky; top: var(--workspace-sticky-top); max-height: calc(100dvh - var(--workspace-sticky-top) - 108px); overflow: auto; scroll-margin-top: var(--workspace-sticky-top); }
+.covers-page { color: var(--foreground); }
+.covers-page .panel { box-shadow: var(--panel-shadow); }
+.covers-page .page-return-row { margin: 0 0 24px; }
+.covers-page .page-return-row > :deep(a[data-slot='button']) { padding: 8px 16px; color: #fcd34d; border-color: #334155cc; }
+.covers-page .page-heading { margin: 0 0 24px; }
+.cover-page-title { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.cover-page-title :deep([data-slot='badge']) { padding: 2px 10px; border: 1px solid #fbbf244d; border-radius: 999px; background: #fbbf2426; color: #fcd34d; font: 400 12px/16px var(--font-mono); letter-spacing: -.75px; }
+.covers-page .page-heading > div { width: 100%; }
+.covers-page :deep(.project-navigation) { margin: 0 0 24px; }
+.covers-page :deep(.project-navigation .is-current) { color: #fcd34d; border-color: #fbbf2466; background: #fbbf2426; box-shadow: 0 0 15px #f59e0b40; }
+.covers-page :deep(.project-navigation .is-current .step-state) { background: #fbbf24; }
+.covers-page :deep([data-slot='button']) { font-family: var(--font-mono); }
+.covers-page :deep([data-slot='select-trigger']) { height: 38px; padding: 10px 14px; font: 400 12px/16px var(--font-mono); border-radius: 12px; }
+.covers-page :deep([data-slot='select-value']) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.covers-page :deep([data-slot='input']) { height: 38px; padding: 10px 16px; font: 400 12px/16px var(--font-mono); border-radius: 12px; }
+.covers-page label { margin: 0 0 6px; font: 400 12px/16px var(--font-mono); }
+.cover-size-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px; margin: 0 0 24px; }
+.cover-size-description { min-width: 0; }
+.cover-size-description :deep([data-slot='select-trigger']) { color: #fcd34d; font-weight: 700; }
+.cover-size-description :deep(.app-icon) { color: #fbbf24; }
+.cover-size-description .muted { margin: 6px 0 0; font: 400 11px/16.5px var(--font-mono); }
+.cover-size-bar .actions { flex-shrink: 0; gap: 12px; margin: 0; }
+.cover-size-bar .actions button { padding: 10px 16px; }
+.cover-size-bar .actions button:last-child { border-color: #fbbf2480; color: #fcd34d; }
+.cover-workbench { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.cover-controls { grid-column: span 5; padding: 20px; margin: 0; }
+.cover-controls :deep([data-slot='tabs']) { gap: 0; }
+.cover-preview { grid-column: span 7; padding: 24px; margin: 0; position: relative; overflow: visible; scroll-margin-top: var(--workspace-sticky-top); }
+.studio-editor-heading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.studio-editor-heading h2 { display: flex; align-items: center; gap: 8px; margin: 0; color: #fff; font: 700 12px/16px var(--font-sans); letter-spacing: .6px; }
+.studio-editor-heading .app-icon { color: #fbbf24; }
+.editor-save-status { font: 400 10px/15px var(--font-mono); color: #00ff9d; background: #00ff9d26; border: 1px solid #00ff9d4d; padding: 2px 8px; border-radius: 4px; }
+.editor-save-status[data-dirty='true'] { color: #fcd34d; background: #fbbf2426; border-color: #fbbf2466; }
+.cover-controls :deep([data-slot='tabs-list']) { display: flex; width: 100%; height: 44px; min-height: 44px; padding: 4px; margin: 0 0 20px; border: 1px solid #1e293bcc; border-radius: 12px; gap: 0; background: #020617cc; backdrop-filter: none; }
+.cover-controls :deep([data-slot='tabs-trigger']) { height: 34px; min-height: 34px; padding: 8px 0; border: 1px solid transparent; border-radius: 8px; font: 500 12px/16px var(--font-mono); }
+.cover-controls :deep([data-slot='tabs-trigger'][data-state='active']) { color: #fcd34d; background: var(--secondary); border-color: #fbbf2466; box-shadow: 0 1px 2px #0000000d; font-weight: 700; }
+.cover-controls :deep([data-slot='tabs-content'][data-state='active']) { display: block; }
+.cover-controls :deep(textarea) { min-height: 0; padding: 12px; font: 400 12px/16px var(--font-sans); border-radius: 12px; }
+.cover-controls :deep(#cover-title) { color: #fff; font-size: 14px; line-height: 20px; font-weight: 700; }
+.cover-controls :deep([data-slot='tabs-content'][data-state='active']:not(.background-panel)) > label { margin-top: 16px; }
+.cover-controls :deep([data-slot='tabs-content'][data-state='active']:not(.background-panel)) > label:first-child { margin-top: 0; }
+.cover-controls .muted { font: 400 11px/18px var(--font-mono); }
+.cover-controls .form-grid, .cover-colors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; }
+.cover-controls .form-grid > *, .cover-colors > * { min-width: 0; }
+.cover-controls .form-grid label, .cover-colors label { margin-top: 16px; }
+.background-panel > * + * { margin-top: 16px; }
+.background-panel .choose-image { display: flex; width: 100%; padding: 10px 0; color: #cbd5e1; }
+.background-panel .choose-image .app-icon { color: #fbbf24; }
+.cover-mask { padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: #020617b3; }
+.studio-field-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 400 12px/16px var(--font-mono); color: var(--muted-foreground); }
+.studio-field-heading label, .studio-field-heading strong { margin: 0; font: inherit; }
+.studio-field-heading strong { font-weight: 700; }
+.studio-field-heading button { padding: 0; border: 0; height: auto; font: inherit; background: transparent; color: inherit; }
+.cover-mask .studio-field-heading strong { color: #fcd34d; }
+.covers-page :deep([data-slot='slider']) { height: 16px; margin-top: 8px; }
+.covers-page :deep([data-slot='slider-track']) { height: 6px; background: #475569; }
+.covers-page :deep([data-slot='slider-range']) { background: #fbbf24; }
+.covers-page :deep([data-slot='slider-thumb']) { width: 16px; height: 16px; border: 0; background: #fbbf24; box-shadow: none; }
+.background-actions { display: flex; gap: 8px; }
+.background-actions > button { min-width: 0; flex: 1; padding: 8px 0; color: #cbd5e1; }
+.background-actions > .ai-toggle { gap: 6px; font-weight: 700; border-color: #fbbf2499; color: #fcd34d; background: var(--input-surface); box-shadow: 0 0 12px #f59e0b40; }
+.background-actions .ai-toggle[aria-expanded='false'] { background: linear-gradient(90deg,#f59e0b,#fb923c); color: #020617; }
+.ai-background { position: relative; padding: 16px; border: 1px solid #fbbf2466; border-radius: 12px; background: #020617e6; box-shadow: var(--panel-shadow); }
+.ai-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ai-heading h3 { display: flex; align-items: center; gap: 8px; margin: 0; font: 700 12px/16px var(--font-mono); color: #fcd34d; letter-spacing: .6px; }
+.ai-heading .status-dot, .ai-model-field .status-dot { width: 8px; height: 8px; background: #fbbf24; }
+.ai-heading > .ai-collapse { gap: 6px; padding: 4px 10px; font-weight: 600; border-radius: 8px; color: #fde68a; background: #fbbf241a; border-color: #fbbf244d; box-shadow: 0 1px 2px #0000000d; }
+.ai-heading .app-icon { width: 12px; height: 12px; color: #fbbf24; }
+.ai-background form { margin-top: 14px; }
+.ai-background fieldset > * + * { margin-top: 14px; }
+.ai-background label { font: 400 11px/16.5px var(--font-mono); margin: 0 0 6px; }
+.ai-model-field :deep([data-slot='select-trigger']) { height: 34px; padding: 8px 12px; }
+.ai-model-field :deep([data-slot='select-trigger'] > .app-icon) { color: #fbbf24; }
+.ai-model-field :deep([data-slot='select-value']) { font-weight: 500; }
+.ai-description-field { padding-bottom: 6px; }
+.ai-description-field .studio-field-heading { height: 16.5px; margin-bottom: 6px; }
+.ai-description-field label { margin: 0; color: #cbd5e1; }
+.ai-description-field button { font: 400 10px/15px var(--font-mono); }
+.ai-description-field :deep(textarea) { display: block; padding: 12px; font: 400 12px/19.5px var(--font-mono); border-color: #334155cc; }
+.ai-usage { font: 400 10px/16.25px var(--font-mono); color: var(--muted-foreground); margin: 0; }
+.ai-usage strong { color: #fcd34d; }
+.ai-generate-actions { padding-top: 4px; }
+.ai-generate-actions > .generate-background { display: flex; width: 100%; padding: 10px 0; gap: 8px; font-weight: 700; background: linear-gradient(90deg,#10b981,#2dd4bf,#00ff9d); color: #020617; box-shadow: var(--primary-glow); }
+.ai-background > .refresh-models { display: flex; width: 100%; margin-top: 8px; padding: 8px 0; gap: 6px; color: #cbd5e1; }
+.refresh-models .app-icon { width: 14px; height: 14px; color: #fbbf24; }
+.cover-prompt-source { padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: #020617; font: 400 12px/16px var(--font-mono); }
+.cover-prompt-source .studio-field-heading strong { color: #fbbf24; }
+.cover-prompt-source .studio-field-heading button { color: var(--muted-foreground); }
+.cover-prompt-source :deep(textarea) { display: block; margin-top: 8px; padding: 10px; border-color: var(--border); border-radius: 8px; color: #cbd5e1; font: 400 11px/17.875px var(--font-mono); }
+.cover-prompt-source > button { margin-top: 12px; padding: 6px 12px; border-radius: 8px; color: #fcd34d; font: 400 11px/16px var(--font-mono); }
+.cover-preview > .section-heading { margin: 0 0 20px; }
+.cover-preview h2 { display: flex; align-items: center; gap: 8px; font: 700 12px/16px var(--font-mono); }
+.cover-preview h2 .status-dot { width: 8px; height: 8px; background: #00ff9d; }
+.preview-dimensions { font: 400 12px/16px var(--font-mono); color: var(--muted-foreground); }
+.canvas-stage { position: relative; display: flex; align-items: center; justify-content: center; padding: 8px 0; background: #020617e6; border: 1px solid #1e293bcc; border-radius: 16px; overflow: hidden; }
+.canvas-stage > canvas { display: block; max-width: 100%; height: auto; border-radius: 12px; box-shadow: 0 25px 50px -12px #00000040; }
+.canvas-hint { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); padding: 4px 12px; border: 1px solid #fbbf244d; border-radius: 999px; background: #000000bf; color: #fcd34d; font: 400 10px/15px var(--font-mono); text-align: center; pointer-events: none; opacity: 0; transition: opacity 150ms; }
+.canvas-stage:hover .canvas-hint, .canvas-stage:focus-within .canvas-hint { opacity: 1; }
+.cover-inline-editor { position: absolute; z-index: 2; min-height: 38px; background: var(--card); color: var(--foreground); }
+.cover-inline-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 20px; padding-top: 4px; color: var(--muted-foreground); font: 400 12px/16px var(--font-mono); }
+.cover-inline-actions > div { display: flex; align-items: center; gap: 12px; }
+.cover-inline-actions button { border: 0; background: transparent; padding: 0; color: inherit; font: inherit; height: auto; }
+.cover-inline-actions button:hover { color: #fcd34d; }
+.cover-inline-actions > span { font-size: 11px; }
+.background-adjustments { margin-top: 20px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: #0f172a99; font: 400 12px/16px var(--font-mono); }
+.background-adjustments > .studio-field-heading { color: #cbd5e1; }
+.background-adjustments > .studio-field-heading strong { font-weight: 600; }
+.background-adjustments > .studio-field-heading button { color: #fcd34d; font: 400 12px/16px var(--font-mono); }
+.adjustment-field { margin-top: 12px; }
+.adjustment-field .studio-field-heading { font-size: 11px; }
+.adjustment-field label { margin: 0; font: inherit; }
+.adjustment-field :deep([data-slot='slider']) { height: 12px; margin-top: 4px; }
+.adjustment-field :deep([data-slot='slider-track']) { height: 4px; }
+.cover-previews { margin-top: 20px; padding-top: 8px; border-top: 1px solid var(--border); }
+.cover-previews > .studio-field-heading { color: #cbd5e1; }
+.png-format { display: inline-flex; align-items: center; gap: 4px; color: #00ff9d; font-weight: 700; white-space: nowrap; }
+.png-format .status-dot { width: 6px; height: 6px; }
+.cover-thumbnails { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin-top: 12px; }
+.cover-thumbnails > .size-preview { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 0; width: 100%; min-width: 0; height: auto; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--input-surface); color: var(--muted-foreground); text-align: center; white-space: normal; }
+.size-preview[aria-pressed='true'] { border: 2px solid #fbbf24; color: #fcd34d; box-shadow: var(--panel-shadow); }
+.size-preview canvas { display: block; width: 100%; height: auto; border-radius: 4px; }
+.size-preview > strong { display: block; margin-top: 6px; font: 700 10px/15px var(--font-mono); }
+.size-preview > span { display: block; font: 400 9px/13.5px var(--font-mono); color: var(--muted-foreground); }
+.export-formats { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 8px; font: 400 12px/16px var(--font-mono); }
+.export-formats > div { display: flex; flex-wrap: wrap; gap: 16px; }
+.export-formats label { display: flex; align-items: center; gap: 6px; margin: 0; color: #cbd5e1; font: inherit; cursor: pointer; }
+.export-formats > span { color: #fbbf24; font-size: 11px; white-space: nowrap; }
+.export-formats :deep([data-slot='checkbox'][data-state='checked']) { background: #fbbf24; border-color: #fbbf24; color: #020617; }
+.cover-suggestions, .preview-details { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: #02061799; color: var(--muted-foreground); font-size: 12px; }
+.cover-recommendation { padding: 16px; border: 1px solid #fbbf244d; border-radius: 12px; background: #020617; }
+.cover-recommendation h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 12px; color: #fcd34d; font: 700 12px/16px var(--font-mono); }
+.cover-recommendation > button { width: 100%; margin-top: 12px; padding: 8px 0; border-color: #fbbf2466; color: #fcd34d; background: #fbbf2426; font-weight: 700; }
+.preset-heading { margin: 16px 0 8px; color: #cbd5e1; font: 600 12px/16px var(--font-mono); }
+.preset-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.cover-controls .style-card { display: block; height: auto; min-width: 0; padding: 12px; border: 1px solid transparent; border-radius: 12px; text-align: left; white-space: normal; font-family: var(--font-mono); transition: border-color 150ms; }
+.style-card .preset-accent { display: block; width: 20px; height: 2px; margin-bottom: 6px; }
+.style-card strong { display: block; font-size: 12px; line-height: 16px; }
+.style-card > span:not(.preset-accent) { display: block; font-size: 9px; line-height: 13.5px; }
+.style-card b { display: block; margin-top: 8px; font-size: 10px; line-height: 18.5px; }
+.style-card:hover, .style-card[aria-pressed='true'] { border-color: #fbbf24; }
+.typography-controls { margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: #0f172acc; font: 400 12px/16px var(--font-mono); }
+.typography-controls .form-grid { gap: 12px; }
+.typography-controls .form-grid label, .typography-controls .cover-colors label { margin: 0 0 4px; }
+.typography-controls .cover-colors { margin-top: 12px; padding-top: 4px; border-top: 1px solid var(--border); }
+.covers-page .typography-controls :deep([data-slot='input']), .covers-page .typography-controls :deep([data-slot='select-trigger']) { height: 30px; padding: 6px 10px; border-radius: 8px; font: inherit; }
+.covers-page .typography-controls :deep(input[type='number']) { text-align: center; }
+.covers-page .typography-controls :deep(input[type='color']) { height: 34px; padding: 2px; cursor: pointer; }
+.covers-page > .history-panel { margin-top: 24px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-surface); }
+.history-trigger { display: flex; width: 100%; align-items: center; gap: 8px; font: 400 12px/16px var(--font-mono); }
+.history-trigger .app-icon { color: #fbbf24; }
+.history-trigger::after { margin-left: 0; color: #fbbf24; }
+.history-expand { margin-left: auto; color: #fbbf24; font-size: 11px; }
+.history-current { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: #020617b3; font: 400 11px/16px var(--font-mono); }
+.history-current > div { min-width: 0; }
+.history-current strong { color: #e2e8f0; line-height: 17px; }
+.history-current .file-path { margin: 2px 0 0; padding: 0; border-radius: 0; background: transparent; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground); font-size: 10px; }
+.history-current > button { flex-shrink: 0; height: auto; padding: 6px 12px; border-radius: 8px; color: #fcd34d; font: inherit; }
+.covers-page > .sticky-actions { margin-top: 24px; border-color: #fbbf2466; bottom: 16px; box-shadow: var(--panel-shadow); background: var(--panel-surface); }
+.sticky-actions .save-status { color: var(--muted-foreground); }
+.sticky-actions .status-dot { width: 8px; height: 8px; background: #fbbf24; }
+.sticky-actions .actions { gap: 12px; }
+.sticky-actions .actions button:nth-child(2) { color: #fcd34d; border-color: #fbbf2480; }
+.sticky-actions .actions > button:last-child { font-weight: 700; background: linear-gradient(90deg,#fbbf24,#fb923c,#f59e0b); color: #020617; box-shadow: var(--cover-glow); }
 .cover-jump { display: none; }
-.cover-preview h2 { font-size: 13px; }
-.preview-dimensions { font-size: 12px; color: var(--muted-foreground); }
-.canvas-stage { position: relative; display: flex; align-items: center; justify-content: center; height: clamp(280px, 43vh, 470px); padding: 24px; background: var(--background); border: 0; border-radius: 10px; overflow: hidden; }
-.cover-inline-editor { position: absolute; z-index: 2; min-height: 40px; background: var(--card); color: var(--foreground); }
-.cover-inline-actions { gap: 8px; margin-top: 8px; }
-canvas { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; box-shadow: 0 6px 18px #22352224; }
-.preview-caption { text-align: center; color: var(--muted-foreground); font-size: 12px; margin: 17px 0 11px; }
-.export-formats { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 17px; }
-.export-formats > span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); font-size: 12px; }
-.ratio-icon { width: 17px; height: 13px; border: 1px solid var(--muted-foreground); border-radius: 2px; }
-.ratio-icon.portrait { width: 12px; height: 16px; }
-.ratio-icon.widescreen { width: 21px; height: 12px; }
-.cover-suggestions, .preview-details { margin-top: 21px; padding-top: 15px; border-top: 1px solid var(--line); color: var(--muted-foreground); font-size: 12px; }
-.ai-background { border-top: 1px solid var(--line); padding-top: 17px; margin-top: 17px; }
-.ai-toggle, .choose-image { width: 100%; margin-top: 11px; }
-.refresh-models { margin-top: 8px; }
-@media (max-width: 1180px) { .cover-workbench { gap: 18px; } .cover-controls, .cover-preview { padding: 18px; } }
-@media (max-width: 980px) { .cover-workbench { grid-template-columns: minmax(0, 1fr); gap: 14px; } .cover-preview { position: static; max-height: none; } .cover-jump { display: flex; margin: 0 0 16px; position: sticky; top: var(--workspace-sticky-top); z-index: 6; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); } .cover-jump .back-link { margin: 0; } }
-@media (max-width: 850px) { .cover-controls, .cover-preview { padding: 15px; } .canvas-stage { padding: 15px; height: 300px; } .export-formats { gap: 9px; } }
-@media (max-width: 980px) { .cover-workbench[data-view="edit"] .cover-preview, .cover-workbench[data-view="preview"] .cover-controls { display: none; } .cover-jump [aria-pressed="true"] { background: var(--accent); color: var(--primary); } .cover-preview, .cover-controls { scroll-margin-top: calc(var(--workspace-sticky-top) + 64px); } }
-@media (max-width: 720px) { .cover-workbench { grid-template-columns: 1fr; } .cover-preview { position: static; } .canvas-stage { height: 320px; } }
+@media (prefers-reduced-transparency: reduce) { .covers-page .panel, .covers-page .sticky-actions { backdrop-filter: none; background: var(--card); } }
+@media (max-width: 1279px) { .cover-size-bar { flex-wrap: wrap; } .cover-size-description { flex-basis: 100%; } .cover-inline-actions { flex-wrap: wrap; } }
+@media (max-width: 1023px) { .cover-workbench { grid-template-columns: minmax(0,1fr); } .cover-controls, .cover-preview { grid-column: auto; } .cover-jump { display: flex; margin: 0 0 16px; position: sticky; top: var(--workspace-sticky-top); z-index: 6; padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); } .cover-workbench[data-view='edit'] .cover-preview, .cover-workbench[data-view='preview'] .cover-controls { display: none; } .cover-jump [aria-pressed='true'] { color: #fcd34d; background: #fbbf2426; } .cover-controls, .cover-preview { scroll-margin-top: calc(var(--workspace-sticky-top) + 64px); } }
+@media (max-width: 600px) { .cover-size-bar, .cover-controls, .cover-preview { padding: 16px; } .cover-size-bar .actions { flex-shrink: 1; flex-wrap: wrap; } .cover-size-bar .actions button { white-space: normal; } .studio-field-heading { flex-wrap: wrap; } .ai-heading { flex-wrap: wrap; } .export-formats { flex-wrap: wrap; } .cover-page-title { gap: 8px; } .cover-previews .studio-field-heading > strong { font-size: 11px; } .cover-inline-actions { font-size: 11px; } }
 </style>

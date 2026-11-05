@@ -40,6 +40,7 @@ const steps = [
   <TooltipProvider :delay-duration="200">
     <nav
       class="project-navigation"
+      :data-stage="currentPath"
       aria-label="书籍创作流程"
     >
       <TooltipRoot
@@ -51,12 +52,13 @@ const steps = [
             :to="`/projects/${id}${step.path ? '/' + step.path : ''}`"
             exact-active-class="is-current"
             aria-current-value="step"
+            :data-step="step.path"
             :aria-label="`${step.label} · ${state(step.path).status}`"
           >
             <AppIcon :name="step.icon" />
             <span class="step-copy">{{ index + 1 }}. {{ step.label }}</span>
             <span
-              class="step-state"
+              class="step-state animate-ping"
               :data-tone="state(step.path).tone"
               aria-hidden="true"
             />

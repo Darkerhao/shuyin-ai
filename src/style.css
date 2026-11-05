@@ -60,6 +60,10 @@
   --select-border: rgba(51, 65, 85, .8);
   --info: #00e5ff;
   --warning: #fbbf24;
+  --cover-accent: #fbbf24;
+  --cover-border: #fbbf2466;
+  --cover-surface: #fbbf2426;
+  --cover-glow: 0 0 20px -3px rgba(245, 158, 11, .35);
   --destructive: #f87171;
   --warning-surface: color-mix(in srgb, var(--warning) 8%, var(--card));
   --error-surface: color-mix(in srgb, var(--destructive) 8%, var(--card));
@@ -115,6 +119,8 @@
   .sidebar-current-dot { width: 8px; height: 8px; margin-left: auto; border-radius: 50%; background: var(--primary); box-shadow: 0 0 8px var(--primary); }
   .sidebar-step { margin-left: auto; padding: 2px 6px; border-radius: 4px; background: var(--secondary); color: var(--muted-foreground); font: 400 10px/15px var(--font-mono); }
   .sidebar-nav-row[aria-current='page'] .sidebar-step { color: var(--primary); background: var(--accent); }
+  .sidebar-nav-row[href$='/covers'][aria-current='page'] { color: var(--cover-accent); background: var(--cover-surface); }
+  .sidebar-nav-row[href$='/covers'][aria-current='page'] .sidebar-step { color: var(--cover-accent); background: var(--cover-surface); }
   .sidebar-footer { margin: 12px; padding: 16px; border: 1px solid #1e293be6; border-radius: 16px; background: var(--panel-surface); backdrop-filter: blur(16px); }
   .sidebar-location > p:first-child { margin: 0; font: 400 10px/15px var(--font-mono); color: var(--muted-foreground); }
   .sidebar-directory-row { display: flex; align-items: center; gap: 8px; margin: 2px 0 12px; }
@@ -137,6 +143,8 @@
   .workspace-shortcuts > span { padding-inline: 8px; color: var(--muted-foreground); }
   .workspace-shortcuts a { padding: 4px 10px; border-radius: 8px; color: #cbd5e1; text-decoration: none; }
   .workspace-shortcuts a.router-link-exact-active { color: var(--primary); font-weight: 600; }
+  .workspace-shortcuts .cover-shortcut { color: var(--cover-accent); }
+  .workspace-shortcuts .cover-shortcut.router-link-exact-active { color: var(--cover-accent); background: var(--cover-surface); }
   .local-storage-badge { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--input-surface); color: #cbd5e1; white-space: nowrap; font: 400 12px/16px var(--font-mono); }
   .local-storage-badge .app-icon { width: 14px; height: 14px; color: var(--primary); }
   .app-main { width: 100%; max-width: 1280px; margin-inline: auto; padding: 32px; }
@@ -186,9 +194,14 @@
   .project-navigation { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; padding: 10px; margin: 0 0 24px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-surface); backdrop-filter: blur(16px); box-shadow: var(--panel-shadow); }
   .project-navigation a { display: flex; min-height: 38px; gap: 8px; align-items: center; justify-content: center; padding: 10px 12px; border: 1px solid transparent; border-radius: 12px; color: var(--muted-foreground); font: 400 12px/16px var(--font-mono); text-decoration: none; min-width: 0; transition: background-color 180ms, color 180ms; }
   .project-navigation a.is-current { background: #00ff9d26; color: var(--primary); border-color: var(--active-border); box-shadow: var(--primary-glow); font-weight: 700; }
+  .project-navigation [data-step=''] > .app-icon { color: #00ff9d; }
+  .project-navigation [data-step='writing'] > .app-icon { color: var(--info); }
+  .project-navigation [data-step='covers'] > .app-icon { color: var(--cover-accent); }
+  .project-navigation [data-step='video'] > .app-icon { color: #c084fc; }
   .project-navigation a:hover { color: #fff; background: #1e293b99; }
   .step-copy { white-space: nowrap; }
   .step-state { display: none; }
+  .project-navigation a.is-current .step-state { display: inline-block; width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
   .app-tooltip { z-index: 60; max-width: min(280px, 90vw); padding: 9px 12px; border: 1px solid var(--input-border); border-radius: 12px; background: var(--popover); color: var(--foreground); box-shadow: var(--overlay-shadow); font-size: 12px; line-height: 1.6; }
   .sticky-actions { position: sticky; bottom: 16px; z-index: 20; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; background: var(--panel-surface); backdrop-filter: blur(16px); border: 1px solid #00e5ff4d; border-radius: 16px; padding: 16px; box-shadow: var(--info-glow); margin-top: 24px; scroll-margin-bottom: 6rem; }
   .sticky-actions .actions { margin: 0; }

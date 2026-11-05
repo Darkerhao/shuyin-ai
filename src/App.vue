@@ -73,6 +73,7 @@ const navigation = computed(() => [
   { to: '/projects', label: '我的书籍', icon: 'shelf', active: route.path === '/projects', step: 0, disabled: false },
   { to: `/projects/${route.params.id ?? ''}`, label: '书籍资料', icon: 'book', active: !!route.params.id && route.path === `/projects/${route.params.id}`, step: 1, disabled: !route.params.id },
   { to: `/projects/${route.params.id ?? ''}/writing`, label: '内容创作', icon: 'pen', active: route.path.endsWith('/writing'), step: 2, disabled: !route.params.id },
+  { to: `/projects/${route.params.id ?? ''}/covers`, label: '封面工坊', icon: 'image', active: route.path.endsWith('/covers'), step: 3, disabled: !route.params.id },
   { to: '/publishing', label: '发布任务', icon: 'upload', active: route.path === '/publishing', step: 0, disabled: false },
   { to: '/settings/models', label: '模型设置', icon: 'settings', active: route.path === '/settings/models', step: 0, disabled: false },
 ] as const)
@@ -287,8 +288,18 @@ watch(router.currentRoute, async (to, from) => {
             >
               3. 内容创作
             </RouterLink>
-            <RouterLink to="/settings">
-              4. 数据与诊断
+            <RouterLink
+              v-if="route.params.id"
+              :to="`/projects/${route.params.id}/covers`"
+              class="cover-shortcut"
+            >
+              4. 封面工坊
+            </RouterLink>
+            <RouterLink to="/publishing">
+              5. 发布任务
+            </RouterLink>
+            <RouterLink to="/settings/models">
+              6. 模型设置
             </RouterLink>
           </nav>
           <span class="local-storage-badge"><AppIcon name="shield" />资料保存在本地</span>
