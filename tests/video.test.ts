@@ -166,7 +166,7 @@ it('keeps storyboard controls idle while typing a long SRT and saves the latest 
 it('requires an explicit confirmation before rendering a prepared storyboard', async () => {
   const wrapper = await render()
   const scroll = vi.fn()
-  wrapper.get('.video-job').element.scrollIntoView = scroll
+  wrapper.get('.video-task-workspace').element.scrollIntoView = scroll
   expect(wrapper.text()).toContain('等待确认分镜')
   expect(api.continueJob).not.toHaveBeenCalled()
   vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'rendering' })

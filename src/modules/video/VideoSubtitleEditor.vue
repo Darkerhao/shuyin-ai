@@ -7,6 +7,7 @@ import type { VideoCue } from '../../types/video'
 import { cueKey, replaceSubtitleText, subtitleClock, subtitleRows, type VideoEditorPosition } from './subtitles'
 import { revealInScroller } from '../../lib/scroll'
 import AudioPlayer from '../../components/AudioPlayer.vue'
+import AppIcon from '../../components/AppIcon.vue'
 
 const props = defineProps<{ originals: VideoCue[]; originalError: string; projectId: string; audioAssetId: string | null; disabled: boolean }>()
 const emit = defineEmits<{ playback: [index: number, follow: boolean] }>()
@@ -122,24 +123,32 @@ onBeforeUnmount(stop)
     class="subtitle-review"
     aria-label="字幕逐句对照"
   >
-    <div class="actions">
+    <div class="actions subtitle-toolbar">
       <Button
         variant="ghost"
+        class="subtitle-follow"
         :aria-pressed="followPlayback"
         :disabled="disabled || !audio"
         @click="toggleFollow"
       >
-        跟随播放
+        <span
+          class="subtitle-follow-mark"
+          aria-hidden="true"
+        ><AppIcon
+          v-if="followPlayback"
+          name="check"
+        /></span>跟随播放
       </Button>
       <Button
         variant="outline"
+        class="subtitle-filter"
         :aria-pressed="position.onlyChanges"
         :disabled="disabled || !originals.length"
         @click="filterChanges"
       >
         只看修改项（{{ changed.length }}）
       </Button>
-      <span class="muted">共 {{ rows.length }} 句 · {{ changed.length }} 句与原文不同</span>
+      <span class="muted subtitle-count">共 {{ rows.length }} 句 · <strong>{{ changed.length }} 句与原文不同</strong></span>
       <Button
         v-if="playing !== null || isPlaying"
         variant="outline"
@@ -204,14 +213,15 @@ onBeforeUnmount(stop)
         class="subtitle-row"
         :class="{ 'subtitle-row-active': position.section === 'subtitles' && position.index === row.index, 'subtitle-row-playing': isPlaying && playbackCue === row.index }"
       >
-        <div class="actions">
+        <div class="actions subtitle-row-heading">
           <Button
             variant="ghost"
+            class="subtitle-listen"
             :disabled="disabled || !audio"
             :aria-label="`试听第${row.index + 1}句`"
             @click="play(row.index)"
           >
-            {{ playing === row.index ? '正在试听' : '试听' }} · 第 {{ row.index + 1 }} 句
+            <AppIcon name="play" />{{ playing === row.index ? '正在试听' : '试听' }} · 第 {{ row.index + 1 }} 句
           </Button>
           <span class="muted subtitle-time">{{ subtitleClock(row.start) }}—<wbr>{{ subtitleClock(row.end) }}</span>
           <span
@@ -220,6 +230,7 @@ onBeforeUnmount(stop)
           >已修改</span>
           <Button
             variant="ghost"
+            class="subtitle-restore"
             :disabled="disabled || !row.original || row.text === row.original.text"
             :aria-label="`恢复第${row.index + 1}句原文`"
             @click="edit(row.index, row.original!.text)"
@@ -249,7 +260,7 @@ onBeforeUnmount(stop)
     </div>
     <div
       v-if="filtered.length > 20"
-      class="actions"
+      class="actions subtitle-pagination"
       aria-label="字幕分页"
     >
       <Button
@@ -270,6 +281,7 @@ onBeforeUnmount(stop)
     </div>
     <Collapsible
       v-model:open="rawOpen"
+      class="subtitle-raw"
       :unmount-on-hide="false"
     >
       <CollapsibleTrigger class="disclosure-trigger">
@@ -292,16 +304,37 @@ onBeforeUnmount(stop)
 </template>
 
 <style scoped>
-.subtitle-review { display: grid; gap: 1rem; min-width: 0; }
-.subtitle-list { display: grid; gap: .75rem; max-height: 560px; overflow: auto; padding: 2px; }
-.subtitle-row { padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; min-width: 0; }
-.subtitle-row-active { border-color: var(--primary); }
-.subtitle-row-playing { background: var(--accent); box-shadow: inset 3px 0 var(--primary); }
+.subtitle-review { display: grid; gap: 20px; min-width: 0; font: 400 12px/1.65 var(--font-mono); }
+.subtitle-toolbar, .subtitle-row-heading { margin: 0; gap: 12px; }
+.subtitle-follow { padding: 6px 0; }
+.subtitle-follow-mark { display: grid; place-items: center; width: 14px; height: 14px; border: 1px solid var(--input-border); border-radius: 3px; }
+.subtitle-follow[aria-pressed='true'] .subtitle-follow-mark { border-color: var(--primary); background: var(--primary); color: #020617; }
+.subtitle-follow-mark .app-icon { width: 12px; height: 12px; }
+.subtitle-filter { padding: 6px 12px; color: var(--info); border-color: #00e5ff66; }
+.subtitle-filter[aria-pressed='true'] { background: #00e5ff26; }
+.subtitle-count { margin-left: auto; }
+.subtitle-count strong { color: var(--info); font-weight: 700; }
+.subtitle-review :deep(.audio-player:not([data-theme='oled'])) { --player-accent: var(--info); --player-accent-light: var(--info); --player-glow: #00e5ff59; background: #0a121a; border-color: var(--border); }
+.subtitle-list { display: grid; gap: 16px; max-height: 680px; overflow: auto; padding: 3px; }
+.subtitle-row { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: #02061766; min-width: 0; }
+.subtitle-row-active { border-color: #00e5ff80; }
+.subtitle-row-playing { background: #00e5ff0d; box-shadow: inset 3px 0 var(--info); }
+.subtitle-row-heading button { height: auto; min-height: 28px; padding: 2px 0; font-size: 12px; }
+.subtitle-listen { color: var(--info); font-weight: 700; }
+.subtitle-restore { margin-left: auto; color: var(--muted-foreground); }
 .playback-status { margin: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
-.subtitle-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-.subtitle-columns > div { min-width: 0; }
-.subtitle-original { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: .5rem; }
-.subtitle-change { color: var(--primary); font-size: .875rem; }
-.subtitle-time { max-width: 100%; font-size: .75rem; overflow-wrap: anywhere; }
-@media (max-width: 700px) { .subtitle-columns { grid-template-columns: 1fr; } }
+.subtitle-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.subtitle-columns > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.subtitle-columns label { margin: 0; color: var(--info); font-size: 11px; font-weight: 700; }
+.subtitle-columns > div > span { font-size: 11px; }
+.subtitle-original { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; min-height: 68px; padding: 10px; border: 1px solid var(--border); border-radius: 12px; color: var(--muted-foreground); background: #0f172a80; }
+.subtitle-columns textarea { flex: 1; min-height: 68px; padding: 10px; border-radius: 12px; font-size: 12px; line-height: 1.65; }
+.subtitle-change { padding: 2px 8px; border: 1px solid #00e5ff4d; border-radius: 6px; color: var(--info); background: #00e5ff1a; font-size: 10px; }
+.subtitle-time { max-width: 100%; padding: 2px 8px; border-radius: 6px; background: var(--input-surface); font-size: 11px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.subtitle-pagination { margin: 0; gap: 12px; }
+.subtitle-pagination button { padding: 6px 12px; }
+.subtitle-raw { padding-top: 12px; border-top: 1px solid var(--border); }
+.subtitle-raw > button { padding: 4px 0; color: var(--muted-foreground); font-size: 12px; }
+@media (max-width: 980px) { .subtitle-columns { grid-template-columns: minmax(0, 1fr); } .subtitle-count { flex-basis: 100%; margin-left: 0; } }
+@media (max-width: 520px) { .subtitle-row { padding: 12px; } .subtitle-row-heading { gap: 8px; } }
 </style>
