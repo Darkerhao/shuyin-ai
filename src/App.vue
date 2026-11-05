@@ -75,6 +75,7 @@ const navigation = computed(() => [
   { to: `/projects/${route.params.id ?? ''}/writing`, label: '内容创作', icon: 'pen', active: route.path.endsWith('/writing'), step: 2, disabled: !route.params.id },
   { to: `/projects/${route.params.id ?? ''}/covers`, label: '封面工坊', icon: 'image', active: route.path.endsWith('/covers'), step: 3, disabled: !route.params.id },
   { to: `/projects/${route.params.id ?? ''}/video`, label: '视频制作', icon: 'video', active: route.path.endsWith('/video'), step: 4, disabled: !route.params.id },
+  { to: `/projects/${route.params.id ?? ''}/publishing`, label: '发布准备', icon: 'upload', active: route.path.endsWith('/publishing'), step: 5, disabled: !route.params.id },
   { to: '/publishing', label: '发布任务', icon: 'upload', active: route.path === '/publishing', step: 0, disabled: false },
   { to: '/settings/models', label: '模型设置', icon: 'settings', active: route.path === '/settings/models', step: 0, disabled: false },
 ] as const)
@@ -303,11 +304,17 @@ watch(router.currentRoute, async (to, from) => {
             >
               5. 视频制作
             </RouterLink>
+            <RouterLink
+              v-if="route.params.id"
+              :to="`/projects/${route.params.id}/publishing`"
+            >
+              6. 发布准备
+            </RouterLink>
             <RouterLink to="/publishing">
-              6. 发布任务
+              7. 发布任务
             </RouterLink>
             <RouterLink to="/settings/models">
-              7. 模型设置
+              8. 模型设置
             </RouterLink>
           </nav>
           <span class="local-storage-badge"><AppIcon name="shield" />资料保存在本地</span>

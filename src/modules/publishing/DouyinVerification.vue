@@ -90,6 +90,7 @@ defineExpose({ start })
 
 <template>
   <section
+    v-show="!hideStart || session || pending || error"
     class="panel"
     aria-labelledby="douyin-verification-heading"
   >
