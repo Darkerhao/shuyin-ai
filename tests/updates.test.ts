@@ -24,7 +24,7 @@ beforeEach(() => {
 
 function candidate() {
   return {
-    version: '0.12.0', body: '- 自动更新\n- 修复导出 <script>alert(1)</script>', date: '2026-10-25T00:00:00Z',
+    version: '0.12.0', body: '- 自动更新 fix(updates): 保留确认\n- 修复导出 <script>alert(1)</script>', date: '2026-10-25T00:00:00Z',
     close: vi.fn().mockResolvedValue(undefined),
     download: vi.fn().mockResolvedValue(undefined), install: vi.fn().mockResolvedValue(undefined),
   }
@@ -32,6 +32,14 @@ function candidate() {
 function offer(update: ReturnType<typeof candidate>) { vi.mocked(api.checkUpdate).mockResolvedValue(update as unknown as Update) }
 async function updates() { return (await import('../src/composables/useAppUpdates')).useAppUpdates() }
 const PageHost = defineComponent({ template: '<RouterView />' })
+async function renderAbout() {
+  const AboutPage = (await import('../src/modules/settings/AboutPage.vue')).default
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/about', component: AboutPage }] })
+  await router.push('/about'); await router.isReady()
+  const wrapper = mount(PageHost, { global: { plugins: [router] } })
+  await flushPromises()
+  return wrapper
+}
 
 describe('application updates', () => {
   it('checks and downloads once at startup, waiting for confirmation to install', async () => {
@@ -161,14 +169,14 @@ describe('application updates', () => {
 
   it('renders safe release notes and installs only after explicit confirmation', async () => {
     const update = candidate(); offer(update)
-    const AboutPage = (await import('../src/modules/settings/AboutPage.vue')).default
-    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/about', component: AboutPage }] })
-    await router.push('/about'); await router.isReady()
-    const wrapper = mount(PageHost, { global: { plugins: [router] } })
+    const wrapper = await renderAbout()
     try {
       await flushPromises()
       expect(wrapper.text()).toContain('v0.11.0')
       expect(wrapper.text()).toContain('自动更新')
+      expect(wrapper.get('.about-commit').text()).toBe('fix(updates)')
+      expect(wrapper.get('.about-release-log').text()).toContain('<script>alert(1)</script>')
+      expect(wrapper.get('.about-release-version').text()).toContain('v0.12.0')
       expect(wrapper.find('script').exists()).toBe(false)
       const button = (label: string) => uiButton(wrapper, label)
       await button('安装并重启').trigger('click')
@@ -182,14 +190,79 @@ describe('application updates', () => {
   })
 
   it('shows current release notes even when no newer version exists', async () => {
-    const AboutPage = (await import('../src/modules/settings/AboutPage.vue')).default
-    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/about', component: AboutPage }] })
-    await router.push('/about'); await router.isReady()
-    const wrapper = mount(PageHost, { global: { plugins: [router] } })
+    const wrapper = await renderAbout()
     try {
       await flushPromises()
       expect(wrapper.text()).toContain('当前已是最新版本')
       expect(wrapper.text()).toContain('当前版本：新增关于页面')
+      expect(wrapper.get('.about-release-version').text()).toContain('v0.11.0')
+    } finally { wrapper.unmount() }
+  })
+
+  it.each(['', ' \n '])('shows an empty state when the offered release has no notes (%j)', async body => {
+    const update = candidate(); update.body = body; offer(update)
+    const wrapper = await renderAbout()
+    try {
+      expect(wrapper.get('.about-release-log').text()).toBe('此版本暂未提供更新说明。')
+      expect(wrapper.text()).not.toContain('当前版本：新增关于页面')
+      expect(wrapper.get('.about-release-version').text()).toContain('v0.12.0')
+    } finally { wrapper.unmount() }
+  })
+
+  it('keeps the switch at its saved value on failure and prevents duplicate saves', async () => {
+    const wrapper = await renderAbout()
+    try {
+      const toggle = wrapper.get('[role="switch"]')
+      let fail!: (error: Error) => void
+      vi.mocked(api.setAutoUpdate).mockReturnValueOnce(new Promise((_, reject) => { fail = reject }))
+      await toggle.trigger('click')
+      expect(toggle.attributes('disabled')).toBeDefined()
+      expect(toggle.attributes('aria-checked')).toBe('true')
+      await toggle.trigger('click')
+      expect(api.setAutoUpdate).toHaveBeenCalledTimes(1)
+      fail(new Error('database locked')); await flushPromises()
+      expect(toggle.attributes('aria-checked')).toBe('true')
+      expect(toggle.attributes('disabled')).toBeUndefined()
+      await toggle.trigger('click'); await flushPromises()
+      expect(api.setAutoUpdate).toHaveBeenLastCalledWith(false)
+      expect(toggle.attributes('aria-checked')).toBe('false')
+    } finally { wrapper.unmount() }
+  })
+
+  it('shows download progress without inventing a percentage when the total is unknown', async () => {
+    vi.mocked(api.autoUpdateEnabled).mockResolvedValue(false)
+    const update = candidate(); offer(update)
+    let finish!: () => void
+    update.download.mockImplementation(async (onEvent: (event: DownloadEvent) => void) => {
+      onEvent({ event: 'Started', data: {} })
+      onEvent({ event: 'Progress', data: { chunkLength: 2 * 1024 * 1024 } })
+      await new Promise<void>(resolve => { finish = resolve })
+    })
+    const wrapper = await renderAbout()
+    try {
+      expect(wrapper.text()).toContain('尚未检查')
+      await uiButton(wrapper, '检查更新').trigger('click'); await flushPromises()
+      await uiButton(wrapper, '下载更新').trigger('click'); await flushPromises()
+      expect(wrapper.get('[role="status"]').text()).toContain('正在下载并校验更新')
+      expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBeUndefined()
+      expect(wrapper.get('.about-download').text()).toContain('已下载 2.0 MB')
+      expect(uiButton(wrapper, '检查更新').attributes('disabled')).toBeDefined()
+      finish(); await flushPromises()
+      expect(uiButton(wrapper, '安装并重启').exists()).toBe(true)
+      expect(update.install).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
+  })
+
+  it('keeps web preview controls disabled without claiming a successful check', async () => {
+    vi.mocked(api.isDesktop).mockReturnValue(false)
+    const wrapper = await renderAbout()
+    try {
+      expect(wrapper.get('[role="switch"]').attributes('disabled')).toBeDefined()
+      expect(uiButton(wrapper, '检查更新').attributes('disabled')).toBeDefined()
+      expect(wrapper.get('[role="status"]').text()).toContain('请在桌面应用中检查更新')
+      expect(wrapper.text()).toContain('尚未检查')
+      expect(wrapper.text()).not.toContain('当前已是最新版本')
+      expect(api.checkUpdate).not.toHaveBeenCalled()
     } finally { wrapper.unmount() }
   })
 })
