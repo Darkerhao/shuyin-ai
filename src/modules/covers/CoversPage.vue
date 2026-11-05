@@ -544,7 +544,7 @@ onMounted(async () => {
       <div class="cover-controls panel">
         <div class="section-heading">
           <h2><AppIcon name="settings" /> 编辑封面</h2><Badge
-            :class="{ 'bg-amber-50 text-amber-800': dirty }"
+            :class="{ 'save-status is-dirty': dirty }"
             variant="secondary"
           >
             {{ dirty ? '未保存' : '已保存' }}
@@ -1345,7 +1345,7 @@ canvas { display: block; max-width: 100%; max-height: 100%; width: auto; height:
 .preview-caption { text-align: center; color: var(--muted-foreground); font-size: 12px; margin: 17px 0 11px; }
 .export-formats { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 17px; }
 .export-formats > span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); font-size: 12px; }
-.ratio-icon { width: 17px; height: 13px; border: 1px solid #99ae8a; border-radius: 2px; }
+.ratio-icon { width: 17px; height: 13px; border: 1px solid var(--muted-foreground); border-radius: 2px; }
 .ratio-icon.portrait { width: 12px; height: 16px; }
 .ratio-icon.widescreen { width: 21px; height: 12px; }
 .cover-suggestions, .preview-details { margin-top: 21px; padding-top: 15px; border-top: 1px solid var(--line); color: var(--muted-foreground); font-size: 12px; }

@@ -616,13 +616,13 @@ onMounted(() => { if (desktop) void load() })
 
 <style scoped>
 .models-page {
-  --model-surface: #f8faf8;
-  --model-selected: #edf5f0;
-  --model-selected-border: #aac9b5;
-  --model-image-surface: #f4f0e7;
-  --model-image-ink: #80663b;
-  --model-warning: #896023;
-  --model-destructive: #a53d35;
+  --model-surface: var(--input-surface);
+  --model-selected: var(--accent);
+  --model-selected-border: var(--active-border);
+  --model-image-surface: var(--warning-surface);
+  --model-image-ink: var(--warning);
+  --model-warning: var(--warning);
+  --model-destructive: var(--destructive);
   --model-control-border: var(--input-border);
   color: var(--foreground);
 }

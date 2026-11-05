@@ -979,6 +979,6 @@ onMounted(() => { if (desktop) void loadTask() })
 .publish-actions { margin-top: 24px; }
 .publish-checklist { list-style: none; padding: 0; line-height: 2; font-size: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .publish-checklist li { padding: 9px 0; }
-.check-pending { color: #8c5d23; }
+.check-pending { color: var(--warning); }
 @media (max-width: 1000px) { .publish-form-grid { grid-template-columns: 1fr; } }
 </style>

@@ -1,5 +1,13 @@
 # 书引 AI 技术设计文档
 
+## 参考稿科技主题与局部页面（2026-11-05）
+
+根文档声明dark与原生深色语义，共享主题将背景、控件、菜单、弹窗和通知统一到参考稿的配色、尺寸、玻璃与光晕。Inter/JetBrains Mono的woff2与OFL许可随前端构建打包，不调用字体CDN。App.vue复用原路由/目录/偏好/更新，并将目录与版本入口收敛到侧栏底部。
+
+BookCard采用横向展示并复用原菜单；网格/列表通过继承CSS变量传递显示方式与预览高度。移除误将:global后代规则作用于整个书架的选择器。WritingPage九个字段继续共用Textarea，紧凑字段固定单行外观，保留换行与复制；历史使用一个Collapsible和原historyOpen，触发器移至保存状态。排版色卡复用CoverDesignPreview及提示插槽，媒体仍复用真实AudioPlayer/AudioWaveform。
+
+原稿脚本、固定状态、样例版本和遥测不进入业务服务。Rust、Provider、SQLite、草稿、正式版本、Canvas导出、素材与发布权限均不变。详细落点与证据见[方案](TECH-STYLE-UPGRADE-PLAN.md)、[验收](TECH-STYLE-UPGRADE-VERIFICATION.md)。
+
 ## 共用原声播放器与真实波形（2026-11-04）
 
 `components/AudioPlayer.vue`负责唯一媒体元素、源加载、播放/暂停、倍速和音量；`AudioWaveform.vue`负责实际幅度包络、悬停时间、进度指针与原有Slider的指针/键盘交互。媒体URL统一为`services/projects.ts::mediaSource`，复用`media_asset_path`的本书已登记音视频校验及单文件授权；移除视频service中的重复入口。WritingPage成功任务卡和其他音频列表、VideoPage制作原声、VideoSubtitleEditor任务原声均使用该组件。

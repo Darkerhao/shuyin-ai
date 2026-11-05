@@ -4,7 +4,6 @@ import OperationFeedback from '../../components/OperationFeedback.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import { requestConfirmation } from '../../composables/useConfirmation'
 import { useWindowCloseGuard } from '../../composables/useWindowCloseGuard'
-import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter, useRoute } from 'vue-router'
@@ -84,21 +83,22 @@ onMounted(async () => {
 })
 </script>
 <template>
+  <div class="page-return-row">
+    <RouterLink
+      class="back-link"
+      to="/projects"
+    >
+      <AppIcon name="back" />返回我的书籍
+    </RouterLink>
+    <span class="text-xs font-mono text-muted-foreground"><i class="status-dot mr-2" />当前目标：{{ project?.title || '一本新书' }}</span>
+  </div>
   <header class="page-heading">
     <div>
-      <RouterLink
-        class="back-link"
-        to="/projects"
-      >
-        <AppIcon name="back" />我的书籍
-      </RouterLink>
-      <h1>{{ project ? '书籍资料' : '添加一本书' }}</h1><p class="muted">
-        {{ project ? '补充你的阅读理解，让创作更有自己的味道。' : '从一个书名开始，把读过的好故事分享出去。' }}
+      <h1>{{ project ? '书籍资料' : '添加一本书' }}</h1>
+      <p class="muted">
+        {{ project ? '补充你的阅读理解，让 AI 创作成片更有专属的思考味道。' : '从一个书名开始，把读过的好故事分享出去。' }}
       </p>
     </div>
-    <Badge variant="secondary">
-      <AppIcon name="book" />{{ project ? project.title : '一段新创作的开始' }}
-    </Badge>
   </header>
   <ProjectNavigation
     v-if="project"
@@ -151,7 +151,7 @@ onMounted(async () => {
             />
           </div>
           <div>
-            <label for="author">作者 <span class="optional">· 选填</span></label><Input
+            <label for="author">作者 <span class="optional">(选填)</span></label><Input
               id="author"
               v-model="form.author"
               placeholder="同名书建议填写作者"
@@ -159,99 +159,107 @@ onMounted(async () => {
           </div>
         </div>
         <section
-          class="my-5 space-y-3 rounded-lg border p-4"
+          class="book-source-section"
           aria-labelledby="source-documents-title"
           aria-describedby="source-documents-help"
         >
-          <h2
-            id="source-documents-title"
-            class="text-base"
-          >
-            本地书籍文件 <span class="optional">· 选填</span>
-          </h2>
+          <div class="book-source-heading">
+            <h2 id="source-documents-title">
+              本地书籍文件 <span class="optional">(EPUB / PDF / TXT)</span>
+            </h2>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              class="h-6 px-2 font-mono text-muted-foreground"
+              @click="chooseSource"
+            >
+              选择本地文件
+            </Button>
+          </div>
           <p
             id="source-documents-help"
-            class="muted"
+            class="sr-only"
           >
             绑定 PDF、EPUB、DOCX、TXT 或 Markdown，生成音频时可直接使用。仅关联本地路径，保存后生效。
           </p>
-          <Button
-            type="button"
-            variant="outline"
-            @click="chooseSource"
-          >
-            <AppIcon name="folder" />选择本地文件
-          </Button>
           <ul
             v-if="documents.length || sourcePaths.length"
-            class="space-y-3"
+            class="m-0 grid list-none gap-2 p-0"
             aria-label="本地书籍文件"
           >
             <li
               v-for="document in documents"
               :key="document.id"
-              class="space-y-1"
+              class="book-source-file"
             >
-              <p class="file-path">
-                {{ document.originalName }}
-              </p>
-              <p class="file-path muted">
+              <div class="flex items-center justify-between gap-2">
+                <p class="book-source-name">
+                  {{ document.originalName }}
+                </p>
+                <span class="book-source-status">{{ document.existsStatus === 'available' ? '已绑定生效' : '文件不可用' }}</span>
+              </div>
+              <p
+                class="file-path"
+                :title="displayPath(document.filePath)"
+              >
                 {{ displayPath(document.filePath) }}
               </p>
-              <p :class="document.existsStatus === 'available' ? 'muted' : 'error'">
-                {{ document.existsStatus === 'available' ? '已绑定 · 音频制作可直接使用' : '文件不可用，请到发布准备的素材管理中重新定位' }}
+              <p
+                v-if="document.existsStatus !== 'available'"
+                class="error"
+              >
+                文件不可用，请到发布准备的素材管理中重新定位。
               </p>
             </li>
             <li
               v-for="(path, index) in sourcePaths"
               :key="path"
-              class="space-y-1"
+              class="book-source-file"
             >
-              <p class="file-path">
-                {{ sourceName(path) }}
-              </p>
-              <p class="file-path muted">
-                {{ displayPath(path) }}
-              </p>
-              <div class="actions wrap">
-                <span class="muted">待保存</span>
+              <div class="flex items-center justify-between gap-2">
+                <p class="book-source-name">
+                  {{ sourceName(path) }}
+                </p>
                 <Button
                   type="button"
                   variant="ghost"
+                  size="sm"
+                  class="h-6 px-2"
                   :aria-label="`取消绑定 ${sourceName(path)}`"
                   @click="sourcePaths.splice(index, 1)"
                 >
                   取消绑定
                 </Button>
               </div>
+              <p class="file-path">
+                {{ displayPath(path) }}
+              </p><p class="book-source-status">
+                待保存
+              </p>
             </li>
           </ul>
+          <p
+            v-else
+            class="book-source-file muted"
+          >
+            选择本地原书，保存后可用于音频制作。
+          </p>
           <RouterLink
             v-if="documents.length && project"
             :to="`/projects/${project.id}/publishing`"
-            class="back-link"
+            class="mt-2 inline-block text-[10px] font-mono text-muted-foreground"
           >
             管理已绑定文件
           </RouterLink>
         </section>
-        <label for="notes">这本书，你想聊什么？ <span class="optional">· 选填</span></label>
+        <label for="notes">这本书，你想聊什么？<span class="optional">(选填灵感提示)</span></label>
         <Textarea
           id="notes"
           v-model="form.sourceNotes"
-          rows="9"
-          class="min-h-52 resize-y leading-7"
-          placeholder="粘贴书籍简介、读书笔记，或写下这一期想重点讲的内容。&#10;&#10;例如：想从人物的命运聊聊普通人的韧性，语言通俗一些，像朋友聊天。"
+          rows="4"
+          placeholder="粘贴书籍简介、读书笔记，或写下这一期想重点讲的内容。"
         />
-        <p class="muted">
-          不需要先准备大纲或讲稿，留空也可以继续。
-        </p>
-        <Button
-          type="button"
-          variant="outline"
-          @click="chooseImport"
-        >
-          导入 TXT / Markdown 笔记
-        </Button>
         <section
           v-if="imported"
           class="my-4 space-y-3 rounded-lg border p-4"
@@ -272,8 +280,7 @@ onMounted(async () => {
               @click="applyImport"
             >
               采用并追加到资料
-            </Button>
-            <Button
+            </Button><Button
               type="button"
               variant="outline"
               @click="imported = null"
@@ -282,23 +289,50 @@ onMounted(async () => {
             </Button>
           </div>
         </section>
-        <div class="actions wrap">
-          <Button type="submit">
-            <AppIcon name="check" />{{ busy ? operation : '保存并继续' }}
-          </Button><RouterLink
-            :to="project ? `/projects/${project.id}/writing` : '/projects'"
-            :class="buttonVariants({ variant: 'outline' })"
+        <div class="book-form-footer">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            class="font-mono"
+            @click="chooseImport"
           >
-            取消
-          </RouterLink><span
-            v-if="dirty"
-            class="save-status is-dirty"
-          >有未保存的修改</span>
+            <AppIcon name="upload" />导入 TXT / Markdown 笔记
+          </Button>
+          <div class="actions wrap">
+            <span
+              v-if="dirty"
+              class="save-status is-dirty"
+            >有未保存的修改</span>
+            <RouterLink
+              :to="project ? `/projects/${project.id}/writing` : '/projects'"
+              :class="buttonVariants({ variant: 'ghost', size: 'sm' })"
+            >
+              取消
+            </RouterLink>
+            <Button
+              type="submit"
+              size="sm"
+            >
+              {{ busy ? operation : '保存并继续' }}<AppIcon name="arrow" />
+            </Button>
+          </div>
         </div>
       </fieldset>
     </form>
     <aside class="book-form-aside">
-      <AppIcon name="sparkle" /><h2>好内容，始于你的视角</h2><p>一个打动你的片段、一个想讨论的问题，都能让生成的内容更贴近你的表达。</p><p>接下来，你可以一键准备发布文案、音频提示词与封面素材。</p>
+      <h2><AppIcon name="bolt" />好内容，始于你的视角</h2>
+      <p>一个打动你的片段、一个想讨论的问题，都能让 AI 生成的内容更贴近你的表达风格与人设立场。</p>
+      <div class="book-form-guide">
+        <strong>下一步创作建议：</strong><p>1. 准备发布文案</p><p>2. 制作读书音频</p><p>3. 准备多比例封面素材</p>
+      </div>
+      <RouterLink
+        v-if="project"
+        :to="`/projects/${project.id}/writing`"
+        :class="[buttonVariants({ variant: 'outline' }), 'w-full font-mono text-info']"
+      >
+        快速进入内容制作
+      </RouterLink>
     </aside>
   </div>
   <Collapsible

@@ -145,7 +145,7 @@ describe('M3 cover workflow', () => {
     vi.mocked(api.listCovers).mockResolvedValue([])
     const { wrapper } = await render()
     await button(wrapper, '排版样式').trigger('click')
-    expect(wrapper.get('[aria-label="AI 推荐排版"]').text()).toContain('148 px')
+    expect(wrapper.get('[aria-label="AI 推荐排版"]').text()).toContain('148px')
     expect((wrapper.get('#cover-subtitle-color').element as HTMLInputElement).value).toBe(design.subtitleColor)
     await button(wrapper, '导出 3 张封面').trigger('click'); await flushPromises()
     for (const [, config] of vi.mocked(api.saveCover).mock.calls) expect(config).toMatchObject(design)

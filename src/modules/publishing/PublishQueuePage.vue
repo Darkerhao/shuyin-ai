@@ -82,7 +82,7 @@ onMounted(() => { if (desktop) void load() })
         size="sm"
         type="button"
         :aria-pressed="status === filter"
-        :class="status === filter ? 'bg-white shadow-xs hover:bg-white' : 'text-muted-foreground'"
+        :class="status === filter ? 'bg-accent text-primary hover:bg-accent' : 'text-muted-foreground'"
         :disabled="!desktop"
         @click="status = filter"
       >
@@ -100,7 +100,7 @@ onMounted(() => { if (desktop) void load() })
         name="search"
         type="search"
         autocomplete="off"
-        class="bg-white pl-9 pr-9"
+        class="pl-9 pr-9"
         placeholder="搜索书名或发布标题"
         :disabled="!desktop"
         @keydown.esc="search = ''"

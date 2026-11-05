@@ -57,7 +57,7 @@ export default async function verifyBookMenu(page) {
       const trigger = globalThis.document.querySelector('button[aria-label="更多操作：文城"]').getBoundingClientRect();
       return { background: style.backgroundColor, border: style.borderTopWidth, radius: style.borderRadius, shadow: style.boxShadow, padding: style.padding, side: node.getAttribute('data-side'), box: box.toJSON(), trigger: trigger.toJSON(), scrollWidth: node.scrollWidth, clientWidth: node.clientWidth };
     });
-    assert(visual.background === 'rgb(255, 255, 255)', `Transparent menu at ${width}: ${JSON.stringify(visual)}`);
+    assert(visual.background === 'rgb(16, 23, 42)', `Incorrect dark menu surface at ${width}: ${JSON.stringify(visual)}`);
     assert(visual.border !== '0px' && visual.radius !== '0px' && visual.shadow !== 'none' && visual.padding !== '0px', `Missing menu surface at ${width}`);
     assert(visual.box.left >= 11 && visual.box.right <= width - 11 && visual.box.top >= 11 && visual.box.bottom <= height - 11, `Menu clipped at ${width}`);
     assert(Math.abs(visual.box.right - visual.trigger.right) < 2, `More menu lost right alignment at ${width}`);
