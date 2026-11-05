@@ -1,5 +1,11 @@
 # 书引 AI 技术设计文档
 
+## 关于与更新样式对齐（2026-11-05）
+
+`AboutPage.vue` 在原组件中重排三张卡片并维护 scoped 样式，复用共享主题、本地 Inter/JetBrains Mono、Button、Progress 和 ConfirmAction。自动更新改为带 `role="switch"`、`aria-checked`、关联标签和说明的原生按钮，直接调用原 `setAutomatic`，没有新增偏好状态。检查中禁用检查按钮，下载与安装状态沿用唯一 `useAppUpdates`；错误详情继续由 App 的 OperationFeedback 提示。
+
+更新日志按原始行展示，将实际说明中的 Conventional Commit 类型标为彩色标签；所有片段仍用 Vue 文本插值，保留空行、长文本换行及缺失说明提示，不使用 HTML 渲染。更新卡展示真实时间与状态，平台标签描述支持范围。渐变品牌符号按参考稿绘制，使用描述性的 DESKTOP 标记，不加入无依据的 Pro 版本或内核稳定性声明。没有新增服务、依赖、IPC、权限、SQL 迁移或版本号调整。见[关于与更新样式验收](ABOUT-STYLE-VERIFICATION.md)。
+
 ## 发布准备样式对齐（2026-11-05）
 
 `PublishingPage` 在原组件内重排返回栏、标题、任务选择、文案与素材双栏、复制和自检区，替换原局部样式，继续使用本地字体、共享颜色变量、Select、CopyButton 与 CoverThumbnail。字段计数复用原计算值；保存检查摘要由非空 checklist 推导，未保存时优先提示当前修改，双封面保持实际导出比例。菜单宽度绑定触发器，长路径换行，窄窗口单列。
