@@ -248,17 +248,17 @@ function setSceneImage(image: VideoSceneImage | undefined) {
 </template>
 
 <style scoped>
-.video-scene { display: grid; align-content: start; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: #02061766; scroll-margin-block: 16px; min-width: 0; font: 400 12px/1.65 var(--font-mono); }
-.video-scene-playing { background: #00e5ff0d; border-color: var(--info); }
+.video-scene { display: grid; align-content: start; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: color-mix(in srgb, var(--terminal) 40%, transparent); scroll-margin-block: 16px; min-width: 0; font: 400 12px/1.65 var(--font-mono); }
+.video-scene-playing { background: color-mix(in srgb, var(--info) 5%, transparent); border-color: var(--info); }
 .video-scene-actions { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .video-scene-actions button { min-height: 28px; padding: 4px 8px; font-size: 11px; }
 .video-scene-actions button:first-child { padding-left: 0; color: var(--info); font-weight: 700; }
-.video-scene-actions button:last-child { color: #cbd5e1; }
+.video-scene-actions button:last-child { color: var(--text-secondary); }
 .video-scene > .muted { margin: 0 0 -6px; font-size: 11px; }
 .video-scene-title { min-height: 42px; padding: 12px; color: var(--foreground); font-weight: 700; }
 .video-scene-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .video-scene-kind { grid-column: 1 / -1; }
-.video-scene-kind :deep([role='combobox']) { border-color: var(--video-border); color: #d8b4fe; }
+.video-scene-kind :deep([role='combobox']) { border-color: var(--video-border); color: var(--video-accent); }
 .video-scene :deep(.scene-image-editor > button) { justify-content: flex-start; height: auto; padding: 4px 0; color: var(--info); font-size: 11px; }
 .video-beat { display: grid; gap: 6px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--border); }
 .video-beat label { color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }

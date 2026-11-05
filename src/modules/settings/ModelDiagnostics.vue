@@ -114,10 +114,10 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearInterval(timer) })
 .model-diagnostics > .muted { font: 400 11px/18px var(--font-mono); margin-block: 16px; }
 table { width: 100%; min-width: 740px; text-align: left; font: 400 12px/18px var(--font-mono); }
 th { padding: 12px; color: var(--muted-foreground); border-bottom: 1px solid var(--border); font-weight: 500; white-space: nowrap; }
-td { color: #e2e8f0; }
+td { color: var(--editor-foreground); }
 td:first-child { white-space: nowrap; }
 th:last-child, td:last-child { text-align: right; white-space: nowrap; }
-tr:hover td { background: #1e293b4d; }
+tr:hover td { background: color-mix(in srgb, var(--secondary) 30%, transparent); }
 .diagnostic-secondary { display: block; color: var(--muted-foreground); font-size: 11px; margin-top: 2px; }
 .diagnostic-model { color: var(--info); font-weight: 700; }
 .diagnostic-status { display: inline-block; white-space: nowrap; padding: 2px 8px; border-radius: 6px; color: var(--muted-foreground); background: var(--secondary); font-size: 10px; }

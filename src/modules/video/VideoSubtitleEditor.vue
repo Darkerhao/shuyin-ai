@@ -308,17 +308,17 @@ onBeforeUnmount(stop)
 .subtitle-toolbar, .subtitle-row-heading { margin: 0; gap: 12px; }
 .subtitle-follow { padding: 6px 0; }
 .subtitle-follow-mark { display: grid; place-items: center; width: 14px; height: 14px; border: 1px solid var(--input-border); border-radius: 3px; }
-.subtitle-follow[aria-pressed='true'] .subtitle-follow-mark { border-color: var(--primary); background: var(--primary); color: #020617; }
+.subtitle-follow[aria-pressed='true'] .subtitle-follow-mark { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
 .subtitle-follow-mark .app-icon { width: 12px; height: 12px; }
-.subtitle-filter { padding: 6px 12px; color: var(--info); border-color: #00e5ff66; }
-.subtitle-filter[aria-pressed='true'] { background: #00e5ff26; }
+.subtitle-filter { padding: 6px 12px; color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, transparent); }
+.subtitle-filter[aria-pressed='true'] { background: color-mix(in srgb, var(--info) 15%, transparent); }
 .subtitle-count { margin-left: auto; }
 .subtitle-count strong { color: var(--info); font-weight: 700; }
-.subtitle-review :deep(.audio-player:not([data-theme='oled'])) { --player-accent: var(--info); --player-accent-light: var(--info); --player-glow: #00e5ff59; background: #0a121a; border-color: var(--border); }
+.subtitle-review :deep(.audio-player:not([data-theme='oled'])) { --player-accent: var(--info); --player-accent-light: var(--info); --player-glow: color-mix(in srgb, var(--info) 35%, transparent); background: var(--player-surface); border-color: var(--border); }
 .subtitle-list { display: grid; gap: 16px; max-height: 680px; overflow: auto; padding: 3px; }
-.subtitle-row { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: #02061766; min-width: 0; }
-.subtitle-row-active { border-color: #00e5ff80; }
-.subtitle-row-playing { background: #00e5ff0d; box-shadow: inset 3px 0 var(--info); }
+.subtitle-row { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: color-mix(in srgb, var(--terminal) 40%, transparent); min-width: 0; }
+.subtitle-row-active { border-color: color-mix(in srgb, var(--info) 50%, transparent); }
+.subtitle-row-playing { background: color-mix(in srgb, var(--info) 5%, transparent); box-shadow: inset 3px 0 var(--info); }
 .subtitle-row-heading button { height: auto; min-height: 28px; padding: 2px 0; font-size: 12px; }
 .subtitle-listen { color: var(--info); font-weight: 700; }
 .subtitle-restore { margin-left: auto; color: var(--muted-foreground); }
@@ -327,9 +327,9 @@ onBeforeUnmount(stop)
 .subtitle-columns > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .subtitle-columns label { margin: 0; color: var(--info); font-size: 11px; font-weight: 700; }
 .subtitle-columns > div > span { font-size: 11px; }
-.subtitle-original { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; min-height: 68px; padding: 10px; border: 1px solid var(--border); border-radius: 12px; color: var(--muted-foreground); background: #0f172a80; }
+.subtitle-original { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; min-height: 68px; padding: 10px; border: 1px solid var(--border); border-radius: 12px; color: var(--muted-foreground); background: color-mix(in srgb, var(--input-surface) 50%, transparent); }
 .subtitle-columns textarea { flex: 1; min-height: 68px; padding: 10px; border-radius: 12px; font-size: 12px; line-height: 1.65; }
-.subtitle-change { padding: 2px 8px; border: 1px solid #00e5ff4d; border-radius: 6px; color: var(--info); background: #00e5ff1a; font-size: 10px; }
+.subtitle-change { padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--info) 30%, transparent); border-radius: 6px; color: var(--info); background: color-mix(in srgb, var(--info) 10%, transparent); font-size: 10px; }
 .subtitle-time { max-width: 100%; padding: 2px 8px; border-radius: 6px; background: var(--input-surface); font-size: 11px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .subtitle-pagination { margin: 0; gap: 12px; }
 .subtitle-pagination button { padding: 6px 12px; }

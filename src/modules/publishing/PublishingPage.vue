@@ -1031,7 +1031,7 @@ onMounted(() => { if (desktop) void loadTask() })
 .publishing-page { display: grid; gap: 24px; min-width: 0; padding-bottom: 80px; }
 .publishing-page > .page-return-row, .publishing-page > .page-heading, .publishing-page > :deep(.project-navigation) { margin-bottom: 0; }
 .publishing-page .panel { margin: 0; padding: 24px; box-shadow: var(--panel-shadow); }
-.publishing-page h2 { color: #fff; font-family: var(--font-mono); }
+.publishing-page h2 { color: var(--heading); font-family: var(--font-mono); }
 .publishing-page .actions { margin-top: 16px; }
 .publishing-page :deep(button), .publishing-page input, .publishing-page textarea { font-family: var(--font-mono); }
 .publishing-page :deep(button[data-slot='button']) { border-radius: 12px; }
@@ -1069,13 +1069,13 @@ onMounted(() => { if (desktop) void loadTask() })
 .publish-cover-selects { margin-top: 4px; }
 .publish-cover-selects > div { min-width: 0; }
 .publish-cover-selects :deep([data-slot='select-trigger']) { color: var(--cover-accent); }
-.publishing-page .file-path { padding: 12px; margin: 10px 0 0; border: 1px solid var(--border); border-radius: 12px; background: #020617cc; color: var(--muted-foreground); font: 400 11px/1.65 var(--font-mono); overflow-wrap: anywhere; }
+.publishing-page .file-path { padding: 12px; margin: 10px 0 0; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--terminal) 80%, transparent); color: var(--muted-foreground); font: 400 11px/1.65 var(--font-mono); overflow-wrap: anywhere; }
 .publish-save { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
 .publish-save .muted { margin: 0; font: 400 11px/1.65 var(--font-mono); }
 .is-published .publish-form-grid :deep(:disabled) { opacity: 1; }
 .publish-actions h2 { margin: 0; }
 .publish-actions :deep(.app-icon) { color: var(--info); }
-.publishing-page :deep(.publish-copy-all), .publishing-page .publish-primary-action { border-color: transparent; background: linear-gradient(90deg, var(--primary), #2dd4bf, var(--info)); color: var(--primary-foreground); font-weight: 800; box-shadow: var(--primary-glow); }
+.publishing-page :deep(.publish-copy-all), .publishing-page .publish-primary-action { border-color: transparent; background: var(--action-gradient); color: var(--primary-foreground); font-weight: 800; box-shadow: var(--primary-glow); }
 .publish-actions :deep(.publish-copy-all .app-icon) { color: inherit; }
 .publishing-page :deep(.publish-copy-all:hover), .publishing-page .publish-primary-action:hover { filter: brightness(1.1); }
 .publish-preflight { scroll-margin-top: 90px; }
@@ -1093,7 +1093,7 @@ onMounted(() => { if (desktop) void loadTask() })
 .preflight-covers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 24px; max-width: 672px; margin-top: 28px; }
 .preflight-covers:empty { display: none; }
 .preflight-cover { min-width: 0; }
-.preflight-cover :deep(figure) { margin: 0; padding: 14px; border-radius: 12px; border-color: var(--input-border); background: #020617; }
+.preflight-cover :deep(figure) { margin: 0; padding: 14px; border-radius: 12px; border-color: var(--input-border); background: var(--terminal); }
 .preflight-cover :deep(img) { width: 100%; max-height: none; border-radius: 8px; object-fit: contain; }
 .preflight-landscape :deep(img) { aspect-ratio: 4 / 3; }
 .preflight-portrait :deep(img) { aspect-ratio: 3 / 4; }

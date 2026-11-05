@@ -289,9 +289,9 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 </template>
 
 <style scoped>
-.creation-progress { --progress-tone: var(--video-accent); display: grid; gap: 24px; min-width: 0; padding: 24px; border: 1px solid color-mix(in srgb, var(--progress-tone) 40%, transparent); border-radius: 16px; background: #080d1a; font-family: var(--font-mono); }
+.creation-progress { --progress-tone: var(--video-accent); display: grid; gap: 24px; min-width: 0; padding: 24px; border: 1px solid color-mix(in srgb, var(--progress-tone) 40%, transparent); border-radius: 16px; background: var(--card); font-family: var(--font-mono); }
 .creation-progress[data-status='succeeded'], .creation-progress[data-status='awaiting_confirmation'] { --progress-tone: var(--primary); }
-.creation-progress[data-status='failed'] { --progress-tone: var(--destructive); background: #0e0b12; box-shadow: 0 0 30px -5px #ef444426; }
+.creation-progress[data-status='failed'] { --progress-tone: var(--destructive); background: var(--error-surface); box-shadow: 0 0 30px -5px #ef444426; }
 .creation-progress[data-status='cancelled'], .creation-progress[data-status='draft'] { --progress-tone: var(--muted-foreground); }
 .progress-hero { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .progress-emblem { display: grid; place-items: center; width: 56px; height: 56px; flex-shrink: 0; color: var(--progress-tone); border: 1px solid color-mix(in srgb, var(--progress-tone) 35%, transparent); border-radius: 16px; background: color-mix(in srgb, var(--progress-tone) 10%, transparent); }
@@ -309,19 +309,19 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .elapsed-time .app-icon { width: 14px; height: 14px; }
 .elapsed-time strong { color: var(--foreground); font-weight: 700; font-variant-numeric: tabular-nums; }
 .creation-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 8px 0 0; list-style: none; border-top: 1px solid var(--border); }
-.creation-steps li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 6px; align-content: start; align-items: center; padding: 10px; min-width: 0; color: var(--muted-foreground); font-size: 12px; font-weight: 700; border: 1px solid var(--border); border-radius: 12px; background: #0f172a80; }
+.creation-steps li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 6px; align-content: start; align-items: center; padding: 10px; min-width: 0; color: var(--muted-foreground); font-size: 12px; font-weight: 700; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--input-surface) 50%, transparent); }
 .step-marker { display: flex; align-items: center; font-size: 11px; font-variant-numeric: tabular-nums; }
 .step-marker .app-icon { width: 14px; height: 14px; }
 .creation-steps li > small { grid-column: 1 / -1; color: var(--muted-foreground); font-size: 10px; font-weight: 400; }
-.creation-steps .is-current { color: var(--progress-tone); border-color: color-mix(in srgb, var(--progress-tone) 40%, transparent); background: color-mix(in srgb, var(--progress-tone) 10%, #080d1a); }
+.creation-steps .is-current { color: var(--progress-tone); border-color: color-mix(in srgb, var(--progress-tone) 40%, transparent); background: color-mix(in srgb, var(--progress-tone) 10%, var(--card)); }
 .creation-steps .is-current > small { color: var(--progress-tone); }
-.creation-steps .is-done { color: var(--primary); border-color: #00ff9d4d; background: #022c224d; }
-.stage-progress-label { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 8px; font-size: 12px; color: #cbd5e1; font-variant-numeric: tabular-nums; }
+.creation-steps .is-done { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 30%, transparent); background: var(--accent); }
+.stage-progress-label { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 8px; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .stage-progress-label strong { color: var(--progress-tone); font-weight: 700; }
-.stage-progress-track { height: 8px; border: 1px solid var(--border); background: #020617; }
-.stage-progress-track :deep([data-slot='progress-indicator']) { background: linear-gradient(to right, #a855f7, #6366f1, var(--info)); }
+.stage-progress-track { height: 8px; border: 1px solid var(--border); background: var(--terminal); }
+.stage-progress-track :deep([data-slot='progress-indicator']) { background: linear-gradient(to right, var(--video-accent), #6366f1, var(--info)); }
 .creation-progress:not(.is-animating) .stage-progress-track :deep([data-state='indeterminate']) { animation-play-state: paused; }
-.render-monitor { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: #020617b3; }
+.render-monitor { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--terminal) 70%, transparent); }
 .render-telemetry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; margin-top: 12px; color: var(--muted-foreground); font-size: 12px; }
 .render-telemetry > span { display: inline-flex; align-items: center; gap: 7px; }
 .render-telemetry .app-icon { width: 14px; height: 14px; }
@@ -339,7 +339,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .render-phases [data-state='current'] { color: var(--progress-tone); }
 .render-phases [data-state='current'] .render-phase-marker { border-color: var(--progress-tone); background: var(--video-surface); }
 .creation-output { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 20px; padding-top: 8px; }
-.output-summary, .output-preview { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: #020617cc; }
+.output-summary, .output-preview { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--terminal) 80%, transparent); }
 .output-summary { display: grid; align-content: start; gap: 8px; }
 .output-label { font-size: 12px; font-weight: 700; color: var(--muted-foreground); }
 .output-metric { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
@@ -352,13 +352,13 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .preview-heading .app-icon { width: 15px; height: 15px; }
 .preview-heading small { margin-left: auto; font-size: 10px; color: var(--muted-foreground); font-weight: 400; }
 .subtitle-preview { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }
-.subtitle-preview li { display: flex; gap: 10px; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: #0f172a99; font-size: 12px; line-height: 1.65; }
+.subtitle-preview li { display: flex; gap: 10px; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--input-surface) 60%, transparent); font-size: 12px; line-height: 1.65; }
 .subtitle-preview time { flex-shrink: 0; color: var(--video-accent); font-weight: 700; font-variant-numeric: tabular-nums; }
 .subtitle-preview li > span { overflow-wrap: anywhere; }
 .scene-preview-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .scene-preview { display: flex; gap: 12px; align-items: flex-start; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--input-surface); }
 .scene-preview > div { min-width: 0; }
-.scene-number { flex-shrink: 0; padding: 2px 8px; background: var(--secondary); border-radius: 4px; color: #d8b4fe; font-size: 12px; font-weight: 700; }
+.scene-number { flex-shrink: 0; padding: 2px 8px; background: var(--secondary); border-radius: 4px; color: var(--video-accent); font-size: 12px; font-weight: 700; }
 .scene-preview strong { font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
 .scene-preview p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
 .preview-placeholder { display: grid; min-height: 125px; align-content: center; justify-items: center; text-align: center; gap: 8px; color: var(--muted-foreground); }
@@ -368,7 +368,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .progress-note { display: flex; gap: 8px; align-items: flex-start; margin: 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.7; }
 .progress-note .app-icon { width: 14px; height: 14px; margin-top: 2px; }
 .sync-warning { color: var(--warning); }
-.progress-error { padding: 16px; border: 1px solid #f871714d; border-radius: 12px; background: #450a0a33; color: #fca5a5; font-size: 12px; }
+.progress-error { padding: 16px; border: 1px solid color-mix(in srgb, var(--destructive) 30%, transparent); border-radius: 12px; background: var(--error-surface); color: var(--destructive); font-size: 12px; }
 .progress-error strong { display: flex; align-items: center; gap: 8px; }
 .progress-error p { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .progress-actions { padding-top: 16px; border-top: 1px solid var(--border); }

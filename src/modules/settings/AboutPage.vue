@@ -272,16 +272,16 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
 .about-description { margin: 4px 0 0; color: var(--muted-foreground); font-size: 14px; line-height: 20px; }
 .about-page > .panel { margin: 0 0 24px; padding: 24px; }
 .about-page > .about-identity { position: relative; isolation: isolate; overflow: hidden; padding: 28px; box-shadow: var(--panel-shadow); }
-.about-identity::before { content: ''; position: absolute; z-index: -1; top: -64px; right: -64px; width: 208px; height: 208px; border-radius: 50%; background: #00ff9d1a; filter: blur(64px); pointer-events: none; }
+.about-identity::before { content: ''; position: absolute; z-index: -1; top: -64px; right: -64px; width: 208px; height: 208px; border-radius: 50%; background: color-mix(in srgb, var(--primary) 10%, transparent); filter: blur(64px); pointer-events: none; }
 .about-identity-row, .about-brand, .about-brand-title { display: flex; align-items: center; }
 .about-identity-row { justify-content: space-between; gap: 24px; padding-top: 24px; }
 .about-brand { min-width: 0; gap: 20px; }
-.about-symbol { display: grid; place-items: center; width: 64px; height: 64px; flex-shrink: 0; border: 2px solid transparent; border-radius: 16px; background: linear-gradient(#020617, #020617) padding-box, linear-gradient(to top right, var(--primary), #2dd4bf, var(--info)) border-box; color: var(--primary); box-shadow: var(--primary-glow); }
+.about-symbol { display: grid; place-items: center; width: 64px; height: 64px; flex-shrink: 0; border: 2px solid transparent; border-radius: 16px; background: var(--brand-background); color: var(--brand-foreground); box-shadow: var(--primary-glow); }
 .about-symbol svg { width: 36px; height: 36px; }
 .about-brand-copy { min-width: 0; }
 .about-brand-title { flex-wrap: wrap; gap: 10px; }
-.about-brand-title h2 { margin: 0; color: #fff; font-size: 24px; line-height: 32px; font-weight: 900; letter-spacing: .6px; }
-.about-edition { padding: 2px 8px; border: 1px solid var(--active-border); border-radius: 999px; background: #00ff9d33; color: var(--primary); box-shadow: 0 0 10px #00ff9d40; font: 700 10px/15px var(--font-mono); }
+.about-brand-title h2 { margin: 0; color: var(--heading); font-size: 24px; line-height: 32px; font-weight: 900; letter-spacing: .6px; }
+.about-edition { padding: 2px 8px; border: 1px solid var(--active-border); border-radius: 999px; background: color-mix(in srgb, var(--primary) 20%, transparent); color: var(--primary); box-shadow: 0 0 10px color-mix(in srgb, var(--primary) 25%, transparent); font: 700 10px/15px var(--font-mono); }
 .about-version { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; color: var(--muted-foreground); font: 400 12px/16px var(--font-mono); }
 .about-version-number { padding: 2px 8px; border: 1px solid var(--input-border); border-radius: 4px; background: var(--input-surface); color: var(--info); font-weight: 700; overflow-wrap: anywhere; }
 .about-version-caption { font-size: 11px; }
@@ -291,15 +291,15 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
 .about-check:hover:not(:disabled) { border-color: color-mix(in srgb, var(--info) 50%, transparent); }
 .about-checking { animation: about-spin 1s linear infinite; }
 .about-preference { display: flex; align-items: flex-start; gap: 14px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
-.about-switch { position: relative; width: 36px; height: 20px; min-height: 0; margin-top: 2px; padding: 2px; border: 0; border-radius: 999px; background: var(--secondary); }
+.about-switch { position: relative; width: 36px; height: 20px; min-height: 0; margin-top: 2px; padding: 2px; border: 0; border-radius: 999px; background: var(--input-border); }
 .about-switch[aria-checked='true'] { background: var(--primary); }
 .about-switch > span { position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 150ms ease; }
 .about-switch[aria-checked='true'] > span { transform: translateX(16px); }
-.about-preference label { margin: 0; color: #fff; font: 700 12px/18px var(--font-mono); cursor: pointer; }
+.about-preference label { margin: 0; color: var(--heading); font: 700 12px/18px var(--font-mono); cursor: pointer; }
 .about-preference label:hover { color: var(--primary); }
 .about-preference p { margin: 4px 0 0; color: var(--muted-foreground); font: 400 11px/18px var(--font-mono); }
 .about-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
-.about-section-heading h2 { display: flex; align-items: center; gap: 8px; margin: 0; color: #fff; font-family: var(--font-mono); }
+.about-section-heading h2 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--heading); font-family: var(--font-mono); }
 .about-channel h2 .app-icon { color: var(--info); }
 .about-release h2 .app-icon { color: var(--primary); }
 .about-status { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted-foreground); font: 400 12px/18px var(--font-mono); }
@@ -309,8 +309,8 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
 .about-status[data-status='installing'], .about-status[data-status='restart'] { color: var(--warning); }
 .about-status[data-status='error'] { color: var(--destructive); }
 .about-platform-description { margin: 16px 0; color: var(--muted-foreground); font: 400 12px/20px var(--font-mono); }
-.about-check-details { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: #020617cc; }
-.about-last-check { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 0; color: #e2e8f0; font: 400 12px/18px var(--font-mono); }
+.about-check-details { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--terminal) 80%, transparent); }
+.about-last-check { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 0; color: var(--editor-foreground); font: 400 12px/18px var(--font-mono); }
 .about-last-check > span:first-child { color: var(--muted-foreground); }
 .about-platforms { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 0; list-style: none; }
 .about-platforms li { padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--input-surface); color: var(--muted-foreground); font: 400 11px/16px var(--font-mono); }
@@ -320,7 +320,7 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
 .about-actions button { border-radius: 12px; font-family: var(--font-mono); }
 .about-release-version, .about-release-date { color: var(--muted-foreground); font: 400 12px/18px var(--font-mono); overflow-wrap: anywhere; }
 .about-release-date { margin: 16px 0 0; }
-.about-release-log { padding: 16px; margin-top: 16px; border: 1px solid var(--border); border-radius: 12px; background: #020617; color: #cbd5e1; font: 400 12px/20px var(--font-mono); }
+.about-release-log { padding: 16px; margin-top: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--terminal); color: var(--text-secondary); font: 400 12px/20px var(--font-mono); }
 .about-release-line { display: flex; align-items: flex-start; gap: 10px; min-height: 20px; }
 .about-release-line + .about-release-line { margin-top: 10px; padding-top: 4px; border-top: 1px solid var(--input-surface); }
 .about-release-marker { flex-shrink: 0; color: var(--info); font-weight: 700; }

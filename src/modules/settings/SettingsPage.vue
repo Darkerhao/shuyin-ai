@@ -308,7 +308,7 @@ onMounted(() => { if (desktop) void load() })
 .settings-page > .panel, .settings-page :deep(.panel), .settings-page > .history-panel { padding: 24px; box-shadow: var(--panel-shadow); margin-bottom: 24px; }
 .settings-page h2 { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .settings-page h2 > .app-icon { color: var(--info); }
-.workspace-path { margin-block: 16px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; color: var(--primary); background: #020617; font: 400 12px/18px var(--font-mono); }
+.workspace-path { margin-block: 16px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; color: var(--primary); background: var(--terminal); font: 400 12px/18px var(--font-mono); }
 .workspace-directory .actions { margin-top: 16px; }
 .workspace-directory dl { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding-top: 16px; margin: 16px 0 0; border-top: 1px solid var(--border); font: 400 11px/18px var(--font-mono); color: var(--muted-foreground); }
 .workspace-directory dt { flex-shrink: 0; }
@@ -316,13 +316,13 @@ onMounted(() => { if (desktop) void load() })
 .backup-primary h2 > .app-icon { color: var(--primary); }
 .backup-primary > p:not(.notice) { font-size: 12px; }
 .backup-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 20px; }
-.backup-options > div { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: #02061780; }
-.backup-options h3 { margin: 0; color: #fff; font-size: 13px; }
+.backup-options > div { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--terminal) 50%, transparent); }
+.backup-options h3 { margin: 0; color: var(--heading); font-size: 13px; }
 .backup-options label { font-size: 12px; line-height: 20px; }
 .backup-options > .backup-copy { border-color: var(--active-border); }
-.backup-recovery button { margin-top: 16px; color: var(--info); border-color: #00e5ff66; }
+.backup-recovery button { margin-top: 16px; color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, transparent); }
 .settings-page :deep([aria-label='缓存管理'] h2) { font-size: 14px; }
 .settings-page :deep([aria-label='缓存管理'] .actions) { gap: 8px; }
-.settings-page :deep([aria-label='缓存管理'] .file-path) { background: #020617; padding: 12px; border-radius: 12px; }
+.settings-page :deep([aria-label='缓存管理'] .file-path) { background: var(--terminal); padding: 12px; border-radius: 12px; }
 @media (max-width: 600px) { .settings-page > .panel, .settings-page :deep(.panel), .settings-page > .history-panel { padding: 16px; } .backup-options { grid-template-columns: minmax(0, 1fr); } .backup-options > div { padding: 16px; } .settings-local { font-size: 11px; } }
 </style>
