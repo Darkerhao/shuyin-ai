@@ -84,7 +84,7 @@ const revising = ref(false)
 const preview = ref<GenerationPreview | null>(null)
 const revisionLocked = computed(() => revising.value || !!preview.value)
 const activeTab = useQueryState('tab', 'publishing', ['publishing', 'audio', 'cover'])
-const durationOpen = ref(activeTab.value === 'audio')
+const durationOpen = ref(true)
 watch(activeTab, tab => { if (tab === 'audio') durationOpen.value = true })
 const clipboard = useCopyFeedback()
 const copiedField = clipboard.copied
@@ -107,10 +107,10 @@ function flashSave() {
   savedTimer = globalThis.setTimeout(() => { savedFlash.value = false }, 1000)
 }
 const tabs = [
-  { value: 'publishing', label: '发布文案' },
-  { value: 'audio', label: '音频制作' },
-  { value: 'cover', label: '封面素材' },
-]
+  { value: 'publishing', label: '发布文案', icon: 'pen' },
+  { value: 'audio', label: '音频制作', icon: 'headphones' },
+  { value: 'cover', label: '封面素材', icon: 'image' },
+] as const
 const { busy, error, message, operation, run } = useOperation()
 // Preserve the current source when a newer history entry has not been adopted.
 const draftRequired = computed(() => dirty.value || selected.value?.id !== versions.value[0]?.id)
@@ -448,29 +448,33 @@ onMounted(async () => {
 })
 </script>
 <template>
+  <div class="page-return-row">
+    <RouterLink
+      class="back-link"
+      to="/projects"
+    >
+      <AppIcon name="back" />返回我的书籍
+    </RouterLink>
+    <Button
+      variant="outline"
+      size="sm"
+      class="h-[30px] px-3 font-mono"
+      as-child
+    >
+      <RouterLink :to="`/projects/${id}`">
+        <AppIcon name="pen" />修改书籍资料
+      </RouterLink>
+    </Button>
+  </div>
   <header class="page-heading">
     <div>
-      <RouterLink
-        class="back-link"
-        to="/projects"
-      >
-        <AppIcon name="back" />我的书籍
-      </RouterLink>
-      <h1>{{ title || '书籍' }}</h1>
+      <div class="flex flex-wrap items-center gap-3">
+        <h1>{{ title || '书籍' }}</h1><span class="creation-chip">{{ taskId ? 'AI 正在生成' : 'AI 内容创作' }}</span>
+      </div>
       <p class="muted">
         把读过的好书，变成想分享的内容。
       </p>
     </div>
-    <Button
-      variant="outline"
-      as-child
-    >
-      <RouterLink
-        :to="`/projects/${id}`"
-      >
-        <AppIcon name="pen" />修改书籍资料
-      </RouterLink>
-    </Button>
   </header>
   <ProjectNavigation
     :id="id"
@@ -504,13 +508,13 @@ onMounted(async () => {
     <section class="panel generation-panel">
       <div class="generation-info">
         <span class="generation-symbol"><AppIcon
-          name="sparkle"
+          name="bolt"
           :class="{ spin: !!taskId }"
         /></span>
         <div><h2>让灵感，成为这一期内容</h2><p>甲子 · 读懂一本书 · {{ durationValid ? `目标 ${durationMinutes} 分钟` : '请设置目标时长' }}</p></div>
       </div>
       <div class="generation-actions">
-        <template v-if="providers.length > 1">
+        <template v-if="providers.length">
           <label
             class="sr-only"
             for="writing-provider"
@@ -521,9 +525,15 @@ onMounted(async () => {
           >
             <SelectTrigger
               id="writing-provider"
-              class="w-full min-w-0 sm:w-44"
+              class="writing-model w-64 max-sm:w-full min-w-0 py-2.5 data-[size=default]:h-[44px]"
+              :title="providers.find(provider => provider.id === providerId)?.name"
             >
-              <SelectValue placeholder="请选择" />
+              <span
+                class="status-dot"
+                aria-hidden="true"
+              /><SelectValue placeholder="请选择">
+                <span class="font-bold text-info">{{ providers.find(provider => provider.id === providerId)?.name }}</span>
+              </SelectValue><span class="model-kind-badge">文本</span>
             </SelectTrigger>
             <SelectContent>
               <SelectItem
@@ -537,6 +547,7 @@ onMounted(async () => {
           </Select>
         </template>
         <Button
+          class="bg-gradient-to-r from-[#10b981] to-[#2dd4bf]"
           :disabled="busy || !providerId || !!preview || !durationValid"
           type="button"
           @click="generate"
@@ -544,6 +555,7 @@ onMounted(async () => {
           <AppIcon name="sparkle" />{{ taskId && !recommending ? '生成中…' : versions.length ? '生成备选' : '一键生成' }}
         </Button>
         <Button
+          class="px-4"
           variant="outline"
           :disabled="busy || !selected || !!preview || !providerId"
           type="button"
@@ -564,34 +576,33 @@ onMounted(async () => {
     </section>
     <Collapsible
       v-model:open="durationOpen"
-      class="panel mb-6 space-y-3"
+      class="panel writing-duration"
       :unmount-on-hide="false"
     >
       <CollapsibleTrigger class="disclosure-trigger">
-        生成时长：{{ durationMinutes }} 分钟 · 调整音频时长
+        <AppIcon name="clock" /><span>生成时长：<strong class="text-primary">{{ durationMinutes }} 分钟</strong> · 调整音频目标时长</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div class="flex flex-wrap items-end gap-3">
-          <div>
-            <label
-              id="audio-duration-heading"
-              for="audio-duration"
-            >音频目标时长（分钟）</label>
-            <Input
-              id="audio-duration"
-              v-model="durationMinutes"
-              type="number"
-              min="1"
-              max="1440"
-              step="1"
-              class="w-36"
-              :aria-invalid="!durationValid"
-              aria-describedby="audio-duration-help"
-              :disabled="busy || !!preview"
-            />
-          </div>
+        <label
+          id="audio-duration-heading"
+          for="audio-duration"
+        >音频目标时长（分钟）</label>
+        <div class="duration-controls">
+          <Input
+            id="audio-duration"
+            v-model="durationMinutes"
+            class="w-28 h-[30px] px-3 py-1.5 text-center font-mono text-xs font-normal text-primary"
+            type="number"
+            min="1"
+            max="1440"
+            step="1"
+            :aria-invalid="!durationValid"
+            aria-describedby="audio-duration-help"
+            :disabled="busy || !!preview"
+          />
           <Button
             variant="outline"
+            class="duration-recommend"
             :disabled="busy || !providerId || !!preview"
             @click="recommendDuration"
           >
@@ -606,13 +617,14 @@ onMounted(async () => {
             保存时长
           </Button>
           <div
-            class="flex flex-wrap gap-2"
+            class="flex flex-wrap gap-2.5"
             aria-label="常用音频时长"
           >
             <Button
               v-for="minutes in [5, 10, 15, 20, 30, 60]"
               :key="minutes"
               size="sm"
+              :aria-pressed="Number(durationMinutes) === minutes"
               :variant="Number(durationMinutes) === minutes ? 'secondary' : 'ghost'"
               :disabled="busy || !!preview"
               @click="durationMinutes = minutes"
@@ -623,13 +635,13 @@ onMounted(async () => {
         </div>
         <p
           id="audio-duration-help"
-          class="muted text-sm"
+          class="muted"
         >
           {{ durationValid ? '生成前可自由修改时长，生成时自动保存。开场、分段安排、结尾及相关文案按此时长生成；已有内容需重新生成或按项调整。' : '请输入 1—1440 分钟的整数。' }}
         </p>
         <p
           v-if="durationReason"
-          class="muted text-sm"
+          class="muted"
           role="status"
         >
           AI 推荐依据：{{ durationReason }}
@@ -813,566 +825,612 @@ onMounted(async () => {
         </Button>
       </div>
     </section>
-    <form
-      class="writing-editor"
-      @submit.prevent="save"
+    <Collapsible
+      v-model:open="historyOpen"
+      class="writing-workspace"
+      :unmount-on-hide="false"
     >
-      <Tabs
-        v-model="activeTab"
-        :unmount-on-hide="false"
+      <form
+        class="writing-editor"
+        @submit.prevent="save"
       >
-        <TabsList
-          class="w-full"
-          aria-label="创作内容"
+        <Tabs
+          v-model="activeTab"
+          class="gap-0"
+          :unmount-on-hide="false"
         >
-          <TabsTrigger
+          <TabsList
+            class="mb-6 w-full"
+            aria-label="创作内容"
+          >
+            <TabsTrigger
+              v-for="tab in tabs"
+              :key="tab.value"
+              :value="tab.value"
+            >
+              <AppIcon :name="tab.icon" />{{ tab.label }}
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent
             v-for="tab in tabs"
             :key="tab.value"
             :value="tab.value"
           >
-            {{ tab.label }}
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent
-          v-for="tab in tabs"
-          :key="tab.value"
-          :value="tab.value"
-        >
-          <p class="tab-intro">
-            {{ tab.value === 'publishing' ? '准备标题、介绍和话题标签，让感兴趣的观众找到你的作品。' : tab.value === 'audio' ? '自动生成或手动导入音频，再到视频制作识别字幕、生成原声 MG 成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
-          </p>
-          <section
-            v-if="tab.value === 'cover' && draft.coverDesign"
-            class="panel editor-section"
-            aria-label="AI 推荐排版"
-          >
-            <h2 class="mb-4 text-base font-semibold">
-              AI 推荐字号与配色
-            </h2>
-            <CoverDesignPreview :design="draft.coverDesign" />
-            <p class="muted">
-              制作新封面时自动带入；已有封面可在「排版样式」中应用，并单独调整每种颜色。
+            <p class="tab-intro">
+              {{ tab.value === 'publishing' ? '准备标题、介绍和话题标签，让感兴趣的观众找到你的作品。' : tab.value === 'audio' ? '自动生成或手动导入音频，再到视频制作识别字幕、生成原声 MG 成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
             </p>
-          </section>
-          <section
-            v-for="field in fields.filter(item => fieldTab(item.key) === tab.value)"
-            :key="field.key"
-            class="panel editor-section"
-          >
-            <div class="result-heading">
-              <label :for="`result-${field.key}`">{{ field.label }}</label>
-              <CopyButton
-                compact
-                :label="`复制${field.label}`"
-                :copied="copiedField === field.key"
-                :disabled="!draft[field.key]"
-                @click="copy(field.key, field.label)"
-              />
-            </div>
-            <p
-              v-if="field.help"
-              :id="`result-help-${field.key}`"
-              class="muted"
-            >
-              {{ field.help }}
-            </p>
-            <Textarea
-              :id="`result-${field.key}`"
-              v-model="draft[field.key]"
-              :rows="field.rows"
-              :maxlength="field.limit"
-              :disabled="(busy && !taskId) || revisionLocked"
-              :aria-describedby="field.help ? `result-help-${field.key}` : undefined"
-              :placeholder="field.key === 'tags' ? '#读书 #好书分享 #书籍主题' : `生成后在这里查看和修改${field.label}`"
-            />
-            <p
-              v-if="field.key !== 'audioPrompt'"
-              class="character-count"
-            >
-              {{ [...draft[field.key]].length }} / {{ field.limit }}
-            </p>
-          </section>
-          <section
-            v-if="tab.value === 'audio'"
-            class="panel editor-section"
-            aria-labelledby="audio-automation-title"
-          >
-            <div class="result-heading">
-              <h2 id="audio-automation-title">
-                自动生成音频
-              </h2>
-              <Badge variant="secondary">
-                Gemini Notebook
-              </Badge>
-            </div>
-            <p class="muted">
-              书引 AI 将在应用内打开网站，自动添加所选来源、填写指导、生成并下载音频。首次使用需完成 Google 登录，请保持应用运行。
-            </p>
-            <div
-              v-if="audioBrowser && !audioBrowser.supported"
-              class="error"
-              role="alert"
-            >
-              <AppIcon name="info" />{{ audioBrowser.message || '当前平台暂不支持自动音频，请使用手动导入。' }}
-            </div>
-            <template v-else>
-              <div class="audio-setup-grid">
-                <div class="audio-setup-field">
-                  <label for="audio-source">本次原书来源</label>
-                  <Select
-                    v-model="audioSourceKey"
-                    :disabled="busy || !!activeAudioJob"
-                  >
-                    <SelectTrigger
-                      id="audio-source"
-                      class="w-full bg-card *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate"
-                      :title="selectedDocument?.originalName"
-                      aria-describedby="audio-source-hint"
-                    >
-                      <SelectValue placeholder="选择原书文件或资料文本" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem
-                        v-for="document in documents"
-                        :key="document.id"
-                        :value="`asset:${document.id}`"
-                        :disabled="document.existsStatus !== 'available'"
-                      >
-                        {{ document.originalName }} · {{ document.existsStatus === 'available' ? '文件可用' : '文件已丢失' }}
-                      </SelectItem>
-                      <SelectItem
-                        value="text"
-                        :disabled="!sourceNotes.trim()"
-                      >
-                        书籍资料文本（用户提供，不标为完整原著）
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p
-                    v-if="selectedDocument"
-                    id="audio-source-hint"
-                    class="muted file-path"
-                  >
-                    {{ displayPath(selectedDocument.filePath) }}
-                  </p>
-                  <p
-                    v-else-if="audioSourceKey === 'text' && sourceNotes.trim()"
-                    id="audio-source-hint"
-                    class="muted"
-                  >
-                    将使用「修改书籍资料」中保存的资料文本，不会标记为完整原著。
-                  </p>
-                  <p
-                    v-else
-                    id="audio-source-hint"
-                    class="muted"
-                  >
-                    还没有可选来源。请添加原书文件，或先在书籍资料中填写资料文本。
-                  </p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    :disabled="busy || !!activeAudioJob"
-                    @click="addSourceDocument"
-                  >
-                    <AppIcon name="plus" />添加原书文件
-                  </Button>
-                </div>
-                <div class="audio-setup-field">
-                  <label for="audio-format">Gemini Notebook 音频格式</label>
-                  <Select
-                    v-model="audioFormat"
-                    :disabled="busy || !!activeAudioJob"
-                  >
-                    <SelectTrigger
-                      id="audio-format"
-                      class="w-full bg-card"
-                      aria-describedby="audio-format-hint"
-                    >
-                      <SelectValue placeholder="选择格式" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="deep_dive">
-                        深入探索
-                      </SelectItem>
-                      <SelectItem value="brief">
-                        简报
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p
-                    id="audio-format-hint"
-                    class="muted"
-                  >
-                    「深入探索」通常是双主持人；「简报」较短。网站实际档位和提示词只影响创作要求，不保证精确分钟或单人效果。
-                  </p>
-                </div>
-              </div>
-              <div class="actions audio-start-actions">
-                <Button
-                  id="start-audio-job"
-                  type="button"
-                  :disabled="!canStartAudio"
-                  @click="startAudio"
-                >
-                  <AppIcon name="headphones" />开始生成音频
-                </Button>
-                <span class="muted">启动前会保存目标时长和当前提示词，再冻结来源与版本。</span>
-              </div>
-            </template>
-            <div
-              v-if="otherActiveAudioJob"
-              class="error"
-              role="alert"
-            >
-              当前已有《{{ otherActiveAudioJob.projectTitle }}》的音频任务。完成或停止该任务后才能开始本书任务。
-            </div>
-            <article
-              v-if="shownAudioJob"
-              class="asset-row"
-              aria-labelledby="audio-job-title"
+            <section
+              v-if="tab.value === 'cover' && draft.coverDesign"
+              class="panel editor-section"
+              aria-label="AI 推荐排版"
             >
               <div class="result-heading">
-                <h3 id="audio-job-title">
-                  自动任务 · {{ shownAudioJob.projectTitle }}
-                </h3>
+                <h2 class="flex items-center gap-2 text-xs font-bold">
+                  <AppIcon
+                    name="palette"
+                    class="text-[#fbbf24]"
+                  />AI 推荐字号与配色
+                </h2>
+                <span class="text-[10px] font-mono text-info">建议 {{ Math.round(draft.coverDesign.overlayOpacity * 100) }}% 底色蒙层自动适配</span>
+              </div>
+              <CoverDesignPreview :design="draft.coverDesign">
+                <template #hint>
+                  <p class="muted !m-0">
+                    建议底色蒙层 {{ Math.round(draft.coverDesign.overlayOpacity * 100) }}%，突出文字；长文字仍会按各比例自动缩小。制作新封面时自动带入；已有封面可在「排版样式」中应用。
+                  </p>
+                </template>
+              </CoverDesignPreview>
+            </section>
+            <div
+              class="editor-fields"
+              :data-tab="tab.value"
+              :class="{ 'cover-fields': tab.value === 'cover' }"
+            >
+              <section
+                v-for="field in fields.filter(item => fieldTab(item.key) === tab.value)"
+                :key="field.key"
+                :data-field="field.key"
+                class="panel editor-section"
+              >
+                <div class="result-heading">
+                  <div class="flex items-center gap-2">
+                    <span
+                      v-if="field.key.startsWith('coverPrompt')"
+                      class="ratio-tag"
+                      :data-ratio="field.key"
+                    >{{ field.key === 'coverPromptLandscape' ? '4:3 RATIO' : field.key === 'coverPromptPortrait' ? '3:4 RATIO' : '16:9 WIDE' }}</span><label :for="`result-${field.key}`">{{ field.label }}</label>
+                  </div>
+                  <CopyButton
+                    compact
+                    :label="`复制${field.label}`"
+                    :copied="copiedField === field.key"
+                    :disabled="!draft[field.key]"
+                    @click="copy(field.key, field.label)"
+                  />
+                </div>
+                <p
+                  v-if="field.help"
+                  :id="`result-help-${field.key}`"
+                  class="muted"
+                >
+                  {{ field.help }}
+                </p>
+                <div class="editor-input-wrap">
+                  <Textarea
+                    :id="`result-${field.key}`"
+                    v-model="draft[field.key]"
+                    :class="['editor-input', field.rows === 2 ? 'block min-h-0 resize-none max-sm:pr-20' : '', field.key === 'title' ? 'h-[46px] py-3 text-sm leading-5 font-medium text-white' : field.rows === 2 ? 'h-[38px] py-2.5 text-xs leading-4 font-medium' : '', field.key === 'tags' ? 'font-mono font-normal text-info' : '', field.key === 'audioPrompt' ? 'block h-56 bg-terminal p-4 font-mono text-[11px] leading-[1.5]' : field.key.startsWith('coverPrompt') ? 'p-3.5 font-mono' : '']"
+                    :rows="field.rows === 2 ? 1 : field.key === 'description' ? 5 : field.key.startsWith('coverPrompt') ? 3 : field.rows"
+                    :wrap="field.rows === 2 ? 'off' : undefined"
+                    :maxlength="field.limit"
+                    :disabled="(busy && !taskId) || revisionLocked"
+                    :aria-describedby="field.help ? `result-help-${field.key}` : undefined"
+                    :placeholder="field.key === 'tags' ? '#读书 #好书分享 #书籍主题' : `生成后在这里查看和修改${field.label}`"
+                  />
+                  <p
+                    v-if="field.key !== 'audioPrompt'"
+                    class="character-count"
+                  >
+                    {{ [...draft[field.key]].length }} / {{ field.limit }}
+                  </p>
+                </div>
+              </section>
+            </div>
+            <section
+              v-if="tab.value === 'audio'"
+              class="panel editor-section"
+              aria-labelledby="audio-automation-title"
+            >
+              <div class="result-heading">
+                <h2 id="audio-automation-title">
+                  自动生成音频
+                </h2>
                 <Badge variant="secondary">
-                  {{ audioStatusLabel(shownAudioJob) }}
+                  Gemini Notebook
                 </Badge>
               </div>
-              <p>{{ isLiveAudio(shownAudioJob) ? audioStageLabel(shownAudioJob) : `停留阶段：${audioStageLabel(shownAudioJob)}` }}</p>
               <p class="muted">
-                任务创建于 {{ new Date(shownAudioJob.createdAt).toLocaleString() }}<span v-if="isLiveAudio(shownAudioJob)"> · 已等待 {{ audioElapsed(shownAudioJob) }}</span> · 上次检查 {{ audioCheckedAt(shownAudioJob) }}
+                书引 AI 将在应用内打开网站，自动添加所选来源、填写指导、生成并下载音频。首次使用需完成 Google 登录，请保持应用运行。
               </p>
-              <p
-                v-if="audioBrowser?.url"
-                class="muted break-all"
-              >
-                当前网站：{{ audioBrowser.url }}
-              </p>
-              <p
-                v-if="shownAudioJob.status === 'waiting_login'"
-                class="notice"
-              >
-                请在应用内网站窗口完成 Google 登录。完成后无需在网站手动点击生成，书引 AI 会继续跟进。
-              </p>
-              <p
-                v-if="shownAudioJob.errorMessage"
+              <div
+                v-if="audioBrowser && !audioBrowser.supported"
                 class="error"
                 role="alert"
               >
-                {{ displayPath(shownAudioJob.errorMessage) }}
-              </p>
-              <p
-                v-if="shownAudioJob.status === 'waiting_user'"
-                class="notice"
-              >
-                {{ needsDownloadRetry(shownAudioJob) ? '音频已生成，但下载或归档未完成。继续后会只重试当前任务的下载和归档。' : '远端状态需要人工核对。确认原笔记本后继续跟进，不会自动重复点击生成。' }}
-              </p>
-              <p
-                v-if="shownAudioJob.status === 'succeeded'"
-                class="muted"
-              >
-                音频已保存到本书，点击下方播放器即可试听。
-                <span v-if="shownAudioJob.outputSize"> 文件大小：{{ (shownAudioJob.outputSize / 1024 / 1024).toFixed(2) }} MB。</span>
-              </p>
-              <AudioPlayer
-                v-if="completedAudioId"
-                ref="completedPlayer"
-                :project-id="id"
-                :asset-id="completedAudioId"
-                :title="shownAudioJob.projectTitle"
-                :format="audioAssets.find(asset => asset.id === completedAudioId)?.originalName.split('.').pop()?.toUpperCase()"
-                subtitle="已归档音频 · 本地原声"
-                aria-label="已下载音频播放器"
-                :disabled="activeTab !== 'audio'"
-              />
-              <p
-                v-if="shownAudioJob.status === 'cancelled'"
-                class="notice"
-              >
-                已停止本地跟进，可点击“继续跟进”恢复原任务。Gemini Notebook 中已经提交的生成可能仍在继续。
-              </p>
-              <p
-                v-if="shownAudioJob.status !== 'succeeded'"
-                class="muted"
-              >
-                页面空白或报错时可刷新网站；仍无法加载可重新打开原笔记本（尚未创建时打开首页）。刷新会暂停正在执行的任务，核对页面后继续跟进。登录、验证码及地区限制请按网站提示处理。
-              </p>
-              <ConfirmAction
-                v-if="audioConfirmation && audioConfirmation.job.id === shownAudioJob.id"
-                :title="audioConfirmation.action === 'cancel' ? '确认停止跟进？' : '确认关联当前笔记本？'"
-                :confirm-label="audioConfirmation.action === 'cancel' ? '确认停止跟进' : '确认关联并继续'"
-                :destructive="false"
-                :busy="busy"
-                @confirm="confirmAudio"
-                @cancel="audioConfirmation = null"
-              >
-                <p v-if="audioConfirmation.action === 'cancel'">
-                  停止后可点击“继续跟进”恢复原任务。停止跟进不等于取消 Google 生成。
-                </p>
-                <template v-else>
-                  <p>原任务未保存笔记本地址。请确认此网站是要用于《{{ audioConfirmation.job.projectTitle }}》的空白笔记本。</p>
-                  <p class="muted break-all">
-                    {{ audioConfirmation.url }}
-                  </p>
-                  <p>确认后继续命名、添加来源和生成。网站必须明确显示 0 个来源且没有音频生成结果。</p>
-                </template>
-              </ConfirmAction>
+                <AppIcon name="info" />{{ audioBrowser.message || '当前平台暂不支持自动音频，请使用手动导入。' }}
+              </div>
+              <template v-else>
+                <div class="audio-setup-grid">
+                  <div class="audio-setup-field">
+                    <label for="audio-source">本次原书来源</label>
+                    <Select
+                      v-model="audioSourceKey"
+                      :disabled="busy || !!activeAudioJob"
+                    >
+                      <SelectTrigger
+                        id="audio-source"
+                        class="w-full bg-card *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate"
+                        :title="selectedDocument?.originalName"
+                        aria-describedby="audio-source-hint"
+                      >
+                        <SelectValue placeholder="选择原书文件或资料文本" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem
+                          v-for="document in documents"
+                          :key="document.id"
+                          :value="`asset:${document.id}`"
+                          :disabled="document.existsStatus !== 'available'"
+                        >
+                          {{ document.originalName }} · {{ document.existsStatus === 'available' ? '文件可用' : '文件已丢失' }}
+                        </SelectItem>
+                        <SelectItem
+                          value="text"
+                          :disabled="!sourceNotes.trim()"
+                        >
+                          书籍资料文本（用户提供，不标为完整原著）
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p
+                      v-if="selectedDocument"
+                      id="audio-source-hint"
+                      class="muted file-path"
+                    >
+                      {{ displayPath(selectedDocument.filePath) }}
+                    </p>
+                    <p
+                      v-else-if="audioSourceKey === 'text' && sourceNotes.trim()"
+                      id="audio-source-hint"
+                      class="muted"
+                    >
+                      将使用「修改书籍资料」中保存的资料文本，不会标记为完整原著。
+                    </p>
+                    <p
+                      v-else
+                      id="audio-source-hint"
+                      class="muted"
+                    >
+                      还没有可选来源。请添加原书文件，或先在书籍资料中填写资料文本。
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      :disabled="busy || !!activeAudioJob"
+                      @click="addSourceDocument"
+                    >
+                      <AppIcon name="plus" />添加原书文件
+                    </Button>
+                  </div>
+                  <div class="audio-setup-field">
+                    <label for="audio-format">Gemini Notebook 音频格式</label>
+                    <Select
+                      v-model="audioFormat"
+                      :disabled="busy || !!activeAudioJob"
+                    >
+                      <SelectTrigger
+                        id="audio-format"
+                        class="w-full bg-card"
+                        aria-describedby="audio-format-hint"
+                      >
+                        <SelectValue placeholder="选择格式" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="deep_dive">
+                          深入探索
+                        </SelectItem>
+                        <SelectItem value="brief">
+                          简报
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p
+                      id="audio-format-hint"
+                      class="muted"
+                    >
+                      「深入探索」通常是双主持人；「简报」较短。网站实际档位和提示词只影响创作要求，不保证精确分钟或单人效果。
+                    </p>
+                  </div>
+                </div>
+                <div class="actions audio-start-actions">
+                  <Button
+                    id="start-audio-job"
+                    type="button"
+                    :disabled="!canStartAudio"
+                    @click="startAudio"
+                  >
+                    <AppIcon name="headphones" />开始生成音频
+                  </Button>
+                  <span class="muted">启动前会保存目标时长和当前提示词，再冻结来源与版本。</span>
+                </div>
+              </template>
               <div
-                v-else
-                class="actions wrap"
+                v-if="otherActiveAudioJob"
+                class="error"
+                role="alert"
               >
-                <Button
-                  v-if="canResumeAudio(shownAudioJob)"
-                  type="button"
-                  :disabled="busy"
-                  :aria-busy="busy && operation === 'resumeAudio'"
-                  @click="controlAudio(shownAudioJob, 'resume')"
-                >
-                  {{ busy && operation === 'resumeAudio' ? '正在继续…' : needsDownloadRetry(shownAudioJob) ? '重试下载并归档' : '继续跟进' }}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  :disabled="busy"
-                  @click="controlAudio(shownAudioJob, 'open_browser')"
-                >
-                  <AppIcon name="headphones" />查看网站
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  :disabled="busy || !audioBrowser?.supported"
-                  @click="controlAudio(shownAudioJob, 'refresh_browser')"
-                >
-                  <AppIcon name="refresh" />刷新网站
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  :disabled="busy || !audioBrowser?.supported"
-                  @click="controlAudio(shownAudioJob, 'reopen_browser')"
-                >
-                  重新打开
-                </Button>
-                <Button
-                  v-if="isLiveAudio(shownAudioJob)"
-                  type="button"
-                  variant="outline"
-                  :disabled="busy"
-                  @click="controlAudio(shownAudioJob, 'pause')"
-                >
-                  暂停跟进
-                </Button>
-                <Button
-                  v-if="shownAudioJob.status === 'failed'"
-                  type="button"
-                  variant="outline"
-                  :disabled="busy"
-                  @click="controlAudio(shownAudioJob, 'cancel')"
-                >
-                  停止跟进以允许新任务
-                </Button>
-                <Button
-                  v-else-if="shownAudioJob.status !== 'succeeded' && shownAudioJob.status !== 'cancelled'"
-                  type="button"
-                  variant="outline"
-                  :disabled="busy"
-                  @click="controlAudio(shownAudioJob, 'cancel')"
-                >
-                  停止跟进
-                </Button>
+                当前已有《{{ otherActiveAudioJob.projectTitle }}》的音频任务。完成或停止该任务后才能开始本书任务。
               </div>
-            </article>
-          </section>
-          <section
-            v-if="tab.value === 'audio'"
-            class="panel editor-section"
-            aria-labelledby="audio-assets-title"
-          >
-            <div class="result-heading">
-              <h2 id="audio-assets-title">
-                音频成品与视频制作
-              </h2>
-              <Badge variant="secondary">
-                {{ audioAssets.length }} 个音频
-              </Badge>
-            </div>
-            <p class="muted">
-              自动任务成功后，音频会出现在这里。也可手动导入外部音频，选择「制作 MG 视频」生成字幕与动画；外部剪辑工具导出的成片仍可在发布准备中关联。
-            </p>
-            <div class="actions wrap">
-              <Button
-                type="button"
-                :disabled="!desktop || busy"
-                @click="importAudio"
+            </section>
+            <section
+              v-if="tab.value === 'audio'"
+              class="panel editor-section audio-output"
+            >
+              <article
+                v-if="shownAudioJob"
+                class="audio-task"
+                aria-labelledby="audio-job-title"
               >
-                <AppIcon name="upload" />导入音频成品
-              </Button>
-            </div>
-            <p
-              v-if="!audioAssets.length"
-              class="muted"
-            >
-              还没有音频成品。支持 MP3、M4A、WAV、AAC、FLAC 和 OGG。
-            </p>
-            <article
-              v-for="asset in audioAssets"
-              :key="asset.id"
-              class="asset-row"
-            >
-              <h3>
-                {{ asset.originalName }} <Badge variant="secondary">
-                  音频
-                </Badge>
-              </h3>
-              <p class="file-path">
-                {{ displayPath(asset.filePath) }}
-              </p>
-              <p :class="asset.existsStatus === 'available' ? 'muted' : 'error'">
-                {{ asset.existsStatus === 'available' ? '文件可用' : '文件已丢失，请到发布准备页重新定位' }} · {{ (asset.fileSize / 1024 / 1024).toFixed(2) }} MB
-              </p>
-              <AudioPlayer
-                v-if="asset.existsStatus === 'available' && asset.id !== completedAudioId"
-                :project-id="id"
-                :asset-id="asset.id"
-                :title="title"
-                :format="asset.originalName.split('.').pop()?.toUpperCase()"
-                :subtitle="`${asset.originalName.split('.').pop()?.toUpperCase()} · ${(asset.fileSize / 1024 / 1024).toFixed(2)} MB · 本地原声`"
-                :aria-label="`音频成品播放器：${asset.originalName}`"
-                :disabled="activeTab !== 'audio'"
-              />
-              <div class="actions">
-                <Button
-                  v-if="asset.id === completedAudioId"
-                  type="button"
-                  variant="outline"
-                  :disabled="asset.existsStatus !== 'available'"
-                  @click="playCompletedAudio"
+                <div class="audio-task-meta">
+                  <div>
+                    <div class="result-heading">
+                      <h3 id="audio-job-title">
+                        自动任务 · {{ shownAudioJob.projectTitle }}
+                      </h3>
+                      <Badge variant="secondary">
+                        {{ audioStatusLabel(shownAudioJob) }}
+                      </Badge>
+                    </div>
+                    <p class="muted">
+                      停留阶段：{{ audioStageLabel(shownAudioJob) }} · 任务创建于 {{ new Date(shownAudioJob.createdAt).toLocaleString() }}<span v-if="shownAudioJob.outputSize"> · 大小：{{ (shownAudioJob.outputSize / 1024 / 1024).toFixed(2) }} MB</span><span v-if="isLiveAudio(shownAudioJob)"> · 已等待 {{ audioElapsed(shownAudioJob) }} · 上次检查 {{ audioCheckedAt(shownAudioJob) }}</span>
+                    </p>
+                  </div>
+                  <div class="flex items-start gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      class="h-[30px] px-3 py-1.5"
+                      :disabled="busy"
+                      @click="controlAudio(shownAudioJob, 'open_browser')"
+                    >
+                      查看网站
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      class="h-[30px] px-3 py-1.5"
+                      :disabled="busy || !audioBrowser?.supported"
+                      @click="controlAudio(shownAudioJob, 'refresh_browser')"
+                    >
+                      刷新网站
+                    </Button>
+                  </div>
+                </div>
+                <p
+                  v-if="audioBrowser?.url && shownAudioJob.status !== 'succeeded'"
+                  class="muted break-all"
                 >
-                  <AppIcon name="headphones" />试听音频
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  :disabled="busy || asset.existsStatus !== 'available'"
-                  @click="router.push({ path: `/projects/${id}/video`, query: { audio: asset.id } })"
+                  当前网站：{{ audioBrowser.url }}
+                </p>
+                <p
+                  v-if="shownAudioJob.status === 'waiting_login'"
+                  class="notice"
                 >
-                  <AppIcon name="video" />制作 MG 视频
-                </Button>
-              </div>
-            </article>
-          </section>
-        </TabsContent>
-      </Tabs>
-      <div class="sticky-actions">
-        <span
-          class="save-status"
-          :class="{ 'is-dirty': dirty, 'is-saved': savedFlash }"
-          role="status"
-          aria-live="polite"
-        ><i class="status-dot" />{{ dirty ? autosave.error.value || autosave.status.value || '有未保存的修改' : selected ? `已保存为版本 v${selected.versionNo}` : '尚无保存版本' }}<span class="shortcut-hint"> · Ctrl / ⌘ S 保存</span></span>
-        <div class="actions wrap">
-          <Button
-            type="submit"
-            :disabled="busy || revisionLocked || !dirty || !canSave"
-            variant="outline"
-          >
-            <AppIcon name="save" />保存修改
-          </Button>
-          <Button
-            v-if="activeTab === 'audio'"
+                  请在应用内网站窗口完成 Google 登录。完成后无需在网站手动点击生成，书引 AI 会继续跟进。
+                </p>
+                <p
+                  v-if="shownAudioJob.errorMessage"
+                  class="error"
+                  role="alert"
+                >
+                  {{ displayPath(shownAudioJob.errorMessage) }}
+                </p>
+                <p
+                  v-if="shownAudioJob.status === 'waiting_user'"
+                  class="notice"
+                >
+                  {{ needsDownloadRetry(shownAudioJob) ? '音频已生成，但下载或归档未完成。继续后会只重试当前任务的下载和归档。' : '远端状态需要人工核对。确认原笔记本后继续跟进，不会自动重复点击生成。' }}
+                </p>
+                <AudioPlayer
+                  v-if="completedAudioId"
+                  ref="completedPlayer"
+                  :project-id="id"
+                  :asset-id="completedAudioId"
+                  :title="shownAudioJob.projectTitle"
+                  :format="audioAssets.find(asset => asset.id === completedAudioId)?.originalName.split('.').pop()?.toUpperCase()"
+                  subtitle="已归档音频 · 本地原声"
+                  aria-label="已下载音频播放器"
+                  :disabled="activeTab !== 'audio'"
+                />
+                <p
+                  v-if="shownAudioJob.status === 'cancelled'"
+                  class="notice"
+                >
+                  已停止本地跟进，可点击“继续跟进”恢复原任务。Gemini Notebook 中已经提交的生成可能仍在继续。
+                </p>
+                <p
+                  v-if="shownAudioJob.status !== 'succeeded'"
+                  class="muted"
+                >
+                  页面空白或报错时可刷新网站；仍无法加载可重新打开原笔记本（尚未创建时打开首页）。刷新会暂停正在执行的任务，核对页面后继续跟进。登录、验证码及地区限制请按网站提示处理。
+                </p>
+                <ConfirmAction
+                  v-if="audioConfirmation && audioConfirmation.job.id === shownAudioJob.id"
+                  :title="audioConfirmation.action === 'cancel' ? '确认停止跟进？' : '确认关联当前笔记本？'"
+                  :confirm-label="audioConfirmation.action === 'cancel' ? '确认停止跟进' : '确认关联并继续'"
+                  :destructive="false"
+                  :busy="busy"
+                  @confirm="confirmAudio"
+                  @cancel="audioConfirmation = null"
+                >
+                  <p v-if="audioConfirmation.action === 'cancel'">
+                    停止后可点击“继续跟进”恢复原任务。停止跟进不等于取消 Google 生成。
+                  </p>
+                  <template v-else>
+                    <p>原任务未保存笔记本地址。请确认此网站是要用于《{{ audioConfirmation.job.projectTitle }}》的空白笔记本。</p>
+                    <p class="muted break-all">
+                      {{ audioConfirmation.url }}
+                    </p>
+                    <p>确认后继续命名、添加来源和生成。网站必须明确显示 0 个来源且没有音频生成结果。</p>
+                  </template>
+                </ConfirmAction>
+                <div
+                  v-else-if="shownAudioJob.status !== 'succeeded'"
+                  class="actions wrap"
+                >
+                  <Button
+                    v-if="canResumeAudio(shownAudioJob)"
+                    type="button"
+                    :disabled="busy"
+                    :aria-busy="busy && operation === 'resumeAudio'"
+                    @click="controlAudio(shownAudioJob, 'resume')"
+                  >
+                    {{ busy && operation === 'resumeAudio' ? '正在继续…' : needsDownloadRetry(shownAudioJob) ? '重试下载并归档' : '继续跟进' }}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    :disabled="busy || !audioBrowser?.supported"
+                    @click="controlAudio(shownAudioJob, 'reopen_browser')"
+                  >
+                    重新打开
+                  </Button>
+                  <Button
+                    v-if="isLiveAudio(shownAudioJob)"
+                    type="button"
+                    variant="outline"
+                    :disabled="busy"
+                    @click="controlAudio(shownAudioJob, 'pause')"
+                  >
+                    暂停跟进
+                  </Button>
+                  <Button
+                    v-if="shownAudioJob.status === 'failed'"
+                    type="button"
+                    variant="outline"
+                    :disabled="busy"
+                    @click="controlAudio(shownAudioJob, 'cancel')"
+                  >
+                    停止跟进以允许新任务
+                  </Button>
+                  <Button
+                    v-else-if="shownAudioJob.status !== 'cancelled'"
+                    type="button"
+                    variant="outline"
+                    :disabled="busy"
+                    @click="controlAudio(shownAudioJob, 'cancel')"
+                  >
+                    停止跟进
+                  </Button>
+                </div>
+              </article>
+              <section
+                class="audio-assets"
+                aria-labelledby="audio-assets-title"
+              >
+                <div class="result-heading">
+                  <h2 id="audio-assets-title">
+                    音频成品与视频制作
+                  </h2>
+                  <Badge variant="secondary">
+                    {{ audioAssets.length }} 个音频
+                  </Badge>
+                </div>
+                <p class="muted">
+                  自动任务成功后，音频会出现在这里。也可手动导入外部音频，选择「制作 MG 视频」生成字幕与动画；外部剪辑工具导出的成片仍可在发布准备中关联。
+                </p>
+                <div class="actions wrap">
+                  <Button
+                    type="button"
+                    :disabled="!desktop || busy"
+                    @click="importAudio"
+                  >
+                    <AppIcon name="upload" />导入音频成品
+                  </Button>
+                </div>
+                <p
+                  v-if="!audioAssets.length"
+                  class="muted"
+                >
+                  还没有音频成品。支持 MP3、M4A、WAV、AAC、FLAC 和 OGG。
+                </p>
+                <article
+                  v-for="asset in audioAssets"
+                  :key="asset.id"
+                  class="asset-row"
+                >
+                  <h3>
+                    {{ asset.originalName }} <Badge variant="secondary">
+                      音频
+                    </Badge>
+                  </h3>
+                  <p class="file-path">
+                    {{ displayPath(asset.filePath) }}
+                  </p>
+                  <p :class="asset.existsStatus === 'available' ? 'muted' : 'error'">
+                    {{ asset.existsStatus === 'available' ? '文件可用' : '文件已丢失，请到发布准备页重新定位' }} · {{ (asset.fileSize / 1024 / 1024).toFixed(2) }} MB
+                  </p>
+                  <AudioPlayer
+                    v-if="asset.existsStatus === 'available' && asset.id !== completedAudioId"
+                    :project-id="id"
+                    :asset-id="asset.id"
+                    :title="title"
+                    :format="asset.originalName.split('.').pop()?.toUpperCase()"
+                    :subtitle="`${asset.originalName.split('.').pop()?.toUpperCase()} · ${(asset.fileSize / 1024 / 1024).toFixed(2)} MB · 本地原声`"
+                    :aria-label="`音频成品播放器：${asset.originalName}`"
+                    :disabled="activeTab !== 'audio'"
+                  />
+                  <div class="actions">
+                    <Button
+                      v-if="asset.id === completedAudioId"
+                      type="button"
+                      variant="outline"
+                      :disabled="asset.existsStatus !== 'available'"
+                      @click="playCompletedAudio"
+                    >
+                      <AppIcon name="headphones" />试听音频
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      :disabled="busy || asset.existsStatus !== 'available'"
+                      @click="router.push({ path: `/projects/${id}/video`, query: { audio: asset.id } })"
+                    >
+                      <AppIcon name="video" />制作 MG 视频
+                    </Button>
+                  </div>
+                </article>
+              </section>
+            </section>
+          </TabsContent>
+        </Tabs>
+        <div class="sticky-actions">
+          <span
+            class="save-status"
+            :class="{ 'is-dirty': dirty, 'is-saved': savedFlash }"
+            role="status"
+            aria-live="polite"
+          ><i class="status-dot" /><CollapsibleTrigger as-child><Button
             type="button"
-            :disabled="busy || revisionLocked"
-            @click="router.push(`/projects/${id}/video`)"
-          >
-            下一步：制作视频<AppIcon name="arrow" />
-          </Button>
-          <Button
-            v-else
-            type="button"
-            :disabled="busy || revisionLocked || !canSave || !draft.coverTitle.trim() || !draft.coverSubtitle.trim()"
-            @click="makeCover"
-          >
-            {{ dirty ? '保存并制作封面' : '使用这些内容制作封面' }}<AppIcon name="arrow" />
-          </Button>
-        </div>
-      </div>
-    </form>
-    <Collapsible
-      v-if="versions.length"
-      v-model:open="historyOpen"
-      class="history-panel"
-      :unmount-on-hide="false"
-    >
-      <CollapsibleTrigger class="disclosure-trigger">
-        历史版本（{{ versions.length }}） · 每次生成和保存，都为你保留
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <label for="writing-version">预览历史版本</label>
-        <Select
-          v-model="historyVersionId"
-          :disabled="busy || !!preview"
-        >
-          <SelectTrigger
-            id="writing-version"
-            class="w-full min-w-0"
-          >
-            <SelectValue placeholder="请选择" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem
-              v-for="version in versions"
-              :key="version.id"
-              :value="version.id"
-            >
-              v{{ version.versionNo }} · {{ version.sourceType === 'ai' ? '生成' : '修改' }} · {{ version.modelName || '手动保存' }} · {{ new Date(version.createdAt).toLocaleString() }}{{ selected?.id === version.id ? ' · 当前编辑来源' : '' }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
-        <template v-if="historyVersion">
-          <div class="actions">
+            variant="ghost"
+            class="save-history-trigger inline-block h-auto p-0 font-mono text-xs font-normal"
+            aria-label="预览历史版本"
+            :disabled="!versions.length || busy"
+          ><template v-if="dirty">{{ autosave.error.value || autosave.status.value || '有未保存的修改' }}</template><template v-else-if="selected">已保存为版本 <strong class="text-primary">v{{ selected.versionNo }}</strong></template><template v-else>尚无保存版本</template><span class="sr-only">历史版本（{{ versions.length }}）</span></Button></CollapsibleTrigger><span class="shortcut-hint"> · Ctrl / ⌘ S 快速保存当前状态</span></span>
+          <div class="actions wrap">
             <Button
+              type="submit"
+              size="sm"
+              :disabled="busy || revisionLocked || !dirty || !canSave"
               variant="outline"
-              :disabled="busy || revisionLocked"
-              @click="switchVersion(historyVersion.id)"
             >
-              用于当前编辑
+              <AppIcon name="save" />保存修改
             </Button>
-            <span class="muted text-sm">预览不会改变当前稿；取用单项后保存为新版本。</span>
+            <Button
+              v-if="activeTab === 'audio'"
+              type="button"
+              size="sm"
+              class="px-5"
+              :disabled="busy || revisionLocked"
+              @click="router.push(`/projects/${id}/video`)"
+            >
+              下一步：制作视频<AppIcon name="arrow" />
+            </Button>
+            <Button
+              v-else
+              type="button"
+              size="sm"
+              class="px-5"
+              :disabled="busy || revisionLocked || !canSave || !draft.coverTitle.trim() || !draft.coverSubtitle.trim()"
+              @click="makeCover"
+            >
+              {{ dirty ? '保存并制作封面' : '使用这些内容制作封面' }}<AppIcon name="arrow" />
+            </Button>
           </div>
-          <div
-            v-for="field in historyFields"
-            :key="field.key"
-            class="version-comparison"
+        </div>
+      </form>
+      <section
+        v-if="versions.length"
+        v-show="historyOpen"
+        class="history-panel"
+      >
+        <CollapsibleContent>
+          <label for="writing-version">预览历史版本</label>
+          <Select
+            v-model="historyVersionId"
+            :disabled="busy || !!preview"
           >
-            <div>
-              <label :for="`history-current-${field.key}`">当前稿 · {{ field.label }}</label><Textarea
-                :id="`history-current-${field.key}`"
-                :model-value="draft[field.key]"
-                readonly
-                :rows="Math.min(field.rows, 5)"
-              />
-            </div>
-            <div>
-              <label :for="`history-candidate-${field.key}`">v{{ historyVersion.versionNo }} · {{ field.label }}</label><Textarea
-                :id="`history-candidate-${field.key}`"
-                :model-value="historyVersion.content[field.key]"
-                readonly
-                :rows="Math.min(field.rows, 5)"
-              /><Button
-                variant="ghost"
-                size="sm"
-                :disabled="busy || revisionLocked || draft[field.key] === historyVersion.content[field.key]"
-                @click="takeHistoryField(field.key)"
+            <SelectTrigger
+              id="writing-version"
+              class="w-full min-w-0"
+            >
+              <SelectValue placeholder="请选择" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem
+                v-for="version in versions"
+                :key="version.id"
+                :value="version.id"
               >
-                取用{{ field.label }}
+                v{{ version.versionNo }} · {{ version.sourceType === 'ai' ? '生成' : '修改' }} · {{ version.modelName || '手动保存' }} · {{ new Date(version.createdAt).toLocaleString() }}{{ selected?.id === version.id ? ' · 当前编辑来源' : '' }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <template v-if="historyVersion">
+            <div class="actions">
+              <Button
+                variant="outline"
+                :disabled="busy || revisionLocked"
+                @click="switchVersion(historyVersion.id)"
+              >
+                用于当前编辑
               </Button>
+              <span class="muted text-sm">预览不会改变当前稿；取用单项后保存为新版本。</span>
             </div>
-          </div>
-        </template>
-      </CollapsibleContent>
+            <div
+              v-for="field in historyFields"
+              :key="field.key"
+              class="version-comparison"
+            >
+              <div>
+                <label :for="`history-current-${field.key}`">当前稿 · {{ field.label }}</label><Textarea
+                  :id="`history-current-${field.key}`"
+                  :model-value="draft[field.key]"
+                  readonly
+                  :rows="Math.min(field.rows, 5)"
+                />
+              </div>
+              <div>
+                <label :for="`history-candidate-${field.key}`">v{{ historyVersion.versionNo }} · {{ field.label }}</label><Textarea
+                  :id="`history-candidate-${field.key}`"
+                  :model-value="historyVersion.content[field.key]"
+                  readonly
+                  :rows="Math.min(field.rows, 5)"
+                /><Button
+                  variant="ghost"
+                  size="sm"
+                  :disabled="busy || revisionLocked || draft[field.key] === historyVersion.content[field.key]"
+                  @click="takeHistoryField(field.key)"
+                >
+                  取用{{ field.label }}
+                </Button>
+              </div>
+            </div>
+          </template>
+        </CollapsibleContent>
+      </section>
     </Collapsible>
     <span
       class="sr-only"

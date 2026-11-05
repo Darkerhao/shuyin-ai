@@ -6,7 +6,7 @@ import 'vue-sonner/style.css'
 <template>
   <Toaster
     position="top-right"
-    theme="light"
+    theme="dark"
     rich-colors
     close-button
     :expand="true"
@@ -20,6 +20,7 @@ import 'vue-sonner/style.css'
 
 <style>
 [data-sonner-toaster] { --width: 400px; font-family: inherit; }
+[data-sonner-toaster][data-sonner-theme='dark'] { --normal-bg: var(--card); --normal-bg-hover: var(--secondary); --normal-border: var(--input-border); --normal-border-hover: var(--muted-foreground); --normal-text: var(--foreground); --success-bg: var(--accent); --success-border: var(--active-border); --success-text: var(--primary); --info-bg: var(--card); --info-border: var(--input-border); --info-text: var(--info); --warning-bg: var(--warning-surface); --warning-border: var(--warning); --warning-text: var(--warning); --error-bg: var(--error-surface); --error-border: var(--destructive); --error-text: var(--destructive); }
 [data-sonner-toast] { font-size: 14px; }
 [data-sonner-toast] [data-title] { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow-y: auto; padding-right: 12px; line-height: 1.6; }
 @media (prefers-reduced-motion: reduce) {

@@ -7,9 +7,6 @@ import AppIcon from './components/AppIcon.vue'
 import AppNotifications from './components/AppNotifications.vue'
 import AppConfirmation from './components/AppConfirmation.vue'
 import OperationFeedback from './components/OperationFeedback.vue'
-import appLogo from '../assets/app-icon.svg'
-import { buttonVariants } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
 import { useAppUpdates } from './composables/useAppUpdates'
 import RunningTasks from './components/RunningTasks.vue'
 import { useInterfacePreferences } from './composables/useInterfacePreferences'
@@ -17,7 +14,7 @@ import { workspaceSettings, openProjectDirectory } from './services/projects'
 import { displayPath } from './lib/displayPath'
 import { Button } from '@/components/ui/button'
 
-const { initialize, status: updateStatus, update, error: updateError, settingsError } = useAppUpdates()
+const { initialize, version: appVersion, status: updateStatus, update, error: updateError, settingsError } = useAppUpdates()
 const updateMessage = computed(() => updateStatus.value === 'current' ? '当前已是最新版本。' : update.value
   ? `书引 AI v${update.value.version} ${updateStatus.value === 'ready' ? '已下载，请在关于与更新中确认安装。' : updateStatus.value === 'restart' ? '已安装，请重启应用。' : updateStatus.value === 'available' ? '可用，可在关于与更新中查看。' : ''}` : '')
 onMounted(() => { void initialize() })
@@ -73,9 +70,11 @@ onBeforeUnmount(() => globalThis.removeEventListener('keydown', switchStep))
 const mainContent = ref<globalThis.HTMLElement | null>(null)
 const inProjects = computed(() => route.path.startsWith('/projects'))
 const navigation = computed(() => [
-  { to: '/projects', label: '我的书籍', icon: 'shelf', active: inProjects.value },
-  { to: '/publishing', label: '发布任务', icon: 'upload', active: route.path === '/publishing' },
-  { to: '/settings/models', label: '模型设置', icon: 'settings', active: route.path === '/settings/models' },
+  { to: '/projects', label: '我的书籍', icon: 'shelf', active: route.path === '/projects', step: 0, disabled: false },
+  { to: `/projects/${route.params.id ?? ''}`, label: '书籍资料', icon: 'book', active: !!route.params.id && route.path === `/projects/${route.params.id}`, step: 1, disabled: !route.params.id },
+  { to: `/projects/${route.params.id ?? ''}/writing`, label: '内容创作', icon: 'pen', active: route.path.endsWith('/writing'), step: 2, disabled: !route.params.id },
+  { to: '/publishing', label: '发布任务', icon: 'upload', active: route.path === '/publishing', step: 0, disabled: false },
+  { to: '/settings/models', label: '模型设置', icon: 'settings', active: route.path === '/settings/models', step: 0, disabled: false },
 ] as const)
 const workspaceTitle = computed(() => {
   if (route.path === '/projects/new') return '添加一本书'
@@ -107,134 +106,153 @@ watch(router.currentRoute, async (to, from) => {
     :message="['current', 'available', 'ready', 'restart'].includes(updateStatus) ? updateMessage : ''"
     variant="info"
   />
-  <div class="app-shell grid min-h-screen grid-cols-[64px_minmax(0,1fr)] md:grid-cols-[208px_minmax(0,1fr)] xl:grid-cols-[224px_minmax(0,1fr)]">
+  <div class="app-shell">
     <a
       class="skip-link"
       href="#main-content"
       @click.prevent="mainContent?.focus()"
     >跳到主要内容</a>
-    <aside class="app-sidebar sticky top-0 flex h-screen flex-col border-r border-sidebar-border bg-sidebar px-2 py-6 md:px-4">
-      <RouterLink
-        to="/projects"
-        aria-label="书引 AI 首页"
-        class="mx-auto flex items-center gap-3 rounded-lg md:mx-2"
-      >
-        <img
-          :src="appLogo"
-          alt=""
-          width="40"
-          height="40"
-          class="size-10 shrink-0"
-        >
-        <span class="brand-copy hidden min-w-0 md:block">
-          <span class="brand-name flex items-center gap-2 text-[22px] font-semibold leading-tight tracking-[0.06em]">书引 <span class="rounded px-1.5 py-0.5 text-[10px] font-bold leading-none tracking-normal">AI</span></span>
-          <span class="mt-1 block whitespace-nowrap text-[11px]">让阅读，成为创作。</span>
-        </span>
-      </RouterLink>
-      <p class="sidebar-caption mb-2 mt-10 hidden px-3 text-xs font-medium md:block">
-        工作空间
-      </p>
-      <nav
-        class="mt-8 grid gap-1 md:mt-0"
-        aria-label="主导航"
-      >
+    <aside class="app-sidebar">
+      <div class="sidebar-main">
         <RouterLink
-          v-for="item in navigation"
-          :key="item.to"
-          :to="item.to"
-          :title="item.label"
-          :aria-label="item.label"
-          :aria-current="item.active ? 'page' : undefined"
-          :class="cn(buttonVariants({ variant: 'ghost' }), 'h-11 justify-center px-3 md:justify-start')"
+          to="/projects"
+          aria-label="书引 AI 首页"
+          class="brand-link"
         >
-          <AppIcon :name="item.icon" />
-          <span class="hidden md:inline">{{ item.label }}</span>
-          <span
-            v-if="item.active"
-            class="ml-auto hidden size-1.5 rounded-full bg-primary md:block"
-          />
+          <span class="brand-symbol"><AppIcon name="book" /></span>
+          <span class="brand-copy hidden min-w-0 md:block">
+            <span class="brand-name">书引 <span>AI</span></span>
+            <span class="block whitespace-nowrap text-[11px]">让阅读，成为创作。</span>
+          </span>
         </RouterLink>
-      </nav>
-      <div class="sidebar-footer mt-auto space-y-4 pt-8">
-        <div
-          v-if="preferences.sidebarPrompt.value"
-          class="sidebar-prompt relative mx-2 hidden rounded-xl p-4 md:block"
+        <p class="sidebar-caption sidebar-group-label hidden md:block">
+          工作空间 · WORKSPACE
+        </p>
+        <nav
+          class="sidebar-navigation"
+          aria-label="主导航"
         >
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            class="absolute right-1 top-1"
-            aria-label="收起创作提示"
-            :disabled="!isTauri() || preferences.busy.value"
-            @click="preferences.setPrompt(false)"
+          <template
+            v-for="item in navigation"
+            :key="item.label"
           >
-            <AppIcon name="close" />
-          </Button>
-          <AppIcon
-            name="sparkle"
-            class="mb-3"
-          />
-          <p class="m-0 text-sm font-medium leading-6">
-            让阅读，成为创作。
-          </p>
-          <p class="mb-0 mt-1 text-xs leading-5 sidebar-caption">
-            从一个好故事开始，分享你的独特视角。
-          </p>
-        </div>
+            <RouterLink
+              v-if="!item.disabled"
+              :to="item.to"
+              :title="item.label"
+              :aria-label="item.label"
+              :aria-current="item.active ? 'page' : undefined"
+              class="sidebar-nav-row"
+            >
+              <AppIcon :name="item.icon" />
+              <span class="hidden md:inline">{{ item.label }}</span>
+              <span
+                v-if="item.step"
+                class="sidebar-step hidden md:inline"
+              >Step {{ item.step }}</span>
+              <span
+                v-if="item.active && !item.step"
+                class="sidebar-current-dot hidden md:block"
+              />
+            </RouterLink>
+            <span
+              v-else
+              class="sidebar-nav-row"
+              role="link"
+              aria-disabled="true"
+              :aria-label="`${item.label}，请先选择一本书`"
+            ><AppIcon :name="item.icon" /><span class="hidden md:inline">{{ item.label }}</span><span class="sidebar-step hidden md:inline">Step {{ item.step }}</span></span>
+          </template>
+        </nav>
+      </div>
+      <div class="sidebar-footer">
+        <details
+          v-if="preferences.sidebarPrompt.value"
+          class="sidebar-guidance hidden md:block"
+        >
+          <summary>创作提示</summary>
+          <div class="sidebar-prompt relative">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              class="absolute right-1 top-1"
+              aria-label="收起创作提示"
+              :disabled="!isTauri() || preferences.busy.value"
+              @click="preferences.setPrompt(false)"
+            >
+              <AppIcon name="close" />
+            </Button>
+            <p class="m-0 text-sm font-medium leading-6">
+              让阅读，成为创作。
+            </p>
+            <p class="mb-0 mt-1 text-xs leading-5 sidebar-caption">
+              从一个好故事开始，分享你的独特视角。
+            </p>
+          </div>
+        </details>
         <div
           v-if="workspaceRoot"
-          class="sidebar-location hidden min-w-0 px-3 md:block"
+          class="sidebar-location hidden min-w-0 md:block"
         >
           <p class="m-0 text-xs text-muted-foreground">
-            本地项目
+            本地存储目录
           </p>
-          <p
-            class="mb-0 mt-1 truncate text-xs"
-            :title="displayPath(workspaceRoot)"
-          >
-            {{ displayPath(workspaceRoot) }}
-          </p>
-          <Button
-            v-if="route.params.id"
-            variant="ghost"
-            size="sm"
-            class="mt-2 w-full justify-start px-0"
-            @click="openDirectory"
-          >
-            <AppIcon name="folder" />打开本书目录
-          </Button>
+          <div class="sidebar-directory-row">
+            <p
+              class="sidebar-directory"
+              :title="displayPath(workspaceRoot)"
+            >
+              {{ displayPath(workspaceRoot) }}
+            </p>
+            <Button
+              v-if="route.params.id"
+              variant="ghost"
+              size="icon-sm"
+              class="size-5 p-0 text-info"
+              aria-label="打开本书目录"
+              title="打开本书目录"
+              @click="openDirectory"
+            >
+              <AppIcon name="folder" />
+            </Button>
+          </div>
         </div>
-        <div class="border-t border-sidebar-border pt-3">
+        <div>
           <RouterLink
             to="/settings"
             title="数据与备份"
             aria-label="数据与备份"
             :aria-current="route.path === '/settings' ? 'page' : undefined"
-            :class="cn(buttonVariants({ variant: 'ghost' }), 'h-11 w-full justify-center px-3 md:justify-start')"
+            class="sidebar-backup-link"
           >
             <AppIcon name="folder" /><span class="hidden md:inline">数据与备份</span>
           </RouterLink>
+          <div class="sidebar-system hidden md:flex">
+            <span><i class="status-dot" />本地保存，安心创作</span><RouterLink
+              to="/about"
+              title="关于与更新"
+              aria-label="关于与更新"
+              :aria-current="route.path === '/about' ? 'page' : undefined"
+              class="sidebar-version-link"
+            >
+              {{ appVersion ? `v${appVersion}` : '关于与更新' }}<span
+                v-if="update"
+                class="status-dot"
+              />
+            </RouterLink>
+          </div>
           <RouterLink
             to="/about"
-            title="关于与更新"
             aria-label="关于与更新"
-            :aria-current="route.path === '/about' ? 'page' : undefined"
-            :class="cn(buttonVariants({ variant: 'ghost' }), 'h-11 w-full justify-center px-3 md:justify-start')"
+            class="sidebar-about-link md:hidden"
           >
-            <AppIcon name="info" /><span class="hidden md:inline">关于与更新</span>
-            <span
-              v-if="update"
-              class="size-1.5 rounded-full bg-primary md:ml-auto"
-            />
+            <AppIcon name="info" />
           </RouterLink>
-          <p class="sidebar-caption mb-0 mt-4 hidden items-center gap-2 px-3 text-xs md:flex">
-            <span class="size-1.5 rounded-full bg-primary" />本地保存，安心创作
-          </p>
         </div>
       </div>
     </aside>
     <div class="app-workspace min-w-0">
-      <div class="app-topbar flex h-16 items-center justify-between gap-4 border-b bg-white/80 px-5 md:px-8">
+      <div class="app-topbar">
         <div class="flex items-center gap-3 text-sm">
           <RouterLink
             to="/projects"
@@ -249,13 +267,38 @@ watch(router.currentRoute, async (to, from) => {
             aria-current="page"
           >{{ workspaceTitle }}</span>
         </div>
-        <span class="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex"><AppIcon name="shield" />资料保存在本机</span>
+        <div class="topbar-actions">
+          <nav
+            class="workspace-shortcuts"
+            aria-label="页面快捷入口"
+          >
+            <span>页面导航：</span><RouterLink to="/projects">
+              1. 我的书籍
+            </RouterLink>
+            <RouterLink
+              v-if="route.params.id"
+              :to="`/projects/${route.params.id}`"
+            >
+              2. 书籍资料
+            </RouterLink>
+            <RouterLink
+              v-if="route.params.id"
+              :to="`/projects/${route.params.id}/writing`"
+            >
+              3. 内容创作
+            </RouterLink>
+            <RouterLink to="/settings">
+              4. 数据与诊断
+            </RouterLink>
+          </nav>
+          <span class="local-storage-badge"><AppIcon name="shield" />资料保存在本地</span>
+        </div>
       </div>
       <main
         id="main-content"
         ref="mainContent"
         tabindex="-1"
-        class="app-main mx-auto w-full max-w-[1440px] px-5 py-7 md:px-8 md:py-9 xl:px-10"
+        class="app-main"
       >
         <RouterLink
           v-if="update && route.path !== '/about'"

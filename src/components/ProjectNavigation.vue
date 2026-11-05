@@ -54,7 +54,7 @@ const steps = [
             :aria-label="`${step.label} · ${state(step.path).status}`"
           >
             <AppIcon :name="step.icon" />
-            <span class="step-copy">{{ step.label }}</span>
+            <span class="step-copy">{{ index + 1 }}. {{ step.label }}</span>
             <span
               class="step-state"
               :data-tone="state(step.path).tone"

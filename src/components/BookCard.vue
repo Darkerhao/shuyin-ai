@@ -22,25 +22,10 @@ const loaded = ref(false)
 const { busy, error, message, run } = useOperation()
 const to = computed(() => props.resume ? resumeRoute(props.resume) : `/projects/${props.project.id}/writing`)
 const action = computed(() => props.resume ? resumeLabel(props.resume) : '继续创作')
-const bookTones = [
-  ['#48614f', '#eff2ed'], // 松柏绿
-  ['#876648', '#f4eee7'], // 栗棕
-  ['#4b667b', '#eaf0f3'], // 雾蓝
-  ['#793f50', '#f3e9ed'], // 酒红
-  ['#646b43', '#f1f2e8'], // 橄榄绿
-  ['#555b7c', '#ededf4'], // 靛蓝
-  ['#8b6338', '#f6efe3'], // 赭石
-  ['#3e6a67', '#e9f1ef'], // 深青绿
-  ['#985b49', '#f6ece6'], // 陶土红
-  ['#354e6b', '#e8edf3'], // 藏青
-  ['#706078', '#f0ebf2'], // 灰紫
-  ['#51575b', '#eceff0'], // 石墨灰
-] as const
 const tone = computed(() => {
-  // FNV-1a: keep each book's colors stable without depending on its title or position.
+  if (props.project.status !== 'published') return 'neutral'
   const hash = [...props.project.id].reduce((value, char) => Math.imul(value ^ char.charCodeAt(0), 0x01000193) >>> 0, 0x811c9dc5)
-  const [cover, backdrop] = bookTones[hash % bookTones.length]!
-  return { '--book-cover': cover, '--book-backdrop': backdrop }
+  return hash % 3 === 0 ? 'warm' : 'cyan'
 })
 let returnFocus: globalThis.HTMLElement | null = null
 function prepareMore(event: globalThis.Event) {
@@ -92,48 +77,44 @@ const remove = async () => {
   >
     <article
       ref="card"
-      class="project-card group relative overflow-hidden rounded-xl bg-card"
+      class="project-card group relative overflow-hidden"
+      :data-tone="tone"
       @contextmenu.prevent="openContextMenu"
       @keydown="menuShortcut"
     >
       <RouterLink
         :to="to"
-        class="project-card-link block min-w-0 text-card-foreground no-underline"
+        class="project-card-link min-w-0 text-card-foreground no-underline"
       >
-        <div
-          class="book-art relative flex h-48 items-center justify-center"
-          :style="tone"
-        >
+        <div class="project-card-header">
           <Badge
-            variant="secondary"
-            class="absolute left-3 top-3 text-xs font-normal"
+            variant="outline"
+            class="book-status"
+            :data-tone="project.status === 'published' ? tone === 'warm' ? 'success' : 'ready' : 'attention'"
           >
             {{ resume?.running ? action : projectStatuses[project.status] }}
           </Badge>
-          <div
-            class="book-jacket"
-            aria-hidden="true"
-          >
-            <strong>{{ project.title }}</strong><small v-if="project.author">{{ project.author }}</small>
-          </div>
         </div>
-        <div class="project-card-copy p-5">
+        <div
+          class="book-jacket"
+        >
           <h2
             class="project-card-title"
             :title="project.title"
           >
             {{ project.title }}
           </h2>
-          <p class="mb-3 mt-1 text-xs text-muted-foreground">
+          <p class="book-author">
             {{ project.author || '作者待补充' }}
           </p>
-          <div class="project-card-footer mt-4 flex items-center justify-between gap-2 text-xs">
-            <span class="text-muted-foreground">{{ new Date(project.updatedAt).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }} 更新</span>
-            <span class="project-continue flex items-center gap-1 font-medium text-primary">{{ action }}<AppIcon
-              name="arrow"
-              class="size-3.5"
-            /></span>
-          </div>
+          <span class="book-facts">目标音频 {{ Math.round(project.targetDurationSeconds / 60) }} 分钟</span>
+        </div>
+        <div class="project-card-footer">
+          <span>{{ new Date(project.updatedAt).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }} 更新</span>
+          <span class="project-continue">{{ action }}<AppIcon
+            name="arrow"
+            class="size-3.5"
+          /></span>
         </div>
       </RouterLink>
       <DropdownMenuTrigger as-child>
@@ -141,7 +122,7 @@ const remove = async () => {
           :id="`project-more-${project.id}`"
           variant="ghost"
           size="icon-sm"
-          class="book-more absolute right-2 top-2 bg-white/90"
+          class="book-more"
           :aria-label="`更多操作：${project.title}`"
           @click="prepareMore"
           @keydown="prepareMore"
@@ -211,13 +192,27 @@ const remove = async () => {
 </template>
 
 <style scoped>
-.book-art { background: var(--book-backdrop); }
-.book-jacket { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; width: 112px; height: 142px; padding: 16px 14px; border-radius: 2px 5px 5px 2px; background: var(--book-cover); color: #fffaf0; box-shadow: 2px 1px 0 #f9f6ec, 0 8px 24px -4px #0000001f, 0 2px 6px -1px #00000014; text-align: center; }
-.book-jacket::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 13px; border-radius: inherit; background: linear-gradient(90deg, #00000024, #ffffff17 24%, #00000012 44%, transparent); pointer-events: none; }
-.book-jacket::after { content: ''; position: absolute; inset: 2px -2px 2px auto; width: 2px; background: linear-gradient(#f9f6ec, #d9d6cf); border-radius: 0 2px 2px 0; pointer-events: none; }
-.book-jacket strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-family: var(--font-serif); font-size: 19px; line-height: 1.6; letter-spacing: 1px; }
-.book-jacket small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: inherit; }
-.book-context-menu { z-index: 50; width: 256px; max-width: calc(100vw - 24px); max-height: var(--reka-dropdown-menu-content-available-height); overflow-y: auto; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--foreground); box-shadow: 0 12px 32px -8px #202d2830, 0 2px 6px #202d2810; }
+.project-card-link { padding: 20px; display: var(--book-link-display, block); }
+.project-card-header { display: flex; align-items: center; justify-content: space-between; min-height: 22px; padding-right: 28px; margin-bottom: 16px; }
+.book-status { padding: 2px 10px; border-radius: 999px; font: 400 10px/15px var(--font-mono); color: var(--warning); border-color: color-mix(in srgb, var(--warning) 30%, transparent); background: color-mix(in srgb, var(--warning) 15%, transparent); }
+.book-status[data-tone='ready'] { color: var(--info); border-color: #00e5ff4d; background: #00e5ff26; }
+.book-status[data-tone='success'] { color: var(--primary); border-color: #00ff9d4d; background: #00ff9d26; }
+.book-jacket { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; height: var(--book-preview-height, 192px); padding: 16px; border: 1px solid #33415599; border-radius: 12px; background: linear-gradient(to bottom, #1e293b, #020617); box-shadow: inset 0 2px 4px #0000000d; text-align: center; transform: perspective(600px) rotateY(-8deg) rotateX(2deg); transition: transform 350ms cubic-bezier(.16,1,.3,1), box-shadow 350ms; }
+.book-jacket::before { content: ''; position: absolute; inset: 0 0 auto; height: 4px; background: linear-gradient(to right, transparent, var(--info), transparent); }
+.project-card[data-tone='neutral'] .book-jacket { background: linear-gradient(to bottom, #0f172a, #020617); }
+.project-card[data-tone='warm'] .book-jacket { background: linear-gradient(to bottom, #451a0366, #0f172a, #020617); border-color: #78350f66; }
+.project-card[data-tone='neutral'] .book-jacket::before, .project-card[data-tone='warm'] .book-jacket::before { display: none; }
+.project-card[data-tone='neutral'] .book-author { color: #fcd34d; }
+.project-card[data-tone='warm'] .project-card-title { color: #fde68a; }
+.project-card[data-tone='warm'] .book-author { color: #fbbf24cc; }
+.project-card-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0; color: #fff; font-size: 20px; font-weight: 900; line-height: 28px; letter-spacing: .5px; }
+.book-author { margin: 8px 0 0; font: 400 12px/16px var(--font-mono); color: var(--info); }
+.book-facts { margin-top: 16px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 4px; background: #00000080; color: var(--muted-foreground); font: 400 10px/15px var(--font-mono); }
+.project-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 20px; padding-top: 12px; border-top: 1px solid #1e293bcc; color: var(--muted-foreground); font: 400 12px/16px var(--font-mono); }
+.book-more { position: absolute; top: 19px; right: 16px; width: 24px; height: 24px; padding: 4px; border-radius: 8px; color: var(--muted-foreground); background: transparent; }
+@media (hover: hover) { .project-card:hover .book-jacket { transform: perspective(600px) rotateY(-2deg) rotateX(0deg) translateY(-6px); box-shadow: 0 15px 30px -5px #00ff9d40; } }
+@media (prefers-reduced-motion: reduce) { .book-jacket, .project-card:hover .book-jacket { transform: none; } }
+.book-context-menu { z-index: 50; width: 256px; max-width: calc(100vw - 24px); max-height: var(--reka-dropdown-menu-content-available-height); overflow-y: auto; padding: 6px; border: 1px solid var(--input-border); border-radius: 10px; background: var(--card); color: var(--foreground); box-shadow: var(--overlay-shadow); }
 .book-more[data-state="open"] { background: var(--accent); color: var(--primary); }
 .book-menu-label { padding: 8px 10px; font-size: 12px; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere; }
 .book-menu-item { display: flex; align-items: center; gap: 9px; min-height: 38px; padding: 8px 10px; border-radius: 6px; font-size: 13px; line-height: 1.5; cursor: pointer; outline: none; overflow-wrap: anywhere; }

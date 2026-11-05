@@ -50,18 +50,22 @@ onMounted(() => { if (desktop) void load() })
 </script>
 
 <template>
-  <header class="library-heading mb-8 flex flex-wrap items-center justify-between gap-5">
+  <header class="library-heading">
     <div>
-      <h1 class="m-0 font-semibold tracking-tight">
-        我的书籍
+      <h1>
+        我的书籍<span
+          v-if="loaded"
+          class="library-count"
+          aria-hidden="true"
+        >共 {{ projects.length }} 本</span>
       </h1>
-      <p class="mb-0 mt-2 text-sm text-muted-foreground">
+      <p>
         把读过的好书，变成值得分享的内容。
       </p>
     </div>
     <div
       v-if="desktop"
-      class="flex flex-wrap gap-2"
+      class="flex flex-wrap gap-3"
     >
       <RouterLink
         to="/publishing"
@@ -71,7 +75,7 @@ onMounted(() => { if (desktop) void load() })
       </RouterLink>
       <RouterLink
         to="/projects/new"
-        :class="buttonVariants()"
+        :class="[buttonVariants(), 'bg-gradient-to-r from-[#34d399] to-[#14b8a6]']"
       >
         <AppIcon name="plus" />添加一本书
       </RouterLink>
@@ -98,10 +102,10 @@ onMounted(() => { if (desktop) void load() })
     class="resume-project"
     aria-label="最近创作"
   >
-    <span class="resume-icon"><AppIcon name="pen" /></span>
+    <span class="resume-icon"><small>ACTIVE</small><AppIcon name="pen" /><span>{{ recent.author || '作者待补充' }}</span></span>
     <div class="min-w-0 flex-1">
       <p class="resume-label">
-        接着上次的灵感
+        <i class="status-dot" />接着上次的灵感继续创作
       </p>
       <h2>{{ recent.title }}</h2>
       <p class="resume-meta">
@@ -110,14 +114,14 @@ onMounted(() => { if (desktop) void load() })
     </div>
     <RouterLink
       :to="continueTo(recent.id)"
-      :class="buttonVariants({ variant: 'outline' })"
+      :class="buttonVariants()"
     >
       {{ continuation(recent.id) ? resumeLabel(continuation(recent.id)!) : '继续创作' }}<AppIcon name="arrow" />
     </RouterLink>
   </section>
-  <div class="library-toolbar mb-6 flex flex-wrap items-center justify-between gap-4 border-b pb-5">
+  <div class="library-toolbar">
     <div
-      class="library-filters flex gap-1 rounded-lg bg-muted p-1"
+      class="library-filters"
       aria-label="书籍筛选"
     >
       <Button
@@ -126,20 +130,20 @@ onMounted(() => { if (desktop) void load() })
         type="button"
         variant="ghost"
         size="sm"
-        :class="filter === item.value ? 'bg-white text-foreground shadow-xs hover:bg-white' : 'text-muted-foreground'"
+        :class="filter === item.value ? 'bg-accent text-primary hover:bg-accent' : 'text-muted-foreground'"
         :aria-pressed="filter === item.value"
         :disabled="!desktop"
         @click="filter = item.value"
       >
-        {{ item.label }}<span class="text-xs tabular-nums text-muted-foreground">{{ item.count }}</span>
+        {{ item.label }} ({{ item.count }})
       </Button>
     </div>
     <form
-      class="flex flex-wrap items-center gap-2"
+      class="library-search"
       role="search"
       @submit.prevent
     >
-      <div class="relative w-56">
+      <div class="relative">
         <label
           class="sr-only"
           for="search"
@@ -154,7 +158,7 @@ onMounted(() => { if (desktop) void load() })
           name="q"
           type="search"
           autocomplete="off"
-          class="bg-white pl-9 pr-9"
+          class="pl-9 pr-9"
           placeholder="书名、作者或 ISBN"
           :disabled="!desktop"
           @keydown.esc="search = ''"
@@ -179,7 +183,6 @@ onMounted(() => { if (desktop) void load() })
         <SelectTrigger
           id="book-sort"
           aria-label="书籍排序"
-          class="w-28 bg-white"
         >
           <SelectValue />
         </SelectTrigger>
@@ -196,7 +199,7 @@ onMounted(() => { if (desktop) void load() })
         type="button"
         variant="outline"
         size="icon"
-        class="bg-white"
+        class="size-[34px]"
         :disabled="!desktop || busy"
         aria-label="刷新书架"
         title="刷新书架"
@@ -207,6 +210,26 @@ onMounted(() => { if (desktop) void load() })
           :class="{ spin: busy }"
         />
       </Button>
+      <div
+        class="library-views"
+        role="group"
+        aria-label="书架显示方式"
+      >
+        <Button
+          v-for="mode in (['grid', 'list'] as const)"
+          :key="mode"
+          variant="ghost"
+          size="icon-sm"
+          class="h-6 w-7"
+          :aria-label="mode === 'grid' ? '网格视图' : '列表视图'"
+          :title="mode === 'grid' ? '网格视图' : '列表视图'"
+          :aria-pressed="view === mode"
+          :disabled="!desktop || !loaded"
+          @click="view = mode"
+        >
+          <AppIcon :name="mode" />
+        </Button>
+      </div>
     </form>
   </div>
   <OperationFeedback :error="error ? `${error} · 点击刷新书架重试，已有内容保留。` : ''" />
@@ -221,33 +244,13 @@ onMounted(() => { if (desktop) void load() })
     />正在读取你的书架…
   </p>
   <template v-if="loaded">
-    <div class="library-results">
-      <p
-        class="m-0 text-sm text-muted-foreground"
-        role="status"
-        aria-live="polite"
-      >
-        {{ search ? '搜索“' + search + '” · ' : '' }}共 {{ filtered.length }} 本书
-      </p>
-      <div
-        class="library-views"
-        role="group"
-        aria-label="书架显示方式"
-      >
-        <Button
-          v-for="mode in (['grid', 'list'] as const)"
-          :key="mode"
-          variant="ghost"
-          size="icon"
-          :aria-label="mode === 'grid' ? '网格视图' : '列表视图'"
-          :title="mode === 'grid' ? '网格视图' : '列表视图'"
-          :aria-pressed="view === mode"
-          @click="view = mode"
-        >
-          <AppIcon :name="mode" />
-        </Button>
-      </div>
-    </div>
+    <p
+      class="sr-only"
+      role="status"
+      aria-live="polite"
+    >
+      {{ search ? '搜索“' + search + '” · ' : '' }}共 {{ filtered.length }} 本书
+    </p>
     <section
       v-if="filtered.length"
       class="library-grid"
@@ -267,7 +270,7 @@ onMounted(() => { if (desktop) void load() })
         class="add-project-card flex min-h-72 flex-col items-center justify-center gap-4 rounded-xl border border-dashed bg-muted/20 p-8 text-center text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent/50 hover:text-primary"
         to="/projects/new"
       >
-        <span class="flex size-12 items-center justify-center rounded-xl border bg-white"><AppIcon name="plus" /></span>
+        <span class="flex size-12 items-center justify-center rounded-xl border bg-card"><AppIcon name="plus" /></span>
         <div>
           <p class="m-0 text-sm font-medium text-foreground">
             开启下一本书
@@ -279,7 +282,7 @@ onMounted(() => { if (desktop) void load() })
     </section>
     <section
       v-else
-      class="flex flex-col items-center rounded-xl border border-dashed bg-white px-6 py-20 text-center"
+      class="flex flex-col items-center rounded-xl border border-dashed bg-card px-6 py-20 text-center"
     >
       <span class="mb-5 flex size-14 items-center justify-center rounded-2xl bg-muted text-primary"><AppIcon :name="search || filter !== 'all' ? 'search' : 'book'" /></span>
       <h2 class="mb-2 text-lg font-semibold">

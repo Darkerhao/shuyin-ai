@@ -168,11 +168,11 @@ onBeforeUnmount(() => { resize?.disconnect(); visibility?.disconnect(); globalTh
 
 <style scoped>
 .audio-waveform { min-width: 0; position: relative; }
-.waveform-surface { position: relative; height: 80px; padding: 0 12px; overflow: hidden; border: 1px solid var(--player-line); border-radius: 14px; background: #00000024; transition: border-color 160ms; }
+.waveform-surface { position: relative; height: 64px; padding: 0; overflow: hidden; border: 0; border-radius: 0; background: transparent; transition: border-color 160ms; }
 .waveform-surface:hover, .waveform-surface:focus-within { border-color: var(--player-accent); }
 .waveform-stage { position: relative; width: 100%; height: 100%; }
-.waveform-image { position: absolute; width: 100%; height: 64px; top: 7px; left: 0; pointer-events: none; }
-.waveform-image path { fill: none; stroke-width: 3; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.waveform-image { position: absolute; width: 100%; height: 64px; top: 0; left: 0; pointer-events: none; }
+.waveform-image path { fill: none; stroke-width: 5; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .waveform-base { stroke: var(--player-wave); }
 .waveform-hover { stroke: var(--player-accent); opacity: .35; }
 .waveform-playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; pointer-events: none; background: var(--player-accent); box-shadow: 0 0 10px var(--player-accent); transform: translateX(-1px); }
@@ -182,7 +182,7 @@ onBeforeUnmount(() => { resize?.disconnect(); visibility?.disconnect(); globalTh
 .waveform-seek :deep([data-slot='slider-range']) { background: transparent !important; }
 .waveform-seek :deep([data-slot='slider-thumb']) { height: 100%; width: 24px; border: 0; opacity: 0; box-shadow: none !important; }
 .waveform-tooltip { position: absolute; top: -31px; transform: translateX(-50%); z-index: 2; padding: 3px 8px; color: var(--player-accent-light); background: var(--player-surface); border: 1px solid var(--player-line); border-radius: 6px; font-size: 11px; font-variant-numeric: tabular-nums; pointer-events: none; box-shadow: 0 3px 10px #00000026; }
-.player-times { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 9px; color: var(--player-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.player-times { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 4px; margin-bottom: 12px; color: var(--player-muted); font: 400 11px/16.5px var(--font-mono); font-variant-numeric: tabular-nums; }
 .player-times > span:first-child { color: var(--player-accent-light); font-weight: 550; }
 .waveform-hint { color: var(--player-muted); font-size: 11px; text-align: center; }
 @container audio-player (max-width: 400px) { .waveform-surface { height: 72px; } .waveform-image { height: 56px; } .waveform-hint { display: none; } }
