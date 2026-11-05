@@ -1,5 +1,34 @@
 # 书引 AI 开发计划与验收标准
 
+## 工作台顶部与侧栏滚动修复（2026-11-05）
+
+已修复长页面滚动时顶部栏和左侧菜单一起离开窗口的问题。浏览器用15本隔离测试书籍复现：正文滚动650px时，顶栏和侧栏的top均从0变为-650px。逐项验证后移除未限高工作区的overflow，恢复侧栏吸顶和视口高度约束；正文仍使用原文档滚动，低高度侧栏独立滚动且底部入口可达。
+
+修改文件为 `src/style.css`、`docs/TECHNICAL-DESIGN.md` 和本计划；无组件、路由、依赖、数据库结构或迁移变更，schema17与版本0.50.0不变。属于fix/patch，本次按用户要求以 `fix(ui): 修复顶部栏和侧栏随页面滚动的问题` 本地提交，不推送或发布。
+
+实际验证命令与结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run lint` | 通过，0 ESLint警告 |
+| `npm run build` | Vue TypeScript检查与Vite生产构建通过；保留大于500kB的分块提示 |
+| `npx vitest run tests/ui-refinement.test.ts tests/confirmation.test.ts tests/projects.test.ts --maxWorkers=2` | 3个文件43项通过 |
+| `npm run dev -- --port 14347 --strictPort` | 启动本轮独立开发预览 |
+| 下列Playwright `reproduce.cjs` | 修复前捕获650px位移并失败；修复后通过 |
+| 下列Playwright `verify.cjs` | 8档窗口的正文滚动、底部导航位置、内容可达及横向溢出检查通过；低高度侧栏独立滚动、页面切换及焦点、书籍菜单和另4个路由通过，页面异常0 |
+
+```powershell
+$pw = 'D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js'
+node $pw -s=shell-scroll open http://127.0.0.1:14347 --json
+node $pw -s=shell-scroll run-code --filename output/playwright/shell-scroll/setup.cjs --json
+node $pw -s=shell-scroll run-code --filename output/playwright/shell-scroll/reproduce.cjs --json
+node $pw -s=shell-scroll run-code --filename output/playwright/shell-scroll/verify.cjs --json
+```
+
+浏览器窗口为1847×1259、1440×900、1366×768、1120×800、800×600、560×700、360×800和900×500；页底位置允许1px内的子像素舍入差。另查添加书籍、模型设置、封面工坊、发布准备。900×500窗口侧栏滚动301px时正文仍为0，数据与备份及关于入口均在视口内。记录和截图位于 `output/playwright/shell-scroll/`，由现有规则忽略。
+
+范围与下一步：使用真实Vue页面和CSS、隔离内存IPC，未操作正式数据，未运行Windows安装版或WebView2系统缩放验收。历史返回书架时，异步列表加载后的原滚动位置恢复未通过；用改动前样式同样复现，原路由代码保持不变，不计入本次通过项。下一步在桌面开发版或后续安装包中核对实际窗口缩放下的滚轮操作；无本次导航固定问题的待修复项。
+
 ## 关于与更新设计稿重构（2026-11-05）
 
 按用户提供的 `ai (2)-关于与更新.html` 完成关于页三卡布局、渐变品牌符号、版本徽标、自动更新滑动开关、真实更新状态、平台标签及终端风格更新日志。旧 Checkbox 和分散日志展示由同一页面的新布局替代，更新检查、设置保存、下载、确认安装与重启继续使用原流程，无新增状态存储。
