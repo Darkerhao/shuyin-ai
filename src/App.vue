@@ -78,6 +78,7 @@ const navigation = computed(() => [
   { to: `/projects/${route.params.id ?? ''}/publishing`, label: '发布准备', icon: 'upload', active: route.path.endsWith('/publishing'), step: 5, disabled: !route.params.id },
   { to: '/publishing', label: '发布任务', icon: 'upload', active: route.path === '/publishing', step: 0, disabled: false },
   { to: '/settings/models', label: '模型设置', icon: 'settings', active: route.path === '/settings/models', step: 0, disabled: false },
+  { to: '/about', label: '关于与更新', icon: 'info', active: route.path === '/about', step: 0, disabled: false },
 ] as const)
 const workspaceTitle = computed(() => {
   if (route.path === '/projects/new') return '添加一本书'
@@ -231,26 +232,16 @@ watch(router.currentRoute, async (to, from) => {
             <AppIcon name="folder" /><span class="hidden md:inline">数据与备份</span>
           </RouterLink>
           <div class="sidebar-system hidden md:flex">
-            <span><i class="status-dot" />本地保存，安心创作</span><RouterLink
-              to="/about"
-              title="关于与更新"
-              aria-label="关于与更新"
-              :aria-current="route.path === '/about' ? 'page' : undefined"
-              class="sidebar-version-link"
+            <span><i class="status-dot" />本地保存，安心创作</span><span
+              v-if="appVersion"
+              class="sidebar-version"
             >
-              {{ appVersion ? `v${appVersion}` : '关于与更新' }}<span
+              v{{ appVersion }}<span
                 v-if="update"
                 class="status-dot"
               />
-            </RouterLink>
+            </span>
           </div>
-          <RouterLink
-            to="/about"
-            aria-label="关于与更新"
-            class="sidebar-about-link md:hidden"
-          >
-            <AppIcon name="info" />
-          </RouterLink>
         </div>
       </div>
     </aside>

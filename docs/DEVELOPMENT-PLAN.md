@@ -1,5 +1,15 @@
 # 书引 AI 开发计划与验收标准
 
+## 关于与更新菜单恢复（2026-11-05）
+
+已将“关于与更新”恢复到左侧主导航“模型设置”下方，具有完整文字、信息图标与当前页面高亮；窄窗口沿用图标、标题提示及可访问名称。底部版本号改为普通展示，清理旧的窄窗口重复入口和样式。修改 `src/App.vue`、`src/style.css`、技术设计及本计划；不改更新服务、数据库、依赖或版本号。沿用用户的中文提交要求，以 `fix(ui): 恢复关于与更新侧栏菜单入口` 本地提交。
+
+实际验证：`npm run lint` 通过；`npm run build` 的TypeScript检查与生产构建通过，保留既有大于500kB的分块提示；`npx vitest run tests/ui-refinement.test.ts tests/updates.test.ts --maxWorkers=2` 共24项通过。
+
+使用 `npm run dev -- --port 14347 --strictPort` 与既有隔离IPC数据运行 Playwright：`node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=about-menu run-code --filename output/playwright/about-menu/verify.cjs --json`。修复前捕获主菜单缺少入口；修复后1440×900、1366×768、900×500、767×800和360×800五档通过，覆盖菜单显示、唯一入口、点击/键盘跳转、当前项高亮、更新控件与横向溢出，并确认滚动后顶部/侧栏保持固定。页面异常0；截图与记录位于 `output/playwright/about-menu/`。
+
+验收标准已满足，无本次未解决问题。浏览器使用隔离测试数据，未更新正式安装包；下一步可在桌面开发版或后续安装包中核对实际系统缩放，未执行推送或发布。
+
 ## 工作台顶部与侧栏滚动修复（2026-11-05）
 
 已修复长页面滚动时顶部栏和左侧菜单一起离开窗口的问题。浏览器用15本隔离测试书籍复现：正文滚动650px时，顶栏和侧栏的top均从0变为-650px。逐项验证后移除未限高工作区的overflow，恢复侧栏吸顶和视口高度约束；正文仍使用原文档滚动，低高度侧栏独立滚动且底部入口可达。
