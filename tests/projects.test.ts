@@ -249,12 +249,20 @@ describe('M1 projects and materials', () => {
     await button(wrapper, '创建完整备份').trigger('click'); await flushPromises()
     expect(fullBackup.createFullBackup).toHaveBeenLastCalledWith('D:/备份', true)
   })
-  it('browser preview never invokes local database commands', async () => {
+  it('browser preview disables desktop actions while allowing theme changes without local database commands', async () => {
     vi.mocked(api.isDesktop).mockReturnValue(false)
     const { wrapper } = await render('/projects')
     expect(api.listProjects).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('浏览器预览')
-    expect(wrapper.findAll('button').every(b => b.element.disabled)).toBe(true)
+    const desktopActions = wrapper.get('#main-content').findAll('button')
+    expect(desktopActions.length).toBeGreaterThan(0)
+    expect(desktopActions.every(b => b.element.disabled)).toBe(true)
+    const themeToggle = wrapper.get('button.theme-toggle')
+    expect(themeToggle.attributes()).not.toHaveProperty('disabled')
+    await themeToggle.trigger('click'); await flushPromises()
+    expect(api.listProjects).not.toHaveBeenCalled()
+    expect(api.saveProject).not.toHaveBeenCalled()
+    expect(api.workspaceSettings).not.toHaveBeenCalled()
   })
   it('filters immediately and preserves the library when refreshing fails', async () => {
     const { wrapper } = await render('/projects')

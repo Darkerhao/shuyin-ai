@@ -435,7 +435,7 @@ onMounted(async () => {
       <div>
         <div class="cover-page-title">
           <h1>封面工坊</h1><Badge variant="outline">
-            {{ !ready || previewError || backgroundError || backgroundLoading ? '排版待核对' : '全尺寸排版就绪' }}
+            {{ !ready || previewError || backgroundError || backgroundLoading ? '排版待核对' : '当前尺寸排版就绪' }}
           </Badge>
         </div><p class="muted">
           让故事的第一眼，在全网信息流中拥有强烈的视觉抓力。

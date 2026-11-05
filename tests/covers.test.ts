@@ -379,10 +379,13 @@ describe('M3 cover workflow', () => {
     ])
     vi.mocked(api.readBackground).mockRejectedValue('背景不存在')
     const { wrapper } = await render()
+    expect(wrapper.get('.cover-page-title').text()).toContain('当前尺寸排版就绪')
     expect(button(wrapper, '导出 3 张封面').element.disabled).toBe(true)
     expect(button(wrapper, '导出当前封面').element.disabled).toBe(false)
     await button(wrapper, '导出当前封面').trigger('click'); await flushPromises()
     expect(api.saveCover).toHaveBeenCalledExactlyOnceWith('p1', initial.config, expect.any(Array))
+    await chooseSelect(wrapper, '#cover-size', '竖版 3:4 · 1080 × 1440')
+    expect(wrapper.get('.cover-page-title').text()).toContain('排版待核对')
   })
   it('uses the matching background for each preview and export, and shares only the background on request', async () => {
     const landscape = { ...initial.config, backgroundAssetId: 'landscape' }
