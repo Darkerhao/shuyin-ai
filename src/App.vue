@@ -10,6 +10,7 @@ import OperationFeedback from './components/OperationFeedback.vue'
 import { useAppUpdates } from './composables/useAppUpdates'
 import RunningTasks from './components/RunningTasks.vue'
 import { useInterfacePreferences } from './composables/useInterfacePreferences'
+import { useTheme } from './composables/useTheme'
 import { workspaceSettings, openProjectDirectory } from './services/projects'
 import { displayPath } from './lib/displayPath'
 import { Button } from '@/components/ui/button'
@@ -22,6 +23,7 @@ onMounted(() => { void initialize() })
 const route = useRoute()
 const router = useRouter()
 const preferences = useInterfacePreferences()
+const { theme, toggleTheme, error: themeError } = useTheme()
 const workspaceRoot = ref('')
 const directoryError = ref('')
 const dropHover = ref(false)
@@ -105,6 +107,7 @@ watch(router.currentRoute, async (to, from) => {
     <div><AppIcon name="book" /><strong>释放文件，快速添加书籍</strong><p>TXT · Markdown · EPUB · PDF · DOCX</p><span>保存前可以核对书名与来源文件。</span></div>
   </div>
   <OperationFeedback :error="preferences.error.value || directoryError" />
+  <OperationFeedback :error="themeError" />
   <OperationFeedback
     :error="updateError || settingsError"
     :message="['current', 'available', 'ready', 'restart'].includes(updateStatus) ? updateMessage : ''"
@@ -308,6 +311,16 @@ watch(router.currentRoute, async (to, from) => {
               8. 模型设置
             </RouterLink>
           </nav>
+          <Button
+            variant="outline"
+            class="theme-toggle"
+            :aria-label="theme === 'dark' ? '切换为浅色风格' : '切换为深色风格'"
+            :title="theme === 'dark' ? '切换为浅色风格' : '切换为深色风格'"
+            @click="toggleTheme"
+          >
+            <AppIcon :name="theme === 'dark' ? 'sun' : 'moon'" />
+            <span>{{ theme === 'dark' ? '浅色风格' : '深色风格' }}</span>
+          </Button>
           <span class="local-storage-badge"><AppIcon name="shield" />资料保存在本地</span>
         </div>
       </div>

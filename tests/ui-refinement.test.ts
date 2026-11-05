@@ -10,6 +10,7 @@ import * as projects from '../src/services/projects'
 import * as workflow from '../src/services/workflow'
 import * as preferences from '../src/services/interface'
 import { useInterfacePreferences } from '../src/composables/useInterfacePreferences'
+import { initializeTheme } from '../src/composables/useTheme'
 import { answerConfirmation } from './ui'
 const native = vi.hoisted(() => ({ onDragDropEvent: vi.fn(), onCloseRequested: vi.fn(), destroy: vi.fn() }))
 vi.mock('@tauri-apps/api/core', async original => ({ ...await original<typeof import('@tauri-apps/api/core')>(), isTauri: () => true }))
@@ -26,6 +27,8 @@ const mounted: ReturnType<typeof mount>[] = []
 const Page = { components: { ProjectNavigation }, props: ['id'], template: '<ProjectNavigation :id="id" /><p>创作页面</p>' }
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.clear()
+  initializeTheme()
   native.onDragDropEvent.mockResolvedValue(vi.fn())
   native.onCloseRequested.mockResolvedValue(vi.fn())
   vi.mocked(preferences.interfacePreferences).mockResolvedValue({ sidebarPrompt: true })
@@ -49,6 +52,23 @@ async function render(path = '/projects') {
   const wrapper = mount(App, { attachTo: document.body, global: { plugins: [router] } }); mounted.push(wrapper)
   await flushPromises(); return { wrapper, router }
 }
+it('switches the whole interface and notifications without remounting or saving the current editor', async () => {
+  const { wrapper, router } = await render('/projects/p1')
+  await wrapper.get('#title').setValue('尚未保存的书名')
+  const editor = wrapper.get('#title').element
+  await wrapper.get('button[aria-label="切换为浅色风格"]').trigger('click')
+  await flushPromises()
+  expect(document.documentElement.classList.contains('dark')).toBe(false)
+  expect(localStorage.getItem('shuyin.theme')).toBe('light')
+  expect(wrapper.findComponent({ name: 'Toaster' }).props('theme')).toBe('light')
+  expect(wrapper.get('#title').element).toBe(editor)
+  expect(editor).toHaveProperty('value', '尚未保存的书名')
+  expect(projects.saveProject).not.toHaveBeenCalled()
+  expect(router.currentRoute.value.path).toBe('/projects/p1')
+  await wrapper.get('button[aria-label="切换为深色风格"]').trigger('click')
+  expect(document.documentElement.classList.contains('dark')).toBe(true)
+  expect(wrapper.get('#title').element).toHaveProperty('value', '尚未保存的书名')
+})
 it('navigates to each of the five real routes using Ctrl/Cmd while keeping exactly one current step', async () => {
   const { wrapper, router } = await render('/projects/p1/covers')
   for (const [index, suffix] of ['', '/writing', '/covers', '/video', '/publishing'].entries()) {

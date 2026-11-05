@@ -547,7 +547,7 @@ onMounted(async () => {
           </Select>
         </template>
         <Button
-          class="bg-gradient-to-r from-[#10b981] to-[#2dd4bf]"
+          class="primary-gradient"
           :disabled="busy || !providerId || !!preview || !durationValid"
           type="button"
           @click="generate"
@@ -868,7 +868,7 @@ onMounted(async () => {
                 <h2 class="flex items-center gap-2 text-xs font-bold">
                   <AppIcon
                     name="palette"
-                    class="text-[#fbbf24]"
+                    class="text-warning"
                   />AI 推荐字号与配色
                 </h2>
                 <span class="text-[10px] font-mono text-info">建议 {{ Math.round(draft.coverDesign.overlayOpacity * 100) }}% 底色蒙层自动适配</span>
@@ -919,7 +919,7 @@ onMounted(async () => {
                   <Textarea
                     :id="`result-${field.key}`"
                     v-model="draft[field.key]"
-                    :class="['editor-input', field.rows === 2 ? 'block min-h-0 resize-none max-sm:pr-20' : '', field.key === 'title' ? 'h-[46px] py-3 text-sm leading-5 font-medium text-white' : field.rows === 2 ? 'h-[38px] py-2.5 text-xs leading-4 font-medium' : '', field.key === 'tags' ? 'font-mono font-normal text-info' : '', field.key === 'audioPrompt' ? 'block h-56 bg-terminal p-4 font-mono text-[11px] leading-[1.5]' : field.key.startsWith('coverPrompt') ? 'p-3.5 font-mono' : '']"
+                    :class="['editor-input', field.rows === 2 ? 'block min-h-0 resize-none max-sm:pr-20' : '', field.key === 'title' ? 'h-[46px] py-3 text-sm leading-5 font-medium text-foreground' : field.rows === 2 ? 'h-[38px] py-2.5 text-xs leading-4 font-medium' : '', field.key === 'tags' ? 'font-mono font-normal text-info' : '', field.key === 'audioPrompt' ? 'block h-56 bg-terminal p-4 font-mono text-[11px] leading-[1.5]' : field.key.startsWith('coverPrompt') ? 'p-3.5 font-mono' : '']"
                     :rows="field.rows === 2 ? 1 : field.key === 'description' ? 5 : field.key.startsWith('coverPrompt') ? 3 : field.rows"
                     :wrap="field.rows === 2 ? 'off' : undefined"
                     :maxlength="field.limit"

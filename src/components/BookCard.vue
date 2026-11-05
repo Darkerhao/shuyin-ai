@@ -195,8 +195,8 @@ const remove = async () => {
 .project-card-link { padding: 20px; display: var(--book-link-display, block); }
 .project-card-header { display: flex; align-items: center; justify-content: space-between; min-height: 22px; padding-right: 28px; margin-bottom: 16px; }
 .book-status { padding: 2px 10px; border-radius: 999px; font: 400 10px/15px var(--font-mono); color: var(--warning); border-color: color-mix(in srgb, var(--warning) 30%, transparent); background: color-mix(in srgb, var(--warning) 15%, transparent); }
-.book-status[data-tone='ready'] { color: var(--info); border-color: #00e5ff4d; background: #00e5ff26; }
-.book-status[data-tone='success'] { color: var(--primary); border-color: #00ff9d4d; background: #00ff9d26; }
+.book-status[data-tone='ready'] { color: var(--info); border-color: color-mix(in srgb, var(--info) 30%, transparent); background: color-mix(in srgb, var(--info) 15%, transparent); }
+.book-status[data-tone='success'] { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 30%, transparent); background: color-mix(in srgb, var(--primary) 15%, transparent); }
 .book-jacket { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; height: var(--book-preview-height, 192px); padding: 16px; border: 1px solid #33415599; border-radius: 12px; background: linear-gradient(to bottom, #1e293b, #020617); box-shadow: inset 0 2px 4px #0000000d; text-align: center; transform: perspective(600px) rotateY(-8deg) rotateX(2deg); transition: transform 350ms cubic-bezier(.16,1,.3,1), box-shadow 350ms; }
 .book-jacket::before { content: ''; position: absolute; inset: 0 0 auto; height: 4px; background: linear-gradient(to right, transparent, var(--info), transparent); }
 .project-card[data-tone='neutral'] .book-jacket { background: linear-gradient(to bottom, #0f172a, #020617); }
@@ -206,9 +206,9 @@ const remove = async () => {
 .project-card[data-tone='warm'] .project-card-title { color: #fde68a; }
 .project-card[data-tone='warm'] .book-author { color: #fbbf24cc; }
 .project-card-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0; color: #fff; font-size: 20px; font-weight: 900; line-height: 28px; letter-spacing: .5px; }
-.book-author { margin: 8px 0 0; font: 400 12px/16px var(--font-mono); color: var(--info); }
-.book-facts { margin-top: 16px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 4px; background: #00000080; color: var(--muted-foreground); font: 400 10px/15px var(--font-mono); }
-.project-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 20px; padding-top: 12px; border-top: 1px solid #1e293bcc; color: var(--muted-foreground); font: 400 12px/16px var(--font-mono); }
+.book-author { margin: 8px 0 0; font: 400 12px/16px var(--font-mono); color: #00e5ff; }
+.book-facts { margin-top: 16px; padding: 4px 12px; border: 1px solid #1e293b; border-radius: 4px; background: #00000080; color: #94a3b8; font: 400 10px/15px var(--font-mono); }
+.project-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted-foreground); font: 400 12px/16px var(--font-mono); }
 .book-more { position: absolute; top: 19px; right: 16px; width: 24px; height: 24px; padding: 4px; border-radius: 8px; color: var(--muted-foreground); background: transparent; }
 @media (hover: hover) { .project-card:hover .book-jacket { transform: perspective(600px) rotateY(-2deg) rotateX(0deg) translateY(-6px); box-shadow: 0 15px 30px -5px #00ff9d40; } }
 @media (prefers-reduced-motion: reduce) { .book-jacket, .project-card:hover .book-jacket { transform: none; } }

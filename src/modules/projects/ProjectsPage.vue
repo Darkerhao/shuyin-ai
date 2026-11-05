@@ -75,7 +75,7 @@ onMounted(() => { if (desktop) void load() })
       </RouterLink>
       <RouterLink
         to="/projects/new"
-        :class="[buttonVariants(), 'bg-gradient-to-r from-[#34d399] to-[#14b8a6]']"
+        :class="[buttonVariants(), 'primary-gradient']"
       >
         <AppIcon name="plus" />添加一本书
       </RouterLink>

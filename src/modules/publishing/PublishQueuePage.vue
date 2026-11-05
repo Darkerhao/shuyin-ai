@@ -247,22 +247,22 @@ onMounted(() => { if (desktop) void load() })
 .queue-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; padding: 12px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-surface); backdrop-filter: blur(16px); }
 .queue-filters { display: flex; flex-wrap: wrap; gap: 4px; }
 .queue-filters button { border: 1px solid transparent; border-radius: 12px; font-size: 12px; color: var(--muted-foreground); }
-.queue-filters button[aria-pressed='true'] { color: var(--info); background: #00e5ff1a; border-color: #00e5ff4d; box-shadow: var(--info-glow); }
+.queue-filters button[aria-pressed='true'] { color: var(--info); background: color-mix(in srgb, var(--info) 10%, transparent); border-color: color-mix(in srgb, var(--info) 30%, transparent); box-shadow: var(--info-glow); }
 .queue-filters button[data-status='draft'][aria-pressed='true'] { color: var(--warning); background: var(--warning-surface); border-color: var(--cover-border); box-shadow: none; }
 .queue-filters button[data-status='published'][aria-pressed='true'] { color: var(--primary); background: var(--accent); border-color: var(--active-border); box-shadow: var(--primary-glow); }
 .queue-task { padding: 24px; margin-bottom: 16px; box-shadow: var(--panel-shadow); transition: border-color 180ms; }
-.queue-task:hover { border-color: #00e5ff66; }
+.queue-task:hover { border-color: color-mix(in srgb, var(--info) 40%, transparent); }
 .queue-task[data-status='draft']:hover { border-color: var(--cover-border); }
 .queue-task[data-status='published']:hover { border-color: var(--active-border); }
-.queue-task h2 { margin: 0; color: #fff; font-size: 20px; line-height: 28px; letter-spacing: .3px; }
+.queue-task h2 { margin: 0; color: var(--heading); font-size: 20px; line-height: 28px; letter-spacing: .3px; }
 .queue-task p { font-family: var(--font-mono); font-size: 12px; }
 .queue-task > div:first-child > div > p:first-child { margin: 0 0 8px; }
-.queue-task :deep([data-slot='badge']) { flex-shrink: 0; padding: 4px 12px; border: 1px solid #00e5ff66; border-radius: 999px; color: var(--info); background: #00e5ff26; }
+.queue-task :deep([data-slot='badge']) { flex-shrink: 0; padding: 4px 12px; border: 1px solid color-mix(in srgb, var(--info) 40%, transparent); border-radius: 999px; color: var(--info); background: color-mix(in srgb, var(--info) 15%, transparent); }
 .queue-task[data-status='draft'] :deep([data-slot='badge']) { color: var(--warning); background: var(--warning-surface); border-color: var(--cover-border); }
 .queue-task[data-status='published'] :deep([data-slot='badge']) { color: var(--primary); background: var(--accent); border-color: var(--active-border); }
 .queue-pending { padding: 12px; border-radius: 12px; border: 1px solid var(--cover-border); color: var(--warning); background: var(--warning-surface); }
 .queue-task-actions { justify-content: flex-end; padding-top: 16px; border-top: 1px solid var(--border); margin-top: 16px; }
-.queue-task-actions a { color: var(--info); border-color: #00e5ff66; }
+.queue-task-actions a { color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, transparent); }
 .queue-task[data-status='draft'] .queue-task-actions a { color: var(--warning); border-color: var(--cover-border); }
 @media (prefers-reduced-transparency: reduce) { .queue-toolbar { backdrop-filter: none; background: var(--card); } }
 @media (max-width: 600px) { .queue-reminder { font-size: 11px; } .queue-toolbar > div:last-child { width: 100%; } .queue-task { padding: 16px; } .queue-task h2 { font-size: 18px; line-height: 26px; } .queue-task-actions { justify-content: flex-start; } }

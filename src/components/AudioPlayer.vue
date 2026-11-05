@@ -236,7 +236,7 @@ defineExpose({ media, play, pause })
           class="player-control player-theme"
           aria-label="切换播放器配色"
           :aria-pressed="theme === 'oled'"
-          :title="theme === 'emerald' ? '科技蓝黑 · 切换 OLED 暗黑' : 'OLED 暗黑 · 切换科技蓝黑'"
+          :title="theme === 'emerald' ? '跟随界面 · 切换 OLED 暗黑' : 'OLED 暗黑 · 跟随界面'"
           @click="theme = theme === 'emerald' ? 'oled' : 'emerald'"
         >
           <AppIcon name="palette" />
@@ -309,37 +309,37 @@ defineExpose({ media, play, pause })
 </template>
 
 <style scoped>
-.audio-player { --player-surface: #020617; --player-text: #ffffff; --player-muted: #94a3b8; --player-accent: #00ff9d; --player-accent-light: #00e5ff; --player-wave: #334155; --player-line: #1e293b; --player-glow: #00ff9d59; position: relative; isolation: isolate; container: audio-player / inline-size; min-width: 0; padding: 20px; border: 1px solid var(--player-line); border-radius: 16px; color: var(--player-text); background: linear-gradient(135deg, #020617, #0f172a, #020617); }
-.audio-player[data-theme='oled'] { --player-surface: #000000; --player-accent: #00e5ff; --player-accent-light: #00e5ff; --player-glow: #00e5ff59; background: var(--player-surface); }
+.audio-player { --player-surface: var(--terminal); --player-text: var(--heading); --player-muted: var(--muted-foreground); --player-accent: var(--primary); --player-accent-light: var(--info); --player-wave: var(--input-border); --player-line: var(--border); --player-control: var(--secondary); --player-contrast: var(--primary-foreground); --player-glow: color-mix(in srgb, var(--primary) 35%, transparent); position: relative; isolation: isolate; container: audio-player / inline-size; min-width: 0; padding: 20px; border: 1px solid var(--player-line); border-radius: 16px; color: var(--player-text); background: linear-gradient(135deg, var(--player-surface), var(--input-surface), var(--player-surface)); }
+.audio-player[data-theme='oled'] { color-scheme: dark; --player-surface: #000000; --player-text: #fff; --player-muted: #94a3b8; --player-wave: #334155; --player-line: #1e293b; --player-control: #1e293b; --player-contrast: #020617; --player-accent: #00e5ff; --player-accent-light: #00e5ff; --player-glow: #00e5ff59; background: var(--player-surface); }
 .player-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; min-width: 0; }
-.player-art { display: grid; place-items: center; flex: 0 0 40px; height: 40px; border: 1px solid #00ff9d66; border-radius: 12px; color: var(--player-accent); background: #00ff9d26; }
+.player-art { display: grid; place-items: center; flex: 0 0 40px; height: 40px; border: 1px solid color-mix(in srgb, var(--player-accent) 40%, transparent); border-radius: 12px; color: var(--player-accent); background: color-mix(in srgb, var(--player-accent) 15%, transparent); }
 .player-art .app-icon { width: 20px; height: 20px; stroke-width: 2; }
 .player-copy { flex: 1; min-width: 0; }
 .player-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .player-title { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--player-text); font-size: 14px; font-weight: 700; line-height: 20px; }
-.player-format { flex-shrink: 0; padding: 0 6px; color: var(--player-muted); background: #1e293b; border-radius: 4px; font: 400 10px/15px var(--font-mono); }
+.player-format { flex-shrink: 0; padding: 0 6px; color: var(--player-muted); background: var(--player-control); border-radius: 4px; font: 400 10px/15px var(--font-mono); }
 .player-subtitle { margin: 0; color: var(--player-muted); font: 400 11px/16.5px var(--font-mono); }
 .player-state { display: flex; align-items: center; gap: 6px; flex-shrink: 0; color: var(--player-accent); font: 400 12px/16px var(--font-mono); }
 .player-signal { width: 8px; height: 8px; border-radius: 50%; background: var(--player-accent); }
 .player-signal i { display: none; }
 .player-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding-top: 12px; border-top: 1px solid var(--player-line); }
 .player-skip, .player-preferences, .player-volume { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.player-play { width: 40px; height: 40px; flex-shrink: 0; padding: 0; border: 0; border-radius: 50%; background: var(--player-accent); color: #020617; box-shadow: 0 0 20px -3px var(--player-glow); transition: background-color 150ms, transform 150ms; }
+.player-play { width: 40px; height: 40px; flex-shrink: 0; padding: 0; border: 0; border-radius: 50%; background: var(--player-accent); color: var(--player-contrast); box-shadow: 0 0 20px -3px var(--player-glow); transition: background-color 150ms, transform 150ms; }
 .player-play:hover { background: color-mix(in srgb, var(--player-accent) 85%, white); }
 .player-play:active { transform: scale(.95); }
 .player-play .app-icon { width: 20px; height: 20px; fill: currentColor; stroke: none; }
 .player-control { width: 32px; height: 32px; padding: 8px; flex-shrink: 0; border-radius: 8px; background: transparent; color: var(--player-muted); }
-.player-control:hover, .player-retry:hover { background: #1e293b; color: var(--player-text); }
+.player-control:hover, .player-retry:hover { background: var(--player-control); color: var(--player-text); }
 .player-jump .app-icon { width: 16px; height: 16px; }
 .player-jump span { display: none; }
 .player-theme { width: 24px; height: 24px; padding: 4px; }
-.player-speed { width: 64px; height: 24px; min-height: 24px; padding: 4px 8px; border: 1px solid #334155cc; border-radius: 8px; background: #0f172a; color: var(--player-text); font: 400 11px/16px var(--font-mono); box-shadow: none; }
-.player-speed:hover { background: #1e293b; }
+.player-speed { width: 64px; height: 24px; min-height: 24px; padding: 4px 8px; border: 1px solid var(--player-line); border-radius: 8px; background: var(--player-surface); color: var(--player-text); font: 400 11px/16px var(--font-mono); box-shadow: none; }
+.player-speed:hover { background: var(--player-control); }
 .player-speed :deep(svg) { width: 10px; height: 10px; color: var(--player-accent); }
 .player-volume { gap: 8px; padding: 0; height: 32px; }
 .player-volume .player-control { width: 24px; height: 24px; padding: 4px; }
 .player-volume-slider { width: 80px; height: 32px; }
-.player-volume-slider :deep([data-slot='slider-track']) { height: 4px; background: #334155; }
+.player-volume-slider :deep([data-slot='slider-track']) { height: 4px; background: var(--player-wave); }
 .player-volume-slider :deep([data-slot='slider-range']) { background: var(--player-accent); }
 .player-volume-slider :deep([data-slot='slider-thumb']) { width: 10px; height: 10px; border: 0; background: var(--player-text); box-shadow: none; }
 .audio-player :deep(:focus-visible) { outline: 2px solid var(--player-accent-light); outline-offset: 3px; box-shadow: none; }
