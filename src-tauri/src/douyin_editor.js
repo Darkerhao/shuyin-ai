@@ -1,4 +1,4 @@
-// Page controls observed in Douyin Creator Center on 2026-10-26.
+// Editor controls: retained official DOM (2026-10-26) and its public bundles checked 2026-11-06.
 ((action, payload = {}) => {
   const visible = element => element.getClientRects().length > 0 && getComputedStyle(element).visibility === 'visible'
   const unique = (elements, message) => {
@@ -7,6 +7,20 @@
   }
   const exact = (root, text) => [...root.querySelectorAll('*')].filter(e => e.children.length === 0 && e.textContent.trim() === text && visible(e))
   const clean = text => text.replace(/\u200b/g, '').replace(/\r\n/g, '\n').trim()
+  const setting = (heading, names) => {
+    const root = unique(exact(document, heading), `${heading}入口已变化，请人工核对。`).closest('[class^="content-"]')
+    if (!root) throw new Error(`${heading}区域无法读取。`)
+    const options = names.map(name => unique([...root.querySelectorAll('label[data-checked]')].filter(e => visible(e) && e.textContent.trim() === name), `${heading}选项不唯一。`))
+    const selected = unique(options.filter(e => e.dataset.checked === 'true'), `${heading}当前选择无法读取。`)
+    return { root, options, selected: options.indexOf(selected) }
+  }
+  const chooseSetting = (control, index) => {
+    const label = control.options[index]
+    if (label.querySelector('input')?.disabled || label.closest('[aria-disabled="true"], [class*="disabled-"]')) throw new Error('官方页不允许修改此设置，请人工检查。')
+    if (control.selected !== index) label.click()
+  }
+  const scheduleInput = root => unique([...root.querySelectorAll('[class^="date-picker-"] input[placeholder="日期和时间"]')].filter(visible), '定时日期控件未就绪，请人工设置。')
+  const readSetting = read => { try { return read() } catch { return null } }
   const previewVideo = () => {
     if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) throw new Error('请先处理官方页弹窗，再核对视频。')
     const tab = unique([...document.querySelectorAll('[class^="tabItem-"]')].filter(e => visible(e) && e.textContent.trim() === '预览视频'), '视频预览入口已变化。')
@@ -33,6 +47,50 @@
     if (location.pathname !== '/creator-micro/content/post/video') throw new Error('尚未进入视频编辑页。')
     const titleInput = unique([...document.querySelectorAll('input[placeholder="填写作品标题，为作品获得更多流量"]')].filter(visible), '标题控件已变化。')
     const descriptionInput = unique([...document.querySelectorAll('[contenteditable="true"][data-slate-editor="true"].editor-comp-publish')].filter(visible), '简介控件已变化。')
+    if (['settings', 'setDownload', 'setPublishMode', 'setSchedule'].includes(action)) {
+      if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) throw new Error('请先处理官方页弹窗，再核对发布设置。')
+      if (action === 'setDownload') {
+        if (typeof payload.allowDownload !== 'boolean') throw new Error('保存权限无效。')
+        chooseSetting(setting('保存权限', ['允许', '不允许']), payload.allowDownload ? 0 : 1)
+      } else if (action === 'setPublishMode') {
+        if (typeof payload.scheduled !== 'boolean') throw new Error('发布时间模式无效。')
+        chooseSetting(setting('发布时间', ['立即发布', '定时发布']), payload.scheduled ? 1 : 0)
+      } else if (action === 'setSchedule') {
+        const control = setting('发布时间', ['立即发布', '定时发布'])
+        if (control.selected !== 1 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00\+08:00$/.test(payload.scheduledAt)) throw new Error('请先选择有效的定时发布。')
+        const date = new Date(payload.scheduledAt)
+        if (!Number.isFinite(date.getTime())) throw new Error('定时时间无效。')
+        // The official DatePicker uses the device timezone; the saved task uses Beijing time.
+        const pad = value => String(value).padStart(2, '0')
+        const text = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+        const input = scheduleInput(control.root)
+        if (input.disabled || input.readOnly) throw new Error('官方页定时时间不可编辑，请人工设置。')
+        if (input.value !== text) {
+          input.focus()
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, text)
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+          input.dispatchEvent(new Event('change', { bubbles: true }))
+          // The official Semi Input commits through onEnterPress, which listens to keypress.
+          input.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', charCode: 13, bubbles: true }))
+          input.blur()
+          unique(exact(control.root, '发布时间'), '发布时间标题无法定位。').click()
+        }
+      } else {
+        const download = readSetting(() => setting('保存权限', ['允许', '不允许']))
+        const schedule = readSetting(() => setting('发布时间', ['立即发布', '定时发布']))
+        const scheduled = schedule ? schedule.selected === 1 : null
+        let scheduledAt = null
+        if (scheduled) {
+          scheduledAt = readSetting(() => {
+            const value = scheduleInput(schedule.root).value
+            const time = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(value) ? Date.parse(`${value.replace(' ', 'T')}:00`) : NaN
+            return Number.isFinite(time) ? `${new Date(time + 8 * 3600000).toISOString().slice(0, 16)}:00+08:00` : ''
+          })
+        }
+        return { ok: true, allowDownload: download ? download.selected === 0 : null, scheduled, scheduledAt }
+      }
+      return { ok: true }
+    }
     if (action === 'read') {
       if (payload.video) previewVideo()
       const videos = [...document.querySelectorAll('video')].filter(v => !v.closest('[role="dialog"]'))

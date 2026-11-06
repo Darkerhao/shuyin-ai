@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import App from '../src/App.vue'
 import PublishingPage from '../src/modules/publishing/PublishingPage.vue'
+import { DateTimePicker } from '../src/components/ui/date-time-picker'
 import * as api from '../src/services/publishing'
 import * as projects from '../src/services/projects'
 import * as ai from '../src/services/ai'
@@ -14,7 +15,7 @@ import type { VideoJob } from '../src/types/video'
 import { emptyPublishing } from '../src/types/ai'
 import { emptyProject, type Asset } from '../src/types/project'
 import { newCover } from '../src/types/cover'
-import type { PublishTask } from '../src/types/publishing'
+import { publishScheduleError, type PublishTask } from '../src/types/publishing'
 vi.mock('../src/services/publishing', () => ({ listPublishTasks: vi.fn(), listPublishQueue: vi.fn(), savePublishTask: vi.fn(), preparePublishTask: vi.fn(), recordPublishSuccess: vi.fn(), openPublishItem: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), videoAssetMetadata: vi.fn(), linkAsset: vi.fn(), chooseAsset: vi.fn(), unlinkAsset: vi.fn(), openAsset: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listVersions: vi.fn() }))
@@ -22,7 +23,7 @@ vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), readCoverExport:
 vi.mock('../src/services/douyin', () => ({ openDouyinWindow: vi.fn(), getDouyinSession: vi.fn(), startDouyinTask: vi.fn(), continueDouyinTask: vi.fn(), stopDouyinTask: vi.fn(), onDouyinProgress: vi.fn() }))
 vi.mock('../src/services/video', () => ({ listJobs: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ decodeBackground: vi.fn(async () => ({ src: 'data:image/png;base64,thumbnail' })) }))
-const task: PublishTask = { id: 't1', projectId: 'p1', writingVersionId: null, title: '中文标题', description: '第一行\n第二行', tags: '#读书', videoAssetId: 'a1', audioAssetId: 'a2', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: true, coversConfirmed: true, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [{ key: 'video', label: '视频已关联且文件可用', passed: true }], record: null }
+const task: PublishTask = { id: 't1', projectId: 'p1', writingVersionId: null, title: '中文标题', description: '第一行\n第二行', tags: '#读书', videoAssetId: 'a1', audioAssetId: 'a2', landscapeCoverId: 'c1', portraitCoverId: 'c2', titleConfirmed: true, coversConfirmed: true, allowDownload: true, scheduledAt: null, status: 'ready', taskDirectory: 'D:/任务包', createdAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z', checklist: [{ key: 'video', label: '视频已关联且文件可用', passed: true }], record: null }
 const asset: Asset = { id: 'a1', projectId: 'p1', assetType: 'video', originalName: '视频.mp4', filePath: 'D:/视频.mp4', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
 const audio: Asset = { id: 'a2', projectId: 'p1', assetType: 'audio', originalName: '本期音频.m4a', filePath: 'D:/本期音频.m4a', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
 const wrappers: ReturnType<typeof mount>[] = []
@@ -69,6 +70,77 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 
 describe('M4 publish preparation', () => {
+  it('saves save permission and Beijing schedule with the selected task, restores them, and clears schedule for immediate publication', async () => {
+    const { wrapper } = await render()
+    expect(wrapper.get('#publish-allow-download').attributes('data-state')).toBe('checked')
+    expect(wrapper.find('#publish-scheduled-at').exists()).toBe(false)
+    await wrapper.get('#publish-allow-download').trigger('click')
+    await chooseSelect(wrapper, '#publish-mode', '定时发布')
+    expect(button(wrapper, '确认并开始辅助发布').element.disabled).toBe(true)
+    wrapper.getComponent(DateTimePicker).vm.$emit('update:modelValue', '2099-01-05T18:30'); await flushPromises()
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ allowDownload: false, scheduledAt: '2099-01-05T18:30:00+08:00' }))
+    expect(wrapper.get('#publish-scheduled-at').text()).toContain('2099-01-05 18:30')
+    expect(douyin.startDouyinTask).not.toHaveBeenCalled()
+    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, allowDownload: false, scheduledAt: '2099-01-05T18:30:00+08:00' }])
+    const restored = await render()
+    expect(restored.wrapper.get('#publish-allow-download').attributes('data-state')).toBe('unchecked')
+    expect(restored.wrapper.get('#publish-scheduled-at').text()).toContain('2099-01-05 18:30')
+    await chooseSelect(wrapper, '#publish-mode', '立即发布')
+    expect(wrapper.find('#publish-scheduled-at').exists()).toBe(false)
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.savePublishTask).toHaveBeenLastCalledWith('t1', expect.objectContaining({ allowDownload: false, scheduledAt: null }))
+  })
+  it('rejects expired schedule before saving or starting and preserves the current text', async () => {
+    const { wrapper } = await render()
+    await chooseSelect(wrapper, '#publish-mode', '定时发布')
+    wrapper.getComponent(DateTimePicker).vm.$emit('update:modelValue', '2020-01-01T12:00'); await flushPromises()
+    expect(wrapper.get('#publish-schedule-error').text()).toContain('已过')
+    expect(button(wrapper, '确认并开始辅助发布').element.disabled).toBe(true)
+    expect(button(wrapper, '确认并导出任务包').element.disabled).toBe(true)
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+    expect(douyin.startDouyinTask).not.toHaveBeenCalled()
+    expect(wrapper.get('#publish-title').element).toHaveProperty('value', task.title)
+  })
+  it('keeps published settings read-only and permits a historical publication time', async () => {
+    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, status: 'published', allowDownload: false, scheduledAt: '2020-01-01T12:00:00+08:00' }])
+    const { wrapper } = await render()
+    expect(wrapper.get('#publish-allow-download').element.matches(':disabled')).toBe(true)
+    expect(wrapper.get('#publish-mode').element.matches(':disabled')).toBe(true)
+    expect(wrapper.get('#publish-scheduled-at').element.matches(':disabled')).toBe(true)
+    expect(wrapper.get('#publish-schedule-error').text()).toBe('')
+  })
+  it('allows recording an already published scheduled work after its time without starting it again', async () => {
+    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, scheduledAt: '2020-01-01T12:00:00+08:00' }])
+    const { wrapper } = await render()
+    expect(button(wrapper, '确认并开始辅助发布').element.disabled).toBe(true)
+    expect(button(wrapper, '记录发布成功').element.disabled).toBe(false)
+    await button(wrapper, '记录发布成功').trigger('click'); await flushPromises()
+    expect(dialog().text()).toContain('实际发布时间')
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+    expect(douyin.startDouyinTask).not.toHaveBeenCalled()
+  })
+  it('requires a time from the shared UI picker before recording publication', async () => {
+    const { wrapper } = await render()
+    await button(wrapper, '记录发布成功').trigger('click'); await flushPromises()
+    const picker = wrapper.findAllComponents(DateTimePicker).find(component => component.props('id') === 'published-at')!
+    expect(picker.exists()).toBe(true)
+    expect(document.querySelector('input[type="datetime-local"]')).toBeNull()
+    picker.vm.$emit('update:modelValue', ''); await flushPromises()
+    expect(button(wrapper, '确认已发布并保存').element.disabled).toBe(true)
+    await dialog().get('form').trigger('submit'); await flushPromises()
+    expect(api.recordPublishSuccess).not.toHaveBeenCalled()
+    picker.vm.$emit('update:modelValue', '2026-11-06T18:30'); await flushPromises()
+    expect(button(wrapper, '确认已发布并保存').element.disabled).toBe(false)
+  })
+  it('validates real calendar dates and the exact instant independently of device timezone', () => {
+    const instant = Date.parse('2026-11-06T12:00:00+08:00')
+    expect(publishScheduleError(null, instant)).toBe('')
+    expect(publishScheduleError('2026-11-06T12:01:00+08:00', instant)).toBe('')
+    for (const value of ['', '2026-02-30T12:00:00+08:00', '2026-11-06T12:01:00Z', '2026-11-06T12:01:30+08:00']) expect(publishScheduleError(value, instant)).not.toBe('')
+    expect(publishScheduleError('2026-11-06T12:00:00+08:00', instant)).toContain('已过')
+  })
   it('counts the current text and distinguishes unsaved edits from saved checks', async () => {
     const { wrapper } = await render()
     expect(wrapper.get('.preflight-status').text()).toBe('已保存检查全部通过')

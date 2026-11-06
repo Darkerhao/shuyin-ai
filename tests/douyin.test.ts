@@ -31,6 +31,26 @@ beforeEach(() => {
 afterEach(() => wrappers.splice(0).forEach(w => w.unmount()))
 
 describe('single host-owned Douyin workflow', () => {
+  it('allows stopping a completed review before changing its publish settings', async () => {
+    vi.mocked(api.getDouyinSession).mockResolvedValue(state({ status: 'review', step: 'review', waitingFor: null }))
+    vi.mocked(api.stopDouyinTask).mockResolvedValue(state({ status: 'stopped', waitingFor: null, message: '人工接管' }))
+    const w = render(); await flushPromises()
+    await button(w, '停止并人工接管').trigger('click'); await flushPromises()
+    expect(api.stopDouyinTask).toHaveBeenCalledWith(1)
+    expect(w.text()).toContain('人工接管')
+  })
+  it('shows the saved settings and requires an explicit settings decision when automatic verification stops', async () => {
+    vi.mocked(api.getDouyinSession).mockResolvedValue(state({ step: 'settings', waitingFor: 'settings', completed: ['video', 'text', 'covers', 'collection'] }))
+    const w = render({ task: { ...task, allowDownload: false, scheduledAt: '2099-01-05T18:30:00+08:00' } }); await flushPromises()
+    expect(w.text()).toContain('保存权限：不允许')
+    expect(w.text()).toContain('2099-01-05 18:30（北京时间）')
+    expect(api.continueDouyinTask).not.toHaveBeenCalled()
+    await button(w, '重新填写发布设置').trigger('click'); await flushPromises()
+    expect(api.continueDouyinTask).toHaveBeenCalledWith(1, { kind: 'page' })
+    progress(state({ step: 'settings', waitingFor: 'settings' })); await flushPromises()
+    await button(w, '已按本次任务核对保存权限和发布时间').trigger('click'); await flushPromises()
+    expect(api.continueDouyinTask).toHaveBeenLastCalledWith(1, { kind: 'settings' })
+  })
   it('keeps the embedded assistant idle until progress arrives and restores a waiting session', async () => {
     const w = render({ hideStart: true })
     await flushPromises()

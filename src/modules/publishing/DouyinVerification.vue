@@ -28,6 +28,7 @@ const steps = [
   { key: 'video', label: '上传视频', fields: ['video'] },
   { key: 'text', label: '填写内容', fields: ['text'] },
   { key: 'covers', label: '封面与合集', fields: ['covers', 'collection'] },
+  { key: 'settings', label: '发布设置', fields: ['settings'] },
   { key: 'review', label: '检查并发布', fields: [] },
 ]
 let dispose: (() => void) | undefined
@@ -102,6 +103,12 @@ defineExpose({ start })
     </p>
     <p v-if="task">
       <strong>{{ task.title || '待填写标题' }}</strong>
+    </p>
+    <p
+      v-if="task"
+      class="muted"
+    >
+      保存权限：{{ task.allowDownload ? '允许' : '不允许' }} · {{ task.scheduledAt ? `定时发布：${task.scheduledAt.slice(0, 16).replace('T', ' ')}（北京时间）` : '立即发布' }}
     </p>
     <slot name="summary" />
     <p v-if="session?.account">
@@ -259,6 +266,28 @@ defineExpose({ start })
           </CollapsibleContent>
         </Collapsible>
       </template>
+      <template v-else-if="session.waitingFor === 'settings'">
+        <div class="actions wrap">
+          <Button
+            type="button"
+            :disabled="pending || stopping"
+            @click="decide({ kind: 'settings' })"
+          >
+            已按本次任务核对保存权限和发布时间
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            :disabled="pending || stopping"
+            @click="decide({ kind: 'page' })"
+          >
+            重新填写发布设置
+          </Button>
+        </div>
+        <p class="muted">
+          如需更改任务中的时间或保存权限，请先停止并人工接管，再修改并保存任务。
+        </p>
+      </template>
       <Button
         v-else
         type="button"
@@ -287,7 +316,7 @@ defineExpose({ start })
         {{ session?.status === 'review' ? '查看抖音并发布' : '显示抖音窗口' }}
       </Button>
       <Button
-        v-if="active || pending"
+        v-if="active || pending || session?.status === 'review'"
         type="button"
         variant="outline"
         :disabled="!session || stopping"

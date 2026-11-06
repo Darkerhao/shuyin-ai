@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 发布设置（2026-11-06，v18）
+
+`0018_publish_settings.sql` 为 `publish_tasks` 增加 `allow_download INTEGER NOT NULL DEFAULT 1 CHECK (allow_download IN (0,1))` 和可空的 `scheduled_at TEXT`。旧任务默认允许保存、立即发布，原文案、素材、合集、状态、时间戳和发布记录不回填或重写。保存两个字段与原任务更新使用同一事务。
+
+`scheduled_at=NULL` 表示立即发布；非空值只能为北京时间 `YYYY-MM-DDTHH:mm:00+08:00`，由 Rust 在保存前校验真实日期与未来时间。导出与上传快照再次校验未来时间，过期不再允许上传或导出；就绪任务仍可在作品实际发布后记录成功，已发布任务可展示历史时间。数据库与完整资料备份沿用现有机制，旧备份先升级到 v18。已验证 v17 升级、旧备份恢复、重开、快照和任务包兼容，见[发布设置验收](DOUYIN-SETTINGS-VERIFICATION.md)。
+
 ## 本机主题偏好（2026-11-05，仍为v17）
 
 主题属于设备显示偏好，保存为当前应用 WebView 的 `localStorage.shuyin.theme`，值仅为 `light` / `dark`；不是业务数据，不写入 SQLite、编辑草稿或素材配置，不随数据库/完整资料备份恢复。清除应用 WebView 数据后回到默认深色，可再次选择。无表、列、索引和SQL迁移，SQLite继续作为结构化业务数据权威来源。见[浅色风格验收](LIGHT-THEME-VERIFICATION.md)。

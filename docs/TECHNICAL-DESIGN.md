@@ -1,5 +1,17 @@
 # 书引 AI 技术设计文档
 
+## 抖音发布设置（2026-11-06）
+
+`PublishInput` 增加 `allowDownload: boolean` 与 `scheduledAt: string | null`，贯通既有页面、保存命令、SQLite、任务快照和任务包；`null` 唯一表示立即发布，不另存一份发布时间模式。定时以 `YYYY-MM-DDTHH:mm:00+08:00` 保存，前端显示北京时间，Rust 通过 SQLite 日期规范化与当前时间校验，保存失败不写任务。时间已过时禁止重新保存、导出或上传，但保留就绪任务供实际发布后人工记录结果；历史查看与人工记录不要求时间仍在未来。
+
+沿用 `douyin_flow.rs` 单一会话编排，在合集之后增加 `settings` 步骤。适配器使用官方区域标题、`label[data-checked]` 和日期控件定位；原生 checkbox 的 checked 属性在留存官方 DOM 中与选中标签不一致，不能单独作为选择证据。设置日期时从固定北京时间转换到设备当地时间，使用原生输入事件和 Semi Input 的 `keypress` Enter 提交，然后按官方回读值转换回北京时间比较。未接受、被限时范围调整或无法读取时等待用户；已读到与目标不同的值不允许人工确认跳过。
+
+最终阶段再次核对任务快照、有效时间与发布设置。未知控件可明确人工核对并标记为人工完成，停止与重试沿用原会话；不增加浏览器轮询服务、权限或自动发布接口。任务包 manifest 默认缺失字段按旧行为解读，默认设置沿用原文本文件，定制设置增加 `publish-settings.txt`；旧默认任务包继续有效。数据库 v18 与验证边界见[发布设置验收](DOUYIN-SETTINGS-VERIFICATION.md)。
+
+提交前审核修复：读取当前任务快照后才判断是否复用会话，`resumable_session` 要求绑定快照完全相同且未停止；修改设置后的旧 `review` 不能直接返回，准备完成也提供停止入口。官方观察分别保留可空的保存权限、发布时间模式和时间，自动完成要求全部匹配，人工确认及最终复核仍拒绝任意可读冲突，只有无法读取的字段交由用户明确核对。
+
+`components/ui/date-time-picker/DateTimePicker.vue` 复用 Reka UI 2.11.0 的日历/浮层及现有 Select 时分组件，替代发布页两处原生日期输入。外部只传分钟精度墙上时间字符串，定时边界拼接 `+08:00`，人工记录边界保持原设备时区转换。已保存值决定初始月份；选择日期保留小时分钟，清空后阻止提交，浮层按可用高度滚动。`@internationalized/date` 3.12.4 已在原锁中作为 Reka 依赖，本次显式声明直接依赖以使用其公开日期类型及解析 API，没有新增另一套日期实现或改变锁内版本。依据为[Reka DatePicker](https://reka-ui.com/docs/components/date-picker)、[CalendarDateTime](https://react-spectrum.adobe.com/internationalized/date/CalendarDateTime.html)及安装版本源码。
+
 ## 双主题共享颜色（2026-11-05）
 
 `useTheme.ts` 持有唯一主题状态，在 `main.ts` 挂载 Vue 前读取本机 `localStorage.shuyin.theme`。仅接受 `light` / `dark`，无值或未知值使用原深色；切换先持久化，成功后更新根文档的 `dark` 类。读取失败可继续启动，写入失败保留原主题并通过原通知组件反馈，用户可重试。主题不参与路由 key、组件挂载、草稿或业务保存。

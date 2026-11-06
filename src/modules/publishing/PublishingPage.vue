@@ -2,6 +2,8 @@
 import { displayPath } from '@/lib/displayPath'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { DateTimePicker } from '@/components/ui/date-time-picker'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -13,7 +15,7 @@ import { getProject, isDesktop, listAssets, openAsset, videoAssetMetadata, type 
 import { listVersions } from '../../services/ai'
 import { listCovers, readCoverExport } from '../../services/covers'
 import { listJobs as listVideoJobs } from '../../services/video'
-import { publishInput, publishStatuses, type PublishInput, type PublishQueueItem, type PublishTask } from '../../types/publishing'
+import { publishInput, publishScheduleError, publishStatuses, type PublishInput, type PublishQueueItem, type PublishTask } from '../../types/publishing'
 import type { Asset } from '../../types/project'
 import type { CoverVersion } from '../../types/cover'
 import type { WritingVersion } from '../../types/ai'
@@ -45,10 +47,19 @@ const selected = ref<PublishTask | null>(null)
 const assets = ref<Asset[]>([])
 const covers = ref<CoverVersion[]>([])
 const writing = ref<WritingVersion[]>([])
-const draft = ref<PublishInput>({ projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: null, audioAssetId: null, landscapeCoverId: null, portraitCoverId: null, titleConfirmed: false, coversConfirmed: false })
+const draft = ref<PublishInput>({ projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: null, audioAssetId: null, landscapeCoverId: null, portraitCoverId: null, titleConfirmed: false, coversConfirmed: false, allowDownload: true, scheduledAt: null })
 const original = ref(JSON.stringify(draft.value))
 const dirty = computed(() => JSON.stringify(draft.value) !== original.value)
 const published = computed(() => selected.value?.status === 'published')
+const publishMode = computed({
+  get: () => draft.value.scheduledAt === null ? 'immediate' : 'scheduled',
+  set: (mode: string) => { draft.value.scheduledAt = mode === 'scheduled' ? '' : null },
+})
+const scheduledTime = computed({
+  get: () => draft.value.scheduledAt?.slice(0, 16) ?? '',
+  set: (value: string | number) => { draft.value.scheduledAt = value ? `${value}:00+08:00` : '' },
+})
+const scheduleError = computed(() => published.value ? '' : publishScheduleError(draft.value.scheduledAt))
 const videos = computed(() => assets.value.filter(a => a.assetType === 'video'))
 const audios = computed(() => assets.value.filter(a => a.assetType === 'audio'))
 const landscape = computed(() => covers.value.filter(c => c.exportedPath && c.config.width === 1440 && c.config.height === 1080))
@@ -72,10 +83,11 @@ watch(() => [draft.value.videoAssetId, video.value?.filePath, video.value?.modif
 const titleCount = computed(() => [...draft.value.title].length)
 const descriptionCount = computed(() => [...draft.value.description].length)
 const savedChecksPassed = computed(() => !!selected.value?.checklist.length && selected.value.checklist.every(item => item.passed))
-const canReview = computed(() => titleCount.value > 0 && titleCount.value <= 30 && descriptionCount.value > 0 && descriptionCount.value <= 1000 && audio.value?.existsStatus === 'available' && video.value?.existsStatus === 'available' && !!videoInfo.value?.hasAudio && videoInfo.value.width > 0 && videoInfo.value.height > 0 && videoInfo.value.durationSeconds > 0 && !!selectedLandscape.value && !!selectedPortrait.value)
+const canReview = computed(() => !scheduleError.value && titleCount.value > 0 && titleCount.value <= 30 && descriptionCount.value > 0 && descriptionCount.value <= 1000 && audio.value?.existsStatus === 'available' && video.value?.existsStatus === 'available' && !!videoInfo.value?.hasAudio && videoInfo.value.width > 0 && videoInfo.value.height > 0 && videoInfo.value.durationSeconds > 0 && !!selectedLandscape.value && !!selectedPortrait.value)
 const recordOpen = ref(false)
 const assetsOpen = ref(false)
 const record = ref({ publishedAt: '', postUrl: '', notes: '' })
+const recordTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const { busy: operationBusy, error, message, run } = useOperation()
 const douyinBusy = ref(false)
 const busy = computed(() => operationBusy.value || douyinBusy.value)
@@ -84,7 +96,7 @@ const taskLabel = (task: PublishTask) => `${task.title || '未填写标题'} · 
 const assetLabel = (asset: Asset) => `${asset.originalName}${asset.existsStatus !== 'available' ? '（文件不可用）' : ''}`
 
 function defaults(): PublishInput {
-  return { projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: videos.value.find(v => v.existsStatus === 'available')?.id ?? null, audioAssetId: audios.value.find(v => v.existsStatus === 'available')?.id ?? null, landscapeCoverId: landscape.value[0]?.id ?? null, portraitCoverId: portrait.value[0]?.id ?? null, titleConfirmed: false, coversConfirmed: false }
+  return { projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: videos.value.find(v => v.existsStatus === 'available')?.id ?? null, audioAssetId: audios.value.find(v => v.existsStatus === 'available')?.id ?? null, landscapeCoverId: landscape.value[0]?.id ?? null, portraitCoverId: portrait.value[0]?.id ?? null, titleConfirmed: false, coversConfirmed: false, allowDownload: true, scheduledAt: null }
 }
 async function selectWriting(id: string | null) {
   if (id === draft.value.writingVersionId) return
@@ -167,12 +179,16 @@ async function switchTask(id: string | null, returnFocusId?: string) {
   await syncTaskUrl(id)
 }
 async function persist() {
+  const invalid = publishScheduleError(draft.value.scheduledAt)
+  if (invalid) throw new Error(invalid)
   if (!selected.value || dirty.value) update(await api.savePublishTask(selected.value?.id ?? null, { ...draft.value }))
   await syncTaskUrl(selected.value!.id)
   return selected.value!.id
 }
 async function persistReviewed() {
   await videoInfoRequest
+  const invalid = publishScheduleError(draft.value.scheduledAt)
+  if (invalid) throw new Error(invalid)
   if (!canReview.value) throw new Error('请先补齐文案、有效原声和成片，以及两张发布封面。')
   const snapshot = JSON.stringify(draft.value)
   await Promise.all([readCoverExport(props.id, draft.value.landscapeCoverId!), readCoverExport(props.id, draft.value.portraitCoverId!)])
@@ -182,7 +198,7 @@ async function persistReviewed() {
 }
 function isConfirmationCheck(key: string) { return key === 'covers' || (key === 'title' && !!draft.value.title.trim()) }
 function locateMissing(key: string) {
-  const fields: Record<string, string> = { title: 'publish-title', description: 'publish-description', audio: 'publish-audio', video: 'publish-video', landscape: 'publish-landscape', portrait: 'publish-portrait', package: 'publish-export' }
+  const fields: Record<string, string> = { title: 'publish-title', description: 'publish-description', audio: 'publish-audio', video: 'publish-video', landscape: 'publish-landscape', portrait: 'publish-portrait', package: 'publish-export', schedule: 'publish-scheduled-at' }
   const confirmation = isConfirmationCheck(key)
   const target = confirmation ? 'publish-confirm' : fields[key] ?? 'publish-title'
   const action = confirmation || key === 'package'
@@ -229,6 +245,7 @@ async function recordSuccess(startNext = false) {
   let recorded = false
   await run(async () => {
     if (!selected.value) return
+    if (!record.value.publishedAt) throw new Error('请选择实际发布时间。')
     const saved = await api.recordPublishSuccess(selected.value.id, { ...record.value, publishedAt: new Date(record.value.publishedAt).toISOString(), confirmed: true })
     update(saved); recordOpen.value = false; message.value = '已记录发布成功。'; recorded = true
   })
@@ -608,6 +625,78 @@ onMounted(() => { if (desktop) void loadTask() })
               </RouterLink> 一次导出横版和竖版两张封面。
             </p>
           </section>
+          <section
+            class="panel publish-settings-panel"
+            aria-labelledby="publish-settings-heading"
+          >
+            <h2 id="publish-settings-heading">
+              抖音发布设置
+            </h2>
+            <div class="form-grid">
+              <div>
+                <label
+                  class="check-label"
+                  for="publish-allow-download"
+                >
+                  <Checkbox
+                    id="publish-allow-download"
+                    v-model="draft.allowDownload"
+                    :disabled="busy || published || recordOpen"
+                    aria-describedby="publish-download-help"
+                  />允许保存视频
+                </label>
+                <p
+                  id="publish-download-help"
+                  class="muted"
+                >
+                  允许其他用户将本条作品保存到本地；取消后会在抖音设置为「不允许」。
+                </p>
+              </div>
+              <div>
+                <label for="publish-mode">发布时间</label>
+                <Select
+                  v-model="publishMode"
+                  :disabled="busy || published || recordOpen"
+                >
+                  <SelectTrigger id="publish-mode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="immediate">
+                      立即发布
+                    </SelectItem>
+                    <SelectItem value="scheduled">
+                      定时发布
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <template v-if="publishMode === 'scheduled'">
+                  <label for="publish-scheduled-at">定时发布时间（北京时间）</label>
+                  <DateTimePicker
+                    id="publish-scheduled-at"
+                    v-model="scheduledTime"
+                    :disabled="busy || published || recordOpen"
+                    :aria-invalid="!!scheduleError"
+                    aria-describedby="publish-schedule-help publish-schedule-error"
+                  />
+                  <p
+                    v-show="!!scheduleError"
+                    id="publish-schedule-error"
+                    class="error"
+                    role="status"
+                  >
+                    {{ scheduleError }}
+                  </p>
+                </template>
+                <p
+                  id="publish-schedule-help"
+                  class="muted"
+                >
+                  设置随本次任务保存并填入官方页，定时范围以当前抖音账号为准。请亲自核对并提交；定时作品实际发布后再记录成功。
+                </p>
+              </div>
+            </div>
+          </section>
           <div
             v-if="!published"
             class="publish-save"
@@ -678,6 +767,12 @@ onMounted(() => { if (desktop) void loadTask() })
           </div>
           <div>
             <dt>发布内容</dt><dd>{{ descriptionCount }} / 1000 字</dd>
+          </div>
+          <div>
+            <dt>保存权限</dt><dd>{{ draft.allowDownload ? '允许保存视频' : '不允许保存视频' }}</dd>
+          </div>
+          <div>
+            <dt>发布时间</dt><dd>{{ draft.scheduledAt ? `${scheduledTime.replace('T', ' ')}（北京时间）` : publishMode === 'scheduled' ? '待选择定时时间' : '立即发布' }}</dd>
           </div>
           <div>
             <dt>制作原声</dt><dd>
@@ -755,7 +850,10 @@ onMounted(() => { if (desktop) void loadTask() })
             v-if="!canReview"
             class="text-sm text-muted-foreground"
           >
-            请补齐文案、有效音视频与双封面，再开始发布准备。
+            {{ scheduleError || '请补齐文案、有效音视频与双封面，再开始发布准备。' }}
+            <template v-if="scheduleError && selected?.status === 'ready'">
+              若作品已经实际发布，可直接记录发布成功。
+            </template>
           </p>
           <div class="actions">
             <Button
@@ -915,6 +1013,7 @@ onMounted(() => { if (desktop) void loadTask() })
         confirm-label="确认已发布并保存"
         form="publish-record-form"
         :destructive="false"
+        :disabled="!record.publishedAt"
         :busy="busy"
         @cancel="recordOpen = false"
       >
@@ -931,11 +1030,11 @@ onMounted(() => { if (desktop) void loadTask() })
           >
             <div class="publish-record-field">
               <label for="published-at">实际发布时间</label>
-              <Input
+              <DateTimePicker
                 id="published-at"
                 v-model="record.publishedAt"
-                type="datetime-local"
-                required
+                :time-zone="recordTimeZone"
+                :disabled="busy"
               />
             </div>
             <div class="publish-record-field">
@@ -1000,7 +1099,7 @@ onMounted(() => { if (desktop) void loadTask() })
             type="button"
             form="publish-record-form"
             variant="outline"
-            :disabled="busy || !nextTaskId"
+            :disabled="busy || !nextTaskId || !record.publishedAt"
             @click="($event.currentTarget as globalThis.HTMLButtonElement).form?.reportValidity() && recordSuccess(true)"
           >
             确认记录并准备下一篇
@@ -1056,6 +1155,9 @@ onMounted(() => { if (desktop) void loadTask() })
 .publish-form-grid h2 { margin: 0 0 18px; }
 .publish-form-grid label { margin: 16px 0 6px; }
 .publish-form-grid h2 + label { margin-top: 0; }
+.publish-settings-panel { grid-column: 1 / -1; }
+.publish-settings-panel .form-grid > div { min-width: 0; }
+.publish-settings-panel .form-grid label:first-child { margin-top: 0; }
 .publish-form-grid .muted { margin: 6px 0 0; font: 400 11px/1.65 var(--font-mono); }
 .publish-form-grid input { padding: 10px 14px; font-size: 12px; font-weight: 400; }
 .publish-form-grid textarea { display: block; padding: 14px; min-height: 146px; }
