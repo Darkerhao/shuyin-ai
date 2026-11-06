@@ -75,7 +75,7 @@ onMounted(() => { if (desktop) void load() })
       </RouterLink>
       <RouterLink
         to="/projects/new"
-        :class="[buttonVariants(), 'primary-gradient']"
+        :class="[buttonVariants(), 'primary-gradient', 'add-book-cta']"
       >
         <AppIcon name="plus" />添加一本书
       </RouterLink>
@@ -308,3 +308,48 @@ onMounted(() => { if (desktop) void load() })
     </section>
   </template>
 </template>
+
+<style scoped>
+.add-book-cta {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+.add-book-cta::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: -80% 20%;
+  background: linear-gradient(110deg, transparent 35%, color-mix(in srgb, var(--heading) 30%, transparent) 50%, transparent 65%);
+  transform: translateX(-160%) skewX(-18deg);
+  pointer-events: none;
+}
+.add-book-cta:is(:hover, :focus-visible) {
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent), 0 8px 24px -6px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.add-book-cta:is(:hover, :focus-visible)::before {
+  transform: translateX(160%) skewX(-18deg);
+  transition: transform 650ms cubic-bezier(.2, .65, .3, 1);
+}
+.add-book-cta:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 4px;
+}
+.add-book-cta .app-icon {
+  transition: transform 380ms cubic-bezier(.34, 1.56, .64, 1);
+}
+.add-book-cta:is(:hover, :focus-visible) .app-icon {
+  transform: rotate(90deg) scale(1.15);
+}
+.add-book-cta:active {
+  transform: translateY(0) scale(.97);
+  box-shadow: var(--primary-glow);
+  transition-duration: 80ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .add-book-cta, .add-book-cta .app-icon { transform: none !important; }
+  .add-book-cta::before { display: none; }
+}
+</style>
