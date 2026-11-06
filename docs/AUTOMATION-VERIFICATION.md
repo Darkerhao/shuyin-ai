@@ -1,5 +1,17 @@
 # 自动制作与抖音发布准备验收
 
+## 提交后复查（2026-11-07）
+
+功能已按要求先同步dev并提交推送`ce42def`，再备份/同步main并cherry-pick推送`ddb7d66`；备份分支为`backup/main-before-automation-20261107`。本次从干净dev对`dbb80ad...ce42def`进行工程规范和需求两轴复查，两个只读审查未报告新阻断项。下方原实现与验证记录继续保留。
+
+主线程追加边界回归确认一项P2：给已选模型改显示名称或把另一模型设为默认，原来会因完整配置JSON不相等而中断自动流程。修复后按冻结ID继续，只核对实际调用参数（用途/地址/模型名/推理强度/启用状态）。冻结输入、Provider接口及数据库结构不变；无新增依赖或版本手动修改，按`fix`交付。
+
+回归先在旧逻辑下实际失败：`cargo test --manifest-path src-tauri/Cargo.toml --locked database::automation_tests::automation_model_display_changes_do_not_interrupt_the_frozen_provider -- --exact --nocapture`，1项失败，失败点为改显示名后被拒绝。首次使用未限定模块的`--exact`筛选没有选中测试，不作为通过证据。修复后以相同完整路径执行`--exact`，1项通过；`npm run test:rust`全量240项通过、2项既有专项忽略，`npm run check:rust`（fmt/Clippy）、`npm run lint`、`npm run typecheck`和`git diff --check`均通过。两个独立审核分别核对增量后通过，无未解决代码发现。
+
+本次只调整后端冻结模型的比较规则及测试/文档，无数据库迁移、前端页面或权限变更。没有重新调用真实模型、NotebookLM或抖音，也没有重做桌面/安装验收；原有本机证据仍只对应下方记录的执行范围。验收要求已满足：改显示名和切换默认后仍用原ID推进，实际地址或模型名变化仍被拒绝。
+
+本轮`npm run build`也通过，仍有既有的Vite大分块提示；该提示未通过改变阈值消除。Git同步前再次核对远端dev/main文件树相同。
+
 日期：2026-11-07。用户修订后采用现有网页路线，允许最后在抖音点击发布。代码基线 `91461ae`（dev）；新增能力按 `feat` / minor，版本由现有发布流水线处理。
 
 ## 实现

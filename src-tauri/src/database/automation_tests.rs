@@ -246,6 +246,52 @@ fn automation_model_changes_are_detected_before_next_step() {
 }
 
 #[test]
+fn automation_model_display_changes_do_not_interrupt_the_frozen_provider() {
+    let (_directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    let mut renamed = run.input.text_provider.clone();
+    renamed.name = "已整理的模型名称".into();
+    database
+        .save_provider(
+            Some(&run.input.selection.text_provider_id),
+            renamed,
+            None,
+            &Vault::default(),
+        )
+        .unwrap();
+    assert!(database.verify_automation_input(&run).is_ok());
+
+    let mut default = model();
+    default.name = "另一任务的默认文本模型".into();
+    database
+        .save_provider(None, default, None, &Vault::default())
+        .unwrap();
+    assert!(
+        !database
+            .get_provider(&run.input.selection.text_provider_id)
+            .unwrap()
+            .input
+            .is_default
+    );
+    assert!(database.verify_automation_input(&run).is_ok());
+
+    let mut changed = database
+        .get_provider(&run.input.selection.text_provider_id)
+        .unwrap()
+        .input;
+    changed.base_url = "https://different.example/v1".into();
+    database
+        .save_provider(
+            Some(&run.input.selection.text_provider_id),
+            changed,
+            None,
+            &Vault::default(),
+        )
+        .unwrap();
+    assert!(database.verify_automation_input(&run).is_err());
+}
+
+#[test]
 fn automation_v19_upgrade_keeps_previous_data_and_manual_defaults() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("v19.sqlite3");
