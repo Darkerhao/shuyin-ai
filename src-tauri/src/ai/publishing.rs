@@ -119,31 +119,131 @@ impl AudioDraft {
             .replace("{{sections}}", &sections))
     }
 }
-impl PublishingDraft {
-    pub fn into_content(self, book: &str, duration_seconds: i64) -> Result<WritingContent, String> {
+pub fn automatic_audio_prompt(book: &str, duration_seconds: i64) -> Result<String, String> {
+    let sections = [
+        ("进入原书", "从来源中说明本书讨论的核心问题与必要背景。"),
+        ("核心内容", "挑选原书实际出现的主要观点或故事，解释其联系。"),
+        ("具体例子", "使用来源中可以核对的例子，只作有限引用。"),
+        (
+            "理解与讨论",
+            "区分原书内容与主持人的理解，说明适用条件和局限。",
+        ),
+        (
+            "阅读收获",
+            "总结本期实际讨论的内容，不增加新的未经核实事实。",
+        ),
+    ]
+    .into_iter()
+    .map(|(heading, guidance)| Section {
+        heading: heading.into(),
+        guidance: guidance.into(),
+    })
+    .collect();
+    let prompt = AudioDraft {
+        introduction: "介绍上传来源中的这本书，无法核实的信息不补造。".into(),
+        sections,
+    }
+    .into_prompt(book, duration_seconds)?;
+    Ok(format!(
+        "{}\n\n{prompt}",
+        include_str!("../../../prompts/automatic-audio-v1.md")
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptDraft {
+    title: String,
+    description: String,
+    tags: String,
+    cover_title: String,
+    cover_subtitle: String,
+    cover_prompt_landscape: String,
+    cover_prompt_portrait: String,
+    cover_prompt_widescreen: String,
+    cover_design: CoverDesign,
+}
+
+impl TranscriptDraft {
+    pub fn into_content(self, audio_prompt: String) -> Result<WritingContent, String> {
         let tags = parse_tags(&self.tags)?;
         self.cover_design.validate()?;
-        if [
+        validate_cover_prompts(
             &self.cover_title,
             &self.cover_subtitle,
             &self.cover_prompt_landscape,
             &self.cover_prompt_portrait,
             &self.cover_prompt_widescreen,
-        ]
+        )?;
+        if self.title.chars().count() + self.description.chars().count() + tags.chars().count()
+            > 1000
+            || [
+                &self.title,
+                &self.description,
+                &self.cover_title,
+                &self.cover_subtitle,
+            ]
+            .iter()
+            .any(|text| {
+                ["{{", "}}", "[书名]", "[作者]", "待填写"]
+                    .iter()
+                    .any(|value| text.contains(value))
+            })
+        {
+            return Err("发布文案超过平台长度或含未完成占位内容，已保存成果保留。".into());
+        }
+        let content = WritingContent::Publishing {
+            title: self.title.trim().into(),
+            description: self.description.trim().into(),
+            tags,
+            audio_prompt,
+            cover_title: self.cover_title.trim().into(),
+            cover_subtitle: self.cover_subtitle.trim().into(),
+            cover_prompt_landscape: self.cover_prompt_landscape.trim().into(),
+            cover_prompt_portrait: self.cover_prompt_portrait.trim().into(),
+            cover_prompt_widescreen: self.cover_prompt_widescreen.trim().into(),
+            cover_design: Some(Box::new(self.cover_design)),
+        };
+        content.validate("publishing", None)?;
+        Ok(content)
+    }
+}
+
+fn validate_cover_prompts(
+    title: &str,
+    subtitle: &str,
+    landscape: &str,
+    portrait: &str,
+    widescreen: &str,
+) -> Result<(), String> {
+    if [title, subtitle, landscape, portrait, widescreen]
         .iter()
         .any(|value| value.trim().is_empty())
-            || !self.cover_prompt_landscape.contains("4:3")
-            || !self.cover_prompt_portrait.contains("3:4")
-            || !self.cover_prompt_widescreen.contains("16:9")
-            || self.cover_prompt_landscape.trim() == self.cover_prompt_portrait.trim()
-            || self.cover_prompt_widescreen.trim() == self.cover_prompt_landscape.trim()
-            || self.cover_prompt_widescreen.trim() == self.cover_prompt_portrait.trim()
-        {
-            return Err(
-                "封面需要主标题、副标题及分别标明 4:3、3:4、16:9 的三份不同提示词，原有内容保留。"
-                    .into(),
-            );
-        }
+        || !landscape.contains("4:3")
+        || !portrait.contains("3:4")
+        || !widescreen.contains("16:9")
+        || landscape.trim() == portrait.trim()
+        || widescreen.trim() == landscape.trim()
+        || widescreen.trim() == portrait.trim()
+    {
+        return Err(
+            "封面需要主标题、副标题及分别标明 4:3、3:4、16:9 的三份不同提示词，原有内容保留。"
+                .into(),
+        );
+    }
+    Ok(())
+}
+impl PublishingDraft {
+    pub fn into_content(self, book: &str, duration_seconds: i64) -> Result<WritingContent, String> {
+        let tags = parse_tags(&self.tags)?;
+        self.cover_design.validate()?;
+        validate_cover_prompts(
+            &self.cover_title,
+            &self.cover_subtitle,
+            &self.cover_prompt_landscape,
+            &self.cover_prompt_portrait,
+            &self.cover_prompt_widescreen,
+        )?;
         let audio_prompt = AudioDraft {
             introduction: self.introduction,
             sections: self.sections,
@@ -186,6 +286,22 @@ pub(super) fn parse_tags(raw: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transcript_output_keeps_actual_audio_guidance_and_rejects_unasked_fields() {
+        let mut value = draft();
+        value.as_object_mut().unwrap().remove("introduction");
+        value.as_object_mut().unwrap().remove("sections");
+        let content = serde_json::from_value::<TranscriptDraft>(value.clone())
+            .unwrap()
+            .into_content("实际音频使用的旧版指导".into())
+            .unwrap();
+        let WritingContent::Publishing { audio_prompt, .. } = content else {
+            panic!("expected publishing content");
+        };
+        assert_eq!(audio_prompt, "实际音频使用的旧版指导");
+        value["audioPrompt"] = serde_json::json!("模型不得替换指导");
+        assert!(serde_json::from_value::<TranscriptDraft>(value).is_err());
+    }
     #[test]
     fn generates_valid_hashtags_without_putting_them_in_the_description() {
         let mut value = draft();

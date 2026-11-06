@@ -2,6 +2,7 @@ mod ai;
 mod ai_commands;
 mod audio;
 mod audio_commands;
+mod automation;
 mod commands;
 mod cover_commands;
 mod credentials;
@@ -47,6 +48,7 @@ pub fn run() {
                 database.recover_model_calls()?;
                 database.recover_audio_jobs()?;
                 database.recover_video_jobs()?;
+                database.recover_automation()?;
             }
             app.manage(database);
             app.manage(video_commands::VideoRuntime::default());
@@ -58,6 +60,7 @@ pub fn run() {
             ));
             app.manage(ai::ActiveTasks::default());
             app.manage(douyin::DouyinPublisher::default());
+            app.manage(automation::AutomationRuntime::default());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -76,6 +79,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             read_probe,
+            automation::automation_snapshot,
+            automation::start_automation,
+            automation::control_automation,
+            automation::automation_cover,
+            automation::complete_automation_cover,
+            automation::fail_automation_cover,
+            douyin::flow::prepare_automation_account,
+            douyin::flow::confirm_automation_account,
             save_probe,
             updates::update_settings,
             updates::set_auto_update,

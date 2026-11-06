@@ -1,6 +1,7 @@
 pub mod ai;
 mod assets;
 pub mod audio;
+pub mod automation;
 mod backup;
 pub mod covers;
 pub mod diagnostics;
@@ -90,6 +91,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0017_model_calls.sql"),
     include_str!("../migrations/0018_publish_settings.sql"),
     include_str!("../migrations/0019_editor_owners.sql"),
+    include_str!("../migrations/0020_automation_runs.sql"),
 ];
 
 impl Database {
@@ -286,3 +288,6 @@ mod m4_tests;
 
 #[cfg(test)]
 mod workflow_tests;
+
+#[cfg(test)]
+mod automation_tests;

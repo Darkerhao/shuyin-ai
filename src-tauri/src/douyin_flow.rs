@@ -218,6 +218,70 @@ fn current(publisher: &DouyinPublisher) -> Result<Option<Session>, String> {
     Ok(publisher.session.lock().map_err(|e| e.to_string())?.clone())
 }
 
+pub(crate) fn automation_session(publisher: &DouyinPublisher) -> Result<Option<Session>, String> {
+    current(publisher)
+}
+
+pub(crate) fn require_automation_account(publisher: &DouyinPublisher) -> Result<Account, String> {
+    let account = publisher
+        .confirmed
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone()
+        .ok_or("请先打开抖音窗口、登录并确认本次自动制作使用的账号。")?;
+    if publisher.task.lock().map_err(|e| e.to_string())?.is_some() {
+        return Err("抖音窗口仍绑定其他发布任务，请先完成原任务并关闭窗口。".into());
+    }
+    Ok(account)
+}
+
+#[tauri::command]
+pub async fn prepare_automation_account(
+    app: AppHandle,
+    window: WebviewWindow,
+    publisher: tauri::State<'_, DouyinPublisher>,
+) -> Result<Account, String> {
+    local_main(&window)?;
+    if publisher.task.lock().map_err(|e| e.to_string())?.is_some() {
+        return Err("请先完成当前抖音任务。".into());
+    }
+    open_douyin_window(app.clone(), window.clone(), publisher.clone()).await?;
+    let page = inspect_douyin_window(app.clone(), window.clone()).await?;
+    if !page.authenticated || page.login_visible || !page.online {
+        return Err("请在打开的抖音窗口登录后，再读取账号。".into());
+    }
+    if page.kind == "home" {
+        publish_window(&app)?
+            .navigate(
+                "https://creator.douyin.com/creator-micro/content/upload"
+                    .parse()
+                    .unwrap(),
+            )
+            .map_err(|e| e.to_string())?;
+        return Err("已打开视频入口，请页面就绪后再次读取账号。".into());
+    }
+    if page.kind != "upload" || !page.upload_ready || page.blocked {
+        return Err("抖音页面已有草稿或不在空白上传页，请先处理原内容。".into());
+    }
+    page.account
+        .ok_or_else(|| "无法识别当前账号，请在官方窗口检查。".into())
+}
+
+#[tauri::command]
+pub async fn confirm_automation_account(
+    app: AppHandle,
+    window: WebviewWindow,
+    publisher: tauri::State<'_, DouyinPublisher>,
+    expected: Account,
+) -> Result<(), String> {
+    let observed = prepare_automation_account(app, window, publisher.clone()).await?;
+    if !same_account(Some(&expected), Some(&observed)) {
+        return Err("账号已变化，请重新读取并核对。".into());
+    }
+    *publisher.confirmed.lock().map_err(|e| e.to_string())? = Some(observed);
+    Ok(())
+}
+
 fn resumable_session(
     publisher: &DouyinPublisher,
     snapshot: &PublishSnapshot,
@@ -275,7 +339,8 @@ pub async fn start_douyin_task(
             );
         }
     }
-    let snapshot = database.publish_snapshot(&id).or_else(|_| {
+    database.renew_automatic_schedule(&id)?;
+    let mut snapshot = database.publish_snapshot(&id).or_else(|_| {
         database.prepare_publish_task(&id)?;
         database.publish_snapshot(&id)
     })?;
@@ -314,7 +379,7 @@ pub async fn start_douyin_task(
         &window,
         &database,
         &publisher,
-        &snapshot,
+        &mut snapshot,
         &mut session,
     )
     .await;
@@ -337,7 +402,7 @@ pub async fn continue_douyin_task(
         .map_err(|_| "正在执行，请等待当前操作。")?;
     let mut session = current(&publisher)?.ok_or("没有等待中的辅助任务。")?;
     session.validate_decision(run_id, publisher.stopped.load(Ordering::SeqCst))?;
-    let snapshot = database.publish_snapshot(&session.task_id)?;
+    let mut snapshot = database.publish_snapshot_during_upload(&session.task_id)?;
     running(&publisher, &snapshot)?;
     let publish_window = publish_window(&app)?;
     let page = inspect_douyin_window(app.clone(), window.clone()).await?;
@@ -458,7 +523,7 @@ pub async fn continue_douyin_task(
         &window,
         &database,
         &publisher,
-        &snapshot,
+        &mut snapshot,
         &mut session,
     )
     .await;
@@ -536,7 +601,7 @@ async fn execute(
     main: &WebviewWindow,
     database: &Database,
     publisher: &DouyinPublisher,
-    snapshot: &PublishSnapshot,
+    snapshot: &mut PublishSnapshot,
     session: &mut Session,
 ) {
     let result = drive(app, main, database, publisher, snapshot, session).await;
@@ -570,7 +635,7 @@ async fn drive(
     main: &WebviewWindow,
     database: &Database,
     publisher: &DouyinPublisher,
-    snapshot: &PublishSnapshot,
+    snapshot: &mut PublishSnapshot,
     session: &mut Session,
 ) -> Result<(), String> {
     running(publisher, snapshot)?;
@@ -632,6 +697,15 @@ async fn drive(
         .account
         .as_ref()
         .ok_or("无法识别账号，请在官方窗口检查。")?;
+    if let Some(expected) = database.automation_publish_account(&session.task_id)? {
+        if !same_account(Some(&expected), Some(account)) {
+            session.wait(
+                "account",
+                "当前抖音账号与自动流程启动时不同，请恢复原账号；不会上传到另一账号。",
+            );
+            return Ok(());
+        }
+    }
     if !same_account(session.account.as_ref(), Some(account)) {
         session.reset_page_proofs();
     }
@@ -684,7 +758,10 @@ async fn drive(
         publish(app, publisher, session)?;
         session.sent_video = true; // Reserve before dispatch; timeout cannot prove that dispatch failed.
         publish(app, publisher, session)?;
-        verify_snapshot(&database.publish_snapshot(&snapshot.task_id)?, snapshot)?;
+        verify_snapshot(
+            &database.publish_snapshot_during_upload(&snapshot.task_id)?,
+            snapshot,
+        )?;
         ensure_account(app, main, session).await?;
         set_local_file(
             &window,
@@ -824,7 +901,10 @@ async fn drive(
     } else {
         for ratio in ["landscape", "portrait"] {
             running(publisher, snapshot)?;
-            verify_snapshot(&database.publish_snapshot(&snapshot.task_id)?, snapshot)?;
+            verify_snapshot(
+                &database.publish_snapshot_during_upload(&snapshot.task_id)?,
+                snapshot,
+            )?;
             ensure_account(app, main, session).await?;
             running(publisher, snapshot)?;
             let has_dialog = read_editor(&window).await?.cover_dialog;
@@ -923,6 +1003,19 @@ async fn drive(
         }
     }
     let mut collections = read_collections(&window).await?;
+    if session.collection.is_none()
+        && collections.available
+        && collections.selected.is_none()
+        && database.is_automatic_publish(&session.task_id)?
+    {
+        let account = session.account.as_ref().ok_or("账号尚未核对。")?;
+        session.collection = Some(CollectionChoice {
+            account_id: account.id.clone(),
+            account_name: account.name.clone(),
+            id: None,
+            name: None,
+        });
+    }
     if !session.manual.iter().any(|s| s == "collection") {
         if collections.available
             && !session
@@ -972,6 +1065,13 @@ async fn drive(
         }
     }
     session.step = "settings".into();
+    if database.renew_automatic_schedule(&snapshot.task_id)? {
+        database.prepare_publish_task(&snapshot.task_id)?;
+        *snapshot = database.publish_snapshot(&snapshot.task_id)?;
+        *publisher.task.lock().map_err(|e| e.to_string())? = Some(snapshot.clone());
+        session.completed.retain(|field| field != "settings");
+        session.manual.retain(|field| field != "settings");
+    }
     session.message = "正在核对保存权限和发布时间…".into();
     publish(app, publisher, session)?;
     running(publisher, snapshot)?;
@@ -1046,6 +1146,7 @@ async fn drive(
         return Ok(());
     }
     session.step = "review".into();
+    database.hand_off_automatic_publish(&snapshot.task_id)?;
     session.status = "review".into();
     session.waiting_for = None;
     session.message = if snapshot.input.scheduled_at.is_some() {

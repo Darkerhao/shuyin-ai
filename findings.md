@@ -1,3 +1,48 @@
+# 自动制作与网页发布实施发现（2026-11-07）
+
+- 用户接受最终人工点击发布后，直接复用现有网页适配，官方API缺口不再作为阻塞。一个Rust固定执行器、一个流程表；根级封面只是原Canvas执行端，不再建设官方服务或重复视频引擎。
+- 原音频创建方法拆出共享业务入口，自动任务只用固定指导/真实文件，writing_version_id=NULL。字幕文案通过统一Provider处理全部字幕并读取实际冻结音频指导，保留原手动生成。
+- 自动绑定与子任务创建共用事务，SHA和账号/模型快照防混用；人工确认字段false，通过完整自动策略自检。上传开始和交接用户分别记账；交接前日期过期可同任务重建包，交接后及未知会话不能自动重发。
+- 双轴审核定位并修复混合字幕版本、执行器占用遗留running、迟到封面失败、音频摘要/指导脱节、预约日期跨日及父停止不影响子任务等问题。最终复核无新阻断项。
+- 真实隔离WebView2验证从已准备音频字幕夹具开始：1文本/2图片调用、2张Canvas PNG、6秒1080p含音轨成片和正确发布任务全部自动完成。重启未知上传不重发；本机契约服务不代表真实账号/整本书内容质量。验收见docs/AUTOMATION-VERIFICATION.md。
+
+# 全自动实施 P0 复核（2026-11-07，前序记录）
+
+- 用户已授权实现及完成审核后的 Git 交付；先按原计划 P0 核验。当前 dev 基线 `91461ae`，0.51.1、schema19，开始时已有五份规划文档改动，均保留。
+- 本轮实时获取9个主要官方文档及公开列表，并解析创建页完整请求/响应结构：21个正文参数含 `download_type=1`（作者不允许下载），无已证实的预约/AI声明字段；4个创建回执字段不包含设置回读。禁止下载枚举由未知更新为已核实，实际效果与回读继续待验证。
+- `video_basic_info` 要另一个 `posting.behavior` 权限，示例 `video_status=5` 缺正式结构/枚举依据；分享结果和 `create_video` 事件属于 `aweme.forward`，不能直接充当本路线的公开审核结果。
+- 当前源码只有网页辅助填写和人工发布记录，没有官方OAuth、发布服务或跨阶段持久编排。现有网页设置不能证明API原生定时可用，也不能自动写人工确认字段来冒充新流程。
+- 证据及所需非密钥接入资料见 [P0核验记录](docs/BOOK-TO-DOUYIN-P0-VERIFICATION.md)。P0尚未通过，未实现功能、未改数据库、未执行投稿；用户要求的完成及审核通过条件未满足，因此不提交调查文档冒充功能，也不推送或cherry-pick。
+
+# 书籍到抖音全自动流程：官方发布研究（2026-11-07，前序规划依据）
+
+用户后续明确的默认值：AI 背景图、北京时间凌晨01:11定时发布、不允许保存视频。它们是需求，不能据此推断平台接口已支持。计划因此将原生定时和禁止下载回读升级为P0必要条件；复用现有图片Provider按4:3/3:4各生成一张无字背景，禁止失败后静默改用纯色。定时采用满足预约窗口的未来01:11完整日期，旧任务不被默认配置回填。
+
+最终全自动核查：用户要求配置后正常运行不再操作，因此明确AI结果自动采用、视频校验后自动渲染、预算内调用不再确认、自动提交预约并自动归档实际结果。创建意图/调用之前可以按既定策略自动计算下个有效01:11；已提交/未知或固定绝对日期失效时核对并暂停。需要逐次人工最终发布的路线不满足需求，下面研究中提到的半自动只能作为应急或阶段成果，不能冒充全自动交付。新增三本书启动后零点击及正常等待/续期验收，未新增真实平台验证。
+
+本节为本轮公开文档研究，不代表已获得平台权限或完成真实接口验收。通过 Python 标准库只读获取官方页面并提取正文；未访问已登录控制台、读取Cookie或操作真实作品。下列官方资料访问日期均为2026-11-07。
+
+- 新版[创建视频](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-video/video-create)正文于2026-11-07可读：`POST https://open.douyin.com/api/douyin/v1/video/create_video/`，Scope为`video.create.bind`；需要在控制台「应用详情 > 能力管理 > 能力实验室 > 代替用户发布内容到抖音」申请权限，并需要用户授权。旧平台上传页仍显示`video.create`，实施不能混用旧文档与新端点。
+- 同页明确：创建后有审核过程，期间只有自己可见；返回`item_id`或`video_id`只证明接口受理，不能直接显示「公开发布成功」。文案字段`text`总字数上限1000，支持话题；`custom_cover_image_url`实际填写图片上传接口返回的`image_id`，不可按字段名称假设接受任意图片URL。可设置`download_type`及`private_status`。当前页错误码列出15分钟时长上限、同一用户同一应用每日最多75个作品；实际可用配额和账号权限仍需控制台及实测核验。
+- 新版[登录与授权](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/sdk/mobile-app/permission/overall-permission)与[获取access_token](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/get-access-token)已读到完整正文：OAuth2授权码模式，code仅10分钟且一次性；access_token为15天，refresh_token为30天，续期存在次数和总时长限制（页面写195天），用户撤销授权会立即失效。因此一次授权不等于永久无人介入。实现以每次返回的有效期为准，并避免并发刷新令牌。
+- 获取access_token需ClientKey、ClientSecret和code；官方明确建议将access_token存储在服务端。网站回调要求预先配置完整URL（域名与path），不是任意桌面localhost地址均可用。推荐由小型服务端持有应用secret、交换/刷新令牌和完成正式发布请求，桌面不内置公共应用secret；此为基于公开接口约束的架构建议，不代表平台已经批准本产品。
+- [创建移动应用和网站应用](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/app-mgmt/create-mobile-and-web-app)明确新建应用先是测试应用，相关操作对线上不生效，开发完成需上线后才能商用。不能把测试应用或普通个人账号的网页登录成功当成发布能力可用。主体、应用类别和具体能力申请资格仍需控制台核验。
+- 当前创建视频页链接的「需要用户授权」目标`/dop/ability/user-authorization/solution`只返回站点外壳，未取得有效正文；上述授权结论采用有完整正文的登录与授权和令牌页面，不根据空白页猜测要求。
+- 新版[上传视频](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-video/upload-video)为`POST /api/douyin/v1/video/upload_video/`，同样要求`video.create.bind`。正文明确超过50MB建议分片、超过300MB必须分片、总大小4GB内，错误码还列15分钟上限。旧页的128MB阈值不能套用到新版。官方页比例描述「16:9」与「竖版」彼此矛盾，因此计划不把该句作为画幅硬约束，实施以实际接口验证为准。
+- 当前[抖音发布能力使用规范](https://developer.open-douyin.com/docs/resource/zh-CN/dop/operation-standard/platform-capabilities/useclue)明确：SDK/H5投稿导入抖音编辑/发布页后由用户手动发布；相应开放范围对正式应用、主体、应用类型和使用场景有要求（页面列企业注册资本至少50万且成立至少1年、不再向个体工商户开放等）。**该表描述SDK/H5投稿，不能直接推定能力实验室`video.create.bind`具有同样主体门槛或每次确认要求。** 自动发布计划必须单独核查本项目可获批的「代替用户发布内容到抖音」能力和授权合同；不能用H5/SDK替代全自动发布。
+- 同一规范要求内容具备原创度与价值，禁止他人原创内容直接投稿、同质低质及营销导流；若违规或连续90天无投稿/分享，可回收能力。读书二创不能退化为整本书机械朗读或未经授权的内容搬运；具体作品权利需用户确认，AI生成本身不证明版权合规。
+- 当前名为[查询视频发布结果](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/search-video/video-share-result)的接口实际是`/share-id/`、Scope `aweme.forward`，用于分享SDK传入share_id后接收Webhooks，share_id有效期一小时。**它不是本次`create_video`通用审核状态查询接口，不能凭页面名称直接用于确认作品公开发布。** 本次需要另行核验与`video.create.bind`相配套的作品查询/审核回调权限。
+- 官方[查询视频基础信息](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/posting-task/video-basic-info)提供`POST /api/douyin/v1/video/video_basic_info/`，但Scope是另一个`posting.behavior`，需申请「用户投稿任务」能力及用户授权，仅能查询对应token用户上传的视频。响应示例包含`video_status`，本次读取的正文未明确各枚举语义；不能把示例数字5推断为公开成功。该页可作为状态核验的候选，是否适用于本应用及审核中的作品须在P0实测。
+- 官方[Webhooks概述](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/webhooks/summarize)要求事件对应scope、已验证回调地址及订阅，说明事件会重试并提供`Msg-Id`去重和`X-Douyin-Signature`验签。[事件列表](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/webhooks/event-list)中的`create_video`仍是`aweme.forward`分享事件；不能将其假定为`video.create.bind`审核完成事件。实现按实际获准的事件或查询进行状态回收，回调重复、乱序和应用重启不能再次创建作品。
+- 官方[图片上传](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-image-text/image-upload/)提供`POST /api/douyin/v1/video/upload_image/`及`image_id`，Scope同为`video.create.bind`。当前创建视频正文可证明一个自定义封面参数，不能据此承诺网页4:3/3:4双封面可逐一映射；本地仍可生成多尺寸，平台只提交能力明确支持的封面。
+- 当前创建视频请求结构未找到AIGC声明、定时发布时间或独立双封面参数；这只说明本次公开文档未证实，不能据此断言平台永远不支持。自动化上线前必须确认AI内容声明的正式提交方式、平台实际所需确认动作，以及用户选择的发布设置是否可由已批准接口表达；不能用文案中写「AI生成」代替尚未核验的平台字段。
+
+推荐结论：本项目的无人值守发布只有一条推荐路线——先取得并验证官方`video.create.bind`等实际所需能力，再用小型服务端处理OAuth、凭据、发布与结果核验，桌面负责书籍生产任务。服务端属于该发布路线所需的最小边界，不扩张为通用云创作平台。P0若无法获得权限、无法满足平台声明或无法可靠核验发布结果，则先交付自动制作与现有半自动发布，产品状态明确为「待人工发布」，不得标成完整自动发布已完成。网页最终按钮自动点击缺少本项目可用的官方支持证据，也不符合当前仓库明确保留最终人工发布的边界，本次不建议将其作为兜底路线。
+
+P0必须拿到的证据：实际开发者主体/应用类别和能力审批结果；目标账号完整scope及授权回调；代表性成片上传和封面采用；文案/话题/保存权限的实际映射；AI声明方式；创建受理与审核后公开状态及作品标识；网络超时后的去重核对；撤销授权/令牌到期/配额不足行为。发布测试需使用明确授权的专用账号及测试作品，研究阶段不执行。
+
+研究局限：未验证任何真实token、控制台权限、API响应或平台审核；某些旧入口和试探性路径返回空壳页，已改用有完整正文的当前官方页面，不把空页当作能力不存在。未找到适用于本项目的官方网页自动化支持承诺，未声称平台存在全面禁止或全面支持网页自动操作的条款。
+
 # 视觉与创作交互优化发现（2026-11-03）
 
 - 当前工作区仅 docs/DEVELOPMENT-PLAN.md 与新方案未提交；npm包0.45.0，Node24.11.0，npm11.6.1。保留既有语义版本与真实数据。

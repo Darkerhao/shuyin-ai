@@ -9,6 +9,7 @@ import AppConfirmation from './components/AppConfirmation.vue'
 import OperationFeedback from './components/OperationFeedback.vue'
 import { useAppUpdates } from './composables/useAppUpdates'
 import RunningTasks from './components/RunningTasks.vue'
+import AutomationTasks from './components/AutomationTasks.vue'
 import { useInterfacePreferences } from './composables/useInterfacePreferences'
 import { useTheme } from './composables/useTheme'
 import { workspaceSettings, openProjectDirectory } from './services/projects'
@@ -339,6 +340,7 @@ watch(router.currentRoute, async (to, from) => {
           <span>书引 AI v{{ update.version }} {{ updateStatus === 'ready' ? '已下载，可以安装' : updateStatus === 'downloading' ? '正在后台下载' : updateStatus === 'restart' ? '已安装，请重启' : '可用' }}</span>
           <span>查看更新内容 →</span>
         </RouterLink>
+        <AutomationTasks />
         <RunningTasks />
         <RouterView v-slot="{ Component, route: currentRoute }">
           <div

@@ -87,6 +87,7 @@ pub(super) fn read_snapshot(path: &Path) -> Result<Connection, String> {
     snapshot.execute("UPDATE ai_tasks SET status='failed',error_code='interrupted',error_message='备份恢复中断了任务，请手动重试。' WHERE status IN ('pending','running')",[]).map_err(|e|e.to_string())?;
     snapshot.execute("UPDATE audio_jobs SET status='waiting_user',stage='verify_remote',run_id=run_id+1,error_code='verify_remote',error_message='备份恢复后请先核对原 Notebook 任务，再继续跟进。',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('created','waiting_login','preparing','generating','downloading','importing')",[]).map_err(|e|e.to_string())?;
     super::video::recover(&snapshot)?;
+    super::automation::recover(&snapshot)?;
     snapshot.execute("UPDATE model_calls SET status='interrupted',error_code='interrupted' WHERE status='running'",[]).map_err(|e|e.to_string())?;
     Ok(snapshot)
 }
@@ -107,6 +108,7 @@ impl Database {
     }
     pub(super) fn replace_snapshot(&self, snapshot: &Connection) -> Result<String, String> {
         self.with_connection(|c| {
+            if c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE status='running')",[],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程正在执行，请先暂停后恢复备份。".into()); }
             if c.query_row("SELECT EXISTS(SELECT 1 FROM video_jobs WHERE status='running')", [], |r| r.get::<_, bool>(0)).map_err(|e| e.to_string())? {
                 return Err("视频任务正在执行，请先停止后恢复备份。".into());
             }

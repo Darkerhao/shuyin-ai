@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-automation"
+description = "允许主工作台控制书籍自动制作与发布准备。"
+commands.allow = ["automation_snapshot", "start_automation", "control_automation", "automation_cover", "complete_automation_cover", "fail_automation_cover", "prepare_automation_account", "confirm_automation_account"]

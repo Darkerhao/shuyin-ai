@@ -2,6 +2,14 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "read_probe",
+            "automation_snapshot",
+            "start_automation",
+            "control_automation",
+            "automation_cover",
+            "complete_automation_cover",
+            "fail_automation_cover",
+            "prepare_automation_account",
+            "confirm_automation_account",
             "save_probe",
             "list_projects",
             "get_project",

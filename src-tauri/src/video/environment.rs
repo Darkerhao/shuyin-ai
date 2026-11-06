@@ -32,8 +32,24 @@ impl EnvironmentItem {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentReport {
-    settings: VideoSettings,
+    pub(crate) settings: VideoSettings,
     items: Vec<EnvironmentItem>,
+}
+
+impl EnvironmentReport {
+    pub(crate) fn require_ready(&self) -> Result<(), String> {
+        let failures: Vec<_> = self
+            .items
+            .iter()
+            .filter(|item| item.status != "ok")
+            .map(|item| format!("{}：{}", item.id, item.detail))
+            .collect();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("请先在视频制作页配置环境：{}", failures.join("；")))
+        }
+    }
 }
 
 fn first_file(names: &[&str]) -> Option<PathBuf> {

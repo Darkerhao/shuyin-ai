@@ -191,7 +191,7 @@ fn revision_base(
         .transpose()
 }
 
-fn append(
+pub(super) fn append(
     c: &Connection,
     input: &SaveWritingInput,
     source: &str,
