@@ -267,11 +267,14 @@ impl Database {
                     &run.input.image_provider,
                 ),
             ] {
-                let current = ai::provider(connection, id)?;
-                if serde_json::to_value(&current.input).map_err(|e| e.to_string())?
-                    != serde_json::to_value(expected).map_err(|e| e.to_string())?
+                let current = ai::provider(connection, id)?.input;
+                if current.model_kind != expected.model_kind
+                    || current.base_url != expected.base_url
+                    || current.model_name != expected.model_name
+                    || current.reasoning_effort != expected.reasoning_effort
+                    || current.is_enabled != expected.is_enabled
                 {
-                    return Err("流程使用的模型配置已变化，请恢复原配置后继续。".into());
+                    return Err("流程使用的模型调用配置已变化，请恢复原配置后继续。".into());
                 }
             }
             Ok(())
