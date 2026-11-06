@@ -1,3 +1,5 @@
+import * as drafts from '../src/services/drafts'
+vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
 import { chooseSelect, button, dialog, answerConfirmation } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -51,6 +53,8 @@ async function render(path = '/projects/p1/publishing') {
 }
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(drafts.readDraft).mockResolvedValue(null)
+  vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   vi.mocked(douyin.onDouyinProgress).mockResolvedValue(vi.fn())
   vi.mocked(api.listPublishQueue).mockResolvedValue([])
   vi.mocked(covers.readCoverExport).mockResolvedValue(new ArrayBuffer(0))
@@ -339,19 +343,27 @@ describe('M4 publish preparation', () => {
     expect(api.savePublishTask).toHaveBeenCalledWith('t1', expect.objectContaining({ videoAssetId: null, audioAssetId: 'a2', landscapeCoverId: null, titleConfirmed: false, coversConfirmed: false }))
   })
 
-  it('keeps task selection and edits when discarding is declined', async () => {
+  it('isolates incomplete schedule edits per task, blocks switching on draft failure and restores on return', async () => {
     vi.mocked(api.listPublishTasks).mockResolvedValue([task, { ...task, id: 't2', title: '另一个任务' }])
+    const stored = new Map<string, Awaited<ReturnType<typeof drafts.readDraft<PublishTask>>>>()
+    vi.mocked(drafts.saveDraft).mockImplementation(async (owner, _kind, value) => { stored.set(owner, structuredClone(value) as never) })
+    vi.mocked(drafts.readDraft).mockImplementation(async owner => stored.get(owner) ?? null)
     const { wrapper } = await render()
     await wrapper.get('#publish-title').setValue('未保存的任务标题')
+    await chooseSelect(wrapper, '#publish-mode', '定时发布')
+    vi.mocked(drafts.saveDraft).mockRejectedValueOnce(new Error('磁盘不可写'))
     await chooseSelect(wrapper, '#publish-task', /^另一个任务 ·/)
-    expect(dialog().text()).toContain('请确认操作'); await answerConfirmation(false)
-    expect(wrapper.get('#publish-task').text()).toContain('中文标题')
-    expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('未保存的任务标题')
-    await chooseSelect(wrapper, '#publish-task', '新任务')
-    await answerConfirmation(true)
-    expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('')
-    await wrapper.get('form').trigger('submit'); await flushPromises()
-    expect(api.savePublishTask).toHaveBeenCalledWith(null, expect.any(Object))
+    expect(wrapper.get('#publish-title').element).toHaveProperty('value', '未保存的任务标题')
+    await chooseSelect(wrapper, '#publish-task', /^另一个任务 ·/)
+    expect(wrapper.get('#publish-title').element).toHaveProperty('value', '另一个任务')
+    expect(wrapper.find('#publish-scheduled-at').exists()).toBe(false)
+    await chooseSelect(wrapper, '#publish-task', /^中文标题 ·/)
+    expect(wrapper.get('#publish-title').element).toHaveProperty('value', '未保存的任务标题')
+    expect(wrapper.find('#publish-scheduled-at').exists()).toBe(true)
+    expect(stored.get('p1:t1')).toMatchObject({ content: { scheduledAt: '', title: '未保存的任务标题' } })
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+    expect(api.preparePublishTask).not.toHaveBeenCalled()
+    expect(douyin.startDouyinTask).not.toHaveBeenCalled()
   })
   it('does not access local data in browser preview', async () => {
     vi.mocked(projects.isDesktop).mockReturnValue(false)
@@ -412,8 +424,10 @@ describe('M4 publish preparation', () => {
     await button(wrapper, '确认并导出任务包').trigger('click'); await flushPromises()
     expect(api.preparePublishTask).not.toHaveBeenCalled(); expect(wrapper.text()).toContain('保存失败')
     expect((wrapper.get('#publish-title').element as HTMLInputElement).value).toBe('新标题')
-    const navigation = router.push('/projects'); await answerConfirmation(false); await navigation
+    vi.mocked(drafts.saveDraft).mockRejectedValue(new Error('暂存失败'))
+    await router.push('/projects')
     expect(router.currentRoute.value.path).toContain('/publishing')
+    expect(wrapper.get('#publish-title').element).toHaveProperty('value', '新标题')
   })
   it('saves before preparing and retains persisted draft after package failure', async () => {
     const { wrapper } = await render()

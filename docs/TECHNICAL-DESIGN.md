@@ -1,5 +1,17 @@
 # 书引 AI 技术设计文档
 
+## 应用级生成与表单暂存（2026-11-06）
+
+`services/generation.ts`按书籍/用途持有本次运行的invoke、Channel、正文预览和最终结果，编辑页只订阅并消费结果。复用原start/execute/cancel与Rust `ai_tasks`，不新增执行器、轮询或重试。取消时停止展示片段，最终状态以execute的后端返回为准，完成先于取消时仍展示已校验成果。文案保留来源草稿，结果只追加原历史；图片明确采用至请求时的宽高对应配置。状态只在应用会话中保留，重启后的任务中断仍由原Rust恢复逻辑记录。
+
+失败或取消的时长推荐保留现有会话任务，返回页面只恢复结果，不自动再次请求；用户点击推荐才开始下一次。书籍资料UPSERT只在新建时初始化目标时长，更新已有书籍时保留数据库当前值；后续时长变更由原专用保存/推荐完成事务负责，防止旧资料表单覆盖后台成果。
+
+`useEditorDraft`继续串行化400ms暂存，并复用`useWindowCloseGuard`。窗口保护统一为一个原生`onCloseRequested`监听，依次等待各页面保存与全局任务确认；当前Tauri API每个监听独立决定destroy，不能为同一窗口并列注册多个自动销毁回调。浏览器beforeunload仍只做未保存保护，不承诺强制关闭前异步写入。
+
+v19将editor_drafts扩展为owner_id主键：旧文案/封面以书籍ID作为owner，资料为书籍ID或new，发布为书籍ID:任务ID或书籍ID:new。project_id保留可空外键用于书籍删除级联；仅新建书籍草稿可无project。使用已有read/save_editor_draft命令传owner，无新增权限。资料/发布正式保存事务清理对应owner，文件与业务校验仍在显式保存执行，恢复只填编辑器。续作查询识别资料和发布草稿，不将其误映射到文案。
+
+时长展开偏好使用本机localStorage的shuyin.writing-duration-open，不存业务数据库。CSS改动限制在创作页及其编辑文字。详见[验收记录](CREATOR-CONTINUITY-VERIFICATION.md)。
+
 ## 添加书籍按钮交互（2026-11-06）
 
 书架顶部的渐变背景覆盖了共享按钮 `hover:bg-primary/90` 的底色变化，因此悬停反馈不明显。在 `ProjectsPage.vue` 的原 RouterLink 上增加 `add-book-cta` 与 scoped CSS：悬停或键盘聚焦时上浮 2px、增强主题色光晕、650ms 单次扫光，加号以 380ms 弹性过渡旋转 90° 并放大；按下时以 80ms 收缩至 97%，离开后复位。扫光使用隔离层和不接收指针事件的伪元素，退出时直接复位，避免反向扫光；颜色引用现有主题变量。

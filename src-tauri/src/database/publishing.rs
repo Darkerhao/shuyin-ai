@@ -624,6 +624,7 @@ impl Database {
         self.with_connection(|c| {
             let tx = c.transaction().map_err(|e|e.to_string())?;
             validate_schedule(&tx, input.scheduled_at.as_deref(), true)?;
+            let draft_owner = format!("{}:{}", input.project_id, id.unwrap_or("new"));
             get(&tx,&input.project_id)?;
             if let Some(version)=&input.writing_version_id {
                 if !tx.query_row("SELECT EXISTS(SELECT 1 FROM writing_versions WHERE id=?1 AND project_id=?2 AND kind='publishing')",params![version,input.project_id],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("文案版本不属于当前书籍。".into()); }
@@ -639,6 +640,7 @@ impl Database {
             tx.execute(&format!("INSERT INTO publish_tasks(id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'draft',{NOW},{NOW}) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,tags=excluded.tags,video_asset_id=excluded.video_asset_id,audio_asset_id=excluded.audio_asset_id,landscape_cover_id=excluded.landscape_cover_id,portrait_cover_id=excluded.portrait_cover_id,title_confirmed=excluded.title_confirmed,covers_confirmed=excluded.covers_confirmed,status='draft',task_directory=NULL,updated_at=excluded.updated_at"),params![id,input.project_id,input.title,input.description,input.tags,input.video_asset_id,input.audio_asset_id,input.landscape_cover_id,input.portrait_cover_id,input.title_confirmed,input.covers_confirmed]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE book_projects SET updated_at={NOW} WHERE id=?1"),[&input.project_id]).map_err(|e|e.to_string())?;
             tx.execute("UPDATE publish_tasks SET writing_version_id=?1,allow_download=?2,scheduled_at=?3 WHERE id=?4",params![input.writing_version_id,input.allow_download,input.scheduled_at,id]).map_err(|e|e.to_string())?;
+            tx.execute("DELETE FROM editor_drafts WHERE kind='publishing' AND owner_id=?1", [&draft_owner]).map_err(|e| e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;
             checked(c,&id)
         })

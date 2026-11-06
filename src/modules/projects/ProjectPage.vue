@@ -2,14 +2,14 @@
 import { displayPath } from '@/lib/displayPath'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
-import { requestConfirmation } from '../../composables/useConfirmation'
-import { useWindowCloseGuard } from '../../composables/useWindowCloseGuard'
+import { useEditorDraft } from '../../composables/useEditorDraft'
+import { readDraft } from '../../services/drafts'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter, useRoute } from 'vue-router'
 import * as api from '../../services/projects'
 import { appendNote, chooseNote, importNote, type ImportedNote } from '../../services/notes'
-import { emptyProject, projectInput, type Asset, type Project } from '../../types/project'
+import { emptyProject, projectInput, type Asset, type Project, type ProjectInput } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
@@ -30,17 +30,31 @@ if (!props.id && typeof route.query.source === 'string' && /\.(txt|md|epub|pdf|d
 }
 const documents = ref<Asset[]>([])
 const dirty = computed(() => JSON.stringify(form.value) !== original.value || sourcePaths.value.length > 0)
-const ready = ref(!props.id)
+const ready = ref(false)
 const deleting = ref(false)
 const imported = ref<ImportedNote | null>(null)
 let leaving = false
 const { busy, error, message, operation, run } = useOperation()
+const draftContent = computed(() => ({ form: form.value, sourcePaths: sourcePaths.value }))
+const autosave = useEditorDraft(() => props.id ?? 'new', 'project', draftContent, () => project.value?.updatedAt ?? null, dirty, ready, () => !busy.value)
 function accept(saved: Project) { project.value = saved; form.value = projectInput(saved); original.value = JSON.stringify(form.value); ready.value = true }
 const load = () => run(async () => {
-  if (!props.id) return
-  const [saved, assets] = await Promise.all([api.getProject(props.id), api.listAssets(props.id)])
-  documents.value = assets.filter(asset => asset.assetType === 'document')
-  accept(saved)
+  ready.value = false
+  if (props.id) {
+    const [saved, assets] = await Promise.all([api.getProject(props.id), api.listAssets(props.id)])
+    documents.value = assets.filter(asset => asset.assetType === 'document')
+    accept(saved)
+    ready.value = false
+  }
+  const recovery = await readDraft<{ form: ProjectInput; sourcePaths: string[] }>(props.id ?? 'new', 'project')
+  if (recovery) {
+    const dropped = sourcePaths.value
+    const { title, author, sourceNotes } = recovery.content.form
+    form.value = { ...form.value, title, author, sourceNotes }
+    sourcePaths.value = [...new Set([...recovery.content.sourcePaths, ...dropped])]
+    message.value = '已恢复书籍资料暂存。保存并继续后，资料与所选文件才正式生效。'
+  }
+  ready.value = true
 }, '正在读取书籍资料…')
 const sourceName = (path: string) => path.split(/[\\/]/).pop() ?? path
 const chooseSource = () => run(async () => {
@@ -60,7 +74,9 @@ const applyImport = () => run(async () => {
   imported.value = null; message.value = '资料已追加，保留来源说明。点击保存并继续写入书籍资料。'
 }, '正在追加资料…')
 const save = () => run(async () => {
+  await autosave.flush()
   const saved = await api.saveProject(props.id ?? null, { ...form.value }, [...sourcePaths.value])
+  autosave.reset()
   sourcePaths.value = []
   accept(saved)
   message.value = '项目已保存。'
@@ -68,17 +84,23 @@ const save = () => run(async () => {
 }, '正在保存书籍资料…')
 const remove = () => run(async () => {
   if (!project.value) return
-  await api.deleteProject(project.value.id)
+  await autosave.flush()
+  ready.value = false
+  try { await api.deleteProject(project.value.id) }
+  catch (cause) { ready.value = true; throw cause }
   original.value = JSON.stringify(form.value)
   leaving = true
   await router.push('/projects')
 }, '正在删除项目…')
-const canLeave = () => leaving || (!busy.value && (!dirty.value || requestConfirmation('项目资料尚未保存，确定离开并放弃修改？')))
-const closeGuard = useWindowCloseGuard(() => dirty.value || busy.value, canLeave)
+const canLeave = async () => {
+  if (leaving) return true
+  if (busy.value) return false
+  try { await autosave.flush(); return true } catch { return false }
+}
 onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate(canLeave)
 onMounted(async () => {
-  if (desktop && props.id) await load()
+  if (desktop) await load()
   if (route.query.focus === 'title') globalThis.document.getElementById('title')?.focus()
 })
 </script>
@@ -112,7 +134,7 @@ onMounted(async () => {
   >
     请在桌面应用中编辑书籍。
   </p>
-  <OperationFeedback :error="closeGuard.error.value" />
+  <OperationFeedback :error="autosave.error.value" />
   <OperationFeedback
     :error="error"
     :message="message"
@@ -303,12 +325,21 @@ onMounted(async () => {
             <span
               v-if="dirty"
               class="save-status is-dirty"
-            >有未保存的修改</span>
+              role="status"
+            >{{ autosave.error.value || autosave.status.value || '等待暂存…' }}</span>
+            <Button
+              v-if="autosave.error.value"
+              type="button"
+              variant="outline"
+              @click="run(() => autosave.flush())"
+            >
+              重试暂存
+            </Button>
             <RouterLink
               :to="project ? `/projects/${project.id}/writing` : '/projects'"
               :class="buttonVariants({ variant: 'ghost', size: 'sm' })"
             >
-              取消
+              返回
             </RouterLink>
             <Button
               type="submit"

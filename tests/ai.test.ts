@@ -1,3 +1,4 @@
+import { generationJobs } from '../src/services/generation'
 import { chooseSelect, openSelect, tab, tabPanel, button, dialog, answerConfirmation, mockResizeObserver } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -55,6 +56,8 @@ async function render(path = '/projects/p1/writing') {
   return { wrapper, router }
 }
 beforeEach(() => {
+  generationJobs.clear()
+  localStorage.clear()
   vi.resetAllMocks()
   vi.mocked(loadWaveform).mockResolvedValue([.2, .6, .8, .1])
   mockResizeObserver()
@@ -75,6 +78,26 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
+  it('finishes once while another page is open and restores the current draft before offering the result', async () => {
+    let finish!: (value: WritingVersion) => void
+    vi.mocked(api.executeGeneration).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    let recovery: Awaited<ReturnType<typeof drafts.readDraft>> = null
+    vi.mocked(drafts.saveDraft).mockImplementation(async (_owner, kind, value) => { if (kind === 'writing') recovery = structuredClone(value) })
+    vi.mocked(drafts.readDraft).mockImplementation(async () => recovery)
+    const { wrapper, router } = await render()
+    await wrapper.get('#result-title').setValue('切页前的手写标题')
+    await button(wrapper, '生成备选').trigger('click'); await flushPromises()
+    await router.push('/projects'); await flushPromises()
+    expect(wrapper.get('[aria-label="正在运行的任务"]').text()).toContain('生成中')
+    finish(generated); await flushPromises()
+    expect(wrapper.get('[aria-label="正在运行的任务"]').text()).toContain('已完成')
+    vi.mocked(api.listVersions).mockResolvedValue([generated, initial])
+    await router.push('/projects/p1/writing'); await flushPromises()
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', '切页前的手写标题')
+    expect(wrapper.get('#history-candidate-title').element).toHaveProperty('value', generated.content.title)
+    expect(api.executeGeneration).toHaveBeenCalledOnce()
+    expect(api.saveWriting).not.toHaveBeenCalled()
+  })
   it('copies, saves and restores edited publishing tags with the existing draft', async () => {
     vi.mocked(api.listVersions).mockResolvedValue([generated])
     const writeText = vi.fn().mockResolvedValue(undefined)
@@ -242,6 +265,25 @@ describe('publishing workflow', () => {
     expect(wrapper.get('#result-audioPrompt').element).toHaveProperty('value', initial.content.audioPrompt)
     expect(api.saveWriting).not.toHaveBeenCalled()
   })
+  it.each(['failed', 'cancelled'])('does not repeat a %s duration recommendation on returning and allows an explicit retry', async code => {
+    vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), audioDurationSource: null, id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
+    let fail!: (cause: unknown) => void
+    vi.mocked(api.executeGeneration).mockReturnValue(new Promise((_resolve, reject) => { fail = reject }))
+    const { wrapper, router } = await render()
+    await router.push('/projects'); await flushPromises()
+    fail({ code, message: code === 'cancelled' ? '生成已取消' : '模型请求超时' }); await flushPromises()
+    for (let visit = 0; visit < 2; visit++) {
+      await router.push('/projects/p1/writing'); await flushPromises()
+      expect(api.startGeneration).toHaveBeenCalledOnce()
+      expect(api.executeGeneration).toHaveBeenCalledOnce()
+      expect(wrapper.get('#result-title').element).toHaveProperty('value', initial.content.title)
+      if (visit === 0) { await router.push('/projects'); await flushPromises() }
+    }
+    vi.mocked(api.executeGeneration).mockResolvedValueOnce({ minutes: 25, reason: '用户主动重试后推荐。' })
+    await button(wrapper, 'AI 推荐时长').trigger('click'); await flushPromises()
+    expect(api.executeGeneration).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '25')
+  })
   it('restores configured duration and sends a manual override to full generation', async () => {
     vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), targetDurationSeconds: 1500, audioDurationSource: 'ai', id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
     vi.mocked(api.executeGeneration).mockResolvedValue(generated)
@@ -365,8 +407,12 @@ describe('publishing workflow', () => {
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('原有标题')
     expect((wrapper.get('#revision-after-title').element as HTMLTextAreaElement).value).toBe(candidate.title)
     expect(wrapper.get('#result-description').attributes('disabled')).toBeDefined()
-    const navigation = router.push('/projects'); await answerConfirmation(false); await navigation
-    expect(router.currentRoute.value.path).toContain('/writing')
+    await router.push('/projects'); await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/projects')
+    await router.push('/projects/p1/writing'); await flushPromises()
+    expect(wrapper.get('#revision-after-title').element).toHaveProperty('value', candidate.title)
+    expect(wrapper.get('#revision-instruction').element).toHaveProperty('value', '标题更有悬念，不剧透')
+    expect(api.executeGeneration).toHaveBeenCalledOnce()
     vi.mocked(api.applyGeneration).mockRejectedValueOnce('保存失败')
     await button(wrapper, '采用并保存新版本').trigger('click'); await flushPromises()
     expect(wrapper.find('#revision-after-title').exists()).toBe(true)
@@ -564,7 +610,9 @@ describe('publishing workflow', () => {
     vi.mocked(api.executeGeneration).mockReturnValue(new Promise((_resolve, fail) => { reject = fail }))
     vi.mocked(api.cancelGeneration).mockImplementation(async () => { reject({ code: 'cancelled', message: '生成已取消' }) })
     const { wrapper, router } = await render(); await button(wrapper, '生成备选').trigger('click'); await flushPromises()
-    await router.push('/projects'); expect(router.currentRoute.value.path).toContain('/writing')
+    await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects')
+    await router.push('/projects/p1/writing'); await flushPromises()
+    expect(api.executeGeneration).toHaveBeenCalledOnce()
     await button(wrapper, '取消生成').trigger('click'); await flushPromises()
     expect(api.cancelGeneration).toHaveBeenCalledWith('t1')
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('原有标题')

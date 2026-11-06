@@ -12,6 +12,25 @@ beforeEach(() => vi.resetAllMocks())
 afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 
 describe('window exit protection', () => {
+  it('uses one native listener and waits for every guard before allowing close', async () => {
+    vi.mocked(isTauri).mockReturnValue(true)
+    let close!: (event: { preventDefault: () => void }) => Promise<void>
+    const register = vi.fn(async callback => { close = callback as typeof close; return vi.fn() })
+    vi.mocked(getCurrentWindow).mockReturnValue({ onCloseRequested: register } as unknown as ReturnType<typeof getCurrentWindow>)
+    let finish!: () => void
+    const save = vi.fn(() => new Promise<boolean>(resolve => { finish = () => resolve(true) }))
+    const confirm = vi.fn(async () => false)
+    const first = mount({ setup() { useWindowCloseGuard(() => true, save) }, template: '<p>暂存</p>' })
+    const second = mount({ setup() { useWindowCloseGuard(() => true, confirm) }, template: '<p>后台任务</p>' })
+    wrappers.push(first, second); await flushPromises()
+    expect(register).toHaveBeenCalledOnce()
+    const event = { preventDefault: vi.fn() }
+    const pending = close(event)
+    expect(confirm).not.toHaveBeenCalled()
+    finish(); await pending
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(event.preventDefault).toHaveBeenCalledOnce()
+  })
   it('protects browser unload only while content or operations need protection', () => {
     vi.mocked(isTauri).mockReturnValue(false)
     const protectedState = ref(true)

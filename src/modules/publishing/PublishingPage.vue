@@ -20,6 +20,8 @@ import type { Asset } from '../../types/project'
 import type { CoverVersion } from '../../types/cover'
 import type { WritingVersion } from '../../types/ai'
 import { useOperation } from '../../composables/useOperation'
+import { useEditorDraft } from '../../composables/useEditorDraft'
+import { readDraft } from '../../services/drafts'
 import ProjectAssets from '../projects/ProjectAssets.vue'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
@@ -91,6 +93,10 @@ const recordTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const { busy: operationBusy, error, message, run } = useOperation()
 const douyinBusy = ref(false)
 const busy = computed(() => operationBusy.value || douyinBusy.value)
+const restoringDraft = ref(false)
+const draftOwner = computed(() => `${props.id}:${selected.value?.id ?? 'new'}`)
+const draftReady = computed(() => loaded.value && !published.value && !restoringDraft.value)
+const autosave = useEditorDraft(() => draftOwner.value, 'publishing', draft, () => selected.value?.updatedAt ?? null, dirty, draftReady, prepareLeave)
 
 const taskLabel = (task: PublishTask) => `${task.title || '未填写标题'} · ${publishStatuses[task.status]} · ${new Date(task.createdAt).toLocaleString()}`
 const assetLabel = (asset: Asset) => `${asset.originalName}${asset.existsStatus !== 'available' ? '（文件不可用）' : ''}`
@@ -115,8 +121,28 @@ function update(task: PublishTask) {
   tasks.value = [task, ...tasks.value.filter(t => t.id !== task.id)]
   accept(task)
 }
-function canDiscard(returnFocusId?: string) { return (!dirty.value && !recordOpen.value) || requestConfirmation('发布准备尚未保存，确定放弃修改？', returnFocusId) }
-const canLeave = () => !busy.value && canDiscard()
+function prepareLeave() { return !busy.value && (!recordOpen.value || requestConfirmation('发布结果尚未记录，确定放弃本次结果填写？')) }
+const canLeave = async () => {
+  if (!await prepareLeave()) return false
+  try { await autosave.flush(); return true } catch { return false }
+}
+async function restoreDraft(task: PublishTask | null) {
+  restoringDraft.value = true
+  accept(task)
+  try {
+    if (!published.value) {
+      const recovery = await readDraft<PublishInput>(draftOwner.value, 'publishing')
+      if (recovery) {
+        draft.value = { ...draft.value, ...recovery.content, projectId: props.id }
+        message.value = '已恢复本任务的编辑暂存；保存或确认后才更新发布准备。'
+      }
+    }
+    autosave.reset()
+  } catch (cause) {
+    loaded.value = false
+    throw cause
+  } finally { restoringDraft.value = false }
+}
 onBeforeRouteLeave(canLeave)
 let syncingTask = false
 onBeforeRouteUpdate((to, from) => syncingTask || (to.params.id === from.params.id && to.query.task === from.query.task) || canLeave())
@@ -130,7 +156,7 @@ const load = () => run(async () => {
   const target = props.taskId === 'new' ? null : props.taskId ? saved.find(task => task.id === props.taskId) : saved[0] ?? null
   if (props.taskId && props.taskId !== 'new' && !target) throw new Error('此任务不属于当前书籍或已不存在，请返回发布任务列表。')
   title.value = project.title; tasks.value = saved; assets.value = files; covers.value = exported; writing.value = versions
-  accept(target ?? null)
+  await restoreDraft(target ?? null)
   if (props.taskId === 'new' && typeof route.query.videoJob === 'string') {
     const job = (await listVideoJobs(props.id)).find(job => job.id === route.query.videoJob && job.status === 'succeeded')
     if (!job || !files.some(asset => asset.id === job.videoAssetId && asset.assetType === 'video' && asset.existsStatus === 'available') || !files.some(asset => asset.id === job.audioAssetId && asset.assetType === 'audio' && asset.existsStatus === 'available')) throw new Error('所选视频任务或原音频不可用，请回到视频制作检查素材。')
@@ -173,15 +199,23 @@ async function syncTaskUrl(id: string | null) {
   finally { syncingTask = false }
 }
 function newTask() { void switchTask(null) }
-async function switchTask(id: string | null, returnFocusId?: string) {
-  if (busy.value || !await canDiscard(returnFocusId)) return
-  accept(tasks.value.find(t => t.id === id) ?? null); recordOpen.value = false; error.value = ''; message.value = ''
-  await syncTaskUrl(id)
+async function switchTask(id: string | null) {
+  if (!await canLeave()) return
+  await run(async () => {
+    await restoreDraft(tasks.value.find(t => t.id === id) ?? null)
+    recordOpen.value = false
+    await syncTaskUrl(id)
+  })
 }
 async function persist() {
   const invalid = publishScheduleError(draft.value.scheduledAt)
   if (invalid) throw new Error(invalid)
-  if (!selected.value || dirty.value) update(await api.savePublishTask(selected.value?.id ?? null, { ...draft.value }))
+  if (!selected.value || dirty.value) {
+    await autosave.flush()
+    const saved = await api.savePublishTask(selected.value?.id ?? null, { ...draft.value })
+    autosave.reset()
+    update(saved)
+  }
   await syncTaskUrl(selected.value!.id)
   return selected.value!.id
 }
@@ -303,7 +337,7 @@ onMounted(() => { if (desktop) void loadTask() })
       请在桌面应用中准备发布。
     </p>
     <OperationFeedback
-      :error="error"
+      :error="error || autosave.error.value"
       :message="message"
       @dismiss="message = ''"
     />
@@ -333,7 +367,7 @@ onMounted(() => { if (desktop) void loadTask() })
           v-if="tasks.length"
           :model-value="selected?.id ?? null"
           :disabled="busy || recordOpen"
-          @update:model-value="switchTask($event, 'publish-task')"
+          @update:model-value="switchTask($event)"
         >
           <SelectTrigger
             id="publish-task"
@@ -708,7 +742,18 @@ onMounted(() => { if (desktop) void loadTask() })
             >
               <AppIcon name="save" />保存发布草稿
             </Button>
-            <span class="muted">{{ dirty ? '有未保存修改，生成时会先保存' : '每次生成都保留已有任务包' }}</span>
+            <span
+              class="muted"
+              role="status"
+            >{{ dirty ? autosave.error.value || autosave.status.value || '等待暂存…' : '每次生成都保留已有任务包' }}</span>
+            <Button
+              v-if="autosave.error.value"
+              type="button"
+              variant="outline"
+              @click="run(() => autosave.flush())"
+            >
+              重试暂存
+            </Button>
           </div>
         </fieldset>
       </form>
