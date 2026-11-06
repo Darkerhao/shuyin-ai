@@ -62,6 +62,8 @@ pub(super) fn input(db: &Database, project: &Project) -> PublishInput {
         portrait_cover_id: Some(cover(db, &project.id, 1080, 1440)),
         title_confirmed: true,
         covers_confirmed: true,
+        allow_download: true,
+        scheduled_at: None,
     }
 }
 fn record() -> PublishRecordInput {
@@ -71,6 +73,180 @@ fn record() -> PublishRecordInput {
         post_url: "https://www.douyin.com/video/123".into(),
         notes: "用户确认".into(),
     }
+}
+
+#[test]
+fn publish_settings_persist_in_snapshots_packages_reopening_and_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.sqlite3");
+    let db = Database::open(path.clone());
+    let p = project(&db);
+    let mut i = input(&db, &p);
+    i.allow_download = false;
+    i.scheduled_at = Some("2099-01-05T18:30:00+08:00".into());
+    let task = db.save_publish_task(None, i.clone()).unwrap();
+    let ready = db.prepare_publish_task(&task.id).unwrap();
+    assert_eq!(db.publish_snapshot(&task.id).unwrap().input, i);
+    let package = Path::new(ready.task_directory.as_deref().unwrap());
+    let settings = fs::read_to_string(package.join("publish-settings.txt")).unwrap();
+    assert!(settings.contains("不允许") && settings.contains("2099-01-05 18:30"));
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["input"]["allowDownload"], false);
+    assert_eq!(
+        manifest["input"]["scheduledAt"],
+        i.scheduled_at.as_deref().unwrap()
+    );
+    assert!(ready.record.is_none());
+    let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    drop(db);
+    let db = Database::open(path);
+    assert_eq!(db.list_publish_queue().unwrap()[0].task.input, i);
+    let mut immediate = i.clone();
+    immediate.allow_download = true;
+    immediate.scheduled_at = None;
+    assert_eq!(
+        db.save_publish_task(Some(&task.id), immediate.clone())
+            .unwrap()
+            .input,
+        immediate
+    );
+    db.restore_backup(&backup).unwrap();
+    let restored = db.list_publish_tasks(&p.id).unwrap().remove(0);
+    assert_eq!(restored.input, i);
+    assert_eq!(restored.status, "ready");
+    assert!(restored.record.is_none());
+}
+
+#[test]
+fn publish_settings_reject_invalid_or_expired_times_without_overwriting_the_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("settings.sqlite3"));
+    let p = project(&db);
+    let original = input(&db, &p);
+    let task = db.save_publish_task(None, original.clone()).unwrap();
+    for value in [
+        "",
+        "invalid",
+        "2026-02-30T12:00:00+08:00",
+        "2020-01-01T12:00:00+08:00",
+        "2099-01-05T18:30:00Z",
+        "2099-01-05T18:30:15+08:00",
+    ] {
+        let mut i = original.clone();
+        i.title = "不应写入".into();
+        i.scheduled_at = Some(value.into());
+        assert!(db.save_publish_task(Some(&task.id), i).is_err(), "{value}");
+        assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].input, original);
+    }
+    let mut scheduled = original;
+    scheduled.scheduled_at = Some("2099-01-05T18:30:00+08:00".into());
+    db.save_publish_task(Some(&task.id), scheduled).unwrap();
+    let ready = db.prepare_publish_task(&task.id).unwrap();
+    db.with_connection(|c| {
+        c.execute(
+            "UPDATE publish_tasks SET scheduled_at='2020-01-01T12:00:00+08:00' WHERE id=?1",
+            [&task.id],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    // Simulate time passing without changing the already exported media or settings.
+    let package = Path::new(ready.task_directory.as_deref().unwrap());
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
+    manifest["input"]["scheduledAt"] = "2020-01-01T12:00:00+08:00".into();
+    fs::write(
+        package.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let settings = fs::read_to_string(package.join("publish-settings.txt"))
+        .unwrap()
+        .replace("2099-01-05 18:30", "2020-01-01 12:00");
+    fs::write(package.join("publish-settings.txt"), settings).unwrap();
+    let expired = db.list_publish_tasks(&p.id).unwrap().remove(0);
+    assert_eq!(expired.status, "ready");
+    assert!(db.publish_snapshot(&task.id).is_err());
+    assert!(db.prepare_publish_task(&task.id).is_err());
+    assert!(expired.record.is_none());
+    // A scheduled work is recorded only after it actually appears, necessarily after its time.
+    assert_eq!(
+        db.record_publish_success(&task.id, record())
+            .unwrap()
+            .status,
+        "published"
+    );
+}
+
+#[test]
+fn publish_settings_defaults_keep_existing_packages_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("settings.sqlite3"));
+    let p = project(&db);
+    let task = db.save_publish_task(None, input(&db, &p)).unwrap();
+    let ready = db.prepare_publish_task(&task.id).unwrap();
+    let package = Path::new(ready.task_directory.as_deref().unwrap());
+    assert!(!package.join("publish-settings.txt").exists());
+    let manifest_path = package.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    let old_input = manifest["input"].as_object_mut().unwrap();
+    old_input.remove("allowDownload");
+    old_input.remove("scheduledAt");
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let snapshot = db.publish_snapshot(&task.id).unwrap();
+    assert!(snapshot.input.allow_download);
+    assert!(snapshot.input.scheduled_at.is_none());
+    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "ready");
+}
+
+#[test]
+fn publish_settings_v18_migrates_old_backups_without_rewriting_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("v17.sqlite3");
+    let c = Connection::open(&old).unwrap();
+    for sql in MIGRATIONS.iter().take(17) {
+        c.execute_batch(sql).unwrap();
+    }
+    c.execute_batch("INSERT INTO book_projects(id,title,source_notes,target_duration_seconds,status,workspace_path,created_at,updated_at) VALUES('old','旧书','手工资料',600,'published','missing','original','original'); INSERT INTO publish_tasks(id,project_id,title,description,tags,title_confirmed,covers_confirmed,status,created_at,updated_at) VALUES('task','old','旧标题','手工内容','',1,1,'published','original','original'); INSERT INTO publish_records VALUES('task','2026-10-26T00:00:00Z','','手工记录','original'); PRAGMA user_version=17;").unwrap();
+    drop(c);
+    let before = fs::read(&old).unwrap();
+    let current = dir.path().join("current.sqlite3");
+    fs::copy(&old, &current).unwrap();
+    for restore in [false, true] {
+        let db = Database::open(current.clone());
+        if restore {
+            db.restore_backup(old.to_str().unwrap()).unwrap();
+        }
+        let task = db.list_publish_tasks("old").unwrap().remove(0);
+        assert!(task.input.allow_download);
+        assert!(task.input.scheduled_at.is_none());
+        assert_eq!(task.input.description, "手工内容");
+        assert_eq!(task.updated_at, "original");
+        assert_eq!(task.status, "published");
+        assert_eq!(task.record.unwrap().notes, "手工记录");
+        db.with_connection(|c| {
+            assert_eq!(
+                c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                18
+            );
+            assert!(!c
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .exists([])
+                .unwrap());
+            Ok(())
+        })
+        .unwrap();
+    }
+    assert_eq!(fs::read(old).unwrap(), before);
 }
 
 #[test]

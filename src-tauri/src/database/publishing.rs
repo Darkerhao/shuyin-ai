@@ -33,6 +33,35 @@ pub struct PublishInput {
     pub portrait_cover_id: Option<String>,
     pub title_confirmed: bool,
     pub covers_confirmed: bool,
+    #[serde(default = "default_allow_download")]
+    pub allow_download: bool,
+    #[serde(default)]
+    pub scheduled_at: Option<String>,
+}
+
+fn default_allow_download() -> bool {
+    true
+}
+
+fn validate_schedule(
+    c: &Connection,
+    scheduled_at: Option<&str>,
+    require_future: bool,
+) -> Result<(), String> {
+    let Some(value) = scheduled_at else {
+        return Ok(());
+    };
+    let (canonical, seconds): (Option<String>, Option<i64>) = c.query_row(
+        "SELECT strftime('%Y-%m-%dT%H:%M:00+08:00',?1,'+8 hours'), unixepoch(?1)-unixepoch('now')",
+        [value], |r| Ok((r.get(0)?, r.get(1)?)),
+    ).map_err(|e| e.to_string())?;
+    if canonical.as_deref() != Some(value) || seconds.is_none() {
+        return Err("请选择有效的定时发布时间（北京时间，精确到分钟）。".into());
+    }
+    if require_future && seconds.is_some_and(|s| s <= 0) {
+        return Err("定时发布时间已过，请重新选择未来时间。".into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -201,8 +230,8 @@ fn cover_path(
 }
 
 fn load(c: &Connection, id: &str) -> Result<PublishTask, String> {
-    let mut task = c.query_row("SELECT id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,task_directory,created_at,updated_at,writing_version_id FROM publish_tasks WHERE id=?1", [id], |r| Ok(PublishTask {
-        id: r.get(0)?, input: PublishInput { project_id:r.get(1)?, title:r.get(2)?, description:r.get(3)?, tags:r.get(4)?, video_asset_id:r.get(5)?, audio_asset_id:r.get(6)?, landscape_cover_id:r.get(7)?, portrait_cover_id:r.get(8)?, title_confirmed:r.get(9)?, covers_confirmed:r.get(10)?, writing_version_id:r.get(15)? }, status:r.get(11)?, task_directory:r.get(12)?, created_at:r.get(13)?, updated_at:r.get(14)?, checklist:Vec::new(), record:None, douyin_collection:None
+    let mut task = c.query_row("SELECT id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,task_directory,created_at,updated_at,writing_version_id,allow_download,scheduled_at FROM publish_tasks WHERE id=?1", [id], |r| Ok(PublishTask {
+        id: r.get(0)?, input: PublishInput { project_id:r.get(1)?, title:r.get(2)?, description:r.get(3)?, tags:r.get(4)?, video_asset_id:r.get(5)?, audio_asset_id:r.get(6)?, landscape_cover_id:r.get(7)?, portrait_cover_id:r.get(8)?, title_confirmed:r.get(9)?, covers_confirmed:r.get(10)?, writing_version_id:r.get(15)?, allow_download:r.get(16)?, scheduled_at:r.get(17)? }, status:r.get(11)?, task_directory:r.get(12)?, created_at:r.get(13)?, updated_at:r.get(14)?, checklist:Vec::new(), record:None, douyin_collection:None
     })).optional().map_err(|e| e.to_string())?.ok_or("发布任务不存在。")?;
     task.douyin_collection = c
         .query_row(
@@ -292,11 +321,18 @@ fn cover_bytes(path: &Path, width: u32, height: u32) -> Result<Vec<u8>, String> 
 }
 
 fn text_files(m: &Manifest) -> Vec<(&'static str, String)> {
-    vec![
+    let mut files = vec![
         ("title.txt",m.input.title.clone()), ("description.txt",m.input.description.clone()), ("tags.txt",m.input.tags.clone()),
         ("video-path.txt",m.video.path.clone()),
         ("README.txt",format!("书引 AI · 抖音发布准备\n\n1. 在 {PORTAL} 登录自己的账号。\n2. 从 video-path.txt 的原路径选择视频上传；任务包未复制视频。\n3. 分别上传 cover-landscape.png（4:3）和 cover-portrait.png（3:4）。\n4. 复制 title.txt、description.txt 与可选 tags.txt，检查预览后手动发布。\n5. 发布成功后回到书引 AI，确认并记录作品链接。\n\n音频仅作制作记录，不上传抖音；请保留音频和视频源文件。此任务包不代表已发布。\n")),
-    ]
+    ];
+    // Default settings keep existing packages valid; customized tasks include a manual checklist.
+    if !m.input.allow_download || m.input.scheduled_at.is_some() {
+        files.push(("publish-settings.txt", format!("允许保存视频：{}\n发布时间：{}\n\n请在官方页面核对并亲自提交。提交定时发布后，作品实际发布时再回到书引 AI 记录成功。\n",
+            if m.input.allow_download { "允许" } else { "不允许" },
+            m.input.scheduled_at.as_deref().map(|s| format!("{}（北京时间）", s.replace('T', " "))).unwrap_or_else(|| "立即发布".into()))));
+    }
+    files
 }
 
 fn package_valid(c: &Connection, task: &PublishTask) -> bool {
@@ -412,6 +448,11 @@ fn checked(c: &Connection, id: &str) -> Result<PublishTask, String> {
                 .is_ok(),
         ),
         ("covers", "已确认两张封面", i.covers_confirmed),
+        (
+            "schedule",
+            "定时发布时间格式有效（立即发布无需设置）",
+            validate_schedule(c, i.scheduled_at.as_deref(), false).is_ok(),
+        ),
         (
             "package",
             "任务包完整且与当前素材一致",
@@ -535,6 +576,7 @@ impl Database {
     pub fn publish_snapshot(&self, id: &str) -> Result<PublishSnapshot, String> {
         self.with_connection(|c| {
             let task = checked(c, id)?;
+            validate_schedule(c, task.input.scheduled_at.as_deref(), true)?;
             if task.status != "ready" {
                 return Err("请先生成有效任务包；已发布任务不能再次上传。".into());
             }
@@ -581,6 +623,7 @@ impl Database {
         }
         self.with_connection(|c| {
             let tx = c.transaction().map_err(|e|e.to_string())?;
+            validate_schedule(&tx, input.scheduled_at.as_deref(), true)?;
             get(&tx,&input.project_id)?;
             if let Some(version)=&input.writing_version_id {
                 if !tx.query_row("SELECT EXISTS(SELECT 1 FROM writing_versions WHERE id=?1 AND project_id=?2 AND kind='publishing')",params![version,input.project_id],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("文案版本不属于当前书籍。".into()); }
@@ -595,7 +638,7 @@ impl Database {
             } else { new_id(&tx)? };
             tx.execute(&format!("INSERT INTO publish_tasks(id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'draft',{NOW},{NOW}) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,tags=excluded.tags,video_asset_id=excluded.video_asset_id,audio_asset_id=excluded.audio_asset_id,landscape_cover_id=excluded.landscape_cover_id,portrait_cover_id=excluded.portrait_cover_id,title_confirmed=excluded.title_confirmed,covers_confirmed=excluded.covers_confirmed,status='draft',task_directory=NULL,updated_at=excluded.updated_at"),params![id,input.project_id,input.title,input.description,input.tags,input.video_asset_id,input.audio_asset_id,input.landscape_cover_id,input.portrait_cover_id,input.title_confirmed,input.covers_confirmed]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE book_projects SET updated_at={NOW} WHERE id=?1"),[&input.project_id]).map_err(|e|e.to_string())?;
-            tx.execute("UPDATE publish_tasks SET writing_version_id=?1 WHERE id=?2",params![input.writing_version_id,id]).map_err(|e|e.to_string())?;
+            tx.execute("UPDATE publish_tasks SET writing_version_id=?1,allow_download=?2,scheduled_at=?3 WHERE id=?4",params![input.writing_version_id,input.allow_download,input.scheduled_at,id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;
             checked(c,&id)
         })
@@ -605,6 +648,7 @@ impl Database {
         self.with_connection(|c| {
             let task = checked(c,id)?;
             if task.status=="published" { return Err("已发布任务不再生成任务包，请新建任务。".into()); }
+            validate_schedule(c, task.input.scheduled_at.as_deref(), true)?;
             let missing:Vec<_> = task.checklist.iter().filter(|i|i.key!="package" && !i.passed).map(|i|i.label).collect();
             if !missing.is_empty() { return Err(format!("发布准备未完成：{}。",missing.join("；"))); }
             let snapshot = manifest(c,&task)?;

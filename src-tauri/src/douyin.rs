@@ -446,7 +446,7 @@ mod tests {
         }
     }
 
-    fn snapshot() -> PublishSnapshot {
+    pub(super) fn snapshot() -> PublishSnapshot {
         PublishSnapshot {
             task_id: "task".into(),
             project_title: "一本书".into(),
@@ -466,6 +466,8 @@ mod tests {
                 portrait_cover_id: Some("portrait".into()),
                 title_confirmed: true,
                 covers_confirmed: true,
+                allow_download: true,
+                scheduled_at: None,
             },
         }
     }

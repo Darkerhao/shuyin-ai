@@ -1,5 +1,5 @@
 use super::*;
-use crate::database::publishing::CollectionChoice;
+use crate::database::publishing::{CollectionChoice, PublishInput};
 use serde_json::json;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -24,6 +24,34 @@ struct Collections {
     loaded: bool,
     options: Vec<CollectionOption>,
     selected: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishSettings {
+    allow_download: Option<bool>,
+    scheduled: Option<bool>,
+    scheduled_at: Option<String>,
+}
+
+impl PublishSettings {
+    fn matches(&self, input: &PublishInput) -> bool {
+        self.allow_download == Some(input.allow_download)
+            && self.scheduled == Some(input.scheduled_at.is_some())
+            && self.scheduled_at == input.scheduled_at
+    }
+
+    fn has_conflict(&self, input: &PublishInput) -> bool {
+        self.allow_download
+            .is_some_and(|value| value != input.allow_download)
+            || self
+                .scheduled
+                .is_some_and(|value| value != input.scheduled_at.is_some())
+            || self
+                .scheduled_at
+                .as_ref()
+                .is_some_and(|value| Some(value) != input.scheduled_at.as_ref())
+    }
 }
 
 impl Collections {
@@ -178,6 +206,7 @@ pub enum Decision {
     Page,
     Text,
     Covers,
+    Settings,
     Collection {
         name: Option<String>,
         remember: bool,
@@ -187,6 +216,17 @@ pub enum Decision {
 
 fn current(publisher: &DouyinPublisher) -> Result<Option<Session>, String> {
     Ok(publisher.session.lock().map_err(|e| e.to_string())?.clone())
+}
+
+fn resumable_session(
+    publisher: &DouyinPublisher,
+    snapshot: &PublishSnapshot,
+) -> Result<Option<Session>, String> {
+    Ok(current(publisher)?.filter(|session| {
+        session.task_id == snapshot.task_id
+            && ["running", "waiting", "review"].contains(&session.status.as_str())
+            && running(publisher, snapshot).is_ok()
+    }))
 }
 
 fn publish(app: &AppHandle, publisher: &DouyinPublisher, session: &Session) -> Result<(), String> {
@@ -234,17 +274,15 @@ pub async fn start_douyin_task(
                 "另一个任务仍绑定官方页面，请先记录实际结果或关闭发布窗口后处理下一篇。".into(),
             );
         }
-        if session.task_id == id
-            && ["running", "waiting", "review"].contains(&session.status.as_str())
-        {
-            open_douyin_window(app, window, publisher.clone()).await?;
-            return Ok(session);
-        }
     }
     let snapshot = database.publish_snapshot(&id).or_else(|_| {
         database.prepare_publish_task(&id)?;
         database.publish_snapshot(&id)
     })?;
+    if let Some(session) = resumable_session(&publisher, &snapshot)? {
+        open_douyin_window(app, window, publisher.clone()).await?;
+        return Ok(session);
+    }
     let mut previous = current(&publisher)?;
     if publisher
         .task
@@ -397,7 +435,20 @@ pub async fn continue_douyin_task(
                 session.done("collection", true);
             }
         }
-        Decision::Page if reason == "page" || reason == "collection" => {}
+        Decision::Settings if reason == "settings" => {
+            let editor = read_video_editor(&publish_window, &publisher, &snapshot).await?;
+            verify_video(&session, &editor)?;
+            if read_settings(&publish_window)
+                .await?
+                .has_conflict(&snapshot.input)
+            {
+                return Err(
+                    "官方页保存权限或发布时间与本次任务不同，请先按任务设置后再确认。".into(),
+                );
+            }
+            session.done("settings", true);
+        }
+        Decision::Page if reason == "page" || reason == "collection" || reason == "settings" => {}
         _ => return Err("此决定不适用于当前步骤。".into()),
     }
     session.status = "running".into();
@@ -455,6 +506,11 @@ async fn read_video_editor(
 async fn read_collections(window: &WebviewWindow) -> Result<Collections, String> {
     serde_json::from_value(page_action(window, "collections", json!({})).await?)
         .map_err(|_| "无法回读合集。".into())
+}
+
+async fn read_settings(window: &WebviewWindow) -> Result<PublishSettings, String> {
+    serde_json::from_value(page_action(window, "settings", json!({})).await?)
+        .map_err(|_| "无法读取官方页发布设置。".into())
 }
 
 async fn load_collection_options(
@@ -915,7 +971,45 @@ async fn drive(
             return Ok(());
         }
     }
+    session.step = "settings".into();
+    session.message = "正在核对保存权限和发布时间…".into();
+    publish(app, publisher, session)?;
     running(publisher, snapshot)?;
+    ensure_account(app, main, session).await?;
+    if !session.manual.iter().any(|s| s == "settings") {
+        let result = async {
+            page_action(
+                &window,
+                "setDownload",
+                json!({"allowDownload":snapshot.input.allow_download}),
+            )
+            .await?;
+            running(publisher, snapshot)?;
+            page_action(
+                &window,
+                "setPublishMode",
+                json!({"scheduled":snapshot.input.scheduled_at.is_some()}),
+            )
+            .await?;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            running(publisher, snapshot)?;
+            if let Some(time) = &snapshot.input.scheduled_at {
+                page_action(&window, "setSchedule", json!({"scheduledAt":time})).await?;
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            read_settings(&window).await
+        }
+        .await;
+        running(publisher, snapshot)?;
+        if !result.is_ok_and(|settings| settings.matches(&snapshot.input)) {
+            session.wait("settings", "保存权限或发布时间未通过回读。请在官方页按本次任务设置并核对；若使用定时发布，请检查当前账号的可选范围。");
+            return Ok(());
+        }
+        session.done("settings", false);
+    }
+    running(publisher, snapshot)?;
+    // Uploading and manual review may take long enough for the chosen time to expire.
+    verify_snapshot(&database.publish_snapshot(&session.task_id)?, snapshot)?;
     ensure_account(app, main, session).await?;
     let final_editor = read_video_editor(&window, publisher, snapshot).await?;
     verify_video(session, &final_editor)?;
@@ -938,10 +1032,27 @@ async fn drive(
         return Ok(());
     }
     session.collection_authorized = false;
+    if !read_settings(&window).await.is_ok_and(|s| {
+        if session.manual.iter().any(|s| s == "settings") {
+            !s.has_conflict(&snapshot.input)
+        } else {
+            s.matches(&snapshot.input)
+        }
+    }) {
+        session.wait(
+            "settings",
+            "最终核对发现保存权限或发布时间变化，请重新按本次任务设置并确认。",
+        );
+        return Ok(());
+    }
     session.step = "review".into();
     session.status = "review".into();
     session.waiting_for = None;
-    session.message = "已准备好，请检查并发布。请在官方页核对预览、声明、可见范围和发布设置，亲自点击发布，再回来记录实际结果。".into();
+    session.message = if snapshot.input.scheduled_at.is_some() {
+        "已准备好定时发布，请在官方页核对预览、声明、保存权限和定时时间，亲自提交；作品实际发布后再回来记录成功。"
+    } else {
+        "已准备好，请检查并发布。请在官方页核对预览、声明、可见范围和保存权限，亲自点击发布，再回来记录实际结果。"
+    }.into();
     Ok(())
 }
 
@@ -994,6 +1105,84 @@ async fn stop_current(publisher: &DouyinPublisher, run_id: u64) -> Result<Sessio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_publish_settings_cannot_reuse_a_review_session() {
+        let publisher = DouyinPublisher::default();
+        let original = super::super::tests::snapshot();
+        let mut session = Session::new(1, original.task_id.clone());
+        session.status = "review".into();
+        session.done("settings", false);
+        *publisher.task.lock().unwrap() = Some(original.clone());
+        *publisher.session.lock().unwrap() = Some(session);
+        assert!(resumable_session(&publisher, &original).unwrap().is_some());
+        let mut changed = original.clone();
+        changed.input.allow_download = false;
+        assert!(resumable_session(&publisher, &changed).unwrap().is_none());
+        changed = original.clone();
+        changed.input.scheduled_at = Some("2099-01-05T18:30:00+08:00".into());
+        assert!(resumable_session(&publisher, &changed).unwrap().is_none());
+        changed.input.scheduled_at = None;
+        assert!(resumable_session(&publisher, &changed).unwrap().is_some());
+        publisher.stopped.store(true, Ordering::SeqCst);
+        assert!(resumable_session(&publisher, &original).unwrap().is_none());
+    }
+
+    #[test]
+    fn publish_settings_readback_requires_both_permission_and_the_exact_schedule() {
+        let input: PublishInput = serde_json::from_value(json!({"projectId":"book","title":"标题","description":"内容","tags":"","videoAssetId":null,"audioAssetId":null,"landscapeCoverId":null,"portraitCoverId":null,"titleConfirmed":true,"coversConfirmed":true,"allowDownload":false,"scheduledAt":"2099-01-05T18:30:00+08:00"})).unwrap();
+        let mut settings = PublishSettings {
+            allow_download: Some(false),
+            scheduled: Some(true),
+            scheduled_at: input.scheduled_at.clone(),
+        };
+        assert!(settings.matches(&input));
+        settings.allow_download = Some(true);
+        assert!(!settings.matches(&input));
+        settings.allow_download = Some(false);
+        for value in [
+            None,
+            Some(String::new()),
+            Some("2099-01-05T18:35:00+08:00".into()),
+        ] {
+            settings.scheduled_at = value;
+            assert!(!settings.matches(&input));
+        }
+        let mut immediate = input;
+        immediate.scheduled_at = None;
+        settings.scheduled = Some(false);
+        settings.scheduled_at = None;
+        assert!(settings.matches(&immediate));
+    }
+
+    #[test]
+    fn manual_settings_confirmation_cannot_skip_readable_conflicts() {
+        let mut input = super::super::tests::snapshot().input;
+        input.allow_download = false;
+        input.scheduled_at = Some("2099-01-05T18:30:00+08:00".into());
+        let mut settings = PublishSettings {
+            allow_download: Some(true),
+            scheduled: None,
+            scheduled_at: None,
+        };
+        assert!(settings.has_conflict(&input));
+        settings.allow_download = None;
+        settings.scheduled = Some(false);
+        assert!(settings.has_conflict(&input));
+        settings.scheduled = Some(true);
+        settings.scheduled_at = Some("2099-01-05T18:35:00+08:00".into());
+        assert!(settings.has_conflict(&input));
+        settings.scheduled_at = Some(String::new());
+        assert!(settings.has_conflict(&input));
+        settings.scheduled_at = None;
+        assert!(!settings.has_conflict(&input));
+        assert!(!settings.matches(&input));
+        input.scheduled_at = None;
+        assert!(settings.has_conflict(&input));
+        settings.scheduled = Some(false);
+        settings.allow_download = Some(false);
+        assert!(settings.matches(&input));
+    }
 
     #[test]
     fn selected_collection_remains_valid_after_the_popup_closes() {

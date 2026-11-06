@@ -18,7 +18,7 @@ beforeEach(() => {
   vi.spyOn(HTMLMediaElement.prototype, 'duration', 'get').mockReturnValue(60)
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
   document.execCommand = vi.fn((_command, _show, text) => { document.querySelector('[contenteditable]')!.textContent = text ?? ''; return true })
-  act = runInNewContext(source, { document, window, location: pageLocation, navigator, getComputedStyle, HTMLInputElement, Event })
+  act = runInNewContext(source, { document, window, location: pageLocation, navigator, getComputedStyle, HTMLInputElement, Event, KeyboardEvent })
 })
 afterEach(() => {
   vi.restoreAllMocks()
@@ -28,6 +28,78 @@ afterEach(() => {
 })
 
 describe('official editor adapter safeguards (local DOM fixtures)', () => {
+  function settings(download = true, scheduled = false) {
+    document.body.insertAdjacentHTML('beforeend', `<div class="content-obt4oA"><div><span>保存权限</span></div><div class="download-content-Lci5tL"><label data-checked="${download}"><input type="checkbox" value="1"><span>允许 </span></label><label data-checked="${!download}"><input type="checkbox" checked value="0"><span>不允许 </span></label></div></div>
+      <div class="content-obt4oA"><div><span>发布时间</span></div><div class="schedule-part-V615Zn"><div class="row-suTOx_"><label data-checked="${!scheduled}"><input type="checkbox" value="0"><span>立即发布 </span></label><label data-checked="${scheduled}"><input type="checkbox" value="1"><span>定时发布 </span></label></div><div class="date-picker-ioPchj"><input class="semi-input" placeholder="日期和时间"></div></div></div>`)
+    document.querySelectorAll('label[data-checked]').forEach(label => label.addEventListener('click', event => {
+      if (event.target instanceof HTMLInputElement) return
+      label.parentElement!.querySelectorAll('label').forEach(item => item.setAttribute('data-checked', String(item === label)))
+    }))
+  }
+  it('reads save permissions from the official selected label and applies both settings without submitting', () => {
+    settings()
+    const publish = vi.fn()
+    document.querySelector('#publish')!.addEventListener('click', publish)
+    expect(act('settings')).toMatchObject({ ok: true, allowDownload: true, scheduledAt: null })
+    expect(act('setDownload', { allowDownload: false })).toMatchObject({ ok: true })
+    expect(act('settings')).toMatchObject({ allowDownload: false })
+    expect(act('setPublishMode', { scheduled: true })).toMatchObject({ ok: true })
+    const scheduledAt = '2099-01-05T18:30:00+08:00'
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="日期和时间"]')!
+    let committed = ''
+    // Semi Input commits through keypress; merely changing the DOM value is insufficient.
+    input.addEventListener('keypress', event => { if (event.key === 'Enter') committed = input.value })
+    input.addEventListener('blur', () => { input.value = committed })
+    expect(act('setSchedule', { scheduledAt })).toMatchObject({ ok: true })
+    expect(committed).not.toBe('')
+    expect(act('settings')).toMatchObject({ allowDownload: false, scheduledAt })
+    expect(act('setPublishMode', { scheduled: false })).toMatchObject({ ok: true })
+    expect(act('settings')).toMatchObject({ allowDownload: false, scheduledAt: null })
+    expect(publish).not.toHaveBeenCalled()
+  })
+  it('never toggles already matching options and refuses missing, ambiguous, disabled or modal controls', () => {
+    settings()
+    const click = vi.fn()
+    document.querySelectorAll('label').forEach(label => label.addEventListener('click', click))
+    expect(act('setDownload', { allowDownload: true })).toMatchObject({ ok: true })
+    expect(act('setPublishMode', { scheduled: false })).toMatchObject({ ok: true })
+    expect(click).not.toHaveBeenCalled()
+    document.querySelector('.download-content-Lci5tL input[value="0"]')!.setAttribute('disabled', '')
+    expect(act('setDownload', { allowDownload: false })).toMatchObject({ ok: false })
+    expect(act('setSchedule', { scheduledAt: 'invalid' })).toMatchObject({ ok: false })
+    document.body.insertAdjacentHTML('beforeend', '<div role="dialog">官方提示</div>')
+    expect(act('settings')).toMatchObject({ ok: false })
+    document.querySelector('[role="dialog"]')!.remove()
+    document.body.append(document.querySelector('.content-obt4oA')!.cloneNode(true))
+    expect(act('settings')).toMatchObject({ ok: true, allowDownload: null, scheduled: false, scheduledAt: null })
+    expect(act('setDownload', { allowDownload: true })).toMatchObject({ ok: false })
+    expect(click).not.toHaveBeenCalled()
+  })
+  it('does not treat an empty or rejected scheduled time as immediate publication', () => {
+    settings(true, true)
+    expect(act('settings')).toMatchObject({ ok: true, scheduledAt: '' })
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="日期和时间"]')!
+    input.addEventListener('input', () => { input.value = '2099-01-05 16:00' })
+    const scheduledAt = '2099-01-05T18:30:00+08:00'
+    act('setSchedule', { scheduledAt })
+    expect(act('settings').scheduledAt).not.toBe(scheduledAt)
+  })
+  it('preserves readable save permission when publish-time controls are unavailable', () => {
+    settings(true)
+    document.querySelectorAll('.content-obt4oA')[1]!.remove()
+    expect(act('settings')).toMatchObject({ ok: true, allowDownload: true, scheduled: null, scheduledAt: null })
+    expect(act('setPublishMode', { scheduled: true })).toMatchObject({ ok: false })
+  })
+  it('preserves readable publish mode and time when save permission or the date input is unavailable', () => {
+    settings(false, true)
+    document.querySelector('.content-obt4oA')!.remove()
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="日期和时间"]')!
+    input.value = '2099-01-05 18:30'
+    expect(act('settings')).toMatchObject({ ok: true, allowDownload: null, scheduled: true })
+    expect(act('settings').scheduledAt).toBeTruthy()
+    input.remove()
+    expect(act('settings')).toMatchObject({ ok: true, allowDownload: null, scheduled: true, scheduledAt: null })
+  })
   it('waits for the official document and the unique upload control to mount', () => {
     const inspect = () => runInNewContext(readFileSync('src-tauri/src/douyin_page.js', 'utf8'), { document, location: pageLocation, navigator, getComputedStyle })
     pageLocation.pathname = '/creator-micro/content/upload'
