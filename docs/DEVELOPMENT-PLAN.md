@@ -1,5 +1,27 @@
 # 书引 AI 开发计划与验收标准
 
+## 添加一本书按钮交互（2026-11-06）
+
+按用户要求增强书架顶部添加入口：悬停上浮、主题光晕、单次扫光、加号旋转及按下回弹；适配明暗主题、键盘焦点与减少动态设置。采用页面内 CSS，保留原路由、表单及浏览器预览禁用行为。修改 `src/modules/projects/ProjectsPage.vue`、技术设计及本计划；无 SQL 迁移、依赖、权限或版本号调整，属于 `style` / patch。
+
+实际验证命令与结果：
+
+- `npm run lint`：通过，0 ESLint 警告。
+- `npm run build`：TypeScript 与生产构建通过；保留已有大于 500kB 的分块提示。
+- `npx vitest run tests/projects.test.ts tests/theme.test.ts tests/ui-refinement.test.ts --maxWorkers=2`：3 个文件、45 项通过。
+- `npm run dev -- --port 14347 --strictPort`：启动独立开发预览；使用下列 Playwright 命令复用现有内存 IPC 夹具。
+
+```powershell
+$pw = 'D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js'
+node $pw -s=add-book-hover open http://127.0.0.1:14347 --json
+node $pw -s=add-book-hover run-code --filename output/playwright/shell-scroll/setup.cjs --json
+node $pw -s=add-book-hover run-code --filename output/playwright/add-book-hover/verify.cjs --json
+```
+
+浏览器 29 项检查通过：两种主题的扫光与旋转、2px 上浮且尺寸不变、按下收缩、移出复位与重入重播、Tab 焦点、Enter/鼠标进入原新书表单、减少动态、1366/800/360px 布局、无业务写入及浏览器预览禁用。页面异常为 0，已目视检查深浅主题截图；脚本与截图保存在忽略目录 `output/playwright/add-book-hover/`。
+
+验收标准在上述范围全部满足，无本次未解决问题。浏览器使用隔离数据，未运行 Windows 原生 WebView2 或更新正式安装包；下一步在桌面开发版或后续安装包核对实际系统缩放下的交互。未提交、推送或发布。
+
 ## 抖音保存权限与定时发布（2026-11-06）
 
 发布准备新增允许保存开关、立即/定时选择及北京时间输入，复用原任务与确认流程。SQLite v18 增加两个字段，设置进入快照、任务包与备份，旧任务默认允许保存、立即发布。辅助发布增加设置填写、回读和最终核对，异常进入人工确认；最终提交与实际发布结果仍由用户完成。
