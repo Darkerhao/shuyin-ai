@@ -113,7 +113,7 @@ onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.j
 async function adopt(job: VideoJob | undefined, restoreDraft = true) {
   draftReady.value = false
   editorJobId.value = ''
-  autosave.status.value = ''; autosave.error.value = ''
+  autosave.reset()
   position.value = initialPosition(); originalCues.value = []; originalError.value = ''
   if (!job) { subtitleText.value = ''; scenes.value = []; savedEditor.value = editorValue(); return }
   const projectId = props.id

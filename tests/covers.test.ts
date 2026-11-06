@@ -1,3 +1,4 @@
+import { generationJobs } from '../src/services/generation'
 import { chooseSelect, openSelect, button, dialog, answerConfirmation } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -37,6 +38,8 @@ async function render(path = '/projects/p1/covers?tab=text') {
   await flushPromises(); return { wrapper, router }
 }
 beforeEach(() => {
+  generationJobs.clear()
+  localStorage.clear()
   vi.resetAllMocks()
   vi.mocked(drafts.readDraft).mockResolvedValue(null)
   vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
@@ -342,6 +345,7 @@ describe('M3 cover workflow', () => {
     await chooseSelect(wrapper, '#cover-size', '横版 16:9 · 1920 × 1080')
     await wrapper.get('#cover-description').setValue('16:9 宽屏留白')
     await wrapper.get('section[aria-label="可选 AI 背景"] form').trigger('submit'); await flushPromises()
+    if (wrapper.find('[aria-label="生成的封面背景"]').exists()) { await button(wrapper, '采用到该尺寸').trigger('click'); await flushPromises() }
     expect(api.startCoverGeneration).toHaveBeenCalledWith('p1', 'image', '16:9 宽屏留白', 1920, 1080)
     await chooseSelect(wrapper, '#cover-size', '横版 4:3 · 1440 × 1080')
     expect(wrapper.get('#cover-background').text()).toBe('纯色背景')
@@ -415,6 +419,7 @@ describe('M3 cover workflow', () => {
     await wrapper.get('#cover-title').setValue('手动修改标题')
     await wrapper.get('#cover-description').setValue('水墨山林，安静留白')
     await wrapper.get('section[aria-label="可选 AI 背景"] form').trigger('submit'); await flushPromises()
+    if (wrapper.find('[aria-label="生成的封面背景"]').exists()) { await button(wrapper, '采用到该尺寸').trigger('click'); await flushPromises() }
     expect(api.startCoverGeneration).toHaveBeenCalledExactlyOnceWith('p1', 'image', '水墨山林，安静留白', 1440, 1080)
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('手动修改标题')
     expect(wrapper.get('#cover-background').text()).toBe('ai.png')
@@ -431,8 +436,9 @@ describe('M3 cover workflow', () => {
     const { wrapper } = await aiCover()
     await wrapper.get('#cover-title').setValue('保留草稿')
     if (failure === 'network') vi.mocked(api.executeCoverGeneration).mockRejectedValue({ message: '服务失败' })
-    else vi.mocked(renderer.decodeBackground).mockRejectedValueOnce(new Error('图片解码失败'))
+    else vi.mocked(renderer.decodeBackground).mockRejectedValue(new Error('图片解码失败'))
     await wrapper.get('section[aria-label="可选 AI 背景"] form').trigger('submit'); await flushPromises()
+    if (wrapper.find('[aria-label="生成的封面背景"]').exists()) { await button(wrapper, '采用到该尺寸').trigger('click'); await flushPromises() }
     expect(wrapper.get('#cover-background').text()).toBe('背景关联已失效，请重新选择')
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('保留草稿')
     expect(api.saveCover).not.toHaveBeenCalled()
@@ -444,7 +450,10 @@ describe('M3 cover workflow', () => {
     vi.mocked(api.executeCoverGeneration).mockReturnValue(new Promise((_resolve, fail) => { reject = fail }))
     vi.mocked(ai.cancelGeneration).mockImplementation(async () => { reject({ message: '生成已取消' }) })
     await wrapper.get('section[aria-label="可选 AI 背景"] form').trigger('submit'); await flushPromises()
-    await router.push('/projects'); expect(router.currentRoute.value.path).toContain('/covers')
+    if (wrapper.find('[aria-label="生成的封面背景"]').exists()) { await button(wrapper, '采用到该尺寸').trigger('click'); await flushPromises() }
+    await router.push('/projects'); expect(router.currentRoute.value.path).toBe('/projects')
+    await router.push('/projects/p1/covers'); await flushPromises()
+    expect(api.executeCoverGeneration).toHaveBeenCalledOnce()
     await button(wrapper, '取消生成').trigger('click'); await flushPromises()
     expect(ai.cancelGeneration).toHaveBeenCalledExactlyOnceWith('image-task')
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe(initial.config.title)

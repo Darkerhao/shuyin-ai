@@ -235,7 +235,7 @@ fn publish_settings_v18_migrates_old_backups_without_rewriting_history() {
             assert_eq!(
                 c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
                     .unwrap(),
-                18
+                MIGRATIONS.len() as u32
             );
             assert!(!c
                 .prepare("PRAGMA foreign_key_check")

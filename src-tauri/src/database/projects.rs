@@ -258,16 +258,18 @@ impl Database {
             };
             let result = (|| {
             let transaction = c.transaction().map_err(|error| error.to_string())?;
+            // Existing duration belongs to the duration commands, not a stale book-details form.
             transaction.execute(&format!("INSERT INTO book_projects ({COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,{NOW},{NOW},CASE WHEN ?12='archived' THEN {NOW} END)
                
                 ON CONFLICT(id) DO UPDATE SET
-                title=excluded.title,author=excluded.author,publisher=excluded.publisher,isbn=excluded.isbn,description=excluded.description,source_notes=excluded.source_notes,theme=excluded.theme,target_audience=excluded.target_audience,content_style=excluded.content_style,target_duration_seconds=excluded.target_duration_seconds,status=excluded.status,updated_at=excluded.updated_at,archived_at=CASE WHEN excluded.status='archived' THEN coalesce(book_projects.archived_at,excluded.archived_at) END"),
+                title=excluded.title,author=excluded.author,publisher=excluded.publisher,isbn=excluded.isbn,description=excluded.description,source_notes=excluded.source_notes,theme=excluded.theme,target_audience=excluded.target_audience,content_style=excluded.content_style,status=excluded.status,updated_at=excluded.updated_at,archived_at=CASE WHEN excluded.status='archived' THEN coalesce(book_projects.archived_at,excluded.archived_at) END"),
                 params![id,input.title.trim(),input.author,input.publisher,input.isbn,input.description,input.source_notes,input.theme,input.target_audience,input.content_style,input.target_duration_seconds,input.status,workspace.to_string_lossy().as_ref()]).map_err(|error| error.to_string())?;
             for path in source_paths {
                 fs::File::open(path).map_err(|error| format!("书籍文件无法读取：{error}"))?;
                 super::assets::register_existing(&transaction, &id, Path::new(path), Some("document"), None)?;
             }
             let saved = get(&transaction, &id)?;
+            transaction.execute("DELETE FROM editor_drafts WHERE kind='project' AND owner_id=?1", [existing.as_ref().map(|p| p.id.as_str()).unwrap_or("new")]).map_err(|e| e.to_string())?;
             transaction.commit().map_err(|error| error.to_string())?;
             Ok(saved)
             })();

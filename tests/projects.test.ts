@@ -1,4 +1,6 @@
-import { button, dialog, answerConfirmation } from './ui'
+import * as drafts from '../src/services/drafts'
+vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
+import { button, dialog } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -43,6 +45,8 @@ async function render(path: string, { pendingNavigation = false } = {}) {
 }
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(drafts.readDraft).mockResolvedValue(null)
+  vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   vi.mocked(workflowSnapshot).mockResolvedValue({ resume: [], running: [] })
   vi.mocked(maintenance.lastBackup).mockResolvedValue(null)
   vi.mocked(maintenance.modelCalls).mockResolvedValue([])
@@ -55,6 +59,15 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M1 projects and materials', () => {
+  it('restores editable book fields without overwriting a duration changed by background generation', async () => {
+    vi.mocked(api.getProject).mockResolvedValue({ ...saved, targetDurationSeconds: 1200 })
+    vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: saved.updatedAt, content: { form: { ...saved, title: '暂存书名', targetDurationSeconds: 600 }, sourcePaths: [] } })
+    vi.mocked(api.saveProject).mockResolvedValue({ ...saved, title: '暂存书名', targetDurationSeconds: 1200 })
+    const { wrapper } = await render('/projects/p1')
+    expect(wrapper.get('#title').element).toHaveProperty('value', '暂存书名')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveProject).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '暂存书名', targetDurationSeconds: 1200 }), [])
+  })
   it('formats pending source paths for display but saves the exact selected path', async () => {
     const path = String.raw`\\?\D:\书籍\原书.epub`
     vi.mocked(api.chooseSourceDocument).mockResolvedValue(path)
@@ -115,8 +128,10 @@ describe('M1 projects and materials', () => {
     vi.mocked(api.chooseSourceDocument).mockResolvedValueOnce('D:\\书籍\\原书.epub')
     await button(wrapper, '选择本地文件').trigger('click'); await flushPromises()
     expect(wrapper.find('[aria-label="取消绑定 原书.epub"]').exists()).toBe(true)
-    const navigation = router.push('/projects'); await answerConfirmation(false); await navigation
+    vi.mocked(drafts.saveDraft).mockRejectedValue(new Error('暂存失败'))
+    await router.push('/projects')
     expect(router.currentRoute.value.path).toBe('/projects/p1')
+    vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
     await wrapper.get('[aria-label="取消绑定 原书.epub"]').trigger('click')
     await router.push('/projects'); await flushPromises()
     expect(router.currentRoute.value.path).toBe('/projects')
@@ -136,18 +151,19 @@ describe('M1 projects and materials', () => {
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.saveProject).toHaveBeenLastCalledWith('p1', expect.objectContaining({ title: '活着' }), ['D:/补充.md'])
   })
-  it('protects unsaved book details from browser unload and removes protection after navigation', async () => {
+  it('stages an incomplete new book before leaving and restores it without creating a book', async () => {
     const { wrapper, router } = await render('/projects/new')
-    await wrapper.get('#title').setValue('尚未保存的书')
+    await wrapper.get('#notes').setValue('书名还没想好，先留下笔记')
     const event = new Event('beforeunload', { cancelable: true }); globalThis.dispatchEvent(event)
     expect(event.defaultPrevented).toBe(true)
-    const cancelled = router.push('/projects')
-    await answerConfirmation(false); await cancelled
-    expect(router.currentRoute.value.path).toBe('/projects/new')
-    const accepted = router.push('/projects')
-    await answerConfirmation(true); await accepted; await flushPromises()
-    const clean = new Event('beforeunload', { cancelable: true }); globalThis.dispatchEvent(clean)
-    expect(clean.defaultPrevented).toBe(false)
+    await router.push('/projects'); await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/projects')
+    const recovery = vi.mocked(drafts.saveDraft).mock.lastCall![2]!
+    expect(recovery).toMatchObject({ content: { form: { title: '', sourceNotes: '书名还没想好，先留下笔记' } } })
+    vi.mocked(drafts.readDraft).mockResolvedValue(recovery)
+    await router.push('/projects/new'); await flushPromises()
+    expect(wrapper.get('#notes').element).toHaveProperty('value', '书名还没想好，先留下笔记')
+    expect(api.saveProject).not.toHaveBeenCalled()
   })
   it('blocks leaving during a backup and retains the completed result after returning', async () => {
     let finish!: (result: Awaited<ReturnType<typeof fullBackup.createFullBackup>>) => void
@@ -367,9 +383,10 @@ describe('M1 projects and materials', () => {
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect((wrapper.get('#notes').element as HTMLTextAreaElement).value).toBe('未保存的读书笔记')
     expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('database is locked')
-    const leave = router.push('/projects'); await answerConfirmation(false); await leave
+    vi.mocked(drafts.saveDraft).mockRejectedValue(new Error('暂存写入失败'))
+    await router.push('/projects')
     expect(router.currentRoute.value.path).toBe('/projects/p1')
-    const changeBook = router.push('/projects/p2'); await answerConfirmation(false); await changeBook
+    await router.push('/projects/p2')
     expect(router.currentRoute.value.path).toBe('/projects/p1')
   })
   it('keeps existing metadata while the book form only asks for title, author and optional notes', async () => {

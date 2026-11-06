@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 完整表单暂存（2026-11-06，v19）
+
+`0019_editor_owners.sql`重建editor_drafts，主键改为(owner_id,kind)，kind为writing/cover/project/publishing；project_id保留到book_projects的ON DELETE CASCADE，允许NULL的唯一情况是kind=project且owner_id=new。原writing/cover行完整复制，owner_id取原project_id，based_on、content_json、updated_at不变；增加project_id索引。
+
+资料草稿owner为书籍ID或new，content保存{form,sourcePaths}；发布草稿owner为书籍ID:任务ID或书籍ID:new，content保存原PublishInput，包括未完成的scheduledAt空字符串。后台核对owner的书籍/任务归属和非published状态；不进行正式内容、文件或定时时间校验，继续限制对象形状及512KB上限。writing/cover来源版本校验保持不变。视频仍使用video_jobs.editor_draft_json。
+
+save_project_with_documents/save_publish_task的同一事务在正式保存成功时清理本表单草稿；失败回滚保留。暂存不创建书籍、发布任务/任务包或素材关联。SQLite快照及完整备份包含新草稿；待绑定文件只是路径，未正式登记的原文件不包含在素材备份中。低版本不能打开v19，回退使用升级前备份。迁移、重开、归属、失败保稿、备份恢复及真实桌面证据见[验收记录](CREATOR-CONTINUITY-VERIFICATION.md)。
+
 ## 发布设置（2026-11-06，v18）
 
 `0018_publish_settings.sql` 为 `publish_tasks` 增加 `allow_download INTEGER NOT NULL DEFAULT 1 CHECK (allow_download IN (0,1))` 和可空的 `scheduled_at TEXT`。旧任务默认允许保存、立即发布，原文案、素材、合集、状态、时间戳和发布记录不回填或重写。保存两个字段与原任务更新使用同一事务。

@@ -11,7 +11,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import * as api from '../../services/covers'
-import { listProviders, listVersions, cancelGeneration } from '../../services/ai'
+import { listProviders, listVersions } from '../../services/ai'
+import { generationJobs, generationKey, isGenerating, startBackgroundGeneration, cancelGenerationJob, dismissGeneration } from '../../services/generation'
 import { emptyPublishing, type ModelProvider, type PublishingContent } from '../../types/ai'
 import { getProject, isDesktop, linkAsset, listAssets, openProjectDirectory } from '../../services/projects'
 import { backgroundRect, coverPng, decodeBackground, renderCover, type CoverTextBounds } from '../../services/coverRenderer'
@@ -118,7 +119,14 @@ watch(canvas, element => {
   if (element) { resizeObserver = new globalThis.ResizeObserver(positionInline); resizeObserver.observe(element) }
 }, { flush: 'post' })
 onBeforeUnmount(() => { resizeObserver?.disconnect(); previewAnimation?.cancel() })
-const { busy, error, message, operation, run } = useOperation()
+const { busy: operationBusy, error, message, operation, run } = useOperation()
+const generation = computed(() => generationJobs.get(generationKey(props.id, 'cover')))
+const generating = computed(() => isGenerating(generation.value))
+const busy = computed(() => operationBusy.value || generating.value)
+const generatedImage = computed(() => {
+  const result = generation.value?.result
+  return result && 'assetType' in result ? result : null
+})
 const activeTab = useQueryState('tab', 'background', ['text', 'style', 'background'])
 const useAi = ref(activeTab.value === 'background')
 const coverView = ref('edit')
@@ -137,15 +145,15 @@ const description = computed({ get: () => draft.value.backgroundPrompt, set: val
 const writing = ref<PublishingContent | null>(null)
 const writingError = ref('')
 const suggestedPrompt = computed(() => writing.value?.[currentSize.value.promptField] ?? '')
-const taskId = ref('')
-const cancelling = ref(false)
+const taskId = computed(() => generating.value ? generation.value?.id ?? '' : '')
+const cancelling = computed(() => generation.value?.cancelling ?? false)
 let disposed = false
 let fontsReady = false
 const canDiscard = () => !dirty.value || requestConfirmation('封面尚未保存，确定放弃修改？', 'cover-history')
 // A saved version contains one size; retain the workspace to recover all sizes and the active selection.
-const autosave = useEditorDraft(() => props.id, 'cover', editor, () => selected.value?.id ?? null, dirty, ready, () => !busy.value, true)
+const autosave = useEditorDraft(() => props.id, 'cover', editor, () => selected.value?.id ?? null, dirty, ready, () => !operationBusy.value, true)
 const canLeave = async () => {
-  if (busy.value) return false
+  if (operationBusy.value) return false
   try { if (ready.value) await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
@@ -334,26 +342,33 @@ function toggleAi() {
   }
 }
 const generateBackground = () => run(async () => {
-  const target = draft.value
-  try {
-    taskId.value = await api.startCoverGeneration(props.id, providerId.value, description.value, target.width, target.height)
-    const asset = await api.executeCoverGeneration(taskId.value)
-    if (disposed) return
-    images.value = [asset, ...images.value]
-    const image = await decodeBackground(await api.readBackground(props.id, asset.id))
-    if (disposed) return
-    // Apply only after reading and decoding succeeds; preserve all text and style edits.
-    backgrounds.value = { ...backgrounds.value, [asset.id]: { image, error: '' } }
-    Object.assign(target, { backgroundAssetId: asset.id, backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1 })
-    message.value = '当前尺寸的 AI 背景已生成，其他尺寸不变。可单独导出，或主动应用到全部尺寸。'
-  } finally { taskId.value = '' }
+  await autosave.flush()
+  await startBackgroundGeneration(props.id, bookTitle.value, providerId.value, description.value, draft.value.width, draft.value.height)
+})
+watch([ready, () => generation.value?.status], () => {
+  const job = generation.value
+  if (!ready.value || !job || isGenerating(job)) return
+  if (job.error) { error.value = job.error; dismissGeneration(job) }
+  if (generatedImage.value) {
+    images.value = [generatedImage.value, ...images.value.filter(image => image.id !== generatedImage.value!.id)]
+    void loadBackground(generatedImage.value.id)
+  }
+})
+const applyGeneratedImage = () => run(async () => {
+  const job = generation.value, asset = generatedImage.value
+  if (!job?.size || !asset) return
+  await loadBackground(asset.id)
+  if (!backgrounds.value[asset.id]?.image) throw new Error('生成背景读取失败，请重试，当前封面保持不变。')
+  const target = editor.value.covers.find(config => config.width === job.size!.width && config.height === job.size!.height)!
+  Object.assign(target, { backgroundAssetId: asset.id, backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1 })
+  await autosave.flush()
+  dismissGeneration(job)
+  message.value = '已采用生成背景到原请求尺寸，其他尺寸保持不变。'
 })
 async function cancelImage() {
-  if (cancelling.value) return
-  cancelling.value = true
-  try { await cancelGeneration(taskId.value) }
+  if (!generation.value) return
+  try { await cancelGenerationJob(generation.value) }
   catch { error.value = '取消失败，请稍后重试。' }
-  finally { cancelling.value = false }
 }
 const save = (exportPng = false, currentOnly = false) => run(async () => {
   if (exportPng && !currentOnly && !exportIndexes.value.length) return
@@ -459,6 +474,44 @@ onMounted(async () => {
       @dismiss="message = ''"
     />
     <OperationFeedback :error="autosave.error.value" />
+    <section
+      v-if="generatedImage && generation"
+      class="panel"
+      aria-label="生成的封面背景"
+    >
+      <h2>背景已生成 · {{ generation.size?.width }} × {{ generation.size?.height }}</h2>
+      <p class="muted">
+        当前封面保持原样，采用后只修改本次请求的尺寸。生成图片已保存在本书素材中。
+      </p>
+      <img
+        v-if="backgrounds[generatedImage.id]?.image"
+        :src="backgrounds[generatedImage.id]!.image!.src"
+        alt="生成的封面背景候选"
+        class="my-3 max-h-48 max-w-full rounded-lg object-contain"
+      >
+      <div class="actions">
+        <Button
+          :disabled="busy"
+          @click="applyGeneratedImage"
+        >
+          采用到该尺寸
+        </Button>
+        <Button
+          variant="outline"
+          :disabled="busy"
+          @click="dismissGeneration(generation)"
+        >
+          保留当前封面
+        </Button>
+      </div>
+    </section>
+    <p
+      v-if="generating"
+      class="notice"
+      role="status"
+    >
+      背景正在生成，可切换页面继续创作，请保持应用运行。完成后可在此采用背景。
+    </p>
     <OperationFeedback
       :message="writingError"
       variant="warning"

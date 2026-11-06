@@ -203,7 +203,7 @@ impl Database {
                 UNION ALL SELECT project_id,'audio',id,status,stage,updated_at,status IN ('created','preparing','generating','downloading','importing') FROM audio_jobs
                 UNION ALL SELECT project_id,'publishing',id,status,'',updated_at,0 FROM publish_tasks
                 UNION ALL SELECT project_id,CASE WHEN kind='video_scene_revision' OR kind='video_illustration' THEN 'video' WHEN kind='cover' THEN 'covers' ELSE 'writing' END,id,status,kind,created_at,1 FROM ai_tasks WHERE status IN ('pending','running')
-                UNION ALL SELECT project_id,CASE kind WHEN 'cover' THEN 'covers' ELSE 'writing' END,'','draft','',updated_at,0 FROM editor_drafts
+                UNION ALL SELECT project_id,CASE kind WHEN 'cover' THEN 'covers' WHEN 'project' THEN 'project' WHEN 'publishing' THEN 'publishing' ELSE 'writing' END,CASE WHEN kind='publishing' THEN substr(owner_id,instr(owner_id,':')+1) ELSE '' END,'draft','',updated_at,0 FROM editor_drafts
                 UNION ALL SELECT project_id,'writing',id,'saved','',created_at,0 FROM writing_versions
                 UNION ALL SELECT project_id,'covers',id,'saved','',created_at,0 FROM cover_versions
             ) t ON t.project_id=p.id WHERE p.status!='archived' ORDER BY t.running DESC,t.updated DESC,t.id DESC").map_err(|e|e.to_string())?;
@@ -404,7 +404,7 @@ mod tests {
         let (_dir, db, input) = crate::database::video::tests::fixture();
         let project = input.project_id.clone();
         let job = db.create_video_job(input).unwrap();
-        db.with_connection(|c|{c.execute("INSERT INTO editor_drafts(project_id,kind,content_json,updated_at) VALUES(?1,'writing','{}','9999')",[&project]).unwrap();Ok(())}).unwrap();
+        db.with_connection(|c|{c.execute("INSERT INTO editor_drafts(owner_id,project_id,kind,content_json,updated_at) VALUES(?1,?1,'writing','{}','9999')",[&project]).unwrap();Ok(())}).unwrap();
         assert_eq!(db.workflow_snapshot().unwrap().resume[0].kind, "writing");
         db.claim_video_job(&job.id, VideoWork::Prepare, None)
             .unwrap();

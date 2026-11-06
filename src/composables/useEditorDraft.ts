@@ -1,6 +1,5 @@
-import { onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
-import { isTauri } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue'
+import { useWindowCloseGuard } from './useWindowCloseGuard'
 import { saveDraft, type DraftKind } from '../services/drafts'
 import { errorMessage } from '../services/verification'
 
@@ -10,8 +9,6 @@ export function useEditorDraft<T>(projectId: () => string, kind: DraftKind, cont
   const error = ref('')
   let timer: ReturnType<typeof globalThis.setTimeout> | undefined
   let queue = Promise.resolve()
-  let disposed = false
-  let unlisten: (() => void) | undefined
   let editRevision = 0
   function flush() {
     globalThis.clearTimeout(timer)
@@ -23,6 +20,10 @@ export function useEditorDraft<T>(projectId: () => string, kind: DraftKind, cont
     queue = queue.catch(() => {}).then(() => saveDraft(id, kind, draft))
     return queue.then(() => { if (revision === editRevision) { status.value = draft ? '草稿已自动暂存' : ''; error.value = '' } }, cause => { if (revision === editRevision) { error.value = `自动暂存失败：${errorMessage(cause)}`; status.value = '' } throw cause })
   }
+  function reset() {
+    globalThis.clearTimeout(timer)
+    status.value = ''; error.value = ''
+  }
   watch([content, dirty], () => {
     if (!ready.value) { globalThis.clearTimeout(timer); return }
     editRevision++
@@ -30,16 +31,10 @@ export function useEditorDraft<T>(projectId: () => string, kind: DraftKind, cont
     globalThis.clearTimeout(timer)
     timer = globalThis.setTimeout(() => { void flush().catch(() => {}) }, 400)
   }, { deep: true })
-  onMounted(async () => {
-    if (!isTauri()) return
-    try {
-      const stop = await getCurrentWindow().onCloseRequested(async event => {
-        if (!await canClose()) { event.preventDefault(); return }
-        try { if (ready.value) await flush() } catch { event.preventDefault() }
-      })
-      if (disposed) stop(); else unlisten = stop
-    } catch (cause) { error.value = `退出暂存监听失败：${errorMessage(cause)}` }
+  const closeGuard = useWindowCloseGuard(() => ready.value && dirty.value, async () => {
+    if (!await canClose()) return false
+    try { if (ready.value) await flush(); return true } catch { return false }
   })
-  onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer); unlisten?.() })
-  return { status, error, flush }
+  onBeforeUnmount(() => globalThis.clearTimeout(timer))
+  return { status, error: computed(() => error.value || closeGuard.error.value), flush, reset }
 }

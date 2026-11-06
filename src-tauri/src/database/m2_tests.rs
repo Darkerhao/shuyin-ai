@@ -128,6 +128,41 @@ fn duration_is_saved_independently_and_generation_snapshots_the_selected_value()
 }
 
 #[test]
+fn saving_project_details_preserves_duration_completed_after_the_form_was_loaded() {
+    use crate::ai::audio::DurationRecommendation;
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("duration-details.sqlite3"));
+    let book = project(&db);
+    let mut stale_form = book.input.clone();
+    stale_form.title = "更新书名".into();
+    let provider = db
+        .save_provider(None, model(), None, &Vault::default())
+        .unwrap()
+        .provider;
+    let mut input = generation(&book.id, &provider.id);
+    input.recommend_duration = true;
+    let task = db.start_generation(input).unwrap();
+    db.prepare_generation(&task).unwrap();
+    db.finish_duration_recommendation(
+        &task,
+        DurationRecommendation {
+            minutes: 20,
+            reason: "后台推荐完成。".into(),
+        },
+    )
+    .unwrap();
+    let saved = db.save_project(Some(&book.id), stale_form.clone()).unwrap();
+    assert_eq!(saved.input.title, "更新书名");
+    assert_eq!(saved.input.target_duration_seconds, 1200);
+    assert_eq!(saved.audio_duration_source.as_deref(), Some("ai"));
+
+    db.set_audio_duration(&book.id, 1800).unwrap();
+    let saved = db.save_project(Some(&book.id), stale_form).unwrap();
+    assert_eq!(saved.input.target_duration_seconds, 1800);
+    assert_eq!(saved.audio_duration_source.as_deref(), Some("manual"));
+}
+
+#[test]
 fn recommended_duration_is_atomic_and_cancelled_or_invalid_results_do_not_change_it() {
     use crate::ai::audio::DurationRecommendation;
     let dir = tempfile::tempdir().unwrap();

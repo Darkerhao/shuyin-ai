@@ -13,7 +13,8 @@ import * as api from '../../services/ai'
 import * as audioApi from '../../services/audio'
 import { chooseAudio, chooseSourceDocument, getProject, isDesktop, linkAsset, listAssets } from '../../services/projects'
 import { errorMessage } from '../../services/verification'
-import { emptyPublishing, type GenerationTextPreview, type GenerationPreview, type ModelProvider, type PublishingContent, type PublishingField, type PublishingTextField, type WritingVersion } from '../../types/ai'
+import { emptyPublishing, type ModelProvider, type PublishingContent, type PublishingField, type PublishingTextField, type WritingVersion } from '../../types/ai'
+import { generationJobs, generationKey, isGenerating, startWritingGeneration, cancelGenerationJob, dismissGeneration } from '../../services/generation'
 import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
 import type { Asset } from '../../types/project'
 import type { AudioFormat, AudioJob, AudioJobAction, AudioJobStatus, AudioJobView } from '../../types/audio'
@@ -40,7 +41,9 @@ const durationMinutes = ref<string | number>(10)
 const savedDurationSeconds = ref(600)
 const durationConfigured = ref(false)
 const durationReason = ref('')
-const recommending = ref(false)
+const generation = computed(() => generationJobs.get(generationKey(props.id, 'writing')))
+const generating = computed(() => isGenerating(generation.value))
+const recommending = computed(() => generating.value && generation.value?.mode === 'duration')
 const durationValid = computed(() => Number.isInteger(Number(durationMinutes.value)) && Number(durationMinutes.value) >= 1 && Number(durationMinutes.value) <= 1440)
 const durationDirty = computed(() => Number(durationMinutes.value) * 60 !== savedDurationSeconds.value)
 const ready = ref(false)
@@ -61,31 +64,27 @@ const selected = ref<WritingVersion | null>(null)
 const draft = ref(emptyPublishing())
 const original = ref(JSON.stringify(draft.value))
 const dirty = computed(() => JSON.stringify(draft.value) !== original.value)
-const taskId = ref('')
-const liveContent = ref<GenerationTextPreview>({})
-let detachPreview = () => {}
-async function executeWriting(id: string) {
-  let attached = true
-  const detach = () => { attached = false; liveContent.value = {} }
-  detachPreview = detach
-  try {
-    return await api.executeGeneration(id, content => {
-      if (attached && taskId.value === id && !cancelling.value) liveContent.value = content
-    })
-  } finally { detach(); detachPreview = () => {} }
-}
-onBeforeUnmount(() => detachPreview())
-
-const cancelling = ref(false)
+const taskId = computed(() => generating.value ? generation.value?.id ?? '' : '')
+const liveContent = computed(() => generation.value?.preview ?? {})
+const cancelling = computed(() => generation.value?.cancelling ?? false)
 const revisionOpen = ref(false)
 const revisionFields = ref<PublishingField[]>(['title'])
 const revisionInstruction = ref('')
-const revising = ref(false)
-const preview = ref<GenerationPreview | null>(null)
+const revising = computed(() => generating.value && generation.value?.mode === 'revision')
+const preview = computed(() => {
+  const result = generation.value?.result
+  return result && 'taskId' in result ? result : null
+})
 const revisionLocked = computed(() => revising.value || !!preview.value)
 const activeTab = useQueryState('tab', 'publishing', ['publishing', 'audio', 'cover'])
-const durationOpen = ref(true)
-watch(activeTab, tab => { if (tab === 'audio') durationOpen.value = true })
+const durationOpen = ref(false)
+const durationPreference = 'shuyin.writing-duration-open'
+watch(durationOpen, value => {
+  if (ready.value) {
+    try { globalThis.localStorage.setItem(durationPreference, String(value)) }
+    catch { error.value = '时长面板偏好未保存，本次仍可正常使用。' }
+  }
+})
 const clipboard = useCopyFeedback()
 const copiedField = clipboard.copied
 const copyLabel = ref('')
@@ -99,9 +98,9 @@ let waitingTimer: ReturnType<typeof globalThis.setInterval> | undefined
 watch(taskId, id => {
   globalThis.clearInterval(waitingTimer)
   if (!id) return
-  const started = Date.now(); waitingSeconds.value = 0
+  const started = generation.value?.startedAt ?? Date.now(); waitingSeconds.value = Math.floor((Date.now() - started) / 1000)
   waitingTimer = globalThis.setInterval(() => { waitingSeconds.value = Math.floor((Date.now() - started) / 1000) }, 1000)
-})
+}, { immediate: true })
 function flashSave() {
   globalThis.clearTimeout(savedTimer); savedFlash.value = true
   savedTimer = globalThis.setTimeout(() => { savedFlash.value = false }, 1000)
@@ -111,9 +110,10 @@ const tabs = [
   { value: 'audio', label: '音频制作', icon: 'headphones' },
   { value: 'cover', label: '封面素材', icon: 'image' },
 ] as const
-const { busy, error, message, operation, run } = useOperation()
+const { busy: operationBusy, error, message, operation, run } = useOperation()
+const busy = computed(() => operationBusy.value || generating.value)
 // Preserve the current source when a newer history entry has not been adopted.
-const draftRequired = computed(() => dirty.value || selected.value?.id !== versions.value[0]?.id)
+const draftRequired = computed(() => dirty.value || selected.value?.id !== versions.value[0]?.id || (!!generation.value && generation.value.mode !== 'duration'))
 const autosave = useEditorDraft(() => props.id, 'writing', draft, () => selected.value?.id ?? null, draftRequired, ready, prepareLeave)
 const audioBrowser = computed(() => audioView.value?.browser ?? null)
 const audioJob = computed(() => audioView.value?.job ?? null)
@@ -152,7 +152,7 @@ function accept(version: WritingVersion | null) {
 }
 function canDiscard(returnFocusId?: string) { return (!dirty.value && !preview.value) || requestConfirmation(preview.value ? '候选结果尚未采用，确定放弃？' : '当前内容尚未保存，确定放弃修改？', returnFocusId) }
 async function prepareLeave() {
-  if (busy.value || (preview.value && !await canDiscard())) return false
+  if (operationBusy.value) return false
   try { if (ready.value && durationDirty.value) await persistDuration(); return true }
   catch (cause) { error.value = errorMessage(cause); return false }
 }
@@ -230,7 +230,47 @@ const load = () => run(async () => {
     draft.value = { ...emptyPublishing(), ...recovery.content }
     if (dirty.value) message.value = '已恢复自动暂存的草稿，保存修改后才会新增历史版本。'
   }
+  try {
+    const preference = globalThis.localStorage.getItem(durationPreference)
+    durationOpen.value = preference === null ? !durationConfigured.value : preference === 'true'
+  } catch { durationOpen.value = !durationConfigured.value }
+  if (generation.value?.revision) {
+    revisionOpen.value = true
+    revisionFields.value = [...generation.value.revision.fields]
+    revisionInstruction.value = generation.value.revision.instruction
+  }
   ready.value = true
+})
+watch([ready, () => generation.value?.status], () => {
+  const job = generation.value
+  if (!ready.value || !job || isGenerating(job)) return
+  if (job.error) {
+    error.value = job.error
+    // Keep a failed automatic recommendation until an explicit retry, including after navigation.
+    if (job.mode !== 'duration') dismissGeneration(job)
+    return
+  }
+  const result = job.result
+  if (!result || 'assetType' in result) return
+  if ('taskId' in result) {
+    revisionOpen.value = true
+    revisionFields.value = [...result.fields]
+    return
+  }
+  if ('minutes' in result) {
+    durationMinutes.value = result.minutes
+    savedDurationSeconds.value = result.minutes * 60
+    durationConfigured.value = true
+    durationReason.value = result.reason
+    message.value = `AI 推荐 ${result.minutes} 分钟，可直接修改后再生成。已有内容保持原样。`
+  } else {
+    versions.value = [result, ...versions.value.filter(version => version.id !== result.id)]
+    const first = !selected.value && !dirty.value
+    if (first) accept(result)
+    historyVersionId.value = result.id; historyOpen.value = !first
+    message.value = first ? `已生成并保存 v${result.versionNo}，可继续编辑。` : `已保存备选 v${result.versionNo}。当前内容保留，可在版本对照中取用。`
+  }
+  dismissGeneration(job)
 })
 async function switchVersion(id: string | null) {
   if (await canDiscard('writing-version')) accept(versions.value.find(v => v.id === id) ?? null)
@@ -333,62 +373,35 @@ async function persistDuration() {
 }
 const saveDuration = () => run(async () => { await persistDuration(); message.value = '目标时长已保存，下次生成时生效。已有内容保持原样。' })
 const recommendDuration = () => run(async () => {
-  recommending.value = true
-  try {
-    taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value, recommendDuration: true })
-    const result = await api.executeGeneration(taskId.value)
-    if (!('minutes' in result)) throw new Error('时长推荐结果类型不符，原时长与内容保留。')
-    durationMinutes.value = result.minutes
-    savedDurationSeconds.value = result.minutes * 60
-    durationConfigured.value = true
-    durationReason.value = result.reason
-    message.value = `AI 推荐 ${result.minutes} 分钟，可直接修改后再生成。已有内容保持原样。`
-  } finally { taskId.value = ''; recommending.value = false }
+  await startWritingGeneration({ projectId: props.id, providerId: providerId.value, recommendDuration: true }, title.value)
 })
 const generate = () => run(async () => {
-  try {
-    await persistDuration()
-    taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60 })
-    const saved = await executeWriting(taskId.value)
-    if (!('id' in saved)) throw new Error('生成结果类型不符，当前内容保留。')
-    versions.value = [saved, ...versions.value]
-    const first = !selected.value && !dirty.value
-    if (first) accept(saved)
-    historyVersionId.value = saved.id; historyOpen.value = !first
-    message.value = first ? `已生成并保存 v${saved.versionNo}，可继续编辑。` : `已保存备选 v${saved.versionNo}。当前内容保留，可在版本对照中取用。`
-  } finally { taskId.value = '' }
+  await persistDuration()
+  await startWritingGeneration({ projectId: props.id, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60 }, title.value)
 })
 function openRevision() { revisionOpen.value = true }
 function selectRevision(field: PublishingField, checked: boolean | 'indeterminate') {
   revisionFields.value = checked === true ? [...revisionFields.value, field] : revisionFields.value.filter(key => key !== field)
 }
 const generateRevision = () => run(async () => {
-  revising.value = true
-  try {
-    await persistDuration()
-    if (dirty.value) await persistWriting()
-    if (!selected.value) throw new Error('请先生成或保存一套内容。')
-    taskId.value = await api.startGeneration({ projectId: props.id, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60, revision: { basedOn: selected.value.id, fields: [...revisionFields.value], instruction: revisionInstruction.value.trim() } })
-    const result = await executeWriting(taskId.value)
-    if (!('taskId' in result)) throw new Error('调整结果类型不符，当前内容保留。')
-    preview.value = result
-    message.value = '候选结果已生成。核对后采用，或放弃并保留原内容。'
-  } finally { taskId.value = ''; revising.value = false }
+  await persistDuration()
+  if (dirty.value) await persistWriting()
+  if (!selected.value) throw new Error('请先生成或保存一套内容。')
+  await startWritingGeneration({ projectId: props.id, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60, revision: { basedOn: selected.value.id, fields: [...revisionFields.value], instruction: revisionInstruction.value.trim() } }, title.value)
 })
 const applyRevision = () => run(async () => {
   if (!preview.value) return
   const saved = await api.applyGeneration(preview.value.taskId)
   accept(saved); versions.value = [saved, ...versions.value.filter(v => v.id !== saved.id)]
-  preview.value = null; revisionOpen.value = false
+  if (generation.value) dismissGeneration(generation.value)
+  revisionOpen.value = false
   message.value = '已采用选中内容并保存新版本，其余内容保持原样。'
 })
-function closeRevision() { preview.value = null; revisionOpen.value = false }
+function closeRevision() { if (generation.value) dismissGeneration(generation.value); revisionOpen.value = false }
 async function cancel() {
-  if (cancelling.value) return
-  cancelling.value = true
-  try { await api.cancelGeneration(taskId.value); detachPreview() }
+  if (!generation.value) return
+  try { await cancelGenerationJob(generation.value) }
   catch { error.value = '取消失败，请稍后重试。' }
-  finally { cancelling.value = false }
 }
 async function makeCover() {
   if (dirty.value) await save()
@@ -444,7 +457,7 @@ onBeforeUnmount(() => {
 onMounted(async () => {
   if (!desktop) return
   await load()
-  if (ready.value && !durationConfigured.value && providerId.value) await recommendDuration()
+  if (ready.value && !durationConfigured.value && providerId.value && !generation.value) await recommendDuration()
 })
 </script>
 <template>
@@ -466,14 +479,11 @@ onMounted(async () => {
       </RouterLink>
     </Button>
   </div>
-  <header class="page-heading">
+  <header class="page-heading writing-heading">
     <div>
       <div class="flex flex-wrap items-center gap-3">
         <h1>{{ title || '书籍' }}</h1><span class="creation-chip">{{ taskId ? 'AI 正在生成' : 'AI 内容创作' }}</span>
       </div>
-      <p class="muted">
-        把读过的好书，变成想分享的内容。
-      </p>
     </div>
   </header>
   <ProjectNavigation
@@ -661,7 +671,7 @@ onMounted(async () => {
       class="notice"
       role="status"
     >
-      {{ recommending ? '正在推荐时长，可停止后手动设置。' : revising ? '正在调整选中内容，完成后先预览再采用。' : '正在生成备选，你可以继续编辑，当前内容保留。' }}已等待 {{ waitingSeconds }} 秒，单次最多等待 5 分钟。
+      {{ recommending ? '正在推荐时长，可停止后手动设置。' : revising ? '正在调整选中内容，完成后先预览再采用。' : '正在生成备选，你可以继续编辑，当前内容保留。' }}可切换页面继续创作，请保持应用运行。已等待 {{ waitingSeconds }} 秒，单次最多等待 5 分钟。
     </p>
     <section
       v-if="taskId && !recommending && (!revising || revisionFields.some(field => field !== 'coverDesign'))"
@@ -840,7 +850,7 @@ onMounted(async () => {
           :unmount-on-hide="false"
         >
           <TabsList
-            class="mb-6 w-full"
+            class="mb-2 w-full"
             aria-label="创作内容"
           >
             <TabsTrigger
@@ -856,7 +866,7 @@ onMounted(async () => {
             :key="tab.value"
             :value="tab.value"
           >
-            <p class="tab-intro">
+            <p class="tab-intro sr-only">
               {{ tab.value === 'publishing' ? '准备标题、介绍和话题标签，让感兴趣的观众找到你的作品。' : tab.value === 'audio' ? '自动生成或手动导入音频，再到视频制作识别字幕、生成原声 MG 成片。' : '为同一本书准备两种构图，用文字引出故事的第一眼。' }}
             </p>
             <section
@@ -919,7 +929,7 @@ onMounted(async () => {
                   <Textarea
                     :id="`result-${field.key}`"
                     v-model="draft[field.key]"
-                    :class="['editor-input', field.rows === 2 ? 'block min-h-0 resize-none max-sm:pr-20' : '', field.key === 'title' ? 'h-[46px] py-3 text-sm leading-5 font-medium text-foreground' : field.rows === 2 ? 'h-[38px] py-2.5 text-xs leading-4 font-medium' : '', field.key === 'tags' ? 'font-mono font-normal text-info' : '', field.key === 'audioPrompt' ? 'block h-56 bg-terminal p-4 font-mono text-[11px] leading-[1.5]' : field.key.startsWith('coverPrompt') ? 'p-3.5 font-mono' : '']"
+                    :class="['editor-input text-sm', field.rows === 2 ? 'block min-h-0 resize-none max-sm:pr-20' : '', field.key === 'title' ? 'h-[46px] py-3 leading-5 font-medium text-foreground' : field.rows === 2 ? 'h-[42px] py-2.5 leading-5 font-medium' : '', field.key === 'tags' ? 'font-mono font-normal text-info' : '', field.key === 'audioPrompt' ? 'block h-56 bg-terminal p-4 leading-relaxed' : field.key.startsWith('coverPrompt') ? 'p-3.5' : '']"
                     :rows="field.rows === 2 ? 1 : field.key === 'description' ? 5 : field.key.startsWith('coverPrompt') ? 3 : field.rows"
                     :wrap="field.rows === 2 ? 'off' : undefined"
                     :maxlength="field.limit"

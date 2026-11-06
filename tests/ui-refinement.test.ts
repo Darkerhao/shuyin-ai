@@ -1,3 +1,6 @@
+import { requestConfirmation } from '../src/composables/useConfirmation'
+import * as drafts from '../src/services/drafts'
+vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -27,6 +30,8 @@ const mounted: ReturnType<typeof mount>[] = []
 const Page = { components: { ProjectNavigation }, props: ['id'], template: '<ProjectNavigation :id="id" /><p>创作页面</p>' }
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(drafts.readDraft).mockResolvedValue(null)
+  vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   localStorage.clear()
   initializeTheme()
   native.onDragDropEvent.mockResolvedValue(vi.fn())
@@ -86,12 +91,14 @@ it('does not navigate during composition, key repeat or a pending unsaved-conten
   }
   await wrapper.get('#title').setValue('未保存书名')
   expect(wrapper.get('.project-navigation a[aria-current="step"]').attributes('aria-label')).toContain('编辑中')
-  const navigation = router.push('/projects')
+  const confirmation = requestConfirmation('确认本次操作？')
   await flushPromises()
   globalThis.dispatchEvent(new KeyboardEvent('keydown', { key: '4', ctrlKey: true })); await flushPromises()
   expect(router.currentRoute.value.path).toBe('/projects/p1')
-  await answerConfirmation(false); await navigation
+  await answerConfirmation(false); await confirmation
   expect(wrapper.get('#title').element).toHaveProperty('value', '未保存书名')
+  await router.push('/projects')
+  expect(drafts.saveDraft).toHaveBeenCalledWith('p1', 'project', expect.objectContaining({ content: expect.objectContaining({ form: expect.objectContaining({ title: '未保存书名' }) }) }))
 })
 it('uses returned completion facts, overrides the current unsaved editor and never marks a failed query complete', async () => {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/projects/:id/covers', component: { template: '<p>预览</p>' } }] })
