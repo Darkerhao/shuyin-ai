@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 自动流程（2026-11-07，v20）
+
+`0020_automation_runs.sql`新增`automation_runs`：唯一启动键、书籍、冻结输入JSON、状态/阶段/代次/错误、音频/视频/文案AI/两背景AI/两封面/发布任务外键、发布策略JSON、上传开始/人工交接标记及时间戳。单活动索引覆盖运行、暂停、等待处理和等待最终发布；完成/取消后释放。输入含原书SHA-256、书名作者、目标时长、模型配置和可见账号指纹，不包含Cookie、密码或密钥。
+
+子任务与流程关联共用原事务，过期绑定失败回滚。发布沿用`allow_download`和`scheduled_at`，旧默认值不变；自动任务显式写禁止保存、未来01:11，人工确认字段保持false，人工修改后自动策略失效。实际发布记录在原事务中同步流程completed。
+
+数据库及完整备份包含新表，启动/恢复将活动流程暂停，保留上传意图；执行中禁止覆盖恢复。自动音频的`writing_version_id`为NULL；音频摘要沿用原表，计划摘要保存在文案AI任务输入。兼容v19升级，详见 [验收](AUTOMATION-VERIFICATION.md)。
+
 ## 完整表单暂存（2026-11-06，v19）
 
 `0019_editor_owners.sql`重建editor_drafts，主键改为(owner_id,kind)，kind为writing/cover/project/publishing；project_id保留到book_projects的ON DELETE CASCADE，允许NULL的唯一情况是kind=project且owner_id=new。原writing/cover行完整复制，owner_id取原project_id，based_on、content_json、updated_at不变；增加project_id索引。

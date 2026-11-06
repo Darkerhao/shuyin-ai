@@ -416,11 +416,16 @@ pub(super) fn rebase_package(c: &Connection, id: &str) -> Result<(), String> {
 fn checked(c: &Connection, id: &str) -> Result<PublishTask, String> {
     let mut task = load(c, id)?;
     let i = &task.input;
+    let policy = super::automation::policy_matches(c, id, i)?;
     task.checklist = [
         (
             "title",
-            "已填写并确认发布标题",
-            !i.title.trim().is_empty() && i.title_confirmed,
+            if policy {
+                "标题已通过自动流程校验"
+            } else {
+                "已填写并确认发布标题"
+            },
+            !i.title.trim().is_empty() && (i.title_confirmed || policy),
         ),
         (
             "description",
@@ -447,7 +452,15 @@ fn checked(c: &Connection, id: &str) -> Result<PublishTask, String> {
                 .and_then(|p| reference(&p))
                 .is_ok(),
         ),
-        ("covers", "已确认两张封面", i.covers_confirmed),
+        (
+            "covers",
+            if policy {
+                "双封面已通过自动流程校验"
+            } else {
+                "已确认两张封面"
+            },
+            i.covers_confirmed || policy,
+        ),
         (
             "schedule",
             "定时发布时间格式有效（立即发布无需设置）",
@@ -574,9 +587,25 @@ impl Database {
     }
 
     pub fn publish_snapshot(&self, id: &str) -> Result<PublishSnapshot, String> {
+        self.publish_snapshot_at(id, true)
+    }
+
+    pub(crate) fn publish_snapshot_during_upload(
+        &self,
+        id: &str,
+    ) -> Result<PublishSnapshot, String> {
+        let automatic = self.with_connection(|connection|connection.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE publish_task_id=?1 AND publish_handed_off=0)",[id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string()))?;
+        self.publish_snapshot_at(id, !automatic)
+    }
+
+    fn publish_snapshot_at(
+        &self,
+        id: &str,
+        require_future: bool,
+    ) -> Result<PublishSnapshot, String> {
         self.with_connection(|c| {
             let task = checked(c, id)?;
-            validate_schedule(c, task.input.scheduled_at.as_deref(), true)?;
+            validate_schedule(c, task.input.scheduled_at.as_deref(), require_future)?;
             if task.status != "ready" {
                 return Err("请先生成有效任务包；已发布任务不能再次上传。".into());
             }
@@ -599,6 +628,34 @@ impl Database {
         })
     }
 
+    pub(crate) fn renew_automatic_schedule(&self, id: &str) -> Result<bool, String> {
+        self.with_connection(|connection| {
+            let task = checked(connection,id)?;
+            if !super::automation::policy_matches(connection,id,&task.input)? { return Ok(false); }
+            let handed_off: bool = connection.query_row("SELECT publish_handed_off FROM automation_runs WHERE publish_task_id=?1",[id],|row|row.get(0)).map_err(|e|e.to_string())?;
+            if handed_off || validate_schedule(connection,task.input.scheduled_at.as_deref(),true).is_ok() { return Ok(false); }
+            let mut input = task.input;
+            input.scheduled_at = Some(super::automation::next_schedule(connection,"now")?);
+            let transaction = connection.transaction().map_err(|e|e.to_string())?;
+            transaction.execute(&format!("UPDATE publish_tasks SET scheduled_at=?1,status='draft',task_directory=NULL,updated_at={NOW} WHERE id=?2 AND status!='published'"),params![input.scheduled_at,id]).map_err(|e|e.to_string())?;
+            transaction.execute(&format!("UPDATE automation_runs SET publish_input_json=?1,updated_at={NOW} WHERE publish_task_id=?2 AND publish_handed_off=0"),params![serde_json::to_string(&input).map_err(|e|e.to_string())?,id]).map_err(|e|e.to_string())?;
+            transaction.commit().map_err(|e|e.to_string())?;
+            Ok(true)
+        })
+    }
+
+    pub(crate) fn hand_off_automatic_publish(&self, id: &str) -> Result<(), String> {
+        self.with_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE automation_runs SET publish_handed_off=1 WHERE publish_task_id=?1",
+                    [id],
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+    }
+
     pub fn list_publish_tasks(&self, project_id: &str) -> Result<Vec<PublishTask>, String> {
         self.with_connection(|c| {
             get(c,project_id)?;
@@ -610,7 +667,16 @@ impl Database {
     pub fn save_publish_task(
         &self,
         id: Option<&str>,
+        input: PublishInput,
+    ) -> Result<PublishTask, String> {
+        self.save_bound_publish_task(id, input, None)
+    }
+
+    pub(crate) fn save_bound_publish_task(
+        &self,
+        id: Option<&str>,
         mut input: PublishInput,
+        binding: Option<&super::automation::Binding<'_>>,
     ) -> Result<PublishTask, String> {
         input.title = input.title.trim().into();
         input.description = input.description.trim().into();
@@ -640,7 +706,12 @@ impl Database {
             tx.execute(&format!("INSERT INTO publish_tasks(id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'draft',{NOW},{NOW}) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,tags=excluded.tags,video_asset_id=excluded.video_asset_id,audio_asset_id=excluded.audio_asset_id,landscape_cover_id=excluded.landscape_cover_id,portrait_cover_id=excluded.portrait_cover_id,title_confirmed=excluded.title_confirmed,covers_confirmed=excluded.covers_confirmed,status='draft',task_directory=NULL,updated_at=excluded.updated_at"),params![id,input.project_id,input.title,input.description,input.tags,input.video_asset_id,input.audio_asset_id,input.landscape_cover_id,input.portrait_cover_id,input.title_confirmed,input.covers_confirmed]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE book_projects SET updated_at={NOW} WHERE id=?1"),[&input.project_id]).map_err(|e|e.to_string())?;
             tx.execute("UPDATE publish_tasks SET writing_version_id=?1,allow_download=?2,scheduled_at=?3 WHERE id=?4",params![input.writing_version_id,input.allow_download,input.scheduled_at,id]).map_err(|e|e.to_string())?;
-            tx.execute("DELETE FROM editor_drafts WHERE kind='publishing' AND owner_id=?1", [&draft_owner]).map_err(|e| e.to_string())?;
+            if let Some(binding) = binding {
+                super::automation::bind(&tx,binding,&input.project_id,&id)?;
+                tx.execute("UPDATE automation_runs SET publish_input_json=?1 WHERE id=?2",params![serde_json::to_string(&input).map_err(|e|e.to_string())?,binding.id]).map_err(|e|e.to_string())?;
+            } else {
+                tx.execute("DELETE FROM editor_drafts WHERE kind='publishing' AND owner_id=?1", [&draft_owner]).map_err(|e| e.to_string())?;
+            }
             tx.commit().map_err(|e|e.to_string())?;
             checked(c,&id)
         })
@@ -715,6 +786,7 @@ impl Database {
             tx.execute(&format!("INSERT INTO publish_records(publish_task_id,published_at,post_url,notes,created_at) VALUES(?1,?2,?3,?4,{NOW})"),params![id,published_at,input.post_url.trim(),input.notes.trim()]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE publish_tasks SET status='published',updated_at={NOW} WHERE id=?1"),[id]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE book_projects SET status=CASE WHEN status='archived' THEN status ELSE 'published' END,updated_at={NOW} WHERE id=?1"),[&task.input.project_id]).map_err(|e|e.to_string())?;
+            tx.execute(&format!("UPDATE automation_runs SET status='completed',error='',updated_at={NOW} WHERE publish_task_id=?1 AND status!='cancelled'"),[id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;
             checked(c,id)
         })

@@ -264,6 +264,14 @@ impl Database {
     }
 
     pub fn create_video_job(&self, input: StartVideoInput) -> Result<VideoJob, String> {
+        self.create_bound_video_job(input, None)
+    }
+
+    pub(crate) fn create_bound_video_job(
+        &self,
+        input: StartVideoInput,
+        binding: Option<&super::automation::Binding<'_>>,
+    ) -> Result<VideoJob, String> {
         self.with_connection(|c| {
             let tx = c.transaction().map_err(|e| e.to_string())?;
             let book = projects::get(&tx, &input.project_id)?;
@@ -275,9 +283,14 @@ impl Database {
             let provider = super::ai::provider(&tx, &input.provider_id)?;
             if provider.input.model_kind != "text" || !provider.input.is_enabled { return Err("请选择已启用的文本模型生成分镜。".into()); }
             let id = projects::new_id(&tx)?;
-            let plan = VideoPlan { title: book.input.title, ..Default::default() };
+            let mut plan = VideoPlan { title: book.input.title, ..Default::default() };
+            if let Some(binding) = binding {
+                plan.audio_sha256 = tx.query_row("SELECT a.output_sha256 FROM automation_runs r JOIN audio_jobs a ON a.id=r.audio_job_id WHERE r.id=?1 AND a.asset_id=?2 AND a.status='succeeded'",params![binding.id,input.audio_asset_id],|row|row.get::<_,String>(0)).map_err(|_|"自动视频缺少对应音频的归档摘要。")?;
+                if plan.audio_sha256.is_empty() { return Err("自动视频缺少音频摘要。".into()); }
+            }
             tx.execute(&format!("INSERT INTO video_jobs(id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,plan_json,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'draft','preparing',?6,{NOW},{NOW})"), params![id, book.id, input.audio_asset_id, input.subtitle_asset_id, input.provider_id, serde_json::to_string(&plan).map_err(|e| e.to_string())?]).map_err(|e| e.to_string())?;
             let job = get(&tx, &id)?;
+            if let Some(binding) = binding { super::automation::bind(&tx,binding,&input.project_id,&id)?; }
             tx.commit().map_err(|e| e.to_string())?;
             Ok(job)
         })
@@ -289,7 +302,20 @@ impl Database {
         work: VideoWork,
         provider_id: Option<&str>,
     ) -> Result<VideoJob, String> {
+        self.claim_bound_video_job(id, work, provider_id, None)
+    }
+
+    pub(crate) fn claim_bound_video_job(
+        &self,
+        id: &str,
+        work: VideoWork,
+        provider_id: Option<&str>,
+        automation: Option<&super::automation::AutomationRun>,
+    ) -> Result<VideoJob, String> {
         self.with_connection(|c| {
+            if let Some(run) = automation {
+                if !c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE id=?1 AND video_job_id=?2 AND status='running' AND run_id=?3)",params![run.id,id,run.run_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程已暂停或结束，未启动视频。".into()); }
+            }
             let job = get(c, id)?;
             if matches!(job.status.as_str(), "running" | "succeeded") { return Err("该视频已完成或正在执行。".into()); }
             work.window(&job.plan)?;

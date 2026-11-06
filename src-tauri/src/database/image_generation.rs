@@ -29,18 +29,26 @@ const VIDEO_PROMPT: &str = include_str!("../../../prompts/video-illustration-v1.
 
 impl Database {
     pub fn start_cover_generation(&self, input: ImageGenerationInput) -> Result<String, String> {
-        self.start_image_generation(input, "cover")
+        self.start_image_generation(input, "cover", None)
     }
     pub fn start_video_illustration(&self, input: ImageGenerationInput) -> Result<String, String> {
         if (input.width, input.height) != (1920, 1080) {
             return Err("视频插画使用横屏16:9。".into());
         }
-        self.start_image_generation(input, "video_illustration")
+        self.start_image_generation(input, "video_illustration", None)
+    }
+    pub(crate) fn start_bound_cover_generation(
+        &self,
+        input: ImageGenerationInput,
+        binding: &super::automation::Binding<'_>,
+    ) -> Result<String, String> {
+        self.start_image_generation(input, "cover", Some(binding))
     }
     fn start_image_generation(
         &self,
         mut input: ImageGenerationInput,
         kind: &str,
+        binding: Option<&super::automation::Binding<'_>>,
     ) -> Result<String, String> {
         input.description = input.description.trim().into();
         if input.description.is_empty() || input.description.chars().count() > 2000 {
@@ -53,6 +61,8 @@ impl Database {
             return Err("封面生成尺寸无效。".into());
         }
         self.with_connection(|c| {
+            let transaction = c.transaction().map_err(|e|e.to_string())?;
+            let c = &transaction;
             get(c, &input.project_id)?;
             let provider = super::ai::provider(c, &input.provider_id)?;
             if !provider.input.is_enabled || provider.input.model_kind != "image" {
@@ -61,6 +71,8 @@ impl Database {
             let id = new_id(c)?;
             c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?7,?3,?4,?5,'pending',?6,{NOW})"),
                 params![id,input.project_id,input.provider_id,provider.input.model_name,if kind == "cover" { PROMPT_VERSION } else { VIDEO_PROMPT_VERSION },serde_json::to_string(&input).map_err(|e|e.to_string())?,kind]).map_err(|e|e.to_string())?;
+            if let Some(binding) = binding { super::automation::bind(c,binding,&input.project_id,&id)?; }
+            transaction.commit().map_err(|e|e.to_string())?;
             Ok(id)
         })
     }
@@ -70,6 +82,7 @@ impl Database {
     }
     pub fn prepare_image_generation(&self, id: &str, kind: &str) -> Result<PreparedImage, String> {
         self.with_connection(|c| {
+            if c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE (landscape_task_id=?1 OR portrait_task_id=?1) AND status!='running')",[id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程已暂停，背景请求尚未发送。".into()); }
             let json: String = c.query_row("SELECT input_json FROM ai_tasks WHERE id=?1 AND kind=?2 AND status='pending'",params![id,kind],|r|r.get(0)).map_err(|_|"图片任务已取消、已运行或不存在。")?;
             let input: ImageGenerationInput = serde_json::from_str(&json).map_err(|_|"图片任务输入无效。")?;
             let project = get(c, &input.project_id)?;

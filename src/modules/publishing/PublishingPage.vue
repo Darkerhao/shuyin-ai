@@ -70,6 +70,7 @@ const video = computed(() => videos.value.find(a => a.id === draft.value.videoAs
 const audio = computed(() => audios.value.find(a => a.id === draft.value.audioAssetId))
 const selectedLandscape = computed(() => landscape.value.find(c => c.id === draft.value.landscapeCoverId))
 const selectedPortrait = computed(() => portrait.value.find(c => c.id === draft.value.portraitCoverId))
+const automaticCoversChecked = computed(() => !dirty.value && selected.value?.checklist.some(item => item.key === 'covers' && item.passed && item.label.includes('自动流程')))
 const videoInfo = ref<VideoMetadata | null>(null)
 const videoInfoError = ref('')
 let videoInfoRequest = Promise.resolve()
@@ -852,8 +853,8 @@ onMounted(() => { if (desktop) void loadTask() })
             </dd>
           </div>
           <div>
-            <dt>发布封面</dt><dd :class="{ 'preflight-ready': draft.coversConfirmed }">
-              已选 {{ Number(!!selectedLandscape) + Number(!!selectedPortrait) }} / 2 · {{ draft.coversConfirmed ? '已核对' : '待核对横竖两张图' }}
+            <dt>发布封面</dt><dd :class="{ 'preflight-ready': draft.coversConfirmed || automaticCoversChecked }">
+              已选 {{ Number(!!selectedLandscape) + Number(!!selectedPortrait) }} / 2 · {{ draft.coversConfirmed ? '已核对' : automaticCoversChecked ? '自动流程已校验，发布前请检查' : '待核对横竖两张图' }}
             </dd>
           </div>
           <div>

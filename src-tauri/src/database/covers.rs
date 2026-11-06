@@ -293,6 +293,16 @@ impl Database {
         config: CoverConfig,
         png: Option<&[u8]>,
     ) -> Result<CoverVersion, String> {
+        self.save_bound_cover_version(project_id, config, png, None)
+    }
+
+    pub(crate) fn save_bound_cover_version(
+        &self,
+        project_id: &str,
+        config: CoverConfig,
+        png: Option<&[u8]>,
+        binding: Option<&super::automation::Binding<'_>>,
+    ) -> Result<CoverVersion, String> {
         config.validate()?;
         if let Some(bytes) = png {
             validate_png(bytes, &config)?;
@@ -325,6 +335,7 @@ impl Database {
                 let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
                 tx.execute("INSERT INTO cover_versions(id,project_id,version_no,config_json,exported_path,created_at) VALUES(?1,?2,?3,?4,?5,?6)", params![id,project_id,version_no,json,exported_path,created_at]).map_err(|e| e.to_string())?;
                 tx.execute("UPDATE book_projects SET updated_at=?1 WHERE id=?2", params![created_at,project_id]).map_err(|e| e.to_string())?;
+                if let Some(binding) = binding { super::automation::bind(&tx,binding,project_id,&id)?; }
                 tx.commit().map_err(|e| e.to_string())?;
                 Ok(CoverVersion { id, project_id: project_id.into(), version_no, config, exported_path, created_at })
             })();

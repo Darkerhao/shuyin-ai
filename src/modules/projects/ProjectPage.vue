@@ -13,6 +13,7 @@ import { emptyProject, projectInput, type Asset, type Project, type ProjectInput
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
+import AutomationSetup from '../../components/AutomationSetup.vue'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -31,12 +32,13 @@ if (!props.id && typeof route.query.source === 'string' && /\.(txt|md|epub|pdf|d
 const documents = ref<Asset[]>([])
 const dirty = computed(() => JSON.stringify(form.value) !== original.value || sourcePaths.value.length > 0)
 const ready = ref(false)
+const automationBusy = ref(false)
 const deleting = ref(false)
 const imported = ref<ImportedNote | null>(null)
 let leaving = false
 const { busy, error, message, operation, run } = useOperation()
 const draftContent = computed(() => ({ form: form.value, sourcePaths: sourcePaths.value }))
-const autosave = useEditorDraft(() => props.id ?? 'new', 'project', draftContent, () => project.value?.updatedAt ?? null, dirty, ready, () => !busy.value)
+const autosave = useEditorDraft(() => project.value?.id ?? props.id ?? 'new', 'project', draftContent, () => project.value?.updatedAt ?? null, dirty, ready, () => !busy.value)
 function accept(saved: Project) { project.value = saved; form.value = projectInput(saved); original.value = JSON.stringify(form.value); ready.value = true }
 const load = () => run(async () => {
   ready.value = false
@@ -75,13 +77,24 @@ const applyImport = () => run(async () => {
 }, '正在追加资料…')
 const save = () => run(async () => {
   await autosave.flush()
-  const saved = await api.saveProject(props.id ?? null, { ...form.value }, [...sourcePaths.value])
+  const saved = await api.saveProject(project.value?.id ?? props.id ?? null, { ...form.value }, [...sourcePaths.value])
   autosave.reset()
   sourcePaths.value = []
   accept(saved)
   message.value = '项目已保存。'
   leaving = true; await router.replace(`/projects/${saved.id}/writing`)
 }, '正在保存书籍资料…')
+async function saveAutomaticSource() {
+  if (!form.value.title.trim() || !form.value.author.trim()) throw new Error('自动制作请填写书名和作者。')
+  if (documents.value.length + sourcePaths.value.length !== 1) throw new Error('自动制作每次需要且仅使用一个原书文件。请保留一份PDF、EPUB、TXT或Markdown。')
+  await autosave.flush()
+  const saved = await api.saveProject(project.value?.id ?? props.id ?? null, { ...form.value }, [...sourcePaths.value])
+  autosave.reset(); sourcePaths.value = []; accept(saved)
+  documents.value = (await api.listAssets(saved.id)).filter(asset => asset.assetType === 'document')
+  const source = documents.value[0]
+  if (!source || source.existsStatus !== 'available') throw new Error('原书文件不可读取。')
+  return { projectId: saved.id, sourceAssetId: source.id }
+}
 const remove = () => run(async () => {
   if (!project.value) return
   await autosave.flush()
@@ -94,7 +107,7 @@ const remove = () => run(async () => {
 }, '正在删除项目…')
 const canLeave = async () => {
   if (leaving) return true
-  if (busy.value) return false
+  if (busy.value || automationBusy.value) return false
   try { await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
@@ -126,7 +139,7 @@ onMounted(async () => {
     v-if="project"
     :id="project.id"
     :editing="dirty"
-    :busy="busy"
+    :busy="busy || automationBusy"
   />
   <p
     v-if="!desktop"
@@ -161,7 +174,7 @@ onMounted(async () => {
       class="panel"
       @submit.prevent="save"
     >
-      <fieldset :disabled="!desktop || busy">
+      <fieldset :disabled="!desktop || busy || automationBusy">
         <div class="form-grid">
           <div>
             <label for="title">书名 *</label><Input
@@ -366,6 +379,11 @@ onMounted(async () => {
       </RouterLink>
     </aside>
   </div>
+  <AutomationSetup
+    :save-source="saveAutomaticSource"
+    :disabled="busy"
+    @busy="automationBusy = $event"
+  />
   <Collapsible
     v-if="project"
     class="history-panel"

@@ -284,7 +284,7 @@ fn valid_format(value: &str) -> bool {
     matches!(value, "deep_dive" | "brief")
 }
 
-fn supported_source_name(path: &Path) -> bool {
+pub(super) fn supported_source_name(path: &Path) -> bool {
     matches!(
         path.extension()
             .and_then(|value| value.to_str())
@@ -295,7 +295,7 @@ fn supported_source_name(path: &Path) -> bool {
     )
 }
 
-fn hash_file(path: &Path) -> Result<(i64, String), String> {
+pub(super) fn hash_file(path: &Path) -> Result<(i64, String), String> {
     let metadata = fs::metadata(path).map_err(|error| format!("来源文件不可用：{error}"))?;
     if !metadata.is_file() || metadata.len() == 0 {
         return Err("来源文件为空或不可读取。".into());
@@ -459,13 +459,57 @@ impl Database {
     pub fn audio_job(&self, id: &str) -> Result<AudioJob, String> {
         self.with_connection(|c| job(c, id))
     }
+    pub fn audio_job_prompt(&self, id: &str) -> Result<String, String> {
+        self.with_connection(|connection| {
+            let input: String = connection
+                .query_row(
+                    "SELECT input_json FROM audio_jobs WHERE id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(parse_input(&input)?.prompt)
+        })
+    }
 
     pub fn start_audio_job(&self, input: StartAudioJobInput) -> Result<AudioJob, String> {
-        if !valid_format(&input.format) {
+        self.create_audio_job(
+            &input.project_id,
+            Some(&input.writing_version_id),
+            &input.source,
+            &input.format,
+            None,
+        )
+    }
+
+    pub(crate) fn start_automatic_audio(
+        &self,
+        run: &super::automation::AutomationRun,
+    ) -> Result<AudioJob, String> {
+        self.create_audio_job(
+            &run.project_id,
+            None,
+            &AudioSourceInput::Asset {
+                asset_id: run.input.selection.source_asset_id.clone(),
+            },
+            &run.input.selection.format,
+            Some(run),
+        )
+    }
+
+    fn create_audio_job(
+        &self,
+        project_id: &str,
+        writing_version_id: Option<&str>,
+        source_input: &AudioSourceInput,
+        format: &str,
+        automation: Option<&super::automation::AutomationRun>,
+    ) -> Result<AudioJob, String> {
+        if !valid_format(format) {
             return Err("音频形式只能是深入探索或简报。".into());
         }
         if let Some(existing) = self.with_connection(|connection| active_job(connection))? {
-            if existing.project_id == input.project_id {
+            if automation.is_none() && existing.project_id == project_id {
                 return Ok(existing);
             }
             return Err(format!(
@@ -473,15 +517,19 @@ impl Database {
                 existing.project_title
             ));
         }
-        let (project, version, source) = self.with_connection(|connection| {
-            let project = get(connection, &input.project_id)?;
-            let version = ai::version(connection, &input.writing_version_id)?;
-            if version.project_id != project.id || version.kind != "publishing" {
-                return Err("音频任务必须绑定当前书籍的发布文案版本。".into());
-            }
-            let WritingContent::Publishing { audio_prompt, .. } = &version.content else { return Err("所选版本不是发布文案。".into()); };
-            if audio_prompt.trim().is_empty() { return Err("所选版本的音频生成提示词为空。".into()); }
-            let source = match &input.source {
+        let (project, prompt_version, prompt, duration, source) = self.with_connection(|connection| {
+            let project = get(connection, project_id)?;
+            let (prompt_version, prompt, duration) = if let Some(version_id) = writing_version_id {
+                let version = ai::version(connection, version_id)?;
+                if version.project_id != project.id || version.kind != "publishing" { return Err("音频任务必须绑定当前书籍的发布文案版本。".into()); }
+                let WritingContent::Publishing { audio_prompt, .. } = version.content else { return Err("所选版本不是发布文案。".into()); };
+                if audio_prompt.trim().is_empty() { return Err("所选版本的音频生成提示词为空。".into()); }
+                (version.prompt_version, audio_prompt, project.input.target_duration_seconds)
+            } else {
+                let run = automation.ok_or("自动音频缺少冻结指导。")?;
+                ("automatic-audio-v1".into(), crate::ai::publishing::automatic_audio_prompt(&run.input.title, run.input.target_duration_seconds)?, run.input.target_duration_seconds)
+            };
+            let source = match source_input {
                 AudioSourceInput::Text => {
                     if project.input.source_notes.trim().is_empty() { return Err("本书还没有可用的资料文本。".into()); }
                     if project.input.source_notes.chars().count() > 200_000 { return Err("书籍资料文本过长，请精简后再试。".into()); }
@@ -499,9 +547,9 @@ impl Database {
                     PreparedSource { frozen: FrozenSource::Asset { asset_id: asset_id.clone(), name, size: 0, sha256: String::new() }, path: Some(path) }
                 }
             };
-            Ok((project, version, source))
+            Ok((project, prompt_version, prompt, duration, source))
         })?;
-        let (size, sha256) = match (&input.source, &source.frozen, &source.path) {
+        let (size, sha256) = match (source_input, &source.frozen, &source.path) {
             (
                 AudioSourceInput::Asset { asset_id },
                 FrozenSource::Asset { name, .. },
@@ -520,6 +568,9 @@ impl Database {
             (AudioSourceInput::Text, FrozenSource::Text { .. }, None) => (0, String::new()),
             _ => return Err("来源快照无效。".into()),
         };
+        if automation.is_some_and(|run| run.input.source_sha256 != sha256) {
+            return Err("原书内容在启动后发生变化，自动流程已暂停。".into());
+        }
         let frozen_source = match source.frozen {
             FrozenSource::Asset { asset_id, name, .. } => FrozenSource::Asset {
                 asset_id,
@@ -530,29 +581,29 @@ impl Database {
             text @ FrozenSource::Text { .. } => text,
         };
         let input_json = serde_json::to_string(&FrozenAudioInput {
-            prompt_version: version.prompt_version,
-            prompt: match version.content {
-                WritingContent::Publishing { audio_prompt, .. } => audio_prompt,
-                _ => unreachable!(),
-            },
-            target_duration_seconds: project.input.target_duration_seconds,
-            format: input.format,
+            prompt_version,
+            prompt,
+            target_duration_seconds: duration,
+            format: format.into(),
             source: frozen_source,
         })
         .map_err(|error| error.to_string())?;
         self.with_connection(|connection| {
-            if let Some(existing) = active_job(connection)? {
-                if existing.project_id == input.project_id { return Ok(existing); }
+            let transaction = connection.transaction().map_err(|e|e.to_string())?;
+            if let Some(existing) = active_job(&transaction)? {
+                if automation.is_none() && existing.project_id == project_id { return Ok(existing); }
                 return Err(format!("当前已有《{}》的音频任务。请先完成或停止跟进。", existing.project_title));
             }
-            let id = new_id(connection)?;
-            connection.execute(
+            let id = new_id(&transaction)?;
+            transaction.execute(
                 &format!("INSERT INTO audio_jobs(id,project_id,writing_version_id,input_json,status,stage,run_id,created_at,updated_at) VALUES(?1,?2,?3,?4,'created','opening_site',1,{NOW},{NOW})"),
-                params![id, input.project_id, input.writing_version_id, input_json],
+                params![id, project_id, writing_version_id, input_json],
             ).map_err(|error| match error {
                 rusqlite::Error::SqliteFailure(ref code, _) if code.code == rusqlite::ErrorCode::ConstraintViolation => "当前已有未完成的音频任务。请先完成或停止跟进。".to_owned(),
                 _ => error.to_string(),
             })?;
+            if let Some(run) = automation { super::automation::bind(&transaction, &run.binding(super::automation::Slot::Audio), project_id, &id)?; }
+            transaction.commit().map_err(|e|e.to_string())?;
             job(connection, &id)
         })
     }

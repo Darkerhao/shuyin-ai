@@ -272,6 +272,16 @@ pub fn continue_video_job(
     render: bool,
     provider_id: Option<String>,
 ) -> Result<VideoJob, String> {
+    continue_bound_video_job(app, id, render, provider_id, None)
+}
+
+pub(crate) fn continue_bound_video_job(
+    app: AppHandle,
+    id: String,
+    render: bool,
+    provider_id: Option<String>,
+    automation: Option<&crate::database::automation::AutomationRun>,
+) -> Result<VideoJob, String> {
     if !cfg!(target_os = "windows") {
         return Err("MG 视频首版暂仅支持 Windows。".into());
     }
@@ -288,9 +298,12 @@ pub fn continue_video_job(
     } else {
         VideoWork::Prepare
     };
-    let job = app
-        .state::<Database>()
-        .claim_video_job(&id, work, provider_id.as_deref())?;
+    let job = app.state::<Database>().claim_bound_video_job(
+        &id,
+        work,
+        provider_id.as_deref(),
+        automation,
+    )?;
     spawn(&app, &mut active, &job, work);
     Ok(job)
 }
