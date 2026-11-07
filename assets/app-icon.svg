@@ -1,5 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
-  <rect width="512" height="512" rx="112" fill="#153D32"/>
-  <path d="M112 140C160 143 202 160 240 188V380C204 352 163 335 114 331C106 330 100 324 100 316V152C100 145 105 139 112 140Z" fill="#FFF9EC"/>
-  <path fill-rule="evenodd" d="M279 174L394 116C402 112 412 118 412 128V308C412 318 406 327 397 332L274 394C266 398 256 392 256 382V210C256 194 265 181 279 174ZM302 211V291L370 251L302 211Z" fill="#D5F267"/>
+  <defs>
+    <linearGradient id="surface" x1="48" y1="32" x2="464" y2="496" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#163544"/>
+      <stop offset="1" stop-color="#0B1224"/>
+    </linearGradient>
+    <linearGradient id="page" x1="112" y1="144" x2="232" y2="370" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F1FFF9"/>
+      <stop offset="1" stop-color="#B9F7E5"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="264" y1="128" x2="400" y2="372" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#42EFAD"/>
+      <stop offset="1" stop-color="#39D9F5"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="508" height="508" rx="110" fill="url(#surface)" stroke="#28505C" stroke-width="4"/>
+  <path d="M116 134C160 134 199 150 232 178V370C198 344 158 330 116 330C109 330 104 325 104 318V146C104 139 109 134 116 134Z" fill="url(#page)"/>
+  <path fill-rule="evenodd" d="M264 136C264 125 277 119 286 126L414 236C424 244 424 260 414 268L286 378C277 385 264 379 264 368V136ZM304 208V296L360 252L304 208Z" fill="url(#fold)"/>
 </svg>
