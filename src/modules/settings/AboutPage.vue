@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import appLogo from '../../../assets/app-icon.svg'
 import AppIcon from '../../components/AppIcon.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import { useAppUpdates } from '../../composables/useAppUpdates'
@@ -58,15 +59,13 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
     >
       <div class="about-identity-row">
         <div class="about-brand">
-          <span
+          <img
+            :src="appLogo"
             class="about-symbol"
-            aria-hidden="true"
+            width="64"
+            height="64"
+            alt=""
           >
-            <svg
-              viewBox="0 0 24 24"
-              fill="currentColor"
-            ><path d="M12 3L2 8l10 5 10-5-10-5zm0 7.5L4.5 9 12 5.5 19.5 9 12 10.5zm-8 4.2v3.8c0 2.2 4 4 8 4s8-1.8 8-4v-3.8l-8 4-8-4z" /></svg>
-          </span>
           <div class="about-brand-copy">
             <div class="about-brand-title">
               <h2 id="about-app-title">
@@ -276,8 +275,7 @@ async function confirmAndInstall() { confirmInstall.value = false; await install
 .about-identity-row, .about-brand, .about-brand-title { display: flex; align-items: center; }
 .about-identity-row { justify-content: space-between; gap: 24px; padding-top: 24px; }
 .about-brand { min-width: 0; gap: 20px; }
-.about-symbol { display: grid; place-items: center; width: 64px; height: 64px; flex-shrink: 0; border: 2px solid transparent; border-radius: 16px; background: var(--brand-background); color: var(--brand-foreground); box-shadow: var(--primary-glow); }
-.about-symbol svg { width: 36px; height: 36px; }
+.about-symbol { display: block; width: 64px; height: 64px; flex-shrink: 0; }
 .about-brand-copy { min-width: 0; }
 .about-brand-title { flex-wrap: wrap; gap: 10px; }
 .about-brand-title h2 { margin: 0; color: var(--heading); font-size: 24px; line-height: 32px; font-weight: 900; letter-spacing: .6px; }

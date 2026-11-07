@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { RouterLink, RouterView, START_LOCATION, useRoute, useRouter } from 'vue-router'
+import appLogo from '../assets/app-icon.svg'
 import AppIcon from './components/AppIcon.vue'
 import AppNotifications from './components/AppNotifications.vue'
 import AppConfirmation from './components/AppConfirmation.vue'
@@ -127,7 +128,13 @@ watch(router.currentRoute, async (to, from) => {
           aria-label="书引 AI 首页"
           class="brand-link"
         >
-          <span class="brand-symbol"><AppIcon name="book" /></span>
+          <img
+            :src="appLogo"
+            class="brand-symbol"
+            width="40"
+            height="40"
+            alt=""
+          >
           <span class="brand-copy hidden min-w-0 md:block">
             <span class="brand-name">书引 <span>AI</span></span>
             <span class="block whitespace-nowrap text-[11px]">让阅读，成为创作。</span>
