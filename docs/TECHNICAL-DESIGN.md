@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## 自动制作 P2/P3 当前实现（2026-11-08）
+
+唯一执行器顺序调整为duration → writing → audio → transcript → content_check → landscape_image/cover → portrait_image/cover → widescreen_image/cover → storyboard → render → publishing。同一VideoWork增加Transcript，复用原转写/字幕校对，在完整校对及字幕素材登记后保存draft/transcript_ready；封面完成后以Prepare继续该任务，已有字幕及校对批次不会再次请求。
+
+content-check-v1通过统一Provider输出verified/reason/changes，未核实则失败暂停，修订复用原revision与发布结构校验。检查输入冻结来源版本、音频任务/素材ID及音频SHA/实际时长/完整cues摘要；完整字幕仍限8万字符，不截断。通过且无变化时引用原版本，必要修订追加based_on；audioPrompt禁止修改，音频任务的原版本关联与目标秒数再次核对。旧transcript-publishing-v1整篇重写Prompt已移除。
+
+字幕内容摘要不含分镜。分镜完成后读取三个实际封面导出，再保存独立render_plan_sha256；渲染和发布分别验证实际计划与内容校核。只改分镜不会误使文案失效，冻结渲染后改变分镜会被拒绝。活动新流程的手动视频启动由原claim入口拒绝，避免越过封面阶段；停止自动流程后可手动续作。
+
+三尺寸由COVER_STEPS映射阶段、宽高和子任务位置，根级AutomationTasks仍用唯一coverPng。最终发布任务从成功校核任务获取精确version_id，绑定同任务音频/视频及4:3/3:4导出，16:9只归档。UI的coverVersion链接用现有CoverThumbnail只读查看指定成品，编辑草稿不被替换。无新依赖/Provider/权限或第二套队列，300秒统一请求上限不变。数据库变更见[数据库](DATABASE.md)，验证及边界见[P2/P3验收](AUTOMATION-P23-VERIFICATION.md)。
+
 ## 自动制作前置创作 P1（2026-11-08）
 
 固定执行器增加duration/writing阶段，原字幕文案阶段改为content_check并单独绑定；当前顺序为duration（已有目标时跳过）→writing→audio→video_prepare→content_check→两尺寸背景/封面→render→publishing。P2的字幕检查点、必要字段修订和第三尺寸尚未实施。

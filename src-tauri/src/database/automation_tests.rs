@@ -67,7 +67,7 @@ fn finish_creation(database: &Database, run: &AutomationRun) -> AutomationRun {
     };
     let id = database.start_automation_generation(&run).unwrap();
     let prepared = database.prepare_generation(&id).unwrap();
-    let content: crate::ai::WritingContent = serde_json::from_value(serde_json::json!({"format":"publishing","title":"已保存的创作标题","description":"这期依据原书介绍核心问题","audioPrompt":"本次保存的完整指导，请依据上传原书制作，不补造情节。"})).unwrap();
+    let content: crate::ai::WritingContent = serde_json::from_value(serde_json::json!({"format":"publishing","title":"已保存的创作标题","description":"这期依据原书介绍核心问题","audioPrompt":"本次保存的完整指导，请依据上传原书制作，不补造情节。","tags":"#读书 #主题 #理解","coverTitle":"封面标题","coverSubtitle":"书籍副标题","coverPromptLandscape":"4:3横向书房","coverPromptPortrait":"3:4竖向书架","coverPromptWidescreen":"16:9宽阔空间","coverDesign":{"titleSize":136,"subtitleSize":50,"textColor":"#ffffff","subtitleColor":"#ffffff","accentColor":"#abcdef","backgroundColor":"#123456","overlayOpacity":0.7}})).unwrap();
     database
         .finish_generation(&id, &prepared.input, content, "text")
         .unwrap();
@@ -268,7 +268,7 @@ fn automation_v21_upgrade_preserves_post_audio_writing_and_publish_markers() {
     freeze_v20_schema(&database, false);
     database.with_connection(|connection| {
         super::migrate(connection)?;
-        connection.execute_batch("ALTER TABLE automation_runs DROP COLUMN duration_task_id; ALTER TABLE automation_runs DROP COLUMN content_check_task_id;").map_err(|e|e.to_string())?;
+        connection.execute_batch("ALTER TABLE automation_runs DROP COLUMN duration_task_id; ALTER TABLE automation_runs DROP COLUMN content_check_task_id; ALTER TABLE automation_runs DROP COLUMN widescreen_task_id; ALTER TABLE automation_runs DROP COLUMN widescreen_cover_id; ALTER TABLE automation_runs DROP COLUMN render_plan_sha256;").map_err(|e|e.to_string())?;
         connection.execute("UPDATE automation_runs SET writing_task_id=?1,input_json=json_remove(input_json,'$.workflowVersion'),status='awaiting_publish',publish_started=1,publish_handed_off=1",[run.writing_task_id.as_deref().unwrap()]).map_err(|e|e.to_string())?;
         connection.pragma_update(None,"user_version",21).map_err(|e|e.to_string())
     }).unwrap();
@@ -618,7 +618,7 @@ fn automation_v19_upgrade_keeps_previous_data_and_manual_defaults() {
                 connection
                     .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                     .unwrap(),
-                22
+                23
             );
             assert_eq!(
                 connection
@@ -846,8 +846,7 @@ fn automation_late_cover_failure_does_not_pause_the_next_size_or_generation() {
     );
 }
 
-#[test]
-fn automatic_video_keeps_archived_audio_hash_and_frozen_prompt() {
+fn transcript_fixture() -> (tempfile::TempDir, Database, AutomationRun) {
     let (directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
     let run = finish_creation(&database, &run);
@@ -857,11 +856,17 @@ fn automatic_video_keeps_archived_audio_hash_and_frozen_prompt() {
     let asset = database
         .link_asset(&run.project_id, path.to_str().unwrap(), None)
         .unwrap();
-    let expected = "a".repeat(64);
-    database.with_connection(|connection| {
-        connection.execute("UPDATE audio_jobs SET status='succeeded',asset_id=?1,output_sha256=?2,input_json=json_set(input_json,'$.prompt','旧版本实际使用的冻结指导') WHERE id=?3",rusqlite::params![asset,expected,audio.id]).map_err(|e|e.to_string())?;
-        Ok(())
-    }).unwrap();
+    let hash = super::audio::hash_file(&path).unwrap().1;
+    database
+        .with_connection(|c| {
+            c.execute(
+                "UPDATE audio_jobs SET status='succeeded',asset_id=?1,output_sha256=?2 WHERE id=?3",
+                rusqlite::params![asset, hash, audio.id],
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
     let run = database.automation_run(&run.id).unwrap();
     let video = database
         .create_bound_video_job(
@@ -874,11 +879,18 @@ fn automatic_video_keeps_archived_audio_hash_and_frozen_prompt() {
             Some(&run.binding(Slot::Video)),
         )
         .unwrap();
-    assert_eq!(video.plan.audio_sha256, expected);
-    assert_eq!(
-        database.audio_job_prompt(&audio.id).unwrap(),
-        "旧版本实际使用的冻结指导"
-    );
+    let run = database.automation_run(&run.id).unwrap();
+    let video = database
+        .claim_bound_video_job(
+            &video.id,
+            crate::video::VideoWork::Transcript,
+            Some(&run.input.selection.text_provider_id),
+            Some(&run),
+        )
+        .unwrap();
+    assert!(database
+        .finish_video_transcript(&video.id, video.run_id)
+        .is_err());
     let mut plan = video.plan;
     plan.duration = 2.0;
     plan.cues = vec![crate::video::Cue {
@@ -886,34 +898,146 @@ fn automatic_video_keeps_archived_audio_hash_and_frozen_prompt() {
         end: 2.0,
         text: "实际声音里的句子".into(),
     }];
+    let mut review = crate::video::subtitles::SubtitleReview::new(Default::default());
+    review.completed = 1;
+    plan.subtitle_review = Some(review);
     database
-        .with_connection(|connection| {
-            connection
-                .execute(
-                    "UPDATE video_jobs SET plan_json=?1 WHERE id=?2",
-                    rusqlite::params![serde_json::to_string(&plan).unwrap(), video.id],
-                )
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })
+        .save_video_progress(&video.id, video.run_id, &plan, "proofreading")
+        .unwrap();
+    let subtitle = directory.path().join("proofread.srt");
+    fs::write(&subtitle, crate::video::to_srt(&plan.cues)).unwrap();
+    database
+        .register_video_subtitle(&video.id, video.run_id, &subtitle)
+        .unwrap();
+    database
+        .finish_video_transcript(&video.id, video.run_id)
+        .unwrap();
+    let ready = database.video_job(&video.id).unwrap();
+    assert_eq!(ready.status, "draft");
+    assert_eq!(ready.stage, "transcript_ready");
+    assert!(ready.plan.scenes.is_empty());
+    database
+        .set_automation_stage(&run, "content_check")
         .unwrap();
     let run = database.automation_run(&run.id).unwrap();
-    database.create_transcript_task(&run).unwrap();
-    let run = database.automation_run(&run.id).unwrap();
-    database.verify_automation_video(&run).unwrap();
-    plan.cues[0].text = "被改写的新字幕".into();
-    database
-        .with_connection(|connection| {
-            connection
-                .execute(
-                    "UPDATE video_jobs SET plan_json=?1 WHERE id=?2",
-                    rusqlite::params![serde_json::to_string(&plan).unwrap(), video.id],
-                )
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })
-        .unwrap();
-    assert!(database.verify_automation_video(&run).is_err());
+    (directory, database, run)
+}
+
+#[test]
+fn automatic_content_check_preserves_audio_and_does_not_duplicate_consistent_version() {
+    let (_dir, db, run) = transcript_fixture();
+    let id = db.create_content_check_task(&run).unwrap();
+    let input: serde_json::Value =
+        serde_json::from_str(&db.prepare_content_check_task(&id).unwrap()).unwrap();
+    assert_eq!(
+        input["sourceVersionId"],
+        run.writing_version_id.clone().unwrap()
+    );
+    db.finish_content_check_task(
+        &id,
+        r#"{"verified":true,"reason":"符合实际讲述","changes":{}}"#,
+    )
+    .unwrap();
+    let run = db.automation_run(&run.id).unwrap();
+    assert_eq!(run.final_writing_version_id, run.writing_version_id);
+    assert_eq!(
+        db.list_versions(&run.project_id, "publishing")
+            .unwrap()
+            .len(),
+        1
+    );
+    db.verify_automation_content(&run).unwrap();
+    assert!(db
+        .finish_content_check_task(&id, r#"{"verified":true,"reason":"重复","changes":{}}"#)
+        .is_err());
+    let mut video = db.video_job(run.video_job_id.as_ref().unwrap()).unwrap();
+    video.plan.scenes=vec![serde_json::from_value(serde_json::json!({"first":0,"last":0,"kind":"opening","title":"阅读","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]})).unwrap()];
+    db.with_connection(|c| {
+        c.execute(
+            "UPDATE video_jobs SET plan_json=?1 WHERE id=?2",
+            rusqlite::params![serde_json::to_string(&video.plan).unwrap(), video.id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    db.verify_automation_content(&run).unwrap();
+    video.plan.cues[0].text = "改写字幕".into();
+    db.with_connection(|c| {
+        c.execute(
+            "UPDATE video_jobs SET plan_json=?1 WHERE id=?2",
+            rusqlite::params![serde_json::to_string(&video.plan).unwrap(), video.id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(db.verify_automation_content(&run).is_err());
+    assert!(db
+        .claim_video_job(&video.id, crate::video::VideoWork::Prepare, None)
+        .is_err());
+}
+
+#[test]
+fn automatic_content_check_revises_only_needed_fields_and_rejects_late_changes() {
+    let (_dir, db, run) = transcript_fixture();
+    let id = db.create_content_check_task(&run).unwrap();
+    db.prepare_content_check_task(&id).unwrap();
+    assert!(db
+        .finish_content_check_task(
+            &id,
+            r#"{"verified":true,"reason":"不允许","changes":{"audioPrompt":"替换音频指导"}}"#
+        )
+        .is_err());
+    assert_eq!(
+        db.list_versions(&run.project_id, "publishing")
+            .unwrap()
+            .len(),
+        1
+    );
+    db.control_automation(&run.id, "pause").unwrap();
+    db.finish_content_check_task(
+        &id,
+        r#"{"verified":true,"reason":"标题应对应实际内容","changes":{"title":"实际声音里的句子"}}"#,
+    )
+    .unwrap();
+    let saved = db.automation_run(&run.id).unwrap();
+    assert_eq!(saved.status, "paused");
+    let mut expected =
+        serde_json::to_value(db.automation_writing(&saved).unwrap().content).unwrap();
+    expected["title"] = serde_json::json!("实际声音里的句子");
+    assert_eq!(
+        serde_json::to_value(db.automation_publish_writing(&saved).unwrap().content).unwrap(),
+        expected
+    );
+    assert_eq!(
+        db.audio_job_prompt(run.audio_job_id.as_ref().unwrap())
+            .unwrap(),
+        expected["audioPrompt"].as_str().unwrap()
+    );
+    assert_eq!(
+        db.list_versions(&run.project_id, "publishing")
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn automatic_content_check_rejects_subtitle_changes_while_request_is_running() {
+    let (_dir, db, run) = transcript_fixture();
+    let id = db.create_content_check_task(&run).unwrap();
+    db.prepare_content_check_task(&id).unwrap();
+    db.with_connection(|c|{c.execute("UPDATE video_jobs SET plan_json=json_set(plan_json,'$.cues[0].text','新字幕') WHERE id=?1",[&run.video_job_id]).map_err(|e|e.to_string())?;Ok(())}).unwrap();
+    assert!(db
+        .finish_content_check_task(&id, r#"{"verified":true,"reason":"之前一致","changes":{}}"#)
+        .is_err());
+    assert_eq!(
+        db.list_versions(&run.project_id, "publishing")
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -952,6 +1076,192 @@ fn automatic_schedule_renews_only_before_hand_off_and_preserves_same_task() {
     expire();
     assert!(!database.renew_automatic_schedule(&task.id).unwrap());
     assert!(database.publish_snapshot(&task.id).is_err());
+}
+
+#[test]
+fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
+    use super::automation::COVER_STEPS;
+    let (_dir, db, run) = transcript_fixture();
+    let check = db.create_content_check_task(&run).unwrap();
+    db.prepare_content_check_task(&check).unwrap();
+    db.finish_content_check_task(&check, r#"{"verified":true,"reason":"一致","changes":{}}"#)
+        .unwrap();
+    for step in &COVER_STEPS {
+        let run = db.automation_run(&run.id).unwrap();
+        db.set_automation_stage(&run, step.image_stage).unwrap();
+        let image = db
+            .start_bound_cover_generation(
+                image_generation::ImageGenerationInput {
+                    project_id: run.project_id.clone(),
+                    provider_id: run.input.selection.image_provider_id.clone(),
+                    description: step
+                        .prompt(&db.automation_publish_writing(&run).unwrap().content)
+                        .unwrap()
+                        .into(),
+                    width: step.width,
+                    height: step.height,
+                },
+                &run.binding(step.image_slot),
+            )
+            .unwrap();
+        if step.width == 1920 {
+            db.end_generation(&image, "failed", "timeout", "第三张背景失败")
+                .unwrap();
+            db.set_automation_status(&run, "waiting_user", "重试当前背景")
+                .unwrap();
+            let waiting = db.automation_run(&run.id).unwrap();
+            assert!(waiting.landscape_cover_id.is_some() && waiting.portrait_cover_id.is_some());
+            assert_eq!(db.list_cover_versions(&run.project_id).unwrap().len(), 2);
+            db.retry_automation_generation(&waiting).unwrap();
+            db.control_automation(&run.id, "resume").unwrap();
+        }
+        db.prepare_cover_generation(&image).unwrap();
+        let mut background = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(512, 512)
+            .write_to(&mut background, image::ImageFormat::Png)
+            .unwrap();
+        db.finish_cover_generation(&image, background.get_ref())
+            .unwrap();
+        let run = db.automation_run(&run.id).unwrap();
+        db.set_automation_stage(&run, step.cover_stage).unwrap();
+        let run = db.automation_run(&run.id).unwrap();
+        let config = db.automation_cover_config(&run).unwrap();
+        assert_eq!((config.width, config.height), (step.width, step.height));
+        assert!(db
+            .save_bound_cover_version(
+                &run.project_id,
+                config.clone(),
+                Some(b"invalid"),
+                Some(&run.binding(step.cover_slot))
+            )
+            .is_err());
+        db.fail_automation_cover(&run.id, run.run_id, step.cover_stage)
+            .unwrap();
+        let resumed = db.control_automation(&run.id, "resume").unwrap();
+        assert_eq!(db.automation_cover_config(&resumed).unwrap(), config);
+        assert_eq!(db.automation_ai_result(&image).unwrap().0, "succeeded");
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(step.width, step.height)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        db.save_bound_cover_version(
+            &run.project_id,
+            config,
+            Some(png.get_ref()),
+            Some(&resumed.binding(step.cover_slot)),
+        )
+        .unwrap();
+        db.set_automation_stage(&resumed, step.next).unwrap();
+    }
+    let run = db.automation_run(&run.id).unwrap();
+    assert_eq!(run.stage, "storyboard");
+    assert_eq!(db.list_cover_versions(&run.project_id).unwrap().len(), 3);
+    let images: i64 = db
+        .with_connection(|c| {
+            c.query_row(
+                "SELECT count(*) FROM ai_tasks WHERE kind='cover'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    assert_eq!(images, 3);
+    let job = db
+        .claim_bound_video_job(
+            run.video_job_id.as_ref().unwrap(),
+            crate::video::VideoWork::Prepare,
+            None,
+            Some(&run),
+        )
+        .unwrap();
+    let mut plan = job.plan;
+    plan.scenes = vec![serde_json::from_value(serde_json::json!({"first":0,"last":0,"kind":"opening","title":"阅读","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]})).unwrap()];
+    db.save_video_progress(&job.id, job.run_id, &plan, "storyboard")
+        .unwrap();
+    db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")
+        .unwrap();
+    db.verify_automation_content(&run).unwrap();
+    db.prepare_automation_render(&run).unwrap();
+    db.verify_automation_video(&run).unwrap();
+    let ids: i64 = db
+        .with_connection(|c| {
+            c.query_row("SELECT count(*) FROM video_jobs", [], |r| r.get(0))
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    assert_eq!(ids, 1);
+    db.with_connection(|c| { c.execute("UPDATE video_jobs SET plan_json=json_set(plan_json,'$.scenes[0].title','变更后的分镜') WHERE id=?1", [&job.id]).map_err(|e|e.to_string())?; Ok(()) }).unwrap();
+    db.verify_automation_content(&run).unwrap();
+    assert!(db.verify_automation_video(&run).is_err());
+}
+
+#[test]
+fn automation_v23_upgrades_old_authorization_and_restores_exact_new_artifacts() {
+    let (dir, db, input) = setup();
+    let run = db.create_automation(input, account()).unwrap();
+    let run = finish_creation(&db, &run);
+    let audio = db.start_automatic_audio(&run).unwrap();
+    db.with_connection(|c| {
+        c.execute_batch("ALTER TABLE automation_runs DROP COLUMN widescreen_task_id; ALTER TABLE automation_runs DROP COLUMN widescreen_cover_id; ALTER TABLE automation_runs DROP COLUMN render_plan_sha256; PRAGMA user_version=22;").map_err(|e|e.to_string())?;
+        c.execute("UPDATE automation_runs SET input_json=json_set(input_json,'$.workflowVersion',1),publish_started=1,publish_handed_off=1 WHERE id=?1",[&run.id]).map_err(|e|e.to_string())?;
+        Ok(())
+    }).unwrap();
+    let backup = dir.path().join("old-v22.sqlite3");
+    db.with_connection(|c| c.backup("main", &backup, None).map_err(|e| e.to_string()))
+        .unwrap();
+    db.with_connection(super::migrate).unwrap();
+    let upgraded = db.automation_run(&run.id).unwrap();
+    assert_eq!(upgraded.status, "paused");
+    assert_eq!(upgraded.input.workflow_version, 1);
+    assert_eq!(upgraded.writing_version_id, run.writing_version_id);
+    assert_eq!(upgraded.audio_job_id.as_deref(), Some(audio.id.as_str()));
+    assert!(upgraded.publish_started && upgraded.error.contains("双封面授权"));
+    assert!(db.control_automation(&run.id, "resume").is_err());
+    db.control_audio_job(&audio.id, "cancel").unwrap();
+    db.restore_backup(backup.to_str().unwrap()).unwrap();
+    let restored = db.automation_run(&run.id).unwrap();
+    assert_eq!(restored.writing_version_id, run.writing_version_id);
+    assert!(restored.publish_started);
+    assert!(db.control_automation(&run.id, "resume").is_err());
+    let original = Connection::open(&backup).unwrap();
+    assert_eq!(
+        original
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        22
+    );
+    assert_eq!(
+        db.with_connection(|c| c
+            .query_row(
+                "SELECT publish_handed_off FROM automation_runs WHERE id=?1",
+                [&run.id],
+                |r| r.get::<_, i64>(0)
+            )
+            .map_err(|e| e.to_string()))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn automation_v23_migration_failure_preserves_v22_schema_and_data() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    for sql in MIGRATIONS.iter().take(22) {
+        connection.execute_batch(sql).unwrap();
+    }
+    connection.pragma_update(None, "user_version", 22).unwrap();
+    connection
+        .execute_batch("ALTER TABLE automation_runs ADD COLUMN widescreen_cover_id TEXT;")
+        .unwrap();
+    assert!(super::migrate(&mut connection).is_err());
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        22
+    );
+    assert!(!connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('automation_runs') WHERE name='widescreen_task_id')", [], |r|r.get::<_,bool>(0)).unwrap());
 }
 
 #[test]

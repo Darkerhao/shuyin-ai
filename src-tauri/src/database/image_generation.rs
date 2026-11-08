@@ -82,7 +82,7 @@ impl Database {
     }
     pub fn prepare_image_generation(&self, id: &str, kind: &str) -> Result<PreparedImage, String> {
         self.with_connection(|c| {
-            if c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE (landscape_task_id=?1 OR portrait_task_id=?1) AND status!='running')",[id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程已暂停，背景请求尚未发送。".into()); }
+            if c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE (landscape_task_id=?1 OR portrait_task_id=?1 OR widescreen_task_id=?1) AND status!='running')",[id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程已暂停，背景请求尚未发送。".into()); }
             let json: String = c.query_row("SELECT input_json FROM ai_tasks WHERE id=?1 AND kind=?2 AND status='pending'",params![id,kind],|r|r.get(0)).map_err(|_|"图片任务已取消、已运行或不存在。")?;
             let input: ImageGenerationInput = serde_json::from_str(&json).map_err(|_|"图片任务输入无效。")?;
             let project = get(c, &input.project_id)?;

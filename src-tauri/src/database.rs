@@ -117,6 +117,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0020_automation_runs.sql"),
     include_str!("../migrations/0021_automation_publish_markers.sql"),
     include_str!("../migrations/0022_automation_creation.sql"),
+    include_str!("../migrations/0023_automation_media.sql"),
 ];
 
 impl Database {

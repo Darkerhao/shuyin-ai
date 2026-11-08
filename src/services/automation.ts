@@ -26,10 +26,14 @@ export interface AutomationRun {
   durationTaskId: string | null
   contentCheckTaskId: string | null
   writingVersionId: string | null
+  finalWritingVersionId: string | null
+  actualDurationSeconds: number | null
   landscapeTaskId: string | null
   portraitTaskId: string | null
+  widescreenTaskId: string | null
   landscapeCoverId: string | null
   portraitCoverId: string | null
+  widescreenCoverId: string | null
   publishTaskId: string | null
   createdAt: string
   updatedAt: string
@@ -40,9 +44,10 @@ export const automationError = ref('')
 export const automationConsent = ref(false)
 export const automationAccount = ref<AutomationAccount | null>(null)
 export const stages: Record<string, string> = {
-  duration: '推荐目标时长', writing: '生成完整创作方案', audio: '按本次方案制作音频', video_prepare: '字幕校对与分镜', content_check: '依据实际字幕准备发布文案',
+  video_prepare: '准备字幕与分镜（旧流程）',
+  duration: '推荐目标时长', writing: '生成完整创作方案', audio: '按本次方案制作音频', transcript: '识别并校对实际字幕', content_check: '核对文案与实际音频',
   landscape_image: '生成横版背景', landscape_cover: '导出横版封面', portrait_image: '生成竖版背景',
-  portrait_cover: '导出竖版封面', render: '渲染成片', publishing: '上传并填写抖音',
+  portrait_cover: '导出竖版封面', widescreen_image: '生成16:9宽屏背景', widescreen_cover: '导出16:9宽屏封面', storyboard: '根据实际字幕生成分镜', render: '渲染成片', publishing: '上传并填写抖音',
 }
 export const startAutomation = (input: AutomationInput) => invoke<AutomationRun>('start_automation', { input })
 export const controlAutomation = (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => invoke<AutomationRun>('control_automation', { id, action })
@@ -61,10 +66,11 @@ export function refreshAutomation(): Promise<void> {
   return refreshing
 }
 
+const coverSlots = { landscape_cover: 'landscapeCoverId', portrait_cover: 'portraitCoverId', widescreen_cover: 'widescreenCoverId' } as const
 const rendering = new Set<string>()
 export async function renderAutomationCover(run: AutomationRun): Promise<void> {
-  if (run.status !== 'running' || !['landscape_cover', 'portrait_cover'].includes(run.stage)
-    || (run.stage === 'landscape_cover' ? run.landscapeCoverId : run.portraitCoverId)) return
+  const slot = coverSlots[run.stage as keyof typeof coverSlots]
+  if (run.status !== 'running' || !slot || run[slot]) return
   const key = `${run.id}:${run.runId}:${run.stage}`
   if (rendering.has(key)) return
   rendering.add(key)

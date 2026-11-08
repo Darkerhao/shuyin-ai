@@ -226,6 +226,7 @@ pub struct PreviewWindow {
 #[derive(Debug, Clone, Copy)]
 pub enum VideoWork {
     Prepare,
+    Transcript,
     Render,
     Preview(PreviewRequest),
 }
@@ -234,13 +235,14 @@ impl VideoWork {
     pub fn stage(self) -> &'static str {
         match self {
             Self::Prepare => "preparing",
+            Self::Transcript => "transcribing",
             Self::Render => "rendering",
             Self::Preview(_) => "previewing",
         }
     }
 
     pub fn window(self, plan: &VideoPlan) -> Result<Option<PreviewWindow>, String> {
-        if matches!(self, Self::Prepare) {
+        if matches!(self, Self::Prepare | Self::Transcript) {
             return Ok(None);
         }
         validate_cues(&plan.cues, plan.duration)?;

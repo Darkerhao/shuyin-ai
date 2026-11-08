@@ -16,7 +16,7 @@ import * as renderer from '../src/services/coverRenderer'
 import { coverTemplates, coverWorkspace, newCover, type CoverVersion } from '../src/types/cover'
 import { emptyProject } from '../src/types/project'
 
-vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), saveCover: vi.fn(), readBackground: vi.fn(), chooseBackground: vi.fn(), startCoverGeneration: vi.fn(), executeCoverGeneration: vi.fn(), listPresets: vi.fn(), savePreset: vi.fn(), deletePreset: vi.fn() }))
+vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), saveCover: vi.fn(), readBackground: vi.fn(), readCoverExport: vi.fn(), chooseBackground: vi.fn(), startCoverGeneration: vi.fn(), executeCoverGeneration: vi.fn(), listPresets: vi.fn(), savePreset: vi.fn(), deletePreset: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), listVersions: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), linkAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ coverFonts: { sans: 'sans-serif', serif: 'serif' }, backgroundRect: vi.fn(), renderCover: vi.fn(), coverPng: vi.fn(), decodeBackground: vi.fn() }))
@@ -64,6 +64,19 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M3 cover workflow', () => {
+  it('opens the exact automatic export while retaining the editable recovery draft', async () => {
+    const exact = { ...initial, id: 'automatic-cover', versionNo: 3, exportedPath: 'D:/automatic.png', config: { ...initial.config, title: '本次流程封面' } }
+    vi.mocked(api.listCovers).mockResolvedValue([initial, exact])
+    vi.mocked(api.readCoverExport).mockResolvedValue(new ArrayBuffer(4))
+    vi.mocked(renderer.decodeBackground).mockResolvedValue({ src: 'data:image/png;base64,AAAA' } as globalThis.HTMLImageElement)
+    const recovered = coverWorkspace([initial]); recovered.covers[0]!.title = '保留的手工草稿'
+    vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: initial.id, content: recovered, updatedAt: '' })
+    const { wrapper } = await render('/projects/p1/covers?tab=text&coverVersion=automatic-cover')
+    expect(wrapper.get('[aria-label="本次流程成品封面"]').text()).toContain('本次流程封面')
+    expect(api.readCoverExport).toHaveBeenCalledWith('p1', 'automatic-cover')
+    expect((wrapper.get('#cover-title').element as globalThis.HTMLTextAreaElement).value).toBe('保留的手工草稿')
+    expect(api.saveCover).not.toHaveBeenCalled()
+  })
   it('opens the background workspace by default without changing the saved cover or starting generation', async () => {
     const { wrapper } = await render('/projects/p1/covers')
     expect(button(wrapper, '背景图片').attributes('data-state')).toBe('active')

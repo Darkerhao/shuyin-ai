@@ -8,6 +8,7 @@ const props = defineProps<{ job: VideoJob; syncError?: string }>()
 const now = ref(Date.now())
 let clock: ReturnType<typeof globalThis.setInterval> | undefined
 const active = computed(() => props.job.status === 'running')
+const stateLabel = computed(() => props.job.stage === 'transcript_ready' && props.job.status === 'draft' ? '字幕已就绪' : videoStatuses[props.job.status])
 const progress = computed(() => active.value && props.job.progress?.stage === props.job.stage ? props.job.progress : null)
 const rendering = computed(() => active.value && ['rendering', 'previewing'].includes(props.job.stage))
 const renderSteps = [
@@ -21,7 +22,7 @@ const steps = ['原声字幕', '动画分镜', '确认分镜', '画面渲染', '
 const step = computed(() => {
   if (props.job.status === 'succeeded') return steps.length
   if (props.job.status === 'awaiting_confirmation') return 2
-  return { preparing: 0, transcribing: 0, proofreading: 0, storyboard: 1, previewing: 2, rendering: 3, validating: 4, complete: 4 }[props.job.stage] ?? 0
+  return { preparing: 0, transcribing: 0, proofreading: 0, transcript_ready: 1, storyboard: 1, previewing: 2, rendering: 3, validating: 4, complete: 4 }[props.job.stage] ?? 0
 })
 const covered = computed(() => (props.job.plan.scenes.at(-1)?.last ?? -1) + 1)
 const reviewed = computed(() => props.job.plan.subtitleReview?.completed ?? 0)
@@ -48,6 +49,7 @@ const phaseCopy: Record<string, [string, string]> = {
 }
 const copy = computed<[string, string]>(() => {
   const job = props.job
+  if (job.stage === 'transcript_ready' && job.status === 'draft') return ['字幕校对已完成', '自动流程将先校核发布材料、导出三尺寸封面，再继续本任务生成分镜，无需重复识别音频。']
   if (job.status === 'awaiting_confirmation' && job.preview) return ['试片已就绪，完整视频尚未生成', '请播放片段并检查分镜；修改后重新试片，最后再确认完整视频。']
   if (job.status === 'awaiting_confirmation') return ['分镜已就绪，等你过目', '字幕与动画分镜已保存。向下校对，确认后再开始制作视频。']
   if (job.status === 'succeeded') return ['你的原声，已有了画面', '成片和字幕已保存，可在下方播放，或选用到发布准备。']
@@ -121,7 +123,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
         />
       </div>
       <div class="progress-intro">
-        <span class="progress-eyebrow"><span class="progress-dot" />{{ videoStatuses[job.status] }}</span>
+        <span class="progress-eyebrow"><span class="progress-dot" />{{ stateLabel }}</span>
         <div
           role="status"
           aria-live="polite"
@@ -152,7 +154,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
           v-if="index < step"
           name="check"
         /><span v-else>{{ String(index + 1).padStart(2, '0') }}</span></span>
-        <span>{{ label }}</span><small>{{ index < step ? '已完成' : index === step ? (job.status === 'awaiting_confirmation' ? '待你确认' : active ? '进行中' : videoStatuses[job.status]) : '待进行' }}</small>
+        <span>{{ label }}</span><small>{{ index < step ? '已完成' : index === step ? (job.status === 'awaiting_confirmation' ? '待你确认' : active ? '进行中' : stateLabel) : '待进行' }}</small>
       </li>
     </ol>
 
