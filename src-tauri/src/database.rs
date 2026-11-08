@@ -47,6 +47,11 @@ fn initialize(path: &PathBuf) -> Result<Connection, String> {
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(|error| error.to_string())?;
+    migrate(&mut connection)?;
+    Ok(connection)
+}
+
+fn migrate(connection: &mut Connection) -> Result<(), String> {
     let version: u32 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|error| error.to_string())?;
@@ -60,15 +65,33 @@ fn initialize(path: &PathBuf) -> Result<Connection, String> {
         let transaction = connection
             .transaction()
             .map_err(|error| error.to_string())?;
+        // Early v20 installations lack these columns; preserve them when already present.
+        let markers = if index == 20
+            && transaction
+                .query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('automation_runs') WHERE name='publish_started')", [], |row| row.get::<_, bool>(0))
+                .map_err(|error| error.to_string())?
+        {
+            let mut query = transaction.prepare("SELECT id,publish_started,publish_handed_off FROM automation_runs").map_err(|error| error.to_string())?;
+            let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)))
+                .map_err(|error| error.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| error.to_string())?;
+            rows
+        } else {
+            Vec::new()
+        };
         transaction
             .execute_batch(sql)
             .map_err(|error| error.to_string())?;
+        for (id, started, handed_off) in markers {
+            transaction.execute("UPDATE automation_runs SET publish_started=?2,publish_handed_off=?3 WHERE id=?1", rusqlite::params![id,started,handed_off]).map_err(|error| error.to_string())?;
+        }
         transaction
             .pragma_update(None, "user_version", (index + 1) as u32)
             .map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
-    Ok(connection)
+    Ok(())
 }
 
 pub(super) const MIGRATIONS: &[&str] = &[
@@ -92,6 +115,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0018_publish_settings.sql"),
     include_str!("../migrations/0019_editor_owners.sql"),
     include_str!("../migrations/0020_automation_runs.sql"),
+    include_str!("../migrations/0021_automation_publish_markers.sql"),
 ];
 
 impl Database {

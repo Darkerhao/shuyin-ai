@@ -299,12 +299,12 @@ defineExpose({ start })
     </div>
     <div class="actions wrap">
       <Button
-        v-if="!hideStart && !active && session?.status !== 'review'"
+        v-if="(!hideStart || session?.status === 'failed') && !active && session?.status !== 'review'"
         type="button"
         :disabled="!desktop || disabled || pending || stopping || task?.status === 'published'"
         @click="start"
       >
-        开始抖音辅助发布
+        {{ session?.status === 'failed' ? '重新核对当前网页' : '开始抖音辅助发布' }}
       </Button>
       <Button
         v-if="session || pending"

@@ -389,19 +389,23 @@ fn verify_editor(editor: &EditorSnapshot, snapshot: &PublishSnapshot) -> Result<
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join("\n\n");
-    let normalized = |value: &str| {
-        value
-            .replace('\u{200b}', "")
-            .replace("\r\n", "\n")
-            .trim()
-            .to_owned()
-    };
     if editor.title != snapshot.input.title
-        || normalized(&editor.description) != normalized(&description)
+        || normalize_editor_text(&editor.description) != normalize_editor_text(&description)
     {
         return Err("文案回读与任务不一致，请人工检查。".into());
     }
     Ok(())
+}
+
+fn normalize_editor_text(value: &str) -> String {
+    value
+        .replace('\u{200b}', "")
+        .replace("\r\n", "\n")
+        .trim()
+        .split('\n')
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -511,6 +515,10 @@ mod tests {
             video_key: String::new(),
         };
         assert!(verify_editor(&editor, &original).is_ok());
+        editor.description = "第一行\n第二行\u{200b}\n#读书".into();
+        assert!(verify_editor(&editor, &original).is_ok());
+        editor.description = "第一行第二行#读书".into();
+        assert!(verify_editor(&editor, &original).is_err());
         editor.description = "用户改动".into();
         assert!(verify_editor(&editor, &original).is_err());
     }

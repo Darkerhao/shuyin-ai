@@ -248,6 +248,15 @@ describe('M4 publish preparation', () => {
     expect(vi.mocked(api.savePublishTask).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.preparePublishTask).mock.invocationCallOrder[0]!)
     expect(vi.mocked(api.preparePublishTask).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(douyin.startDouyinTask).mock.invocationCallOrder[0]!)
   })
+  it('resumes a ready automatic task without changing its frozen confirmation fields or rebuilding its package', async () => {
+    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, titleConfirmed: false, coversConfirmed: false }])
+    const { wrapper } = await render('/projects/p1/publishing?task=t1')
+    await button(wrapper, '确认并开始辅助发布').trigger('click'); await flushPromises()
+    expect(douyin.startDouyinTask).toHaveBeenCalledExactlyOnceWith('t1')
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+    expect(api.preparePublishTask).not.toHaveBeenCalled()
+    expect(api.recordPublishSuccess).not.toHaveBeenCalled()
+  })
   it('records successfully before starting the explicitly selected next task and consumes the action', async () => {
     const nextTask = { ...task, id: 't2', title: '下一篇', projectTitle: '测试书' }
     vi.mocked(api.listPublishQueue).mockResolvedValue([nextTask])

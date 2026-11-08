@@ -17,7 +17,7 @@ beforeEach(() => {
   vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(2)
   vi.spyOn(HTMLMediaElement.prototype, 'duration', 'get').mockReturnValue(60)
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
-  document.execCommand = vi.fn((_command, _show, text) => { document.querySelector('[contenteditable]')!.textContent = text ?? ''; return true })
+  document.execCommand = vi.fn(() => false)
   act = runInNewContext(source, { document, window, location: pageLocation, navigator, getComputedStyle, HTMLInputElement, Event, KeyboardEvent })
 })
 afterEach(() => {
@@ -134,48 +134,73 @@ describe('official editor adapter safeguards (local DOM fixtures)', () => {
     document.querySelector('#status')!.innerHTML = '<svg></svg>上传中'
     expect(inspect()).toMatchObject({ processed: false, uploading: true })
   })
-  it('preserves Chinese and line breaks, fires title input events and never clicks publish', () => {
+  it('prepares exact Chinese and line breaks for native input, fires title events and never clicks publish', () => {
     const title = document.querySelector('input')!
     const input = vi.fn(); title.addEventListener('input', input)
     const publish = vi.fn(); document.getElementById('publish')!.addEventListener('click', publish)
-    expect(act('fill', payload)).toMatchObject({ ok: true, title: payload.title, description: '第一段\n第二段\n\n#读书' })
+    const prepared = act('prepareText', payload)
+    expect(prepared).toMatchObject({ ok: true, needsInput: true, text: '第一段\n第二段\n#读书' })
     expect(input).toHaveBeenCalledOnce()
-    expect(act('fill', payload).ok).toBe(true)
+    expect(document.querySelector('[contenteditable]')!.textContent).toBe('')
+    document.querySelector('[contenteditable]')!.textContent = prepared.text as string
+    expect(act('prepareText', payload)).toMatchObject({ ok: true, needsInput: false })
     expect(input).toHaveBeenCalledOnce()
     expect(act('publish').ok).toBe(false)
     expect(publish).not.toHaveBeenCalled()
   })
-  it('appends all generated hashtags after the description and does not duplicate them on continuation', () => {
+  it('prepares all generated hashtags once and does not request native insertion on continuation', () => {
     const generated = { title: '如何把钱花在值得的地方', description: '读《高性价比人生指南》，一起看清生活中的取舍。', tags: '#读书 #高性价比人生指南 #生活选择 #好书分享' }
-    const expected = `${generated.description}\n\n${generated.tags}`
-    expect(act('fill', generated)).toMatchObject({ ok: true, description: expected })
-    expect(act('read')).toMatchObject({ description: expected })
-    expect(act('fill', generated)).toMatchObject({ ok: true, description: expected })
-    expect(document.execCommand).toHaveBeenCalledOnce()
+    const expected = `${generated.description}\n${generated.tags}`
+    expect(act('prepareText', generated)).toMatchObject({ ok: true, needsInput: true, text: expected })
+    document.querySelector('[contenteditable]')!.textContent = expected
+    expect(act('read')).toMatchObject({ description: expected.replace(/\n+/g, '\n') })
+    expect(act('prepareText', generated)).toMatchObject({ ok: true, needsInput: false, text: expected })
+    expect(document.execCommand).not.toHaveBeenCalled()
+  })
+  it('selects only the description and sends paragraph boundaries without empty placeholder lines', () => {
+    const editor = document.querySelector<HTMLElement>('[contenteditable]')!
+    const multiline = { ...payload, description: '第一段\n\n第二段\n第三段', tags: '#读书 #阅读' }
+    const expected = `${multiline.description}\n\n${multiline.tags}`.replace(/\n+/g, '\n')
+    editor.setAttribute('tabindex', '0')
+    expect(act('prepareText', multiline)).toMatchObject({ ok: true, needsInput: true, text: expected })
+    const range = window.getSelection()!.getRangeAt(0)
+    expect(range.commonAncestorContainer).toBe(editor)
+    expect(document.activeElement).toBe(editor)
+    expect(editor.textContent).toBe('')
+    expect(document.execCommand).not.toHaveBeenCalled()
   })
   it('refuses a different existing description before changing either field', () => {
     document.querySelector('[contenteditable]')!.removeAttribute('data-placeholder')
     document.querySelector('[contenteditable]')!.textContent = '人工编辑的内容'
-    expect(act('fill', payload)).toMatchObject({ ok: false })
+    expect(act('prepareText', payload)).toMatchObject({ ok: false })
     expect(document.querySelector('input')!.value).toBe('')
     expect(document.querySelector('[contenteditable]')!.textContent).toBe('人工编辑的内容')
   })
+  it('accepts equivalent paragraph spacing but refuses text with missing or reordered paragraphs', () => {
+    const editor = document.querySelector<HTMLElement>('[contenteditable]')!
+    editor.textContent = '第一段\n第二段\u200b\n#读书'
+    expect(act('prepareText', payload)).toMatchObject({ ok: true, needsInput: false })
+    editor.textContent = '第一段第二段#读书'
+    expect(act('prepareText', payload)).toMatchObject({ ok: false })
+    editor.textContent = '第二段\n第一段\n#读书'
+    expect(act('prepareText', payload)).toMatchObject({ ok: false })
+  })
   it('refuses missing or duplicate controls without changing existing text', () => {
     document.body.append(document.querySelector('input')!.cloneNode())
-    expect(act('fill', payload).ok).toBe(false)
+    expect(act('prepareText', payload).ok).toBe(false)
     expect(document.querySelector('[contenteditable]')!.textContent).toBe('')
     document.querySelectorAll('input').forEach(input => input.remove())
-    expect(act('fill', payload).ok).toBe(false)
+    expect(act('prepareText', payload).ok).toBe(false)
   })
   it('pauses for offline state, a modal and unprocessed video', () => {
     vi.mocked(vi.spyOn(navigator, 'onLine', 'get')).mockReturnValue(false)
-    expect(act('fill', payload).ok).toBe(false)
+    expect(act('prepareText', payload).ok).toBe(false)
     vi.mocked(vi.spyOn(navigator, 'onLine', 'get')).mockReturnValue(true)
     document.body.insertAdjacentHTML('beforeend', '<div role="dialog">需要人工确认</div>')
-    expect(act('fill', payload).ok).toBe(false)
+    expect(act('prepareText', payload).ok).toBe(false)
     document.querySelector('[role=dialog]')!.remove()
     document.querySelector('video')!.remove()
-    expect(act('fill', payload).ok).toBe(false)
+    expect(act('prepareText', payload).ok).toBe(false)
   })
   it('cannot select a video over a retained draft or on the editor route', () => {
     expect(act('videoInput').ok).toBe(false)
@@ -217,8 +242,9 @@ describe('official editor adapter safeguards (local DOM fixtures)', () => {
   })
   it('ignores hidden platform dialogs and reads a restored editor without its empty placeholder', () => {
     document.body.insertAdjacentHTML('beforeend', '<div role="dialog" style="visibility:hidden">平台隐藏的充值窗口</div>')
-    expect(act('fill', payload).ok).toBe(true)
-    expect(act('read')).toMatchObject({ coverDialog: false, description: '第一段\n第二段\n\n#读书' })
+    expect(act('prepareText', payload)).toMatchObject({ ok: true, needsInput: true })
+    document.querySelector('[contenteditable]')!.textContent = '第一段\n第二段\n\n#读书'
+    expect(act('read')).toMatchObject({ coverDialog: false, description: '第一段\n第二段\n#读书' })
   })
   it('does not infer authentication from a missing login form or processing from playable video', () => {
     const inspect = () => runInNewContext(readFileSync('src-tauri/src/douyin_page.js', 'utf8'), { document, location: pageLocation, navigator, getComputedStyle })

@@ -31,6 +31,13 @@ beforeEach(() => {
 afterEach(() => wrappers.splice(0).forEach(w => w.unmount()))
 
 describe('single host-owned Douyin workflow', () => {
+  it('lets an embedded failed session resume its original task without confirming publication', async () => {
+    vi.mocked(api.getDouyinSession).mockResolvedValue(state({ status: 'failed', step: 'text', waitingFor: null, message: '文案回读不一致' }))
+    const w = render({ hideStart: true }); await flushPromises()
+    await button(w, '重新核对当前网页').trigger('click'); await flushPromises()
+    expect(api.startDouyinTask).toHaveBeenCalledExactlyOnceWith(task.id)
+    expect(api.continueDouyinTask).not.toHaveBeenCalled()
+  })
   it('allows stopping a completed review before changing its publish settings', async () => {
     vi.mocked(api.getDouyinSession).mockResolvedValue(state({ status: 'review', step: 'review', waitingFor: null }))
     vi.mocked(api.stopDouyinTask).mockResolvedValue(state({ status: 'stopped', waitingFor: null, message: '人工接管' }))

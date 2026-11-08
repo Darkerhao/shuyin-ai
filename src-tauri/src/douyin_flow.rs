@@ -856,10 +856,10 @@ async fn drive(
             .map(String::as_str)
             .collect::<Vec<_>>()
             .join("\n\n");
-        let normalized = |s: &str| s.replace(['\r', '\u{200b}'], "").trim().to_owned();
         if (!editor.title.is_empty() && editor.title != snapshot.input.title)
             || (!editor.description.is_empty()
-                && normalized(&editor.description) != normalized(&description))
+                && normalize_editor_text(&editor.description)
+                    != normalize_editor_text(&description))
         {
             session.wait(
                 "text",
@@ -869,12 +869,20 @@ async fn drive(
         }
         ensure_account(app, main, session).await?;
         running(publisher, snapshot)?;
-        page_action(
+        let prepared = page_action(
             &window,
-            "fill",
+            "prepareText",
             serde_json::to_value(&snapshot.input).map_err(|e| e.to_string())?,
         )
         .await?;
+        if prepared["needsInput"] == true {
+            let text = prepared["text"]
+                .as_str()
+                .ok_or("抖音编辑器未返回待填写正文。")?;
+            running(publisher, snapshot)?;
+            crate::webview_host::call(&window, "Input.insertText", json!({ "text": text })).await?;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         let editor = read_editor(&window).await?;
         verify_editor(&editor, snapshot)?;
         session.verified_text = Some((editor.title, editor.description));

@@ -100,6 +100,13 @@ pub async fn control_automation(
         if action == "retry" {
             database.retry_automation_generation(&run)?;
         }
+        if run.stage == "publishing" {
+            if let Some(task_id) = &run.publish_task_id {
+                if database.renew_automatic_schedule(task_id)? {
+                    database.prepare_publish_task(task_id)?;
+                }
+            }
+        }
         if action == "resume" && run.status == "paused" {
             if let Some(id) = &run.audio_job_id {
                 let audio = database.audio_job(id)?;
@@ -488,7 +495,18 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
             database.verify_automation_video(run)?;
             if run.publish_started {
                 let session = douyin::flow::automation_session(&app.state::<DouyinPublisher>())?;
-                let session = session.filter(|session|Some(&session.task_id)==run.publish_task_id.as_ref()).ok_or("上次上传已经开始，但网页会话已丢失。请在发布详情核对原草稿或已发布作品，不会自动再次上传。")?;
+                let mut session = session.filter(|session|Some(&session.task_id)==run.publish_task_id.as_ref()).ok_or("上次上传已经开始，但网页会话已丢失。请在发布详情核对原草稿或已发布作品，不会自动再次上传。")?;
+                if session.status == "failed" {
+                    let window = app.get_webview_window("main").ok_or("工作台窗口已关闭。")?;
+                    session = douyin::flow::start_douyin_task(
+                        app.clone(),
+                        window,
+                        database.clone(),
+                        app.state::<DouyinPublisher>(),
+                        session.task_id.clone(),
+                    )
+                    .await?;
+                }
                 if session.status == "review" {
                     database.set_automation_status(
                         run,

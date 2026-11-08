@@ -43,7 +43,25 @@ fn validate_backup(connection: &Connection) -> Result<(), String> {
     for sql in super::MIGRATIONS.iter().take(version as usize) {
         expected.execute_batch(sql).map_err(|e| e.to_string())?;
     }
-    if schema(connection)? != schema(&expected)? {
+    let actual_schema = schema(connection)?;
+    let mut expected_schema = schema(&expected)?;
+    if actual_schema != expected_schema && version == 20 {
+        // Accept only the observed early v20 shape; every other schema entry stays exact.
+        if let Some((_, sql)) = expected_schema
+            .iter_mut()
+            .find(|(name, _)| name == "automation_runs")
+        {
+            *sql = sql
+                .lines()
+                .filter(|line| {
+                    !(line.trim_start().starts_with("publish_started ")
+                        || line.trim_start().starts_with("publish_handed_off "))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+    }
+    if actual_schema != expected_schema {
         return Err("备份数据库结构不匹配。".into());
     }
     let violations: bool = connection
@@ -74,16 +92,7 @@ pub(super) fn read_snapshot(path: &Path) -> Result<Connection, String> {
     let mut snapshot = Connection::open_in_memory().map_err(|e| e.to_string())?;
     copy_database(&source, &mut snapshot)?;
     validate_backup(&snapshot)?;
-    let version: u32 = snapshot
-        .pragma_query_value(None, "user_version", |r| r.get(0))
-        .map_err(|e| e.to_string())?;
-    for (index, sql) in super::MIGRATIONS.iter().enumerate().skip(version as usize) {
-        let tx = snapshot.transaction().map_err(|e| e.to_string())?;
-        tx.execute_batch(sql).map_err(|e| e.to_string())?;
-        tx.pragma_update(None, "user_version", (index + 1) as u32)
-            .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-    }
+    super::migrate(&mut snapshot)?;
     snapshot.execute("UPDATE ai_tasks SET status='failed',error_code='interrupted',error_message='备份恢复中断了任务，请手动重试。' WHERE status IN ('pending','running')",[]).map_err(|e|e.to_string())?;
     snapshot.execute("UPDATE audio_jobs SET status='waiting_user',stage='verify_remote',run_id=run_id+1,error_code='verify_remote',error_message='备份恢复后请先核对原 Notebook 任务，再继续跟进。',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('created','waiting_login','preparing','generating','downloading','importing')",[]).map_err(|e|e.to_string())?;
     super::video::recover(&snapshot)?;
