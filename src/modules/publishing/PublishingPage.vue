@@ -248,6 +248,9 @@ async function showAssets() {
   globalThis.document.querySelector<globalThis.HTMLButtonElement>('#publish-assets button')?.focus({ preventScroll: true })
 }
 async function prepareDouyinTask() {
+  await videoInfoRequest
+  if (!canReview.value) throw new Error('请先补齐文案、有效原声和成片，以及两张发布封面。')
+  if (selected.value?.status === 'ready' && !dirty.value) return selected.value
   const id = await persistReviewed()
   if (selected.value?.status !== 'ready') update(await api.preparePublishTask(id))
   return selected.value!

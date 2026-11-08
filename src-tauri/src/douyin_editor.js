@@ -6,7 +6,7 @@
     return elements[0]
   }
   const exact = (root, text) => [...root.querySelectorAll('*')].filter(e => e.children.length === 0 && e.textContent.trim() === text && visible(e))
-  const clean = text => text.replace(/\u200b/g, '').replace(/\r\n/g, '\n').trim()
+  const clean = text => text.replace(/\u200b/g, '').replace(/\r\n/g, '\n').replace(/\n+/g, '\n').trim()
   const setting = (heading, names) => {
     const root = unique(exact(document, heading), `${heading}入口已变化，请人工核对。`).closest('[class^="content-"]')
     if (!root) throw new Error(`${heading}区域无法读取。`)
@@ -144,7 +144,7 @@
       previewVideo()
       return { ok: true }
     }
-    if (action === 'fill') {
+    if (action === 'prepareText') {
       if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) throw new Error('请先检查并关闭封面窗口。')
       if (![...document.querySelectorAll('video')].some(v => v.readyState >= 2 && v.duration > 0)) throw new Error('视频仍在上传或处理中，请稍后检查。')
       const expectedDescription = [payload.description, payload.tags].filter(Boolean).join('\n\n')
@@ -156,18 +156,16 @@
         titleInput.dispatchEvent(new Event('input', { bubbles: true }))
         titleInput.dispatchEvent(new Event('change', { bubbles: true }))
       }
-      if (oldDescription !== clean(expectedDescription)) {
+      const needsInput = oldDescription !== clean(expectedDescription)
+      if (needsInput) {
         descriptionInput.focus()
         const range = document.createRange()
         range.selectNodeContents(descriptionInput)
         const selection = window.getSelection()
         selection.removeAllRanges()
         selection.addRange(range)
-        if (!document.execCommand('insertText', false, expectedDescription)) throw new Error('简介编辑器未接受内容，请人工填写。')
-        descriptionInput.blur()
       }
-      if (titleInput.value !== payload.title || clean(descriptionInput.innerText) !== clean(expectedDescription)) throw new Error('文案回读不一致，请人工检查。')
-      return { ok: true, title: titleInput.value, description: clean(descriptionInput.innerText) }
+      return { ok: true, needsInput, text: clean(expectedDescription) }
     }
     if (action === 'openCover') {
       if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) throw new Error('已打开封面设置，请先人工检查。')

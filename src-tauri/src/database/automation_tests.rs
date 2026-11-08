@@ -4,7 +4,7 @@ use super::{
     m4_tests, *,
 };
 use crate::douyin::flow::Account;
-use std::fs;
+use std::{fs, path::Path};
 
 fn setup() -> (tempfile::TempDir, Database, StartAutomationInput) {
     let directory = tempfile::tempdir().unwrap();
@@ -314,7 +314,7 @@ fn automation_v19_upgrade_keeps_previous_data_and_manual_defaults() {
                 connection
                     .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                     .unwrap(),
-                20
+                21
             );
             assert_eq!(
                 connection
@@ -336,6 +336,177 @@ fn automation_v19_upgrade_keeps_previous_data_and_manual_defaults() {
             Ok(())
         })
         .unwrap();
+}
+
+fn freeze_v20_schema(database: &Database, missing_markers: bool) {
+    database
+        .with_connection(|connection| {
+            let tx = connection.transaction().unwrap();
+            tx.execute_batch("DROP INDEX automation_single_active; DROP INDEX automation_project; ALTER TABLE automation_runs RENAME TO automation_previous;").unwrap();
+            let sql = MIGRATIONS[19]
+                .lines()
+                .filter(|line| !missing_markers || !(line.trim_start().starts_with("publish_started ") || line.trim_start().starts_with("publish_handed_off ")))
+                .collect::<Vec<_>>()
+                .join("\n");
+            tx.execute_batch(&sql).unwrap();
+            let columns = "id,request_key,project_id,input_json,status,stage,run_id,error,audio_job_id,video_job_id,writing_task_id,landscape_task_id,portrait_task_id,landscape_cover_id,portrait_cover_id,publish_task_id,publish_input_json,created_at,updated_at";
+            tx.execute_batch(&format!("INSERT INTO automation_runs({columns}) SELECT {columns} FROM automation_previous;")).unwrap();
+            if !missing_markers {
+                tx.execute_batch("UPDATE automation_runs SET publish_started=(SELECT publish_started FROM automation_previous WHERE id=automation_runs.id),publish_handed_off=(SELECT publish_handed_off FROM automation_previous WHERE id=automation_runs.id);").unwrap();
+            }
+            tx.execute_batch("DROP TABLE automation_previous; PRAGMA user_version=20;").unwrap();
+            tx.commit().unwrap();
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn automation_legacy_v20_reopens_and_restores_without_losing_the_run() {
+    let (directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    let audio = database.start_automatic_audio(&run).unwrap();
+    freeze_v20_schema(&database, true);
+    let backup = database
+        .create_backup(directory.path().to_str().unwrap())
+        .unwrap();
+    drop(database);
+
+    let database = Database::open(directory.path().join("data.sqlite3"));
+    let upgraded = database.automation_run(&run.id).unwrap();
+    assert_eq!(upgraded.audio_job_id.as_deref(), Some(audio.id.as_str()));
+    assert_eq!(upgraded.input.source_sha256, run.input.source_sha256);
+    assert!(!upgraded.publish_started);
+    let snapshot = super::backup::read_snapshot(Path::new(&backup)).unwrap();
+    assert_eq!(
+        snapshot
+            .query_row("SELECT id FROM automation_runs", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        run.id
+    );
+    assert_eq!(
+        snapshot
+            .query_row("SELECT status FROM automation_runs", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        "paused"
+    );
+    let source = Connection::open(&backup).unwrap();
+    assert_eq!(
+        source
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        20
+    );
+    assert!(source
+        .prepare("SELECT publish_started FROM automation_runs")
+        .is_err());
+    database
+        .create_backup(directory.path().to_str().unwrap())
+        .and_then(|path| super::backup::read_snapshot(Path::new(&path)).map(|_| ()))
+        .unwrap();
+}
+
+#[test]
+fn automation_v20_upgrade_keeps_existing_upload_and_handoff_markers() {
+    let (directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    database.mark_automation_upload(&run).unwrap();
+    database
+        .with_connection(|c| {
+            c.execute("UPDATE automation_runs SET publish_handed_off=1", [])
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    freeze_v20_schema(&database, false);
+    let backup = database
+        .create_backup(directory.path().to_str().unwrap())
+        .unwrap();
+    drop(database);
+
+    for _ in 0..2 {
+        let database = Database::open(directory.path().join("data.sqlite3"));
+        assert!(database.automation_run(&run.id).unwrap().publish_started);
+        database
+            .with_connection(|c| {
+                assert_eq!(
+                    c.query_row("SELECT publish_handed_off FROM automation_runs", [], |r| {
+                        r.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                    1
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+    let snapshot = super::backup::read_snapshot(Path::new(&backup)).unwrap();
+    assert_eq!(
+        snapshot
+            .query_row(
+                "SELECT publish_started,publish_handed_off FROM automation_runs",
+                [],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            )
+            .unwrap(),
+        (1, 1)
+    );
+}
+
+#[test]
+fn automation_legacy_v20_failed_upgrade_keeps_the_original_schema_and_run() {
+    let (directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    freeze_v20_schema(&database, true);
+    database
+        .with_connection(|c| {
+            c.execute_batch("CREATE TABLE automation_runs_previous (original TEXT);")
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    drop(database);
+    let path = directory.path().join("data.sqlite3");
+    assert!(Database::open(path.clone()).read().is_err());
+    let original = Connection::open(path).unwrap();
+    assert_eq!(
+        original
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        20
+    );
+    assert_eq!(
+        original
+            .query_row("SELECT id FROM automation_runs", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        run.id
+    );
+    assert!(original
+        .prepare("SELECT publish_started FROM automation_runs")
+        .is_err());
+    assert_eq!(original.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('automation_single_active','automation_project')", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+}
+
+#[test]
+fn automation_legacy_v20_backup_still_rejects_unexpected_schema_changes() {
+    let (directory, database, input) = setup();
+    database.create_automation(input, account()).unwrap();
+    freeze_v20_schema(&database, true);
+    database
+        .with_connection(|c| {
+            c.execute_batch("ALTER TABLE automation_runs ADD COLUMN unexpected TEXT;")
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    let backup = database
+        .create_backup(directory.path().to_str().unwrap())
+        .unwrap();
+    assert!(super::backup::read_snapshot(Path::new(&backup))
+        .err()
+        .unwrap()
+        .contains("结构不匹配"));
 }
 
 #[test]
