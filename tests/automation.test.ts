@@ -15,8 +15,8 @@ vi.mock('../src/services/covers', () => ({ readBackground: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ coverPng: vi.fn(), decodeBackground: vi.fn() }))
 
 const run = (overrides: Partial<AutomationRun> = {}): AutomationRun => ({
-  id: 'run1', projectId: 'book1', input: { workflowVersion: 1, durationReason: '已保存目标', title: '原书', author: '作者', targetDurationSeconds: 600, selection: { projectId: 'book1', sourceAssetId: 'source1', textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'request1' } },
-  status: 'running', stage: 'landscape_cover', runId: 2, error: '', audioJobId: 'audio1', videoJobId: 'video1', writingTaskId: 'writing1', writingVersionId: 'version1', durationTaskId: null, contentCheckTaskId: null, landscapeTaskId: 'background1', portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '', ...overrides,
+  id: 'run1', projectId: 'book1', input: { workflowVersion: 2, durationReason: '已保存目标', title: '原书', author: '作者', targetDurationSeconds: 600, selection: { projectId: 'book1', sourceAssetId: 'source1', textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'request1' } },
+  status: 'running', stage: 'landscape_cover', runId: 2, error: '', audioJobId: 'audio1', videoJobId: 'video1', writingTaskId: 'writing1', writingVersionId: 'version1', finalWritingVersionId: null, actualDurationSeconds: null, widescreenTaskId: null, widescreenCoverId: null, durationTaskId: null, contentCheckTaskId: null, landscapeTaskId: 'background1', portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '', ...overrides,
 })
 beforeEach(() => {
   vi.resetAllMocks(); automationRuns.value = []; automationConsent.value = false; automationAccount.value = null
@@ -30,6 +30,15 @@ beforeEach(() => {
 })
 
 describe('automatic cover execution outside the cover page', () => {
+  it('exports the widescreen cover with the existing renderer and skips an already saved output', async () => {
+    vi.mocked(invoke).mockResolvedValue({ ...newCover('宽屏'), width: 1920, height: 1080, backgroundAssetId: 'wide-background' })
+    await renderAutomationCover(run({ stage: 'widescreen_cover', widescreenTaskId: 'wide-task' }))
+    expect(readBackground).toHaveBeenCalledWith('book1', 'wide-background')
+    expect(coverPng).toHaveBeenCalledOnce()
+    expect(invoke).toHaveBeenCalledWith('complete_automation_cover', { id: 'run1', runId: 2, stage: 'widescreen_cover', png: [1, 2, 3] })
+    await renderAutomationCover(run({ stage: 'widescreen_cover', widescreenCoverId: 'saved' }))
+    expect(coverPng).toHaveBeenCalledOnce()
+  })
   it('renders the frozen background once and includes run generation and stage', async () => {
     let release!: (value: number[]) => void
     vi.mocked(coverPng).mockImplementation(() => new Promise(resolve => { release = resolve }))

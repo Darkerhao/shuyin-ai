@@ -3,6 +3,7 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Mutex, time::Dur
 use tokio::sync::watch;
 
 pub mod audio;
+pub mod content_check;
 pub mod diagnostics;
 pub mod images;
 pub(crate) mod preview;

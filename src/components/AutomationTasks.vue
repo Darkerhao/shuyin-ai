@@ -12,6 +12,12 @@ const active = computed(() => automationRuns.value.filter(run => !['completed', 
 const working = computed(() => active.value.some(run => run.status === 'running'))
 const busy = ref(false)
 const error = ref('')
+function audioDuration(run: AutomationRun) {
+  const seconds = Math.round(run.actualDurationSeconds ?? 0)
+  const target = run.input.targetDurationSeconds
+  const difference = target === null ? '' : seconds === target ? ' · 与目标一致' : ` · 比目标${seconds > target ? '长' : '短'} ${Math.abs(seconds - target)} 秒`
+  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒${difference}`
+}
 useWindowCloseGuard(() => working.value, () => !working.value || requestConfirmation('自动制作仍在进行。退出会中断本地执行，重开后可核对并继续。确定退出？'))
 let disposed = false
 let timer: ReturnType<typeof globalThis.setTimeout> | undefined
@@ -64,13 +70,20 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
         <span
           role="status"
           class="text-sm"
-        >{{ run.status === 'awaiting_publish' ? '等待最终发布' : run.status === 'running' ? stages[run.stage] : run.status === 'paused' ? '已暂停' : '需要处理' }}</span>
+        >{{ run.status === 'awaiting_publish' ? '等待最终发布' : `${run.status === 'running' ? '' : run.status === 'paused' ? '已暂停 · ' : '需要处理 · '}${stages[run.stage] ?? run.stage}` }}</span>
       </div>
       <p class="text-sm text-muted-foreground">
         {{ run.input.targetDurationSeconds ? `目标 ${run.input.targetDurationSeconds / 60} 分钟` : '目标时长待推荐' }}<span v-if="run.input.durationReason"> · {{ run.input.durationReason }}</span>
       </p>
       <p class="text-sm text-muted-foreground">
-        {{ run.error || '保持应用运行，可切换页面。AI背景、双封面和视频将自动制作；最后在抖音窗口点击发布。' }}
+        {{ run.error || '保持应用运行，可切换页面。AI背景、三尺寸封面和视频将自动制作；最后在抖音窗口点击发布。' }}
+      </p>
+      <p
+        v-if="run.actualDurationSeconds"
+        class="text-sm text-muted-foreground"
+      >
+        实际音频 {{ audioDuration(run) }}
+        · 封面已导出 {{ [run.landscapeCoverId, run.portraitCoverId, run.widescreenCoverId].filter(Boolean).length }} / {{ run.input.workflowVersion === 2 ? 3 : 2 }}
       </p>
       <div class="flex flex-wrap gap-2">
         <Button
@@ -82,14 +95,14 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
           暂停后续步骤
         </Button>
         <Button
-          v-else-if="run.status !== 'awaiting_publish' && run.input.workflowVersion === 1"
+          v-else-if="run.status !== 'awaiting_publish' && run.input.workflowVersion === 2"
           :disabled="busy"
           @click="act(run, 'resume')"
         >
           继续流程
         </Button>
         <Button
-          v-if="run.input.workflowVersion === 1 && ['paused', 'waiting_user'].includes(run.status) && ['duration', 'writing', 'content_check', 'landscape_image', 'portrait_image', 'video_prepare', 'render'].includes(run.stage)"
+          v-if="run.input.workflowVersion === 2 && ['paused', 'waiting_user'].includes(run.status) && ['duration', 'writing', 'content_check', 'landscape_image', 'portrait_image', 'widescreen_image', 'transcript', 'storyboard', 'render'].includes(run.stage)"
           variant="outline"
           :disabled="busy"
           @click="act(run, 'retry')"
@@ -111,6 +124,13 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
           查看本次创作方案
         </RouterLink>
         <RouterLink
+          v-if="run.finalWritingVersionId"
+          :to="`/projects/${run.projectId}/writing?writingVersion=${run.finalWritingVersionId}`"
+          class="self-center text-sm underline"
+        >
+          查看已校核发布材料
+        </RouterLink>
+        <RouterLink
           v-if="run.publishTaskId"
           :to="`/projects/${run.projectId}/publishing?task=${run.publishTaskId}`"
           class="self-center text-sm underline"
@@ -118,19 +138,31 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
           发布详情与结果记录
         </RouterLink>
         <RouterLink
-          v-else-if="run.videoJobId"
+          v-if="run.videoJobId"
           :to="`/projects/${run.projectId}/video?job=${run.videoJobId}`"
           class="self-center text-sm underline"
         >
           查看视频任务
         </RouterLink>
         <RouterLink
-          v-else-if="run.audioJobId"
+          v-if="run.audioJobId"
           :to="`/projects/${run.projectId}/writing?tab=audio&audioJob=${run.audioJobId}`"
           class="self-center text-sm underline"
         >
           查看音频任务
         </RouterLink>
+        <template
+          v-for="cover in [{ id: run.landscapeCoverId, label: '4:3' }, { id: run.portraitCoverId, label: '3:4' }, { id: run.widescreenCoverId, label: '16:9' }]"
+          :key="cover.label"
+        >
+          <RouterLink
+            v-if="cover.id"
+            :to="`/projects/${run.projectId}/covers?coverVersion=${cover.id}`"
+            class="self-center text-sm underline"
+          >
+            查看 {{ cover.label }} 成品封面
+          </RouterLink>
+        </template>
         <Button
           variant="ghost"
           :disabled="busy"

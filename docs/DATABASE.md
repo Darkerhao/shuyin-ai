@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 字幕校核与三尺寸制作（2026-11-08，v23）
+
+新增0023_automation_media.sql，在automation_runs追加可空widescreen_task_id（ai_tasks外键）、widescreen_cover_id（cover_versions外键）与render_plan_sha256。迁移暂停旧活动流程、增加运行代次，保留旧workflowVersion、所有子任务/成果及上传/交接标记；不按新三图片授权继续旧双封面任务。历史详情仍可使用，旧流程需停止后再新建。
+
+新流程input_json.workflowVersion=2。content_check_task_id指向kind=content_check任务，其input_json记录前置版本、音频任务/素材、视频任务以及音频SHA/实际时长/完整字幕摘要；preview_json记录verified/reason/changes。通过时version_id复用原版本或引用追加的based_on修订，不再保存一份可编辑副本。视频沿用原表，draft/transcript_ready表示字幕检查点；render_plan_sha256仅在分镜及三尺寸文件就绪后冻结。
+
+迁移、精确备份结构检查、v22旧备份副本升级及回滚测试已覆盖，源备份不改写。v23不能由旧程序读取；回退需使用升级前备份。验证范围见[P2/P3验收](AUTOMATION-P23-VERIFICATION.md)。
+
 ## 前置创作流程（2026-11-08，v22）
 
 新增`0022_automation_creation.sql`：automation_runs增加可空外键duration_task_id和content_check_task_id，writing_task_id用于音频前完整创作。旧writing_task_id移至content_check_task_id，旧流程输入标为workflowVersion=0，活动记录暂停并提示通过原业务详情继续或停止后新建，保留原子任务与发布标记。新流程workflowVersion=1。

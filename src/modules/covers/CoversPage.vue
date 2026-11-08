@@ -29,6 +29,7 @@ import ConfirmAction from '../../components/ConfirmAction.vue'
 import { requestConfirmation } from '../../composables/useConfirmation'
 import { useQueryState } from '../../composables/useQueryState'
 import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
+import CoverThumbnail from '../../components/CoverThumbnail.vue'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -42,6 +43,7 @@ const currentSize = computed(() => coverSizes[editor.value.activeSize]!)
 const original = ref(JSON.stringify(editor.value.covers))
 const dirty = computed(() => original.value !== JSON.stringify(editor.value.covers))
 const versions = ref<CoverVersion[]>([])
+const linkedCover = computed(() => versions.value.find(version => version.id === route.query.coverVersion))
 const selected = ref<CoverVersion | null>(null)
 const images = ref<Asset[]>([])
 const canvas = ref<globalThis.HTMLCanvasElement | null>(null)
@@ -474,6 +476,20 @@ onMounted(async () => {
       @dismiss="message = ''"
     />
     <OperationFeedback :error="autosave.error.value" />
+    <section
+      v-if="linkedCover"
+      class="mb-4 rounded-xl border bg-card p-4"
+      aria-label="本次流程成品封面"
+    >
+      <p class="text-sm text-muted-foreground">
+        本次流程已导出的封面 · 下方编辑草稿保留
+      </p>
+      <CoverThumbnail :cover="linkedCover" />
+    </section>
+    <OperationFeedback
+      v-else-if="ready && route.query.coverVersion"
+      error="指定封面版本不存在，请核对原流程。"
+    />
     <section
       v-if="generatedImage && generation"
       class="panel"

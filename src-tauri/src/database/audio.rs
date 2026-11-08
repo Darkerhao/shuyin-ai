@@ -227,7 +227,7 @@ fn row_job(row: &Row<'_>) -> rusqlite::Result<AudioJob> {
     })
 }
 
-fn job(connection: &Connection, id: &str) -> Result<AudioJob, String> {
+pub(super) fn job(connection: &Connection, id: &str) -> Result<AudioJob, String> {
     connection.query_row(
         &format!("SELECT {JOB_COLUMNS} FROM audio_jobs j JOIN book_projects p ON p.id=j.project_id WHERE j.id=?1"),
         [id], row_job,
@@ -459,6 +459,7 @@ impl Database {
     pub fn audio_job(&self, id: &str) -> Result<AudioJob, String> {
         self.with_connection(|c| job(c, id))
     }
+    #[cfg(test)]
     pub fn audio_job_prompt(&self, id: &str) -> Result<String, String> {
         self.with_connection(|connection| {
             let input: String = connection
@@ -597,7 +598,7 @@ impl Database {
         .map_err(|error| error.to_string())?;
         self.with_connection(|connection| {
             let transaction = connection.transaction().map_err(|e|e.to_string())?;
-            if automation.is_none() && transaction.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE project_id=?1 AND json_extract(input_json,'$.workflowVersion')=1 AND status NOT IN ('completed','cancelled'))",[project_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("本书正在自动制作，请查看本次音频任务，或停止流程后手动制作。".into()); }
+            if automation.is_none() && transaction.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE project_id=?1 AND json_extract(input_json,'$.workflowVersion')=2 AND status NOT IN ('completed','cancelled'))",[project_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("本书正在自动制作，请查看本次音频任务，或停止流程后手动制作。".into()); }
             if let Some(existing) = active_job(&transaction)? {
                 if automation.is_none() && existing.project_id == project_id { return Ok(existing); }
                 return Err(format!("当前已有《{}》的音频任务。请先完成或停止跟进。", existing.project_title));

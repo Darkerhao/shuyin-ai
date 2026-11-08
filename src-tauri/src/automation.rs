@@ -1,13 +1,10 @@
 use crate::{
-    ai::{
-        publishing::TranscriptDraft, ActiveTasks, AiError, OpenAiCompatible, TextProvider,
-        WritingContent, TIMEOUT,
-    },
+    ai::{ActiveTasks, AiError, OpenAiCompatible, TextProvider, WritingContent, TIMEOUT},
     ai_commands,
     audio::AudioAutomation,
     credentials::SystemCredentials,
     database::{
-        automation::{AutomationRun, Slot, StartAutomationInput},
+        automation::{cover_step, AutomationRun, Slot, StartAutomationInput},
         image_generation::ImageGenerationInput,
         publishing::PublishInput,
         video::StartVideoInput,
@@ -120,7 +117,7 @@ pub async fn control_automation(
             }
             if let Some(id) = &run.video_job_id {
                 if database.video_job(id)?.status == "cancelled"
-                    && matches!(run.stage.as_str(), "video_prepare" | "render")
+                    && matches!(run.stage.as_str(), "transcript" | "storyboard" | "render")
                 {
                     database.retry_automation_generation(&run)?;
                 }
@@ -161,6 +158,7 @@ pub async fn control_automation(
             &run.content_check_task_id,
             &run.landscape_task_id,
             &run.portrait_task_id,
+            &run.widescreen_task_id,
         ]
         .into_iter()
         .flatten()
@@ -222,12 +220,10 @@ pub fn complete_automation_cover(
     if run.run_id != run_id || run.status != "running" {
         return Err("封面结果已过期，原有成果保留。".into());
     }
-    let (slot, existing) = match stage.as_str() {
-        "landscape_cover" => (Slot::LandscapeCover, &run.landscape_cover_id),
-        "portrait_cover" => (Slot::PortraitCover, &run.portrait_cover_id),
-        _ => return Err("封面阶段无效。".into()),
-    };
-    if existing.is_some() {
+    let step = cover_step(&stage)
+        .filter(|step| step.cover_stage == stage)
+        .ok_or("封面阶段无效。")?;
+    if run.child_id(step.cover_slot).is_some() {
         return Ok(());
     }
     if run.stage != stage {
@@ -238,7 +234,7 @@ pub fn complete_automation_cover(
         &run.project_id,
         config,
         Some(&png),
-        Some(&run.binding(slot)),
+        Some(&run.binding(step.cover_slot)),
     )?;
     Ok(())
 }
@@ -353,7 +349,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                 if job.asset_id.is_none() {
                     return Err("音频已完成但尚未归档素材。".into());
                 }
-                database.set_automation_stage(run, "video_prepare")?;
+                database.set_automation_stage(run, "transcript")?;
             } else if matches!(
                 job.status.as_str(),
                 "failed" | "paused" | "waiting_user" | "cancelled"
@@ -363,7 +359,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                     .unwrap_or_else(|| "音频需要核对，请打开原音频任务处理后继续。".into()));
             }
         }
-        "video_prepare" => {
+        "transcript" => {
             let job = match &run.video_job_id {
                 Some(id) => database.video_job(id)?,
                 None => {
@@ -381,6 +377,12 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                 }
             };
             match job.status.as_str() {
+                "draft" if job.stage == "transcript_ready" => {
+                    if job.plan.duration > 900.0 {
+                        return Err("实际音频超过自动流程15分钟上限，音频和字幕已保留。".into());
+                    }
+                    database.set_automation_stage(run, "content_check")?;
+                }
                 "draft" => {
                     video_commands::continue_bound_video_job(
                         app.clone(),
@@ -389,14 +391,6 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                         Some(run.input.selection.text_provider_id.clone()),
                         Some(run),
                     )?;
-                }
-                "awaiting_confirmation" | "succeeded" => {
-                    crate::video::validate_cues(&job.plan.cues, job.plan.duration)?;
-                    crate::video::validate_scenes(&job.plan.scenes, 0, job.plan.cues.len())?;
-                    if job.plan.duration > 900.0 {
-                        return Err("实际音频超过自动流程15分钟上限，音频和字幕已保留，请调整节目后重新制作。".into());
-                    }
-                    database.set_automation_stage(run, "content_check")?;
                 }
                 "failed" | "cancelled" => {
                     return Err(format!(
@@ -410,69 +404,48 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
         "content_check" => {
             let id = match &run.content_check_task_id {
                 Some(id) => id.clone(),
-                None => database.create_transcript_task(run)?,
+                None => database.create_content_check_task(run)?,
             };
             let (status, _, _, error) = database.automation_ai_result(&id)?;
             if status == "succeeded" {
+                database.verify_automation_content(run)?;
                 database.set_automation_stage(run, "landscape_image")?;
             } else if status == "pending" {
-                generate_transcript(app, run, &id)
-                    .await
-                    .map_err(|e| e.message)?;
+                check_content(app, run, &id).await.map_err(|e| e.message)?;
             } else if status != "running" {
                 return Err(format!(
                     "文案生成未完成：{error}。如需再次调用模型，请明确重试当前生成。"
                 ));
             }
         }
-        "landscape_image" | "portrait_image" => {
-            let landscape = run.stage == "landscape_image";
-            let existing = if landscape {
-                &run.landscape_task_id
-            } else {
-                &run.portrait_task_id
-            };
-            let id = match existing {
-                Some(id) => id.clone(),
+        stage if cover_step(stage).is_some() => {
+            let step = cover_step(stage).ok_or("封面阶段无效。")?;
+            database.verify_automation_content(run)?;
+            if stage == step.cover_stage {
+                if run.child_id(step.cover_slot).is_some() {
+                    database.set_automation_stage(run, step.next)?;
+                }
+                return Ok(());
+            }
+            let id = match run.child_id(step.image_slot) {
+                Some(id) => id.to_owned(),
                 None => {
-                    let WritingContent::Publishing {
-                        cover_prompt_landscape,
-                        cover_prompt_portrait,
-                        ..
-                    } = database.automation_publish_writing(run)?.content
-                    else {
-                        return Err("文案类型无效。".into());
-                    };
+                    let content = database.automation_publish_writing(run)?.content;
                     database.start_bound_cover_generation(
                         ImageGenerationInput {
                             project_id: run.project_id.clone(),
                             provider_id: run.input.selection.image_provider_id.clone(),
-                            description: if landscape {
-                                cover_prompt_landscape
-                            } else {
-                                cover_prompt_portrait
-                            },
-                            width: if landscape { 1440 } else { 1080 },
-                            height: if landscape { 1080 } else { 1440 },
+                            description: step.prompt(&content)?.into(),
+                            width: step.width,
+                            height: step.height,
                         },
-                        &run.binding(if landscape {
-                            Slot::LandscapeImage
-                        } else {
-                            Slot::PortraitImage
-                        }),
+                        &run.binding(step.image_slot),
                     )?
                 }
             };
             let (status, _, _, error) = database.automation_ai_result(&id)?;
             if status == "succeeded" {
-                database.set_automation_stage(
-                    run,
-                    if landscape {
-                        "landscape_cover"
-                    } else {
-                        "portrait_cover"
-                    },
-                )?;
+                database.set_automation_stage(run, step.cover_stage)?;
             } else if status == "pending" {
                 crate::cover_commands::execute_image_task(
                     &database,
@@ -485,18 +458,31 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                 .map_err(|e| e.message)?;
             } else if status != "running" {
                 return Err(format!(
-                    "背景生成未完成：{error}。已完成背景保留，再次调用需明确重试。"
+                    "背景生成未完成：{error}。成功的尺寸已保留，重试只处理当前尺寸。"
                 ));
             }
         }
-        "landscape_cover" => {
-            if run.landscape_cover_id.is_some() {
-                database.set_automation_stage(run, "portrait_image")?;
-            }
-        }
-        "portrait_cover" => {
-            if run.portrait_cover_id.is_some() {
-                database.set_automation_stage(run, "render")?;
+        "storyboard" => {
+            database.verify_automation_content(run)?;
+            let job = database.video_job(run.video_job_id.as_deref().ok_or("缺少视频任务。")?)?;
+            match job.status.as_str() {
+                "draft" => {
+                    video_commands::continue_bound_video_job(
+                        app.clone(),
+                        job.id,
+                        false,
+                        Some(run.input.selection.text_provider_id.clone()),
+                        Some(run),
+                    )?;
+                }
+                "awaiting_confirmation" => database.prepare_automation_render(run)?,
+                "failed" | "cancelled" => {
+                    return Err(format!(
+                        "分镜未完成：{}。字幕与封面已保留，请重试当前阶段。",
+                        job.error
+                    ))
+                }
+                _ => {}
             }
         }
         "render" => {
@@ -611,22 +597,15 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
     Ok(())
 }
 
-async fn generate_transcript(
-    app: &AppHandle,
-    run: &AutomationRun,
-    id: &str,
-) -> Result<(), AiError> {
+async fn check_content(app: &AppHandle, run: &AutomationRun, id: &str) -> Result<(), AiError> {
     let database = app.state::<Database>();
     let database = database.inner();
     let active = app.state::<ActiveTasks>();
     ai_commands::run_task(database,&active,id,|mut receiver| async move {
-        let user = database.prepare_transcript_task(id).map_err(AiError::database)?;
-        let request = ai_commands::request(database.get_provider(&run.input.selection.text_provider_id).map_err(AiError::database)?,&app.state::<SystemCredentials>(),include_str!("../../prompts/transcript-publishing-v1.md"),user)?;
-        let provider = OpenAiCompatible::new(TIMEOUT,&request.base_url)?.observed(database,Some(id),"transcript_publishing");
+        let user = database.prepare_content_check_task(id).map_err(AiError::database)?;
+        let request = ai_commands::request(database.get_provider(&run.input.selection.text_provider_id).map_err(AiError::database)?,&app.state::<SystemCredentials>(),crate::ai::content_check::PROMPT,user)?;
+        let provider = OpenAiCompatible::new(TIMEOUT,&request.base_url)?.observed(database,Some(id),"content_check");
         let raw = tokio::select! { biased; _=receiver.changed()=>return Err(AiError::new("cancelled","自动文案已取消。")), response=provider.generate(request)=>response? };
-        let audio_prompt = database.audio_job_prompt(run.audio_job_id.as_deref().ok_or_else(||AiError::database("缺少音频任务。".into()))?).map_err(AiError::database)?;
-        let draft: TranscriptDraft = serde_json::from_str(&raw).map_err(|_|AiError::new("invalid_content","字幕文案输出结构无效，已有音频和字幕保留。"))?;
-        let content = draft.into_content(audio_prompt).map_err(|error|AiError::new("invalid_content",&error))?;
-        database.finish_transcript_task(id,content).map_err(AiError::database)
+        database.finish_content_check_task(id,&raw).map_err(AiError::database)
     }).await
 }

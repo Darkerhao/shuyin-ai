@@ -349,7 +349,7 @@ impl Database {
         self.with_connection(|connection| {
             let transaction = connection.transaction().map_err(|e| e.to_string())?;
             let c = &transaction;
-            if binding.is_none() && c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE project_id=?1 AND json_extract(input_json,'$.workflowVersion')=1 AND status NOT IN ('completed','cancelled'))",[&input.project_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("本书正在自动制作，请查看本次创作方案，或停止流程后手动生成。".into()); }
+            if binding.is_none() && c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE project_id=?1 AND json_extract(input_json,'$.workflowVersion')=2 AND status NOT IN ('completed','cancelled'))",[&input.project_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("本书正在自动制作，请查看本次创作方案，或停止流程后手动生成。".into()); }
             let project = get(c,&input.project_id)?;
             if input.recommend_duration && input.revision.is_some() { return Err("推荐时长不能同时调整内容。".into()); }
             if !input.recommend_duration {

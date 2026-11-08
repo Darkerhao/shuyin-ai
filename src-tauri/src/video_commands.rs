@@ -295,6 +295,8 @@ pub(crate) fn continue_bound_video_job(
     }
     let work = if render {
         VideoWork::Render
+    } else if automation.is_some_and(|run| run.stage == "transcript") {
+        VideoWork::Transcript
     } else {
         VideoWork::Prepare
     };
@@ -651,7 +653,7 @@ async fn execute(
     if (probe.duration - job.plan.duration).abs() > 0.15 {
         return Err("音频时长与任务不一致。".into());
     }
-    if !matches!(work, VideoWork::Prepare) {
+    if !matches!(work, VideoWork::Prepare | VideoWork::Transcript) {
         let window = work.window(&job.plan)?;
         let snapshots = db.video_image_snapshots(&job.project_id, &job.plan.scenes)?;
         let mut images = serde_json::Map::new();
@@ -778,6 +780,10 @@ async fn execute(
         let corrected = directory.join("proofread.srt");
         process::write_new(&corrected, video::to_srt(&job.plan.cues).as_bytes())?;
         db.register_video_subtitle(&job.id, job.run_id, &corrected)?;
+    }
+    if matches!(work, VideoWork::Transcript) {
+        db.finish_video_transcript(&job.id, job.run_id)?;
+        return Ok(());
     }
     while first < job.plan.cues.len() {
         if flag.load(Ordering::SeqCst) {

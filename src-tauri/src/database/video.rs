@@ -102,7 +102,7 @@ fn row(r: &Row<'_>) -> rusqlite::Result<VideoJob> {
     })
 }
 
-fn get(c: &Connection, id: &str) -> Result<VideoJob, String> {
+pub(super) fn get(c: &Connection, id: &str) -> Result<VideoJob, String> {
     c.query_row(
         &format!("SELECT {COLUMNS} FROM video_jobs WHERE id=?1"),
         [id],
@@ -315,12 +315,14 @@ impl Database {
         self.with_connection(|c| {
             if let Some(run) = automation {
                 if !c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE id=?1 AND video_job_id=?2 AND status='running' AND run_id=?3)",params![run.id,id,run.run_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程已暂停或结束，未启动视频。".into()); }
+            } else if c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE video_job_id=?1 AND json_extract(input_json,'$.workflowVersion')=2 AND status NOT IN ('completed','cancelled'))",[id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? {
+                return Err("视频由自动流程管理，请在全局任务中继续，或停止流程后手动制作。".into());
             }
             let job = get(c, id)?;
             if matches!(job.status.as_str(), "running" | "succeeded") { return Err("该视频已完成或正在执行。".into()); }
             work.window(&job.plan)?;
             if let Some(id) = provider_id {
-                if !matches!(work, VideoWork::Prepare) { return Err("仅生成分镜时可更换文本模型。".into()); }
+                if !matches!(work, VideoWork::Prepare | VideoWork::Transcript) { return Err("仅准备字幕与分镜时可更换文本模型。".into()); }
                 let provider = super::ai::provider(c, id)?;
                 if provider.input.model_kind != "text" || !provider.input.is_enabled { return Err("请选择已启用的文本模型生成分镜。".into()); }
             }
@@ -339,6 +341,19 @@ impl Database {
         self.with_connection(|c| {
             let count = c.execute(&format!("UPDATE video_jobs SET plan_json=?1,stage=?2,updated_at={NOW} WHERE id=?3 AND run_id=?4 AND status='running'"), params![serde_json::to_string(plan).map_err(|e| e.to_string())?, stage, id, run_id]).map_err(|e| e.to_string())?;
             if count != 1 { return Err("视频任务已停止或过期。".into()); }
+            Ok(())
+        })
+    }
+
+    pub(crate) fn finish_video_transcript(&self, id: &str, run_id: i64) -> Result<(), String> {
+        self.with_connection(|c| {
+            let job = get(c,id)?;
+            validate_cues(&job.plan.cues,job.plan.duration)?;
+            if job.status != "running" || job.run_id != run_id || job.subtitle_asset_id.is_none()
+                || job.plan.subtitle_review.as_ref().is_none_or(|review|review.completed != job.plan.cues.len()) {
+                return Err("字幕校对尚未完成或任务已停止。".into());
+            }
+            c.execute(&format!("UPDATE video_jobs SET status='draft',stage='transcript_ready',error='',updated_at={NOW} WHERE id=?1"),[id]).map_err(|e|e.to_string())?;
             Ok(())
         })
     }
