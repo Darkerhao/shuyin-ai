@@ -241,6 +241,22 @@ impl AudioAutomation {
         self.notify();
         Ok(())
     }
+    #[cfg(windows)]
+    fn close_completed_notebook(&self, app: &AppHandle, job_id: &str) {
+        let Ok(mut task) = self.window_task.lock() else {
+            return;
+        };
+        if task.as_deref() != Some(job_id) {
+            return;
+        }
+        if let Some(window) = app.get_webview_window(LABEL) {
+            // User close requests only hide an active task; completion releases the WebView.
+            if window.destroy().is_err() {
+                return;
+            }
+        }
+        *task = None;
+    }
     pub fn interrupt(&self, app: &AppHandle) {
         self.epoch.fetch_add(1, Ordering::SeqCst);
         if let Some(window) = app.get_webview_window(LABEL) {
@@ -377,6 +393,7 @@ impl AudioAutomation {
         if matches!(job.stage.as_str(), "importing" | "verify_remote")
             && database.retry_audio_import(&job.id, job.run_id)?.is_some()
         {
+            self.close_completed_notebook(app, &job.id);
             return Ok(60);
         }
         let window = app
