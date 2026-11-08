@@ -182,6 +182,7 @@ fn start(
         let completed = intent.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let automation = app.state::<AudioAutomation>();
+            let _operation = automation.operation.blocking_lock();
             let matching = automation.download.lock().ok().is_some_and(|pending| {
                 pending.as_ref().is_some_and(|item| {
                     item.job_id == completed.job_id && item.run_id == completed.run_id
@@ -204,6 +205,8 @@ fn start(
                         "download_import_failed",
                         &message,
                     );
+                } else {
+                    automation.close_completed_notebook(&app, &completed.job_id);
                 }
             } else {
                 let _ = database.audio_report_error(

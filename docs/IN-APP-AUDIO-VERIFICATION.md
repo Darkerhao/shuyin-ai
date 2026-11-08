@@ -1,5 +1,43 @@
 # 应用内自动音频实施与验收
 
+## 归档后自动关闭网站（2026-11-08）
+
+### 根因与实现
+
+原生下载完成回调在 `complete_audio_download` 成功后只清理下载意图并唤醒调度；缓存归档重试成功后也直接返回。两条路径均未关闭窗口。现有窗口 `CloseRequested` 会阻止关闭并隐藏页面，因此成功收尾使用当前锁定的 Tauri 2.12.5 `WebviewWindow::destroy`。
+
+`audio.rs` 增加一处完成关闭方法，校验窗口关联仍属于本任务后销毁并清除关联，供两条成功路径调用。原生完成处理复用既有 `operation` 锁，与调度、打开窗口串行。失败不关闭页面；窗口关闭错误不将已成功归档改成失败。保留 `audio-webview` 资料目录，之后仍可查看原笔记本。无数据库、权限、依赖或版本号变更。
+
+### 验证方式与实际结果
+
+使用独立应用标识 `com.shuyin.audio-close-verification-20261108`、本地模拟网页和 844 字节 WAV，通过真实 Tauri IPC、WebView2 原生下载、SQLite 素材事务及窗口销毁验证。测试在独立库预置下载/缓存归档阶段，不调用 Google 生成。Playwright 连接后将 `Browser.setDownloadBehavior` 设为 `default`，避免测试工具接管原生下载；初次夹具未恢复该设置，曾停在精确下载等待，调整后才进行以下有效回归。
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run tauri -- build --debug --no-bundle --config output/playwright/audio-auto-close/tauri.json` | 修改前隔离桌面构建通过，包含 TypeScript 和 Vite 构建；保留已有大于 500 kB 分块提示 |
+| `node output/playwright/audio-auto-close/verify.cjs baseline` | 修改前按预期失败：真实下载归档为 succeeded/completed，网站仍 open=true |
+| `node output/playwright/audio-auto-close/verify.cjs baseline-retry` | 修改前按预期失败：缓存重试归档成功，网站仍 open=true；归档失败保留窗口检查通过 |
+| `cargo build --manifest-path src-tauri/Cargo.toml --locked --features tauri/custom-protocol` | 修改后隔离桌面二进制构建通过 |
+| `node output/playwright/audio-auto-close/verify.cjs fixed` | 5 项场景通过，见下方验收对应 |
+| `node --test tests/audio-page.test.mjs tests/audio-package.test.mjs` | 45 项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked audio:: -- --nocapture` | 29 项通过，覆盖归档、事务失败恢复、旧运行隔离及窗口导航规则 |
+| `npm run lint` | 通过，0 ESLint 警告 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `git diff --check` | 通过 |
+
+Rust 命令先加载 `. ./.tools/env.ps1`；修改后隔离构建还设置 `$env:TAURI_CONFIG = Get-Content -LiteralPath 'output/playwright/audio-auto-close/tauri.json' -Raw`。脚本、配置及三份报告保存在忽略目录 `output/playwright/audio-auto-close/`。
+
+### 验收对应与边界
+
+- 普通原生下载：归档后窗口消失，主工作台仍在；落盘字节与 WAV 一致，素材唯一。
+- 完成后查看网站：打开原笔记本，网站 localStorage 保留，窗口不会因任务已成功而再次自动关闭。
+- 无效音频：拒绝登记、保留窗口；停止跟进也不触发成功关闭。
+- 素材事务失败：保留网站和已校验缓存，无成功素材引用。
+- 去掉测试故障后继续：复用缓存成功归档，自动关闭网站。
+
+本轮未使用真实 Google 账号重新生成，也未构建或安装正式安装包。网站存储保留已用 localStorage 验证，不能据此宣称真实登录续期通过。下一步在后续安装版使用实际音频任务确认同样的成功收尾。未提交、推送或发布。
+
 ## 真实配置、生成、下载与归档验收（2026-10-31，源码 0.24.2）
 
 ### 结果与范围
