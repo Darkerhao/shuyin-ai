@@ -475,7 +475,7 @@ impl Database {
     pub fn start_audio_job(&self, input: StartAudioJobInput) -> Result<AudioJob, String> {
         self.create_audio_job(
             &input.project_id,
-            Some(&input.writing_version_id),
+            &input.writing_version_id,
             &input.source,
             &input.format,
             None,
@@ -486,9 +486,14 @@ impl Database {
         &self,
         run: &super::automation::AutomationRun,
     ) -> Result<AudioJob, String> {
+        run.require_current_workflow()?;
+        if run.stage != "audio" {
+            return Err("请先完成并保存本次创作方案。".into());
+        }
+        let version = self.automation_writing(run)?;
         self.create_audio_job(
             &run.project_id,
-            None,
+            &version.id,
             &AudioSourceInput::Asset {
                 asset_id: run.input.selection.source_asset_id.clone(),
             },
@@ -500,7 +505,7 @@ impl Database {
     fn create_audio_job(
         &self,
         project_id: &str,
-        writing_version_id: Option<&str>,
+        writing_version_id: &str,
         source_input: &AudioSourceInput,
         format: &str,
         automation: Option<&super::automation::AutomationRun>,
@@ -519,15 +524,17 @@ impl Database {
         }
         let (project, prompt_version, prompt, duration, source) = self.with_connection(|connection| {
             let project = get(connection, project_id)?;
-            let (prompt_version, prompt, duration) = if let Some(version_id) = writing_version_id {
-                let version = ai::version(connection, version_id)?;
+            let (prompt_version, prompt, duration) = {
+                let version = ai::version(connection, writing_version_id)?;
                 if version.project_id != project.id || version.kind != "publishing" { return Err("音频任务必须绑定当前书籍的发布文案版本。".into()); }
                 let WritingContent::Publishing { audio_prompt, .. } = version.content else { return Err("所选版本不是发布文案。".into()); };
                 if audio_prompt.trim().is_empty() { return Err("所选版本的音频生成提示词为空。".into()); }
-                (version.prompt_version, audio_prompt, project.input.target_duration_seconds)
-            } else {
-                let run = automation.ok_or("自动音频缺少冻结指导。")?;
-                ("automatic-audio-v1".into(), crate::ai::publishing::automatic_audio_prompt(&run.input.title, run.input.target_duration_seconds)?, run.input.target_duration_seconds)
+                let duration = if let Some(run) = automation {
+                    let seconds = run.input.target_duration_seconds.ok_or("自动制作尚未确定目标时长。")?;
+                    super::automation::validate_target(seconds)?;
+                    seconds
+                } else { project.input.target_duration_seconds };
+                (version.prompt_version, audio_prompt, duration)
             };
             let source = match source_input {
                 AudioSourceInput::Text => {
@@ -590,6 +597,7 @@ impl Database {
         .map_err(|error| error.to_string())?;
         self.with_connection(|connection| {
             let transaction = connection.transaction().map_err(|e|e.to_string())?;
+            if automation.is_none() && transaction.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE project_id=?1 AND json_extract(input_json,'$.workflowVersion')=1 AND status NOT IN ('completed','cancelled'))",[project_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("本书正在自动制作，请查看本次音频任务，或停止流程后手动制作。".into()); }
             if let Some(existing) = active_job(&transaction)? {
                 if automation.is_none() && existing.project_id == project_id { return Ok(existing); }
                 return Err(format!("当前已有《{}》的音频任务。请先完成或停止跟进。", existing.project_title));

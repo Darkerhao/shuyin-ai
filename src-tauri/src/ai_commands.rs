@@ -178,13 +178,27 @@ pub async fn execute_generation(
     webview: tauri::Webview,
     on_preview: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<GenerationResult, AiError> {
-    let database = database.inner();
-    let vault = vault.inner();
-    let id = id.as_str();
     let on_preview = on_preview.map(|channel| {
         channel.channel_on::<_, std::collections::BTreeMap<String, String>>(webview)
     });
-    run_task(database, active.inner(), id, |mut receiver| async move {
+    execute_writing_task(
+        database.inner(),
+        vault.inner(),
+        active.inner(),
+        &id,
+        on_preview,
+    )
+    .await
+}
+
+pub(crate) async fn execute_writing_task(
+    database: &Database,
+    vault: &SystemCredentials,
+    active: &ActiveTasks,
+    id: &str,
+    on_preview: Option<tauri::ipc::Channel<std::collections::BTreeMap<String, String>>>,
+) -> Result<GenerationResult, AiError> {
+    run_task(database, active, id, |mut receiver| async move {
         let prepared=database.prepare_generation(id).map_err(AiError::database)?;
         let model=prepared.provider.input.model_name.clone();
         let system=if prepared.input.recommend_duration { audio::SYSTEM_PROMPT } else if prepared.input.revision.is_some() { revision::SYSTEM_PROMPT } else { SYSTEM_PROMPT };

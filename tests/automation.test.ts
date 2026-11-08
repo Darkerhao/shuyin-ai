@@ -15,8 +15,8 @@ vi.mock('../src/services/covers', () => ({ readBackground: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ coverPng: vi.fn(), decodeBackground: vi.fn() }))
 
 const run = (overrides: Partial<AutomationRun> = {}): AutomationRun => ({
-  id: 'run1', projectId: 'book1', input: { title: '原书', author: '作者', targetDurationSeconds: 600, selection: { projectId: 'book1', sourceAssetId: 'source1', textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'request1' } },
-  status: 'running', stage: 'landscape_cover', runId: 2, error: '', audioJobId: 'audio1', videoJobId: 'video1', writingTaskId: 'writing1', landscapeTaskId: 'background1', portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '', ...overrides,
+  id: 'run1', projectId: 'book1', input: { workflowVersion: 1, durationReason: '已保存目标', title: '原书', author: '作者', targetDurationSeconds: 600, selection: { projectId: 'book1', sourceAssetId: 'source1', textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'request1' } },
+  status: 'running', stage: 'landscape_cover', runId: 2, error: '', audioJobId: 'audio1', videoJobId: 'video1', writingTaskId: 'writing1', writingVersionId: 'version1', durationTaskId: null, contentCheckTaskId: null, landscapeTaskId: 'background1', portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '', ...overrides,
 })
 beforeEach(() => {
   vi.resetAllMocks(); automationRuns.value = []; automationConsent.value = false; automationAccount.value = null

@@ -15,7 +15,7 @@ export interface AutomationInput {
 export interface AutomationRun {
   id: string
   projectId: string
-  input: { title: string; author: string; targetDurationSeconds: number; selection: AutomationInput }
+  input: { workflowVersion: number; title: string; author: string; targetDurationSeconds: number | null; durationReason: string; selection: AutomationInput }
   status: 'running' | 'paused' | 'waiting_user' | 'awaiting_publish' | 'completed' | 'cancelled'
   stage: string
   runId: number
@@ -23,6 +23,9 @@ export interface AutomationRun {
   audioJobId: string | null
   videoJobId: string | null
   writingTaskId: string | null
+  durationTaskId: string | null
+  contentCheckTaskId: string | null
+  writingVersionId: string | null
   landscapeTaskId: string | null
   portraitTaskId: string | null
   landscapeCoverId: string | null
@@ -37,7 +40,7 @@ export const automationError = ref('')
 export const automationConsent = ref(false)
 export const automationAccount = ref<AutomationAccount | null>(null)
 export const stages: Record<string, string> = {
-  audio: '原书音频制作', video_prepare: '字幕校对与分镜', writing: '依据字幕生成文案',
+  duration: '推荐目标时长', writing: '生成完整创作方案', audio: '按本次方案制作音频', video_prepare: '字幕校对与分镜', content_check: '依据实际字幕准备发布文案',
   landscape_image: '生成横版背景', landscape_cover: '导出横版封面', portrait_image: '生成竖版背景',
   portrait_cover: '导出竖版封面', render: '渲染成片', publishing: '上传并填写抖音',
 }

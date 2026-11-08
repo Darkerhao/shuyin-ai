@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## 自动制作前置创作 P1（2026-11-08）
+
+固定执行器增加duration/writing阶段，原字幕文案阶段改为content_check并单独绑定；当前顺序为duration（已有目标时跳过）→writing→audio→video_prepare→content_check→两尺寸背景/封面→render→publishing。P2的字幕检查点、必要字段修订和第三尺寸尚未实施。
+
+`ai_commands::execute_writing_task`由原手动Command和自动执行器共用，同一Provider、取消、300秒上限与校验。`start_bound_generation`事务绑定子任务；`prepare_generation`对自动任务读取冻结资料和模型配置。`audio-duration-v2`接受可选1—15分钟范围，后端严格验证，推荐结果/原因/项目值与任务成功同事务保存；手动推荐未传范围时沿用既有1—1440分钟能力。
+
+音频创建要求真实版本ID，并采用流程冻结秒数，不再调用独立固定指导构造器。前置writing_task_id与后置content_check_task_id分别表示音频指导来源和实际成片发布材料，保留原字幕/视频计划摘要检查。内容页按writingVersion参数精确打开版本，有恢复草稿时仅展示对照；根级任务快照推动方案到达反馈，手动/自动同时启动由后端拒绝。
+
+schema22新增两个任务关联，旧流程标识0并暂停交接原业务页面，新流程标识1；不维护第二套自动执行顺序。完整证据及尚未验收范围见[P1验收](AUTOMATION-P1-VERIFICATION.md)。
+
 ## 自动流程现场迁移修复（2026-11-07）
 
 安装版首次启动自动任务时，早期v20表缺少上传/交接标记导致 `load` 查询失败。新增v21事务迁移统一结构，保留两类v20中已存在的标记和所有关联；`database::migrate`由启动与备份副本升级共用。备份精确校验仅增加已观察到的早期v20结构，无忽略未知字段或跳过校验。见 [数据库](DATABASE.md)和[现场验收](AUTOMATION-LIVE-TEST-20261107.md)。

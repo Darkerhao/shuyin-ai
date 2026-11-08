@@ -338,8 +338,18 @@ impl Database {
         self.with_connection(|c| {let mut q=c.prepare(&format!("SELECT {TASK_COLUMNS} FROM ai_tasks WHERE project_id=?1 ORDER BY created_at DESC,id DESC LIMIT 30")).map_err(|e|e.to_string())?;
             let rows=q.query_map([project_id],row_task).map_err(|e|e.to_string())?; rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())})
     }
-    pub fn start_generation(&self, mut input: GenerationInput) -> Result<String, String> {
-        self.with_connection(|c| {
+    pub fn start_generation(&self, input: GenerationInput) -> Result<String, String> {
+        self.start_bound_generation(input, None)
+    }
+    pub(super) fn start_bound_generation(
+        &self,
+        mut input: GenerationInput,
+        binding: Option<&super::automation::Binding<'_>>,
+    ) -> Result<String, String> {
+        self.with_connection(|connection| {
+            let transaction = connection.transaction().map_err(|e| e.to_string())?;
+            let c = &transaction;
+            if binding.is_none() && c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE project_id=?1 AND json_extract(input_json,'$.workflowVersion')=1 AND status NOT IN ('completed','cancelled'))",[&input.project_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("本书正在自动制作，请查看本次创作方案，或停止流程后手动生成。".into()); }
             let project = get(c,&input.project_id)?;
             if input.recommend_duration && input.revision.is_some() { return Err("推荐时长不能同时调整内容。".into()); }
             if !input.recommend_duration {
@@ -353,6 +363,8 @@ impl Database {
             let id=new_id(c)?;
             let prompt = if input.recommend_duration { audio::PROMPT_VERSION } else if input.revision.is_some() { revision::PROMPT_VERSION } else { PROMPT_VERSION };
             c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW})"),params![id,input.project_id,"publishing",input.provider_id,p.input.model_name,prompt,serde_json::to_string(&input).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+            if let Some(binding) = binding { super::automation::bind(c, binding, &input.project_id, &id)?; }
+            transaction.commit().map_err(|e| e.to_string())?;
             Ok(id)
         })
     }
@@ -361,10 +373,18 @@ impl Database {
             let json:String=c.query_row("SELECT input_json FROM ai_tasks WHERE id=?1 AND kind='publishing' AND status='pending'",[id],|r|r.get(0)).map_err(|_|"任务已取消、已运行或不存在。")?;
             let input:GenerationInput=serde_json::from_str(&json).map_err(|_|"任务输入无效。")?;
             let project=get(c,&input.project_id)?;
-            let p=provider(c,&input.provider_id)?;
+            let mut p=provider(c,&input.provider_id)?;
             if !p.input.is_enabled || p.input.model_kind != "text" {return Err("请选择已启用的文本模型。".into());}
             let base = revision_base(c, &input)?;
             let mut user=serde_json::json!({"book":{"title":project.input.title,"author":project.input.author,"description":project.input.description,"sourceNotes":project.input.source_notes}});
+            let mut book_title = project.input.title;
+            if let Some(run) = super::automation::generation_run(c, id)? {
+                if run.status != "running" { return Err("自动流程已暂停，生成请求尚未发送。".into()); }
+                user["book"] = serde_json::json!({"title":run.input.title,"author":run.input.author,"description":run.input.description,"sourceNotes":run.input.source_notes});
+                book_title = run.input.title;
+                p.input = run.input.text_provider;
+                if input.recommend_duration { user["durationLimits"] = serde_json::json!({"minMinutes":1,"maxMinutes":15}); }
+            }
             if !input.recommend_duration {
                 user["audio"] = audio::context(input.target_duration_seconds.ok_or("任务缺少目标时长，请重新生成。")?);
             }
@@ -373,7 +393,7 @@ impl Database {
                 user["revision"] = serde_json::to_value(&input.revision).map_err(|e|e.to_string())?;
             }
             c.execute("UPDATE ai_tasks SET status='running',model_name=?2 WHERE id=?1 AND status='pending'",params![id,p.input.model_name]).map_err(|e|e.to_string())?;
-            Ok(PreparedGeneration{input,provider:p,user:user.to_string(),book_title:project.input.title,base})
+            Ok(PreparedGeneration{input,provider:p,user:user.to_string(),book_title,base})
         })
     }
     pub fn set_audio_duration(&self, project_id: &str, seconds: i64) -> Result<(), String> {
@@ -397,6 +417,12 @@ impl Database {
             let input: String = tx.query_row("SELECT input_json FROM ai_tasks WHERE id=?1 AND status='running'",[id],|r|r.get(0)).map_err(|_|"任务已取消或结束，时长未修改。")?;
             let input: GenerationInput = serde_json::from_str(&input).map_err(|_|"时长任务输入无效。")?;
             if !input.recommend_duration { return Err("此任务不是时长推荐。".into()); }
+            if let Some(mut run) = super::automation::generation_run(&tx, id)? {
+                super::automation::validate_target(recommendation.minutes * 60)?;
+                run.input.target_duration_seconds = Some(recommendation.minutes * 60);
+                run.input.duration_reason = recommendation.reason.clone();
+                tx.execute(&format!("UPDATE automation_runs SET input_json=?1,updated_at={NOW} WHERE id=?2"),params![serde_json::to_string(&run.input).map_err(|e|e.to_string())?,run.id]).map_err(|e|e.to_string())?;
+            }
             tx.execute(&format!("UPDATE book_projects SET target_duration_seconds=?2,audio_duration_source='ai',updated_at={NOW} WHERE id=?1"),params![input.project_id,recommendation.minutes * 60]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE ai_tasks SET status='succeeded',completed_at={NOW} WHERE id=?1"),[id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;
@@ -415,6 +441,7 @@ impl Database {
             let tx=c.transaction().map_err(|e|e.to_string())?;
             let running:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE id=?1 AND status='running')",[id],|r|r.get(0)).map_err(|e|e.to_string())?;
             if !running{return Err("任务已取消或结束，结果未写入。".into());}
+            super::automation::generation_run(&tx, id)?;
             let saved=append(&tx,&SaveWritingInput{project_id:input.project_id.clone(),kind:"publishing".into(),content,based_on:None,is_confirmed:false},"ai",model,PROMPT_VERSION)?;
             tx.execute(&format!("UPDATE ai_tasks SET status='succeeded',version_id=?2,completed_at={NOW} WHERE id=?1"),params![id,saved.id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;Ok(saved)

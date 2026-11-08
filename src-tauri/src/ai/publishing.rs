@@ -119,37 +119,6 @@ impl AudioDraft {
             .replace("{{sections}}", &sections))
     }
 }
-pub fn automatic_audio_prompt(book: &str, duration_seconds: i64) -> Result<String, String> {
-    let sections = [
-        ("进入原书", "从来源中说明本书讨论的核心问题与必要背景。"),
-        ("核心内容", "挑选原书实际出现的主要观点或故事，解释其联系。"),
-        ("具体例子", "使用来源中可以核对的例子，只作有限引用。"),
-        (
-            "理解与讨论",
-            "区分原书内容与主持人的理解，说明适用条件和局限。",
-        ),
-        (
-            "阅读收获",
-            "总结本期实际讨论的内容，不增加新的未经核实事实。",
-        ),
-    ]
-    .into_iter()
-    .map(|(heading, guidance)| Section {
-        heading: heading.into(),
-        guidance: guidance.into(),
-    })
-    .collect();
-    let prompt = AudioDraft {
-        introduction: "介绍上传来源中的这本书，无法核实的信息不补造。".into(),
-        sections,
-    }
-    .into_prompt(book, duration_seconds)?;
-    Ok(format!(
-        "{}\n\n{prompt}",
-        include_str!("../../../prompts/automatic-audio-v1.md")
-    ))
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TranscriptDraft {

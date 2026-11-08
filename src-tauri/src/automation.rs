@@ -97,6 +97,7 @@ pub async fn control_automation(
             return Err("当前阶段仍在结束，请稍后继续。已完成结果会保留。".into());
         }
         let run = database.automation_run(&id)?;
+        run.require_current_workflow()?;
         if action == "retry" {
             database.retry_automation_generation(&run)?;
         }
@@ -155,7 +156,9 @@ pub async fn control_automation(
     }
     if action == "cancel" {
         for id in [
+            &run.duration_task_id,
             &run.writing_task_id,
+            &run.content_check_task_id,
             &run.landscape_task_id,
             &run.portrait_task_id,
         ]
@@ -305,6 +308,36 @@ async fn drive(app: &AppHandle, id: &str) {
 async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
     let database = app.state::<Database>();
     match run.stage.as_str() {
+        "duration" | "writing" => {
+            let duration = run.stage == "duration";
+            let existing = if duration {
+                &run.duration_task_id
+            } else {
+                &run.writing_task_id
+            };
+            let id = match existing {
+                Some(id) => id.clone(),
+                None => database.start_automation_generation(run)?,
+            };
+            let (status, _, _, error) = database.automation_ai_result(&id)?;
+            if status == "succeeded" {
+                database.set_automation_stage(run, if duration { "writing" } else { "audio" })?;
+            } else if status == "pending" {
+                ai_commands::execute_writing_task(
+                    &database,
+                    &app.state::<SystemCredentials>(),
+                    &app.state::<ActiveTasks>(),
+                    &id,
+                    None,
+                )
+                .await
+                .map_err(|e| e.message)?;
+            } else if status != "running" {
+                return Err(format!(
+                    "前置创作未完成：{error}。已有成果保留，如需再次调用模型，请明确重试当前阶段。"
+                ));
+            }
+        }
         "audio" => {
             let audio = app.state::<AudioAutomation>();
             let job = match &run.audio_job_id {
@@ -363,7 +396,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                     if job.plan.duration > 900.0 {
                         return Err("实际音频超过自动流程15分钟上限，音频和字幕已保留，请调整节目后重新制作。".into());
                     }
-                    database.set_automation_stage(run, "writing")?;
+                    database.set_automation_stage(run, "content_check")?;
                 }
                 "failed" | "cancelled" => {
                     return Err(format!(
@@ -374,8 +407,8 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                 _ => {}
             }
         }
-        "writing" => {
-            let id = match &run.writing_task_id {
+        "content_check" => {
+            let id = match &run.content_check_task_id {
                 Some(id) => id.clone(),
                 None => database.create_transcript_task(run)?,
             };
@@ -406,7 +439,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                         cover_prompt_landscape,
                         cover_prompt_portrait,
                         ..
-                    } = database.automation_writing(run)?.content
+                    } = database.automation_publish_writing(run)?.content
                     else {
                         return Err("文案类型无效。".into());
                     };
@@ -525,7 +558,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                 None => {
                     let job =
                         database.video_job(run.video_job_id.as_deref().ok_or("缺少视频任务。")?)?;
-                    let version = database.automation_writing(run)?;
+                    let version = database.automation_publish_writing(run)?;
                     let WritingContent::Publishing {
                         title,
                         description,
