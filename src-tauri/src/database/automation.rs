@@ -27,10 +27,18 @@ pub struct StartAutomationInput {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrozenInput {
+    #[serde(default)]
+    pub workflow_version: u32,
     pub selection: StartAutomationInput,
     pub title: String,
     pub author: String,
-    pub target_duration_seconds: i64,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub source_notes: String,
+    pub target_duration_seconds: Option<i64>,
+    #[serde(default)]
+    pub duration_reason: String,
     pub source_sha256: String,
     pub text_provider: ai::ProviderInput,
     pub image_provider: ai::ProviderInput,
@@ -50,6 +58,9 @@ pub struct AutomationRun {
     pub audio_job_id: Option<String>,
     pub video_job_id: Option<String>,
     pub writing_task_id: Option<String>,
+    pub duration_task_id: Option<String>,
+    pub content_check_task_id: Option<String>,
+    pub writing_version_id: Option<String>,
     pub landscape_task_id: Option<String>,
     pub portrait_task_id: Option<String>,
     pub landscape_cover_id: Option<String>,
@@ -65,6 +76,8 @@ pub enum Slot {
     Audio,
     Video,
     Writing,
+    Duration,
+    ContentCheck,
     LandscapeImage,
     PortraitImage,
     LandscapeCover,
@@ -77,6 +90,8 @@ impl Slot {
             Self::Audio => "audio_job_id",
             Self::Video => "video_job_id",
             Self::Writing => "writing_task_id",
+            Self::Duration => "duration_task_id",
+            Self::ContentCheck => "content_check_task_id",
             Self::LandscapeImage => "landscape_task_id",
             Self::PortraitImage => "portrait_task_id",
             Self::LandscapeCover => "landscape_cover_id",
@@ -91,6 +106,13 @@ pub struct Binding<'a> {
     pub slot: Slot,
 }
 impl AutomationRun {
+    pub fn require_current_workflow(&self) -> Result<(), String> {
+        if self.input.workflow_version != 1 {
+            return Err("此任务使用旧版制作顺序，已有成果已保留。请在原音频、视频或发布详情继续处理，或停止旧流程后重新制作。".into());
+        }
+        Ok(())
+    }
+
     pub fn binding(&self, slot: Slot) -> Binding<'_> {
         Binding {
             id: &self.id,
@@ -115,11 +137,56 @@ pub(super) fn bind(
 }
 
 fn load(connection: &Connection, id: &str) -> Result<AutomationRun, String> {
-    connection.query_row("SELECT id,project_id,input_json,status,stage,run_id,error,audio_job_id,video_job_id,writing_task_id,landscape_task_id,portrait_task_id,landscape_cover_id,portrait_cover_id,publish_task_id,created_at,updated_at,publish_started FROM automation_runs WHERE id=?1", [id], |row| {
+    connection.query_row("SELECT id,project_id,input_json,status,stage,run_id,error,audio_job_id,video_job_id,writing_task_id,landscape_task_id,portrait_task_id,landscape_cover_id,portrait_cover_id,publish_task_id,created_at,updated_at,publish_started,duration_task_id,content_check_task_id,(SELECT version_id FROM ai_tasks WHERE id=automation_runs.writing_task_id AND status='succeeded') FROM automation_runs WHERE id=?1", [id], |row| {
         let json: String = row.get(2)?;
         let input = serde_json::from_str(&json).map_err(|error| rusqlite::Error::FromSqlConversionFailure(2,rusqlite::types::Type::Text,Box::new(error)))?;
-        Ok(AutomationRun { id:row.get(0)?,project_id:row.get(1)?,input,status:row.get(3)?,stage:row.get(4)?,run_id:row.get(5)?,error:row.get(6)?,audio_job_id:row.get(7)?,video_job_id:row.get(8)?,writing_task_id:row.get(9)?,landscape_task_id:row.get(10)?,portrait_task_id:row.get(11)?,landscape_cover_id:row.get(12)?,portrait_cover_id:row.get(13)?,publish_task_id:row.get(14)?,created_at:row.get(15)?,updated_at:row.get(16)?,publish_started:row.get(17)? })
+        Ok(AutomationRun { id:row.get(0)?,project_id:row.get(1)?,input,status:row.get(3)?,stage:row.get(4)?,run_id:row.get(5)?,error:row.get(6)?,audio_job_id:row.get(7)?,video_job_id:row.get(8)?,writing_task_id:row.get(9)?,landscape_task_id:row.get(10)?,portrait_task_id:row.get(11)?,landscape_cover_id:row.get(12)?,portrait_cover_id:row.get(13)?,publish_task_id:row.get(14)?,created_at:row.get(15)?,updated_at:row.get(16)?,publish_started:row.get(17)?,duration_task_id:row.get(18)?,content_check_task_id:row.get(19)?,writing_version_id:row.get(20)? })
     }).map_err(|error| format!("自动流程不可读取：{error}"))
+}
+
+pub(super) fn generation_run(
+    connection: &Connection,
+    task_id: &str,
+) -> Result<Option<AutomationRun>, String> {
+    let id: Option<String> = connection
+        .query_row(
+            "SELECT id FROM automation_runs WHERE duration_task_id=?1 OR writing_task_id=?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    id.map(|id| {
+        let run = load(connection, &id)?;
+        run.require_current_workflow()?;
+        if matches!(run.status.as_str(), "cancelled" | "completed") {
+            return Err("自动流程已结束，生成结果未采用。".into());
+        }
+        Ok(run)
+    })
+    .transpose()
+}
+
+pub(super) fn validate_target(seconds: i64) -> Result<(), String> {
+    crate::ai::audio::validate_duration(seconds)?;
+    if seconds > 900 {
+        return Err("自动制作的目标时长须为1—15分钟，请先调整并保存目标时长。".into());
+    }
+    Ok(())
+}
+
+fn task_version(
+    connection: &Connection,
+    task_id: Option<&str>,
+) -> Result<ai::WritingVersion, String> {
+    let id: String = connection
+        .query_row(
+            "SELECT version_id FROM ai_tasks WHERE id=?1 AND status='succeeded'",
+            [task_id.ok_or("流程缺少文案任务。")?],
+            |row| row.get(0),
+        )
+        .map_err(|_| "流程文案尚未完成。")?;
+    ai::version(connection, &id)
 }
 
 pub(super) fn recover(connection: &Connection) -> Result<(), String> {
@@ -183,8 +250,11 @@ impl Database {
         self.with_connection(|connection| next_schedule(connection, "now"))
     }
     pub fn retry_automation_generation(&self, run: &AutomationRun) -> Result<(), String> {
+        run.require_current_workflow()?;
         let task = match run.stage.as_str() {
+            "duration" => run.duration_task_id.as_deref(),
             "writing" => run.writing_task_id.as_deref(),
+            "content_check" => run.content_check_task_id.as_deref(),
             "landscape_image" => run.landscape_task_id.as_deref(),
             "portrait_image" => run.portrait_task_id.as_deref(),
             _ => None,
@@ -237,6 +307,7 @@ impl Database {
             let transaction = connection.transaction().map_err(|e|e.to_string())?;
             let book = get(&transaction,&input.project_id)?;
             if book.input.author.trim().is_empty() { return Err("自动制作请先填写作者，避免同名书混淆。".into()); }
+            if transaction.query_row("SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE project_id=?1 AND status IN ('pending','running'))",[&input.project_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("本书还有正在生成的内容，请先等待完成或取消，再开始自动制作。".into()); }
             if transaction.query_row("SELECT EXISTS(SELECT 1 FROM audio_jobs WHERE status NOT IN ('succeeded','cancelled')) OR EXISTS(SELECT 1 FROM video_jobs WHERE status='running') OR EXISTS(SELECT 1 FROM automation_runs WHERE status NOT IN ('completed','cancelled'))",[],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("已有未完成的自动、音频或视频任务，请先处理原任务。".into()); }
             let source: String = transaction.query_row("SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='document'",params![input.source_asset_id,input.project_id],|row|row.get(0)).map_err(|_|"请选择本书已保存的原书文件。")?;
             if !super::audio::supported_source_name(Path::new(&source)) { return Err("自动制作支持 PDF、EPUB、TXT、Markdown 原书。".into()); }
@@ -245,13 +316,16 @@ impl Database {
             let image = ai::provider(&transaction,&input.image_provider_id)?;
             if !text.input.is_enabled || text.input.model_kind != "text" || !image.input.is_enabled || image.input.model_kind != "image" { return Err("请配置可用的文本模型和图片模型。".into()); }
             let id = new_id(&transaction)?;
-            let frozen = FrozenInput { title:book.input.title,author:book.input.author,target_duration_seconds:600,source_sha256,text_provider:text.input,image_provider:image.input,selection:input.clone(),account };
-            transaction.execute(&format!("INSERT INTO automation_runs(id,request_key,project_id,input_json,status,stage,created_at,updated_at) VALUES(?1,?2,?3,?4,'running','audio',{NOW},{NOW})"),params![id,input.request_key,input.project_id,serde_json::to_string(&frozen).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+            let target_duration_seconds = book.audio_duration_source.as_ref().map(|_| book.input.target_duration_seconds);
+            if let Some(seconds) = target_duration_seconds { validate_target(seconds)?; }
+            let frozen = FrozenInput { workflow_version:1,title:book.input.title,author:book.input.author,description:book.input.description,source_notes:book.input.source_notes,target_duration_seconds,duration_reason:if target_duration_seconds.is_some() {"使用本书已保存的目标时长".into()} else {String::new()},source_sha256,text_provider:text.input,image_provider:image.input,selection:input.clone(),account };
+            transaction.execute(&format!("INSERT INTO automation_runs(id,request_key,project_id,input_json,status,stage,created_at,updated_at) VALUES(?1,?2,?3,?4,'running',?5,{NOW},{NOW})"),params![id,input.request_key,input.project_id,serde_json::to_string(&frozen).map_err(|e|e.to_string())?,if target_duration_seconds.is_some() {"writing"} else {"duration"}]).map_err(|e|e.to_string())?;
             transaction.commit().map_err(|e|e.to_string())?;
             load(connection,&id)
         })
     }
     pub fn verify_automation_input(&self, run: &AutomationRun) -> Result<(), String> {
+        run.require_current_workflow()?;
         self.with_connection(|connection| {
             let book = get(connection, &run.project_id)?;
             if book.input.title != run.input.title || book.input.author != run.input.author {
@@ -322,6 +396,7 @@ impl Database {
         self.with_connection(|connection| {
             let run = load(connection,id)?;
             if matches!(run.status.as_str(),"completed"|"cancelled") { return Err("该流程已经结束。".into()); }
+            if action == "resume" { run.require_current_workflow()?; }
             let status = match action { "pause" => "paused", "resume" if run.status != "running" => "running", "cancel" => "cancelled", _ => return Err("当前流程不支持此操作。".into()) };
             connection.execute(&format!("UPDATE automation_runs SET status=?1,run_id=run_id+1,error='',updated_at={NOW} WHERE id=?2"),params![status,id]).map_err(|e|e.to_string())?;
             load(connection,id)
@@ -337,16 +412,43 @@ impl Database {
         self.with_connection(|connection|connection.query_row("SELECT status,version_id,asset_id,COALESCE(error_message,'') FROM ai_tasks WHERE id=?1",[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).map_err(|e|e.to_string()))
     }
     pub fn automation_writing(&self, run: &AutomationRun) -> Result<ai::WritingVersion, String> {
+        self.with_connection(|connection| task_version(connection, run.writing_task_id.as_deref()))
+    }
+    pub fn automation_publish_writing(
+        &self,
+        run: &AutomationRun,
+    ) -> Result<ai::WritingVersion, String> {
         self.with_connection(|connection| {
-            let id: String = connection
-                .query_row(
-                    "SELECT version_id FROM ai_tasks WHERE id=?1 AND status='succeeded'",
-                    [run.writing_task_id.as_deref().ok_or("流程缺少文案任务。")?],
-                    |row| row.get(0),
-                )
-                .map_err(|_| "流程文案尚未完成。")?;
-            ai::version(connection, &id)
+            task_version(connection, run.content_check_task_id.as_deref())
         })
+    }
+    pub fn start_automation_generation(&self, run: &AutomationRun) -> Result<String, String> {
+        run.require_current_workflow()?;
+        let recommend_duration = run.stage == "duration";
+        if !recommend_duration && run.stage != "writing" {
+            return Err("流程不在前置创作阶段。".into());
+        }
+        if !recommend_duration {
+            validate_target(
+                run.input
+                    .target_duration_seconds
+                    .ok_or("目标时长尚未确定。")?,
+            )?;
+        }
+        self.start_bound_generation(
+            ai::GenerationInput {
+                project_id: run.project_id.clone(),
+                provider_id: run.input.selection.text_provider_id.clone(),
+                revision: None,
+                target_duration_seconds: run.input.target_duration_seconds,
+                recommend_duration,
+            },
+            Some(&run.binding(if recommend_duration {
+                Slot::Duration
+            } else {
+                Slot::Writing
+            })),
+        )
     }
     pub fn create_transcript_task(&self, run: &AutomationRun) -> Result<String, String> {
         let video = self.video_job(run.video_job_id.as_deref().ok_or("缺少视频任务。")?)?;
@@ -364,7 +466,7 @@ impl Database {
             let id = new_id(&transaction)?;
             let user = serde_json::json!({"bookTitle":run.input.title,"author":run.input.author,"transcript":transcript,"planSha256":plan_digest(&video.plan)?});
             transaction.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,'transcript_publishing',?3,?4,?5,'pending',?6,{NOW})"),params![id,run.project_id,run.input.selection.text_provider_id,run.input.text_provider.model_name,TRANSCRIPT_PROMPT,user.to_string()]).map_err(|e|e.to_string())?;
-            bind(&transaction,&run.binding(Slot::Writing),&run.project_id,&id)?;
+            bind(&transaction,&run.binding(Slot::ContentCheck),&run.project_id,&id)?;
             transaction.commit().map_err(|e|e.to_string())?;
             Ok(id)
         })
@@ -375,7 +477,9 @@ impl Database {
             connection
                 .query_row(
                     "SELECT json_extract(input_json,'$.planSha256') FROM ai_tasks WHERE id=?1",
-                    [run.writing_task_id.as_deref().ok_or("缺少文案任务。")?],
+                    [run.content_check_task_id
+                        .as_deref()
+                        .ok_or("缺少文案任务。")?],
                     |row| row.get(0),
                 )
                 .map_err(|e| e.to_string())
@@ -387,7 +491,7 @@ impl Database {
     }
     pub fn prepare_transcript_task(&self, id: &str) -> Result<String, String> {
         self.with_connection(|connection| {
-            if connection.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE writing_task_id=?1 AND status!='running')",[id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程已暂停，文案请求尚未发送。".into()); }
+            if connection.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE content_check_task_id=?1 AND status!='running')",[id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程已暂停，文案请求尚未发送。".into()); }
             let input = connection.query_row("SELECT input_json FROM ai_tasks WHERE id=?1 AND kind='transcript_publishing' AND status='pending'",[id],|row|row.get(0)).map_err(|_|"文案任务已执行或结束，不能重复请求。")?;
             connection.execute("UPDATE ai_tasks SET status='running' WHERE id=?1",[id]).map_err(|e|e.to_string())?;
             Ok(input)
@@ -424,7 +528,7 @@ impl Database {
             cover_prompt_landscape,
             cover_prompt_portrait,
             ..
-        } = self.automation_writing(run)?.content
+        } = self.automation_publish_writing(run)?.content
         else {
             return Err("文案类型无效。".into());
         };

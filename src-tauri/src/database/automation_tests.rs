@@ -47,6 +47,293 @@ fn account() -> Account {
     }
 }
 
+fn finish_creation(database: &Database, run: &AutomationRun) -> AutomationRun {
+    let run = if run.stage == "duration" {
+        let id = database.start_automation_generation(run).unwrap();
+        database.prepare_generation(&id).unwrap();
+        database
+            .finish_duration_recommendation(
+                &id,
+                crate::ai::audio::DurationRecommendation {
+                    minutes: 12,
+                    reason: "依据本期重点估计".into(),
+                },
+            )
+            .unwrap();
+        database.set_automation_stage(run, "writing").unwrap();
+        database.automation_run(&run.id).unwrap()
+    } else {
+        database.automation_run(&run.id).unwrap()
+    };
+    let id = database.start_automation_generation(&run).unwrap();
+    let prepared = database.prepare_generation(&id).unwrap();
+    let content: crate::ai::WritingContent = serde_json::from_value(serde_json::json!({"format":"publishing","title":"已保存的创作标题","description":"这期依据原书介绍核心问题","audioPrompt":"本次保存的完整指导，请依据上传原书制作，不补造情节。"})).unwrap();
+    database
+        .finish_generation(&id, &prepared.input, content, "text")
+        .unwrap();
+    database.set_automation_stage(&run, "audio").unwrap();
+    database.automation_run(&run.id).unwrap()
+}
+
+#[test]
+fn automation_frontloaded_duration_starts_before_audio() {
+    let (_directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    assert_eq!(run.stage, "duration");
+    let frozen = serde_json::to_value(&run.input).unwrap();
+    assert!(frozen["targetDurationSeconds"].is_null());
+    assert_eq!(frozen["sourceNotes"], "原始资料");
+    assert!(database.start_automatic_audio(&run).is_err());
+}
+
+#[test]
+fn automation_frontloaded_respects_saved_fifteen_minutes() {
+    let (_directory, database, input) = setup();
+    database.set_audio_duration(&input.project_id, 900).unwrap();
+    let run = database.create_automation(input, account()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&run.input).unwrap()["targetDurationSeconds"],
+        900
+    );
+    assert_eq!(run.stage, "writing");
+    assert!(database.start_automatic_audio(&run).is_err());
+}
+
+#[test]
+fn automation_frontloaded_rejects_out_of_range_before_creating_tasks() {
+    let (_directory, database, input) = setup();
+    database
+        .set_audio_duration(&input.project_id, 1200)
+        .unwrap();
+    assert!(database.create_automation(input, account()).is_err());
+    assert!(database.automation_runs().unwrap().is_empty());
+}
+
+#[test]
+fn automation_frontloaded_freezes_notes_and_commits_duration_with_task() {
+    let (_directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    let id = database.start_automation_generation(&run).unwrap();
+    assert!(database.start_automation_generation(&run).is_err());
+    let mut changed = database.get_project(&run.project_id).unwrap().input;
+    changed.source_notes = "启动后另写的资料".into();
+    database
+        .save_project(Some(&run.project_id), changed)
+        .unwrap();
+    let prepared = database.prepare_generation(&id).unwrap();
+    let user: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
+    assert_eq!(user["book"]["sourceNotes"], "原始资料");
+    assert_eq!(user["durationLimits"]["maxMinutes"], 15);
+    assert!(database
+        .finish_duration_recommendation(
+            &id,
+            crate::ai::audio::DurationRecommendation {
+                minutes: 20,
+                reason: "超出范围".into()
+            }
+        )
+        .is_err());
+    assert!(database
+        .automation_run(&run.id)
+        .unwrap()
+        .input
+        .target_duration_seconds
+        .is_none());
+    assert_eq!(database.automation_ai_result(&id).unwrap().0, "running");
+    assert!(database
+        .get_project(&run.project_id)
+        .unwrap()
+        .audio_duration_source
+        .is_none());
+    database.control_automation(&run.id, "pause").unwrap();
+    database
+        .finish_duration_recommendation(
+            &id,
+            crate::ai::audio::DurationRecommendation {
+                minutes: 13,
+                reason: "资料不足，按已知重点估计".into(),
+            },
+        )
+        .unwrap();
+    let saved = database.automation_run(&run.id).unwrap();
+    assert_eq!(saved.status, "paused");
+    assert_eq!(saved.input.target_duration_seconds, Some(780));
+    assert_eq!(saved.input.duration_reason, "资料不足，按已知重点估计");
+    assert_eq!(
+        database
+            .get_project(&run.project_id)
+            .unwrap()
+            .input
+            .target_duration_seconds,
+        780
+    );
+    assert_eq!(database.automation_ai_result(&id).unwrap().0, "succeeded");
+    assert!(database.set_automation_stage(&run, "writing").is_err());
+}
+
+#[test]
+fn automation_frontloaded_cancel_rejects_late_result_and_stale_binding() {
+    let (_directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    let id = database.start_automation_generation(&run).unwrap();
+    database.prepare_generation(&id).unwrap();
+    database.control_automation(&run.id, "cancel").unwrap();
+    assert!(database
+        .finish_duration_recommendation(
+            &id,
+            crate::ai::audio::DurationRecommendation {
+                minutes: 12,
+                reason: "迟到结果".into()
+            }
+        )
+        .is_err());
+    assert!(database
+        .automation_run(&run.id)
+        .unwrap()
+        .input
+        .target_duration_seconds
+        .is_none());
+    assert!(database.start_automation_generation(&run).is_err());
+    assert!(database
+        .list_versions(&run.project_id, "publishing")
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn automation_frontloaded_restart_keeps_creation_and_requires_explicit_retry() {
+    let (directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    let id = database.start_automation_generation(&run).unwrap();
+    database.prepare_generation(&id).unwrap();
+    drop(database);
+    let database = Database::open(directory.path().join("data.sqlite3"));
+    database.recover_ai_tasks().unwrap();
+    database.recover_automation().unwrap();
+    let paused = database.automation_run(&run.id).unwrap();
+    assert_eq!(paused.duration_task_id.as_deref(), Some(id.as_str()));
+    assert_eq!(database.automation_ai_result(&id).unwrap().0, "failed");
+    assert!(database.prepare_generation(&id).is_err());
+    database.retry_automation_generation(&paused).unwrap();
+    assert!(database.prepare_generation(&id).is_err());
+    let resumed = database.control_automation(&run.id, "resume").unwrap();
+    database.prepare_generation(&id).unwrap();
+    database
+        .finish_duration_recommendation(
+            &id,
+            crate::ai::audio::DurationRecommendation {
+                minutes: 12,
+                reason: "恢复原任务".into(),
+            },
+        )
+        .unwrap();
+    database.set_automation_stage(&resumed, "writing").unwrap();
+    let ready = database.automation_run(&run.id).unwrap();
+    let ready = finish_creation(&database, &ready);
+    let version = ready.writing_version_id.clone();
+    database.control_automation(&run.id, "pause").unwrap();
+    let backup = database
+        .create_backup(directory.path().to_str().unwrap())
+        .unwrap();
+    let snapshot = super::backup::read_snapshot(Path::new(&backup)).unwrap();
+    let saved: String = snapshot.query_row("SELECT version_id FROM ai_tasks WHERE id=(SELECT writing_task_id FROM automation_runs WHERE id=?1)", [&run.id], |row| row.get(0)).unwrap();
+    assert_eq!(Some(saved), version);
+    assert_eq!(database.automation_run(&run.id).unwrap().stage, "audio");
+}
+
+#[test]
+fn automation_frontloaded_blocks_manual_duplicate_generation() {
+    let (_directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    let request = ai::GenerationInput {
+        project_id: run.project_id.clone(),
+        provider_id: run.input.selection.text_provider_id.clone(),
+        recommend_duration: true,
+        target_duration_seconds: None,
+        revision: None,
+    };
+    assert!(database.start_generation(request.clone()).is_err());
+    database.control_automation(&run.id, "cancel").unwrap();
+    assert!(database.start_generation(request).is_ok());
+    let mut next = run.input.selection;
+    next.request_key = "next-run".into();
+    assert!(database.create_automation(next, account()).is_err());
+}
+
+#[test]
+fn automation_v21_upgrade_preserves_post_audio_writing_and_publish_markers() {
+    let (directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    let run = finish_creation(&database, &run);
+    freeze_v20_schema(&database, false);
+    database.with_connection(|connection| {
+        super::migrate(connection)?;
+        connection.execute_batch("ALTER TABLE automation_runs DROP COLUMN duration_task_id; ALTER TABLE automation_runs DROP COLUMN content_check_task_id;").map_err(|e|e.to_string())?;
+        connection.execute("UPDATE automation_runs SET writing_task_id=?1,input_json=json_remove(input_json,'$.workflowVersion'),status='awaiting_publish',publish_started=1,publish_handed_off=1",[run.writing_task_id.as_deref().unwrap()]).map_err(|e|e.to_string())?;
+        connection.pragma_update(None,"user_version",21).map_err(|e|e.to_string())
+    }).unwrap();
+    let backup = database
+        .create_backup(directory.path().to_str().unwrap())
+        .unwrap();
+    drop(database);
+    let database = Database::open(directory.path().join("data.sqlite3"));
+    let saved = database.automation_run(&run.id).unwrap();
+    assert_eq!(saved.status, "paused");
+    assert_eq!(saved.content_check_task_id, run.writing_task_id);
+    assert!(saved.writing_task_id.is_none());
+    assert_eq!(
+        database.automation_publish_writing(&saved).unwrap().id,
+        run.writing_version_id.unwrap()
+    );
+    assert!(saved.publish_started);
+    assert!(database.control_automation(&saved.id, "resume").is_err());
+    let snapshot = super::backup::read_snapshot(Path::new(&backup)).unwrap();
+    assert_eq!(
+        snapshot
+            .query_row(
+                "SELECT publish_handed_off FROM automation_runs",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        Connection::open(backup)
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        21
+    );
+}
+
+#[test]
+fn automation_v22_migration_conflict_rolls_back_without_changing_v21() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("conflict.sqlite3");
+    let mut connection = Connection::open(&path).unwrap();
+    for sql in super::MIGRATIONS.iter().take(21) {
+        connection.execute_batch(sql).unwrap();
+    }
+    connection.pragma_update(None, "user_version", 21).unwrap();
+    connection
+        .execute_batch("ALTER TABLE automation_runs ADD COLUMN content_check_task_id TEXT;")
+        .unwrap();
+    assert!(super::migrate(&mut connection).is_err());
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        21
+    );
+    assert!(connection
+        .prepare("SELECT duration_task_id FROM automation_runs")
+        .is_err());
+    assert!(connection
+        .prepare("SELECT writing_task_id,publish_started,publish_handed_off FROM automation_runs")
+        .is_ok());
+}
+
 #[test]
 fn automation_start_is_idempotent_and_exclusive() {
     let (_directory, database, input) = setup();
@@ -67,17 +354,30 @@ fn automation_start_is_idempotent_and_exclusive() {
     changed.format = "brief".into();
     assert!(database.create_automation(changed, account()).is_err());
     assert_eq!(database.automation_runs().unwrap().len(), 1);
-    assert_eq!(run.input.target_duration_seconds, 600);
+    assert_eq!(run.input.target_duration_seconds, None);
     assert_eq!(run.input.account.key, account().key);
 }
 
 #[test]
-fn automatic_audio_uses_real_source_without_fake_writing_version() {
+fn automatic_audio_uses_saved_creation_and_frozen_duration() {
     let (_directory, database, input) = setup();
+    database.set_audio_duration(&input.project_id, 900).unwrap();
     let run = database.create_automation(input, account()).unwrap();
+    let run = finish_creation(&database, &run);
+    database.set_audio_duration(&run.project_id, 300).unwrap();
+    assert!(database
+        .start_audio_job(audio::StartAudioJobInput {
+            project_id: run.project_id.clone(),
+            writing_version_id: run.writing_version_id.clone().unwrap(),
+            source: audio::AudioSourceInput::Asset {
+                asset_id: run.input.selection.source_asset_id.clone()
+            },
+            format: "deep_dive".into(),
+        })
+        .is_err());
     let audio = database.start_automatic_audio(&run).unwrap();
-    assert!(audio.writing_version_id.is_none());
-    assert_eq!(audio.target_duration_seconds, 600);
+    assert_eq!(audio.writing_version_id, run.writing_version_id);
+    assert_eq!(audio.target_duration_seconds, 900);
     assert_eq!(
         database
             .automation_run(&run.id)
@@ -86,10 +386,13 @@ fn automatic_audio_uses_real_source_without_fake_writing_version() {
             .as_deref(),
         Some(audio.id.as_str())
     );
-    assert!(database
-        .list_versions(&run.project_id, "publishing")
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        database
+            .list_versions(&run.project_id, "publishing")
+            .unwrap()
+            .len(),
+        1
+    );
     let frozen: String = database
         .with_connection(|connection| {
             connection
@@ -101,9 +404,9 @@ fn automatic_audio_uses_real_source_without_fake_writing_version() {
                 .map_err(|e| e.to_string())
         })
         .unwrap();
-    assert!(frozen.contains("automatic-audio-v1"));
+    assert!(frozen.contains(crate::ai::PROMPT_VERSION));
     assert!(frozen.contains(&run.input.source_sha256));
-    assert!(frozen.contains("仅依据上传的原书"));
+    assert!(frozen.contains("本次保存的完整指导"));
     assert!(database.start_automatic_audio(&run).is_err());
 }
 
@@ -111,6 +414,7 @@ fn automatic_audio_uses_real_source_without_fake_writing_version() {
 fn automatic_audio_rejects_changed_source_and_paused_stale_run() {
     let (directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
+    let run = finish_creation(&database, &run);
     fs::write(directory.path().join("原书.txt"), "完全不同的内容").unwrap();
     assert!(database.start_automatic_audio(&run).is_err());
     assert!(database
@@ -314,7 +618,7 @@ fn automation_v19_upgrade_keeps_previous_data_and_manual_defaults() {
                 connection
                     .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                     .unwrap(),
-                21
+                22
             );
             assert_eq!(
                 connection
@@ -365,6 +669,7 @@ fn freeze_v20_schema(database: &Database, missing_markers: bool) {
 fn automation_legacy_v20_reopens_and_restores_without_losing_the_run() {
     let (directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
+    let run = finish_creation(&database, &run);
     let audio = database.start_automatic_audio(&run).unwrap();
     freeze_v20_schema(&database, true);
     let backup = database
@@ -377,6 +682,12 @@ fn automation_legacy_v20_reopens_and_restores_without_losing_the_run() {
     assert_eq!(upgraded.audio_job_id.as_deref(), Some(audio.id.as_str()));
     assert_eq!(upgraded.input.source_sha256, run.input.source_sha256);
     assert!(!upgraded.publish_started);
+    assert_eq!(upgraded.input.workflow_version, 0);
+    assert!(database.control_automation(&run.id, "resume").is_err());
+    assert_eq!(
+        database.audio_job(&audio.id).unwrap().writing_version_id,
+        run.writing_version_id
+    );
     let snapshot = super::backup::read_snapshot(Path::new(&backup)).unwrap();
     assert_eq!(
         snapshot
@@ -539,6 +850,7 @@ fn automation_late_cover_failure_does_not_pause_the_next_size_or_generation() {
 fn automatic_video_keeps_archived_audio_hash_and_frozen_prompt() {
     let (directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
+    let run = finish_creation(&database, &run);
     let audio = database.start_automatic_audio(&run).unwrap();
     let path = directory.path().join("original.wav");
     fs::write(&path, b"audio fixture").unwrap();
@@ -646,6 +958,7 @@ fn automatic_schedule_renews_only_before_hand_off_and_preserves_same_task() {
 fn automatic_audio_stop_prevents_late_source_and_generation_actions() {
     let (_directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
+    let run = finish_creation(&database, &run);
     let audio = database.start_automatic_audio(&run).unwrap();
     let waiting = database
         .observe_audio_job(

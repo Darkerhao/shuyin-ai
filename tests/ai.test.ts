@@ -1,4 +1,6 @@
 import { generationJobs } from '../src/services/generation'
+import { automationRuns, type AutomationRun } from '../src/services/automation'
+vi.mock('../src/services/automation', async importOriginal => ({ ...await importOriginal<typeof import('../src/services/automation')>(), refreshAutomation: vi.fn() }))
 import { chooseSelect, openSelect, tab, tabPanel, button, dialog, answerConfirmation, mockResizeObserver } from './ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -24,6 +26,9 @@ vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.
 const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模型', modelName: 'model', isDefault: true, credentialStatus: 'available' }
 const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'publishing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
 const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', tags: '#读书 #生死疲劳 #文学', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
+function automaticRun(): AutomationRun {
+  return { id: 'automatic1', projectId: 'p1', input: { workflowVersion: 1, title: '测试书', author: '作者', targetDurationSeconds: null, durationReason: '', selection: { projectId: 'p1', sourceAssetId: 'doc1', textProviderId: 'm1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'one' } }, status: 'running', stage: 'duration', runId: 1, error: '', audioJobId: null, videoJobId: null, writingTaskId: null, durationTaskId: null, contentCheckTaskId: null, writingVersionId: null, landscapeTaskId: null, portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '' }
+}
 const browser = { supported: true, open: false, url: null, message: null }
 function makeAudioJob(status: AudioJobStatus, overrides: Partial<AudioJob> = {}): AudioJob {
   return {
@@ -57,6 +62,7 @@ async function render(path = '/projects/p1/writing') {
 }
 beforeEach(() => {
   generationJobs.clear()
+  automationRuns.value = []
   localStorage.clear()
   vi.resetAllMocks()
   vi.mocked(loadWaveform).mockResolvedValue([.2, .6, .8, .1])
@@ -78,6 +84,40 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
+  it('does not recommend again while automatic creation is determining the duration', async () => {
+    automationRuns.value = [automaticRun()]
+    vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), audioDurationSource: null, id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
+    const { wrapper } = await render()
+    expect(api.startGeneration).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('正在确定本次目标时长')
+    expect(button(wrapper, '生成备选').attributes('disabled')).toBeDefined()
+  })
+  it('opens the exact automatic version and preserves a recovered manual draft', async () => {
+    vi.mocked(api.listVersions).mockResolvedValue([generated, initial])
+    vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: generated.id, content: { ...generated.content, title: '手写草稿保留' } })
+    const { wrapper } = await render('/projects/p1/writing?writingVersion=v1')
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', '手写草稿保留')
+    expect(wrapper.get('#history-candidate-title').element).toHaveProperty('value', initial.content.title)
+    expect(api.saveWriting).not.toHaveBeenCalled()
+  })
+  it('shows an arriving automatic creation without replacing the current editor', async () => {
+    const current = automaticRun(); automationRuns.value = [current]
+    const { wrapper } = await render()
+    await wrapper.get('#result-title').setValue('当前手写内容')
+    vi.mocked(api.listVersions).mockResolvedValue([generated, initial])
+    automationRuns.value = [{ ...current, stage: 'audio', writingVersionId: generated.id, input: { ...current.input, targetDurationSeconds: 900, durationReason: '本期重点' } }]
+    await flushPromises()
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', '当前手写内容')
+    expect(wrapper.get('#history-candidate-title').element).toHaveProperty('value', generated.content.title)
+    expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '15')
+    expect(api.startGeneration).not.toHaveBeenCalled()
+    expect(api.saveWriting).not.toHaveBeenCalled()
+  })
+  it('opens the requested saved creation instead of the latest unrelated version', async () => {
+    vi.mocked(api.listVersions).mockResolvedValue([generated, initial])
+    const { wrapper } = await render('/projects/p1/writing?writingVersion=v1')
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', initial.content.title)
+  })
   it('finishes once while another page is open and restores the current draft before offering the result', async () => {
     let finish!: (value: WritingVersion) => void
     vi.mocked(api.executeGeneration).mockImplementation(() => new Promise(resolve => { finish = resolve }))

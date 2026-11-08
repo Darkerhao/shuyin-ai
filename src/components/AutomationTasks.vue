@@ -67,6 +67,9 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
         >{{ run.status === 'awaiting_publish' ? '等待最终发布' : run.status === 'running' ? stages[run.stage] : run.status === 'paused' ? '已暂停' : '需要处理' }}</span>
       </div>
       <p class="text-sm text-muted-foreground">
+        {{ run.input.targetDurationSeconds ? `目标 ${run.input.targetDurationSeconds / 60} 分钟` : '目标时长待推荐' }}<span v-if="run.input.durationReason"> · {{ run.input.durationReason }}</span>
+      </p>
+      <p class="text-sm text-muted-foreground">
         {{ run.error || '保持应用运行，可切换页面。AI背景、双封面和视频将自动制作；最后在抖音窗口点击发布。' }}
       </p>
       <div class="flex flex-wrap gap-2">
@@ -79,14 +82,14 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
           暂停后续步骤
         </Button>
         <Button
-          v-else-if="run.status !== 'awaiting_publish'"
+          v-else-if="run.status !== 'awaiting_publish' && run.input.workflowVersion === 1"
           :disabled="busy"
           @click="act(run, 'resume')"
         >
           继续流程
         </Button>
         <Button
-          v-if="['paused', 'waiting_user'].includes(run.status) && ['writing', 'landscape_image', 'portrait_image', 'video_prepare', 'render'].includes(run.stage)"
+          v-if="run.input.workflowVersion === 1 && ['paused', 'waiting_user'].includes(run.status) && ['duration', 'writing', 'content_check', 'landscape_image', 'portrait_image', 'video_prepare', 'render'].includes(run.stage)"
           variant="outline"
           :disabled="busy"
           @click="act(run, 'retry')"
@@ -100,6 +103,13 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
         >
           显示抖音窗口
         </Button>
+        <RouterLink
+          v-if="run.writingVersionId"
+          :to="`/projects/${run.projectId}/writing?writingVersion=${run.writingVersionId}`"
+          class="self-center text-sm underline"
+        >
+          查看本次创作方案
+        </RouterLink>
         <RouterLink
           v-if="run.publishTaskId"
           :to="`/projects/${run.projectId}/publishing?task=${run.publishTaskId}`"

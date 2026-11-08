@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 前置创作流程（2026-11-08，v22）
+
+新增`0022_automation_creation.sql`：automation_runs增加可空外键duration_task_id和content_check_task_id，writing_task_id用于音频前完整创作。旧writing_task_id移至content_check_task_id，旧流程输入标为workflowVersion=0，活动记录暂停并提示通过原业务详情继续或停止后新建，保留原子任务与发布标记。新流程workflowVersion=1。
+
+input_json新增冻结description/sourceNotes、可空targetDurationSeconds和durationReason。未推荐时目标为null；推荐成功事务内同步流程快照、book_projects及ai_tasks。文案复用writing_versions；音频writing_version_id引用前置版本，input_json保存实际完整指导和冻结目标。前端writingVersionId从成功任务派生，无额外版本列或可编辑文案副本。
+
+原数据库迁移和备份精确结构验证包含v22；旧备份先在副本升级，原文件不变。已有音频提示词与素材不重写，v22不能由旧版本读取，回退需升级前备份。验证见[P1验收](AUTOMATION-P1-VERIFICATION.md)。
+
 ## 自动流程旧 v20 升级修复（2026-11-07，v21）
 
 真实安装版测试发现早期 v20 的 `automation_runs` 缺少 `publish_started`、`publish_handed_off`，但版本已为20，启动时不会重跑后来补充过的v20脚本。新增 `0021_automation_publish_markers.sql` 在事务中统一表结构，保留原流程ID、输入、子任务关联和时间；有标记的v20先保存并回填原值，缺失时默认0。迁移失败回滚表、索引与版本，不删除原任务。
