@@ -169,7 +169,7 @@ const load = () => run(async () => {
   }
 })
 async function poll() {
-  if (!running.value || polling || busy.value || disposed) return
+  if (!loaded.value || polling || busy.value || disposed) return
   const projectId = props.id
   polling = true
   try {
@@ -178,7 +178,12 @@ async function poll() {
     if (disposed || projectId !== props.id) return
     progressError.value = ''
     jobs.value = history
-    if (previous?.status === 'running' && selected.value?.status !== 'running') {
+    if (previous && (previous.status !== selected.value?.status || previous.runId !== selected.value?.runId)) {
+      if (selected.value?.status === 'running') {
+        draftReady.value = false
+        autosave.reset()
+        return
+      }
       await adopt(selected.value)
       const files = await listAssets(projectId)
       if (disposed || projectId !== props.id) return
