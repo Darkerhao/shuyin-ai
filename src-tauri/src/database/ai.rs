@@ -383,7 +383,6 @@ impl Database {
                 user["book"] = serde_json::json!({"title":run.input.title,"author":run.input.author,"description":run.input.description,"sourceNotes":run.input.source_notes});
                 book_title = run.input.title;
                 p.input = run.input.text_provider;
-                if input.recommend_duration { user["durationLimits"] = serde_json::json!({"minMinutes":1,"maxMinutes":15}); }
             }
             if !input.recommend_duration {
                 user["audio"] = audio::context(input.target_duration_seconds.ok_or("任务缺少目标时长，请重新生成。")?);
@@ -418,7 +417,6 @@ impl Database {
             let input: GenerationInput = serde_json::from_str(&input).map_err(|_|"时长任务输入无效。")?;
             if !input.recommend_duration { return Err("此任务不是时长推荐。".into()); }
             if let Some(mut run) = super::automation::generation_run(&tx, id)? {
-                super::automation::validate_target(recommendation.minutes * 60)?;
                 run.input.target_duration_seconds = Some(recommendation.minutes * 60);
                 run.input.duration_reason = recommendation.reason.clone();
                 tx.execute(&format!("UPDATE automation_runs SET input_json=?1,updated_at={NOW} WHERE id=?2"),params![serde_json::to_string(&run.input).map_err(|e|e.to_string())?,run.id]).map_err(|e|e.to_string())?;

@@ -113,7 +113,7 @@ async function start() {
       </div>
     </div>
     <p class="text-sm text-muted-foreground">
-      使用本书已保存的目标时长，未设置时由AI在1—15分钟内推荐；实际音频时长以成品为准。4:3、3:4与16:9各一张AI背景，北京时间最近未来01:11定时，不允许保存视频、不加入合集。
+      使用本书已保存的目标时长，未设置时由AI按书籍内容推荐；目标仅作创作指导，制作按实际音频完整时长继续。4:3、3:4与16:9各一张AI背景，北京时间最近未来01:11定时，不允许保存视频、不加入合集。
     </p>
     <div class="flex flex-wrap items-center gap-3">
       <Button

@@ -532,7 +532,7 @@ impl Database {
                 if audio_prompt.trim().is_empty() { return Err("所选版本的音频生成提示词为空。".into()); }
                 let duration = if let Some(run) = automation {
                     let seconds = run.input.target_duration_seconds.ok_or("自动制作尚未确定目标时长。")?;
-                    super::automation::validate_target(seconds)?;
+                    crate::ai::audio::validate_duration(seconds)?;
                     seconds
                 } else { project.input.target_duration_seconds };
                 (version.prompt_version, audio_prompt, duration)

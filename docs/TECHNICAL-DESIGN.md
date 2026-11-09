@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## 取消音频制作时长门槛（2026-11-09）
+
+固定自动流程不再在字幕检查点或内容校核中拒绝超过900秒的实际音频。删除独立validate_target，目标输入统一复用ai::audio::validate_duration；自动推荐不发送durationLimits，唯一推荐Prompt更新为audio-duration-v3。video::validate_cues与原声渲染入口只校验时长为正有限数值，不再设置7200秒上限。UI显示按完整原声时间轴制作。
+
+目标数值、冻结方案和已有任务均沿用原结构，不回填旧目标或重做音频；SQLite仍schema23，无新依赖或权限。模型请求超时、视频进程等待、文件/字幕/上下文校验属于原有执行规则。新规则替代下方历史章节中的音频时长门槛；验收见[本轮记录](ACCEPTANCE-20261109.md)。
+
+## 音频来源上传不依赖窗口焦点（2026-11-09）
+
+真实NotebookLM当前上传器首次mouseover/focus后才创建文件输入。后台WebView中focus()可能不产生事件，导致原书上传报file_input_missing。audio_page.js改为在原上传按钮派发mouseover，再沿用点击、原弹窗内唯一input核对和原生文件写入；不强制抢前台、不增加状态或重试。真实失焦前后和测试证据见[本轮验收](ACCEPTANCE-20261109.md)，无需SQL迁移或新依赖。
+
 ## 自动制作 P2/P3 当前实现（2026-11-08）
 
 唯一执行器顺序调整为duration → writing → audio → transcript → content_check → landscape_image/cover → portrait_image/cover → widescreen_image/cover → storyboard → render → publishing。同一VideoWork增加Transcript，复用原转写/字幕校对，在完整校对及字幕素材登记后保存draft/transcript_ready；封面完成后以Prepare继续该任务，已有字幕及校对批次不会再次请求。

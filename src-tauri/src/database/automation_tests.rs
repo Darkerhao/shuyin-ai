@@ -100,13 +100,18 @@ fn automation_frontloaded_respects_saved_fifteen_minutes() {
 }
 
 #[test]
-fn automation_frontloaded_rejects_out_of_range_before_creating_tasks() {
+fn automation_frontloaded_accepts_saved_target_beyond_fifteen_minutes() {
     let (_directory, database, input) = setup();
     database
         .set_audio_duration(&input.project_id, 1200)
         .unwrap();
-    assert!(database.create_automation(input, account()).is_err());
-    assert!(database.automation_runs().unwrap().is_empty());
+    let run = database.create_automation(input, account()).unwrap();
+    assert_eq!(run.input.target_duration_seconds, Some(1200));
+    assert_eq!(run.stage, "writing");
+    let task = database.start_automation_generation(&run).unwrap();
+    let prepared = database.prepare_generation(&task).unwrap();
+    let user: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
+    assert_eq!(user["audio"]["targetDurationSeconds"], 1200);
 }
 
 #[test]
@@ -123,13 +128,13 @@ fn automation_frontloaded_freezes_notes_and_commits_duration_with_task() {
     let prepared = database.prepare_generation(&id).unwrap();
     let user: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
     assert_eq!(user["book"]["sourceNotes"], "原始资料");
-    assert_eq!(user["durationLimits"]["maxMinutes"], 15);
+    assert!(user.get("durationLimits").is_none());
     assert!(database
         .finish_duration_recommendation(
             &id,
             crate::ai::audio::DurationRecommendation {
-                minutes: 20,
-                reason: "超出范围".into()
+                minutes: 0,
+                reason: "无效时长".into()
             }
         )
         .is_err());
@@ -150,14 +155,14 @@ fn automation_frontloaded_freezes_notes_and_commits_duration_with_task() {
         .finish_duration_recommendation(
             &id,
             crate::ai::audio::DurationRecommendation {
-                minutes: 13,
+                minutes: 25,
                 reason: "资料不足，按已知重点估计".into(),
             },
         )
         .unwrap();
     let saved = database.automation_run(&run.id).unwrap();
     assert_eq!(saved.status, "paused");
-    assert_eq!(saved.input.target_duration_seconds, Some(780));
+    assert_eq!(saved.input.target_duration_seconds, Some(1500));
     assert_eq!(saved.input.duration_reason, "资料不足，按已知重点估计");
     assert_eq!(
         database
@@ -165,7 +170,7 @@ fn automation_frontloaded_freezes_notes_and_commits_duration_with_task() {
             .unwrap()
             .input
             .target_duration_seconds,
-        780
+        1500
     );
     assert_eq!(database.automation_ai_result(&id).unwrap().0, "succeeded");
     assert!(database.set_automation_stage(&run, "writing").is_err());
@@ -976,6 +981,46 @@ fn automatic_content_check_preserves_audio_and_does_not_duplicate_consistent_ver
     assert!(db
         .claim_video_job(&video.id, crate::video::VideoWork::Prepare, None)
         .is_err());
+}
+
+#[test]
+fn automatic_content_check_accepts_actual_audio_beyond_target_and_two_hours() {
+    let (_directory, database, run) = transcript_fixture();
+    let mut video = database
+        .video_job(run.video_job_id.as_ref().unwrap())
+        .unwrap();
+    video.plan.duration = 10800.0;
+    video.plan.cues[0].end = 10800.0;
+    database
+        .with_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE video_jobs SET plan_json=?1 WHERE id=?2",
+                    rusqlite::params![serde_json::to_string(&video.plan).unwrap(), video.id],
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+    let task = database.create_content_check_task(&run).unwrap();
+    database.prepare_content_check_task(&task).unwrap();
+    database
+        .finish_content_check_task(
+            &task,
+            r#"{"verified":true,"reason":"符合实际讲述","changes":{}}"#,
+        )
+        .unwrap();
+    let saved = database.automation_run(&run.id).unwrap();
+    database.verify_automation_content(&saved).unwrap();
+    assert_eq!(
+        saved.input.target_duration_seconds,
+        run.input.target_duration_seconds
+    );
+    assert_eq!(
+        database.video_job(&video.id).unwrap().plan.duration,
+        10800.0
+    );
+    assert_eq!(saved.final_writing_version_id, run.writing_version_id);
 }
 
 #[test]

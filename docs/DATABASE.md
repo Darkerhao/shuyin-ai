@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 音频实际时长不作业务上限（2026-11-09，仍为v23）
+
+取消自动制作15分钟和视频制作2小时的实际音频检查无需变更表结构或迁移。自动目标复用原目标输入规则，已保存target_duration_seconds、音频输入快照、video_jobs.plan_json中的实际时长/时间码及旧成果全部保留，不修改已有时长或重新生成。记录新的推荐Prompt版本audio-duration-v3；历史任务版本字符串继续可追溯。见[本轮验收](ACCEPTANCE-20261109.md)。
+
 ## 字幕校核与三尺寸制作（2026-11-08，v23）
 
 新增0023_automation_media.sql，在automation_runs追加可空widescreen_task_id（ai_tasks外键）、widescreen_cover_id（cover_versions外键）与render_plan_sha256。迁移暂停旧活动流程、增加运行代次，保留旧workflowVersion、所有子任务/成果及上传/交接标记；不按新三图片授权继续旧双封面任务。历史详情仍可使用，旧流程需停止后再新建。
