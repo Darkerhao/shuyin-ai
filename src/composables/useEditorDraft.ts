@@ -24,8 +24,9 @@ export function useEditorDraft<T>(projectId: () => string, kind: DraftKind, cont
     globalThis.clearTimeout(timer)
     status.value = ''; error.value = ''
   }
-  watch([content, dirty], () => {
-    if (!ready.value) { globalThis.clearTimeout(timer); return }
+  watch([content, dirty, ready], (_, [, , wasReady]) => {
+    // Vue batches loading and readiness changes; unchanged loaded data is not an edit.
+    if (!ready.value || (!wasReady && !dirty.value)) { globalThis.clearTimeout(timer); return }
     editRevision++
     status.value = dirty.value ? '等待暂存…' : ''
     globalThis.clearTimeout(timer)
