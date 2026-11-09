@@ -1,3 +1,11 @@
+# 计划收尾验收发现（2026-11-09）
+
+- 第一册真实启动在NotebookLM上传前报file_input_missing。当前官方上传器xapScottyUploaderTrigger只在focus/mouseover时创建input；真实原生网页document.hasFocus=false时focus()不触发，稳定复现0个input。Playwright默认焦点模拟会掩盖该条件，关闭Emulation.setFocusEmulationEnabled后旧代码失败、新代码通过。最小修复以mouseover替代focus，保留唯一来源弹窗与输入校验，无额外请求/状态。45项音频脚本通过；证据和当前官方源码在output/playwright/acceptance-20261109。
+- 当前 dev / 5765b74，版本 0.54.0。正式进程位于 D:/书引 AI/shuyin-ai.exe；已发现真实主窗口，尚未执行生成或上传。
+- 现有 P23 隔离脚本从前置版本、6秒音频和现成SRT起跑，不能覆盖 P1、NotebookLM 或 ASR。三本真实整链必须单独运行。
+- Windows 原生拖入须从资源管理器实际拖拽，DOM模拟与填入路径不能代替。computer-use 提供窗口范围 drag；需要先核对实际窗口和手势支持。
+- P4 仍缺应用准入与正式提交/结果契约，不以网页准备或公开资料检查替代交付。
+
 # 自动制作 P2/P3/P4 续作发现（2026-11-08）
 
 - 已有改动将流程升级为workflowVersion=2，在同一VideoWork加入Transcript检查点、content-check-v1必要字段修订、第三尺寸映射及render_plan_sha256。v23暂停旧活动流程以保留原双封面授权，不将旧任务自动升级成三张付费图片。

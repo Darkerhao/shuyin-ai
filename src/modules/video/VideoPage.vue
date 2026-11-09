@@ -391,7 +391,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
         <h2 class="video-section-title">
           从本书音频开始
         </h2><p class="muted">
-          横屏 1920 × 1080 · 24 fps · 同款书卷手绘。支持两小时以内音频，具体物体逐笔绘制；不重新配音、不加配乐。
+          横屏 1920 × 1080 · 24 fps · 同款书卷手绘。按原声音频的完整时间轴制作，具体物体逐笔绘制；不重新配音、不加配乐。
         </p>
         <div class="video-form-grid">
           <div class="video-field">

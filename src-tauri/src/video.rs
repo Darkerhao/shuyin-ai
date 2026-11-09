@@ -270,8 +270,8 @@ impl VideoWork {
 }
 
 pub fn validate_cues(cues: &[Cue], duration: f64) -> Result<(), String> {
-    if !duration.is_finite() || !(0.0..=7200.0).contains(&duration) || duration == 0.0 {
-        return Err("首版支持时长不超过两小时的有效音频。".into());
+    if !duration.is_finite() || duration <= 0.0 {
+        return Err("音频时长无效，须为大于零的有限数值。".into());
     }
     if cues.is_empty() || cues.len() > 10000 {
         return Err("字幕为空或超过一万条。".into());
@@ -528,6 +528,17 @@ mod tests {
             10.0
         )
         .is_err());
+    }
+    #[test]
+    fn subtitles_use_the_full_audio_timeline_without_a_duration_cap() {
+        let subtitles =
+            "1\n00:00:00,000 --> 00:00:02,000\n开头\n\n2\n02:59:58,000 --> 03:00:00,000\n结尾";
+        let cues = parse_srt(subtitles, 10800.0).unwrap();
+        assert_eq!(cues[1].end, 10800.0);
+        for duration in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(validate_cues(&cues, duration).is_err());
+        }
+        assert!(validate_cues(&cues, 10799.0).is_err());
     }
     #[test]
     fn generated_storyboards_start_each_subject_at_the_first_cue_but_keep_later_conclusions() {

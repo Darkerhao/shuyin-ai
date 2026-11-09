@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "audio-duration-v2";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/audio-duration-v2.md");
+pub const PROMPT_VERSION: &str = "audio-duration-v3";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/audio-duration-v3.md");
 
 pub fn validate_duration(seconds: i64) -> Result<(), String> {
     if !(60..=86400).contains(&seconds) || seconds % 60 != 0 {

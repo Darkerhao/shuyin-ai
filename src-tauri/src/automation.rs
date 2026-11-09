@@ -378,9 +378,6 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
             };
             match job.status.as_str() {
                 "draft" if job.stage == "transcript_ready" => {
-                    if job.plan.duration > 900.0 {
-                        return Err("实际音频超过自动流程15分钟上限，音频和字幕已保留。".into());
-                    }
                     database.set_automation_stage(run, "content_check")?;
                 }
                 "draft" => {

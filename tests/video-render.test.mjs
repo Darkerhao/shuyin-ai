@@ -52,6 +52,31 @@ test('the entry point rejects an affected runtime before reading the task or loa
   assert.equal(result.stdout, '');
 });
 
+test('probe accepts long audio and rejects invalid durations', testContext => {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-duration-')));
+  assert.equal(path.dirname(directory), fs.realpathSync(os.tmpdir()));
+  testContext.after(() => fs.rmSync(directory, { recursive: true }));
+  const engine = path.join(directory, 'engine');
+  fs.mkdirSync(path.join(engine, 'tools'), { recursive: true });
+  fs.writeFileSync(path.join(engine, 'package.json'), JSON.stringify({ name: '@frametell/engine', version: '0.7.3' }));
+  const input = path.join(directory, 'input.json');
+  const output = path.join(directory, 'output.json');
+  fs.writeFileSync(input, JSON.stringify({ action: 'probe', engineRoot: engine, audioPath: 'original.m4a' }));
+  const script = fileURLToPath(new URL('../src-tauri/video/render.mjs', import.meta.url));
+  for (const duration of [10800, 0, -1, Infinity, NaN]) {
+    fs.writeFileSync(path.join(engine, 'tools/bins.mjs'), `export const FFMPEG = process.execPath; export const findChrome = () => true; export const probe = () => ({ duration: ${duration} });`);
+    if (fs.existsSync(output)) fs.unlinkSync(output);
+    const result = spawnSync(process.execPath, [script, input, output], { encoding: 'utf8', windowsHide: true, timeout: 4000 });
+    if (duration === 10800) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(fs.readFileSync(output, 'utf8')).duration, 10800);
+    } else {
+      assert.equal(result.status, 1);
+      assert.equal(fs.existsSync(output), false);
+    }
+  }
+});
+
 const plan = {
   title: '书籍原声', duration: 12,
   cues: [{ start: 0.5, end: 2, text: '第一句' }, { start: 5, end: 9, text: '第二句' }],

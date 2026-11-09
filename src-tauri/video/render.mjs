@@ -196,7 +196,7 @@ async function main(inputFile, outputFile) {
   const { FFMPEG, probe, findChrome } = await import(pathToFileURL(path.join(engine, 'tools/bins.mjs')));
   if (!fs.existsSync(FFMPEG) || !findChrome()) throw new Error('FFmpeg or Chrome/Edge is missing from the independent engine installation.');
   const metadata = probe(input.audioPath);
-  if (!(metadata.duration > 0 && metadata.duration <= 7200)) throw new Error('Audio must be readable and at most two hours.');
+  if (!Number.isFinite(metadata.duration) || metadata.duration <= 0) throw new Error('Audio must have a valid positive duration.');
   if (input.action === 'probe') {
     fs.writeFileSync(outputFile, JSON.stringify({ duration: metadata.duration, engineVersion: pkg.version }), { flag: 'wx' });
     return;

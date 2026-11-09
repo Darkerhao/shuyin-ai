@@ -256,14 +256,6 @@ pub(super) fn generation_run(
     .transpose()
 }
 
-pub(super) fn validate_target(seconds: i64) -> Result<(), String> {
-    crate::ai::audio::validate_duration(seconds)?;
-    if seconds > 900 {
-        return Err("自动制作的目标时长须为1—15分钟，请先调整并保存目标时长。".into());
-    }
-    Ok(())
-}
-
 fn task_version(
     connection: &Connection,
     task_id: Option<&str>,
@@ -407,7 +399,7 @@ impl Database {
             if !text.input.is_enabled || text.input.model_kind != "text" || !image.input.is_enabled || image.input.model_kind != "image" { return Err("请配置可用的文本模型和图片模型。".into()); }
             let id = new_id(&transaction)?;
             let target_duration_seconds = book.audio_duration_source.as_ref().map(|_| book.input.target_duration_seconds);
-            if let Some(seconds) = target_duration_seconds { validate_target(seconds)?; }
+            if let Some(seconds) = target_duration_seconds { crate::ai::audio::validate_duration(seconds)?; }
             let frozen = FrozenInput { workflow_version:2,title:book.input.title,author:book.input.author,description:book.input.description,source_notes:book.input.source_notes,target_duration_seconds,duration_reason:if target_duration_seconds.is_some() {"使用本书已保存的目标时长".into()} else {String::new()},source_sha256,text_provider:text.input,image_provider:image.input,selection:input.clone(),account };
             transaction.execute(&format!("INSERT INTO automation_runs(id,request_key,project_id,input_json,status,stage,created_at,updated_at) VALUES(?1,?2,?3,?4,'running',?5,{NOW},{NOW})"),params![id,input.request_key,input.project_id,serde_json::to_string(&frozen).map_err(|e|e.to_string())?,if target_duration_seconds.is_some() {"writing"} else {"duration"}]).map_err(|e|e.to_string())?;
             transaction.commit().map_err(|e|e.to_string())?;
@@ -519,7 +511,7 @@ impl Database {
             return Err("流程不在前置创作阶段。".into());
         }
         if !recommend_duration {
-            validate_target(
+            crate::ai::audio::validate_duration(
                 run.input
                     .target_duration_seconds
                     .ok_or("目标时长尚未确定。")?,
@@ -705,7 +697,6 @@ fn content_video(c: &Connection, run: &AutomationRun) -> Result<super::video::Vi
         || video.audio_asset_id != audio.asset_id
         || video.plan.audio_sha256.is_empty()
         || Some(&video.plan.audio_sha256) != audio.output_sha256.as_ref()
-        || video.plan.duration > 900.0
         || video
             .plan
             .subtitle_review
