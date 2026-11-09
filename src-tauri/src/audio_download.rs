@@ -206,7 +206,7 @@ fn start(
                         &message,
                     );
                 } else {
-                    automation.close_completed_notebook(&app, &completed.job_id);
+                    automation.audio_completed(&app, &completed.job_id);
                 }
             } else {
                 let _ = database.audio_report_error(

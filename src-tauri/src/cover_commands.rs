@@ -23,12 +23,14 @@ pub fn start_cover_generation(
 
 #[tauri::command]
 pub async fn execute_cover_generation(
+    app: tauri::AppHandle,
     database: State<'_, Database>,
     vault: State<'_, SystemCredentials>,
     active: State<'_, ActiveTasks>,
     id: String,
 ) -> Result<Asset, AiError> {
     execute_image_task(
+        &app,
         database.inner(),
         vault.inner(),
         active.inner(),
@@ -39,13 +41,14 @@ pub async fn execute_cover_generation(
 }
 
 pub(crate) async fn execute_image_task(
+    app: &tauri::AppHandle,
     database: &Database,
     vault: &SystemCredentials,
     active: &ActiveTasks,
     id: &str,
     kind: &str,
 ) -> Result<Asset, AiError> {
-    run_task(database, active, id, |mut receiver| async move {
+    let asset = run_task(database, active, id, |mut receiver| async move {
         let prepared = database.prepare_image_generation(id, kind).map_err(AiError::database)?;
         let request = ImageRequest {
             key: provider_key(&prepared.provider, vault)?,
@@ -62,7 +65,18 @@ pub(crate) async fn execute_image_task(
             response = provider.generate_image(request) => response?,
         };
         database.finish_image_generation(id, &bytes, kind).map_err(AiError::database)
-    }).await
+    }).await?;
+    use crate::completion::{notify, Completion};
+    notify(
+        app,
+        id,
+        if kind == "cover" {
+            Completion::CoverBackground
+        } else {
+            Completion::Illustration
+        },
+    );
+    Ok(asset)
 }
 
 #[tauri::command]
@@ -75,12 +89,17 @@ pub fn list_cover_versions(
 
 #[tauri::command]
 pub fn save_cover_version(
+    app: tauri::AppHandle,
     database: State<'_, Database>,
     project_id: String,
     config: CoverConfig,
     png: Option<Vec<u8>>,
 ) -> Result<CoverVersion, String> {
-    database.save_cover_version(&project_id, config, png.as_deref())
+    let version = database.save_cover_version(&project_id, config, png.as_deref())?;
+    if png.is_some() {
+        crate::completion::cover(&app, &version);
+    }
+    Ok(version)
 }
 
 #[tauri::command]

@@ -298,8 +298,19 @@ fn publish(app: &AppHandle, publisher: &DouyinPublisher, session: &Session) -> R
     if active.as_ref().is_some_and(|s| s.run_id != session.run_id) {
         return Err("此运行已经结束，请重新读取进度。".into());
     }
+    let ready = session.status == "review"
+        && active
+            .as_ref()
+            .is_none_or(|previous| previous.status != "review");
     *active = Some(session.clone());
     let _ = app.emit_to("main", "douyin-progress", session);
+    if ready {
+        crate::completion::notify(
+            app,
+            &format!("{}:{}", session.task_id, session.run_id),
+            crate::completion::Completion::PublishReady,
+        );
+    }
     Ok(())
 }
 

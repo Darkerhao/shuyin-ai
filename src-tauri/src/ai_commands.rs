@@ -171,6 +171,7 @@ pub fn cancel_generation(
 }
 #[tauri::command]
 pub async fn execute_generation(
+    app: tauri::AppHandle,
     database: State<'_, Database>,
     vault: State<'_, SystemCredentials>,
     active: State<'_, ActiveTasks>,
@@ -182,6 +183,7 @@ pub async fn execute_generation(
         channel.channel_on::<_, std::collections::BTreeMap<String, String>>(webview)
     });
     execute_writing_task(
+        &app,
         database.inner(),
         vault.inner(),
         active.inner(),
@@ -192,13 +194,14 @@ pub async fn execute_generation(
 }
 
 pub(crate) async fn execute_writing_task(
+    app: &tauri::AppHandle,
     database: &Database,
     vault: &SystemCredentials,
     active: &ActiveTasks,
     id: &str,
     on_preview: Option<tauri::ipc::Channel<std::collections::BTreeMap<String, String>>>,
 ) -> Result<GenerationResult, AiError> {
-    run_task(database, active, id, |mut receiver| async move {
+    let result = run_task(database, active, id, |mut receiver| async move {
         let prepared=database.prepare_generation(id).map_err(AiError::database)?;
         let model=prepared.provider.input.model_name.clone();
         let system=if prepared.input.recommend_duration { audio::SYSTEM_PROMPT } else if prepared.input.revision.is_some() { revision::SYSTEM_PROMPT } else { SYSTEM_PROMPT };
@@ -231,7 +234,18 @@ pub(crate) async fn execute_writing_task(
             let content=draft.into_content(&prepared.book_title,duration).map_err(|s|AiError::new("invalid_content",&s))?;
             database.finish_generation(id,&prepared.input,content,&model).map(GenerationResult::Version).map_err(AiError::database)
         }
-    }).await
+    }).await?;
+    use crate::completion::{notify, Completion};
+    notify(
+        app,
+        id,
+        match &result {
+            GenerationResult::Duration(_) => Completion::Duration,
+            GenerationResult::Preview(_) => Completion::Revision,
+            GenerationResult::Version(_) => Completion::Writing,
+        },
+    );
+    Ok(result)
 }
 
 // All generation types share registration, cancellation status and failure recording.

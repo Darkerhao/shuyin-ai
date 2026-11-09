@@ -4,6 +4,7 @@ mod audio;
 mod audio_commands;
 mod automation;
 mod commands;
+mod completion;
 mod cover_commands;
 mod credentials;
 mod database;

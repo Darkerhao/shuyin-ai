@@ -144,6 +144,7 @@ pub fn start_video_scene_revision(
 
 #[tauri::command]
 pub async fn execute_video_scene_revision(
+    app: AppHandle,
     database: State<'_, Database>,
     vault: State<'_, SystemCredentials>,
     active: State<'_, crate::ai::ActiveTasks>,
@@ -153,7 +154,7 @@ pub async fn execute_video_scene_revision(
     let database = database.inner();
     let vault = vault.inner();
     let id = id.as_str();
-    ai_commands::run_task(database, active.inner(), id, |mut receiver| async move {
+    let scene = ai_commands::run_task(database, active.inner(), id, |mut receiver| async move {
         let prepared = database.prepare_video_scene_revision(id).map_err(AiError::database)?;
         let request = ai_commands::request(prepared.provider, vault, &video::revision::prompt(), prepared.user)?;
         let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?.observed(database,Some(id),"video_scene_revision");
@@ -163,16 +164,20 @@ pub async fn execute_video_scene_revision(
             response = provider.generate(request) => response?,
         };
         database.finish_video_scene_revision(id, &raw).map_err(AiError::database)
-    }).await
+    }).await?;
+    crate::completion::notify(&app, id, crate::completion::Completion::SceneRevision);
+    Ok(scene)
 }
 #[tauri::command]
 pub async fn execute_video_illustration(
+    app: AppHandle,
     database: State<'_, Database>,
     vault: State<'_, SystemCredentials>,
     active: State<'_, crate::ai::ActiveTasks>,
     id: String,
 ) -> Result<crate::database::Asset, crate::ai::AiError> {
     crate::cover_commands::execute_image_task(
+        &app,
         database.inner(),
         vault.inner(),
         active.inner(),
@@ -693,12 +698,22 @@ async fn execute(
                 return Err("试片尺寸、时长或音轨未通过校验。".into());
             }
             db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")?;
+            crate::completion::notify(
+                app,
+                &format!("{}:{}", job.id, job.run_id),
+                crate::completion::Completion::Preview,
+            );
             return Ok(());
         }
         db.save_video_progress(&job.id, job.run_id, &job.plan, "validating")?;
         let subtitle = directory.join("subtitles.srt");
         process::write_new(&subtitle, video::to_srt(&job.plan.cues).as_bytes())?;
         db.finish_video_job(&job.id, job.run_id, &directory.join("video.mp4"), &subtitle)?;
+        crate::completion::notify(
+            app,
+            &format!("{}:{}", job.id, job.run_id),
+            crate::completion::Completion::Video,
+        );
         return Ok(());
     }
     if job.plan.cues.is_empty() {
@@ -780,6 +795,11 @@ async fn execute(
         let corrected = directory.join("proofread.srt");
         process::write_new(&corrected, video::to_srt(&job.plan.cues).as_bytes())?;
         db.register_video_subtitle(&job.id, job.run_id, &corrected)?;
+        crate::completion::notify(
+            app,
+            &format!("{}:{}", job.id, job.run_id),
+            crate::completion::Completion::Subtitles,
+        );
     }
     if matches!(work, VideoWork::Transcript) {
         db.finish_video_transcript(&job.id, job.run_id)?;
@@ -811,6 +831,11 @@ async fn execute(
         return Err("视频任务已停止。".into());
     }
     db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")?;
+    crate::completion::notify(
+        app,
+        &format!("{}:{}", job.id, job.run_id),
+        crate::completion::Completion::Storyboard,
+    );
     Ok(())
 }
 

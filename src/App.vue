@@ -7,6 +7,7 @@ import appLogo from '../assets/app-icon.svg'
 import AppIcon from './components/AppIcon.vue'
 import AppNotifications from './components/AppNotifications.vue'
 import AppConfirmation from './components/AppConfirmation.vue'
+import VoiceReminderToggle from './components/VoiceReminderToggle.vue'
 import OperationFeedback from './components/OperationFeedback.vue'
 import { useAppUpdates } from './composables/useAppUpdates'
 import RunningTasks from './components/RunningTasks.vue'
@@ -258,7 +259,7 @@ watch(router.currentRoute, async (to, from) => {
     </aside>
     <div class="app-workspace min-w-0">
       <div class="app-topbar">
-        <div class="flex items-center gap-3 text-sm">
+        <div class="flex min-w-0 items-center gap-3 text-sm">
           <RouterLink
             to="/projects"
             class="workspace-home"
@@ -268,7 +269,7 @@ watch(router.currentRoute, async (to, from) => {
             class="text-border"
             aria-hidden="true"
           >/</span><span
-            class="font-medium"
+            class="min-w-0 truncate font-medium"
             aria-current="page"
           >{{ workspaceTitle }}</span>
         </div>
@@ -319,6 +320,7 @@ watch(router.currentRoute, async (to, from) => {
               8. 模型设置
             </RouterLink>
           </nav>
+          <VoiceReminderToggle />
           <Button
             variant="outline"
             class="theme-toggle"
