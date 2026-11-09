@@ -28,15 +28,25 @@ pub fn save_publish_task(
 }
 #[tauri::command]
 pub fn prepare_publish_task(
+    app: tauri::AppHandle,
     database: State<'_, Database>,
     publisher: State<'_, crate::douyin::DouyinPublisher>,
     id: String,
 ) -> Result<PublishTask, String> {
     publisher.ensure_idle()?;
-    database.prepare_publish_task(&id)
+    let task = database.prepare_publish_task(&id)?;
+    if let Some(directory) = &task.task_directory {
+        crate::completion::notify(
+            &app,
+            directory,
+            crate::completion::Completion::PublishPackage,
+        );
+    }
+    Ok(task)
 }
 #[tauri::command]
 pub fn record_publish_success(
+    app: tauri::AppHandle,
     database: State<'_, Database>,
     publisher: State<'_, crate::douyin::DouyinPublisher>,
     id: String,
@@ -45,6 +55,7 @@ pub fn record_publish_success(
     publisher.ensure_idle()?;
     let task = database.record_publish_success(&id, input)?;
     publisher.release_recorded(&id);
+    crate::completion::notify(&app, &id, crate::completion::Completion::PublishRecorded);
     Ok(task)
 }
 #[tauri::command]

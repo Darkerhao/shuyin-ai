@@ -369,7 +369,8 @@ impl Database {
             return Err("无效的视频状态。".into());
         }
         self.with_connection(|c| {
-            c.execute(&format!("UPDATE video_jobs SET status=?1,error=?2,updated_at={NOW} WHERE id=?3 AND run_id=?4 AND status='running'"), params![status, error, id, run_id]).map_err(|e| e.to_string())?;
+            let changed = c.execute(&format!("UPDATE video_jobs SET status=?1,error=?2,updated_at={NOW} WHERE id=?3 AND run_id=?4 AND status='running'"), params![status, error, id, run_id]).map_err(|e| e.to_string())?;
+            if changed != 1 { return Err("视频任务已停止或运行代次已变化。".into()); }
             Ok(())
         })
     }
@@ -912,6 +913,37 @@ pub(crate) mod tests {
         assert_eq!(recovered["scenes"][0]["environment"], "path");
         assert_eq!(recovered["scenes"][0]["framing"], "detail");
         assert_eq!(recovered["scenes"][0]["beats"][0]["object"], "compass");
+    }
+
+    #[test]
+    fn completion_requires_the_current_running_video_job() {
+        let (_dir, db, input) = fixture();
+        let job = db.create_video_job(input).unwrap();
+        let running = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        db.end_video_job(&job.id, running.run_id, "cancelled", "用户停止")
+            .unwrap();
+        assert!(db
+            .end_video_job(&job.id, running.run_id, "awaiting_confirmation", "")
+            .is_err());
+        assert_eq!(db.video_job(&job.id).unwrap().status, "cancelled");
+        let resumed = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        assert!(db
+            .end_video_job(&job.id, running.run_id, "awaiting_confirmation", "")
+            .is_err());
+        assert_eq!(db.video_job(&job.id).unwrap().status, "running");
+        db.end_video_job(&job.id, resumed.run_id, "awaiting_confirmation", "")
+            .unwrap();
+        assert!(db
+            .end_video_job(&job.id, resumed.run_id, "awaiting_confirmation", "")
+            .is_err());
+        assert_eq!(
+            db.video_job(&job.id).unwrap().status,
+            "awaiting_confirmation"
+        );
     }
 
     #[test]

@@ -210,6 +210,7 @@ pub fn automation_cover(
 
 #[tauri::command]
 pub fn complete_automation_cover(
+    app: AppHandle,
     database: State<'_, Database>,
     id: String,
     run_id: i64,
@@ -230,12 +231,13 @@ pub fn complete_automation_cover(
         return Err("封面阶段已变化。".into());
     }
     let config = database.automation_cover_config(&run)?;
-    database.save_bound_cover_version(
+    let version = database.save_bound_cover_version(
         &run.project_id,
         config,
         Some(&png),
         Some(&run.binding(step.cover_slot)),
     )?;
+    crate::completion::cover(&app, &version);
     Ok(())
 }
 
@@ -320,6 +322,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                 database.set_automation_stage(run, if duration { "writing" } else { "audio" })?;
             } else if status == "pending" {
                 ai_commands::execute_writing_task(
+                    app,
                     &database,
                     &app.state::<SystemCredentials>(),
                     &app.state::<ActiveTasks>(),
@@ -445,6 +448,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                 database.set_automation_stage(run, step.cover_stage)?;
             } else if status == "pending" {
                 crate::cover_commands::execute_image_task(
+                    app,
                     &database,
                     &app.state::<SystemCredentials>(),
                     &app.state::<ActiveTasks>(),
@@ -604,5 +608,7 @@ async fn check_content(app: &AppHandle, run: &AutomationRun, id: &str) -> Result
         let provider = OpenAiCompatible::new(TIMEOUT,&request.base_url)?.observed(database,Some(id),"content_check");
         let raw = tokio::select! { biased; _=receiver.changed()=>return Err(AiError::new("cancelled","自动文案已取消。")), response=provider.generate(request)=>response? };
         database.finish_content_check_task(id,&raw).map_err(AiError::database)
-    }).await
+    }).await?;
+    crate::completion::notify(app, id, crate::completion::Completion::ContentCheck);
+    Ok(())
 }

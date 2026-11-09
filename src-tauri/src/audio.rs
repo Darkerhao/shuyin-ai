@@ -242,7 +242,8 @@ impl AudioAutomation {
         Ok(())
     }
     #[cfg(windows)]
-    fn close_completed_notebook(&self, app: &AppHandle, job_id: &str) {
+    fn audio_completed(&self, app: &AppHandle, job_id: &str) {
+        crate::completion::notify(app, job_id, crate::completion::Completion::Audio);
         let Ok(mut task) = self.window_task.lock() else {
             return;
         };
@@ -393,7 +394,7 @@ impl AudioAutomation {
         if matches!(job.stage.as_str(), "importing" | "verify_remote")
             && database.retry_audio_import(&job.id, job.run_id)?.is_some()
         {
-            self.close_completed_notebook(app, &job.id);
+            self.audio_completed(app, &job.id);
             return Ok(60);
         }
         let window = app
