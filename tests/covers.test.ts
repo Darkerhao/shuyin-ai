@@ -62,7 +62,7 @@ beforeEach(() => {
     return { ...initial, id: `v${versionNo}`, projectId, config, versionNo, exportedPath: png ? `D:/cover-${config.width}x${config.height}-v${versionNo}.png` : null }
   })
 })
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
 describe('M3 cover workflow', () => {
   it('opens the exact automatic export while retaining the editable recovery draft', async () => {
     const exact = { ...initial, id: 'automatic-cover', versionNo: 3, exportedPath: 'D:/automatic.png', config: { ...initial.config, title: '本次流程封面' } }
@@ -78,7 +78,9 @@ describe('M3 cover workflow', () => {
     expect(api.saveCover).not.toHaveBeenCalled()
   })
   it('opens the background workspace by default without changing the saved cover or starting generation', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const { wrapper } = await render('/projects/p1/covers')
+    await vi.advanceTimersByTimeAsync(400)
     expect(button(wrapper, '背景图片').attributes('data-state')).toBe('active')
     expect(wrapper.find('section[aria-label="可选 AI 背景"]').exists()).toBe(true)
     expect(wrapper.get('#cover-description').element).toHaveProperty('value', '')

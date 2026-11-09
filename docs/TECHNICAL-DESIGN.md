@@ -44,6 +44,8 @@ App根级`AutomationTasks`调用原`coverPng`导出；成功与失败回传匹�
 
 `useEditorDraft`继续串行化400ms暂存，并复用`useWindowCloseGuard`。窗口保护统一为一个原生`onCloseRequested`监听，依次等待各页面保存与全局任务确认；当前Tauri API每个监听独立决定destroy，不能为同一窗口并列注册多个自动销毁回调。浏览器beforeunload仍只做未保存保护，不承诺强制关闭前异步写入。
 
+2026-11-09修正初始化时序：自动暂存同时观察内容、未保存状态和就绪状态；首次就绪或重新载入时，未修改的已保存内容不安排写入。Vue批处理中的载入赋值不再被误认成编辑；就绪后真实修改、未保存内容的带入、封面尺寸选择等需保留的工作区状态仍按400ms暂存，显式保存及离页/关闭的串行写入保持原流程。确定性回归与发布检查见[发布故障记录](RELEASE.md#prepare-封面初始化测试修复2026-11-09)。
+
 v19将editor_drafts扩展为owner_id主键：旧文案/封面以书籍ID作为owner，资料为书籍ID或new，发布为书籍ID:任务ID或书籍ID:new。project_id保留可空外键用于书籍删除级联；仅新建书籍草稿可无project。使用已有read/save_editor_draft命令传owner，无新增权限。资料/发布正式保存事务清理对应owner，文件与业务校验仍在显式保存执行，恢复只填编辑器。续作查询识别资料和发布草稿，不将其误映射到文案。
 
 时长展开偏好使用本机localStorage的shuyin.writing-duration-open，不存业务数据库。CSS改动限制在创作页及其编辑文字。详见[验收记录](CREATOR-CONTINUITY-VERIFICATION.md)。

@@ -144,6 +144,36 @@ main 与 dev 的版本一致，但提交 SHA 不同，dev 未发布的业务改�
 
 修复需要合入 main 并推送，才能由新运行验证 GitHub Windows runner；重跑第68次旧运行仍使用旧测试。本地结果不代替四平台新CI、安装升级或外部模型验收；本轮未提交、推送或修改版本。
 
+## prepare 封面初始化测试修复（2026-11-09）
+
+[截图对应运行](https://github.com/Darkerhao/shuyin-ai/actions/runs/42506179612) 在 `prepare` 的封面测试失败，32个文件中31个通过，444项中443项通过；平台安装包、版本同步及发布均未开始。本地在修改前运行 `npx vitest run` 复现相同的 `tests/covers.test.ts` 断言：页面没有编辑，`saveDraft` 却收到了一次封面工作区写入。
+
+根因是 `useEditorDraft` 只监听内容和未保存状态。封面载入的内容赋值与 `ready = true` 被 Vue 3.5.44 合并调度，回调执行时只看到已经就绪，错误地安排400ms暂存；封面启用完整工作区保留后，即使没有未保存修改也会写入。原测试没有控制时间，单独运行可在400ms前结束，全量运行则暴露写入。当前安装版本的 `@vue/runtime-core` 调度实现与[Vue监听时序文档](https://vuejs.org/guide/essentials/watchers.html#callback-flush-timing)均已核对。
+
+修复在同一监听中加入就绪状态，并依据上次就绪值区分载入与后续编辑；载入未修改内容时不写草稿。真实编辑、还原已保存内容后清理普通草稿、切换封面尺寸时保留工作区、异步载入未保存内容、串行写入与关闭保护继续有效。未增加状态、依赖、配置或数据库迁移，属于 `fix` / patch。
+
+原封面测试现在使用可控定时器并明确推进400ms，修复前单独运行也稳定失败，修复后通过；另增加3项共用暂存回归。实际检查：
+
+| 命令 | 结果 |
+| --- | --- |
+| `npx vitest run tests/covers.test.ts tests/drafts.test.ts` | 60项通过 |
+| `npx vitest run tests/drafts.test.ts tests/updates.test.ts` | 21项通过 |
+| 完整 `npm test` 脚本（下方Node24.22.2启动命令） | 前端447项、视频39项、发布相关78项、队列19项通过；1项macOS专属检查按原设置跳过 |
+| `npm run lint` | 通过 |
+| `npm run typecheck` | 通过 |
+| `npm run build` | TypeScript及Vite生产构建通过；保留现有主包超过500kB的提示 |
+| `git diff --check` | 通过 |
+
+本机默认Node为24.11.0，完整测试中的视频入口按已有规则拒绝该版本，导致6项视频夹具无法生成；直接运行 `node src-tauri/video/render.mjs missing-video-input.json missing-video-output.json` 已确认具体版本错误。使用现有D盘Node24.22.2运行完整测试，未安装工具或更改系统PATH，实际启动命令为：
+
+```powershell
+$testNodeDirectory = 'D:\MyWork\software\shuyin-video-node\v24.22.2'
+$env:PATH = "$testNodeDirectory;$env:PATH"
+& (Join-Path $testNodeDirectory 'node.exe') 'D:\MyWork\software\nodejs\node_modules\npm\bin\npm-cli.js' test
+```
+
+验证中另有一次更新页面用例在并行工程检查期间达到原5秒超时；单独复核及顺序全量复核均通过，未改动该用例、超时配置或检查规则。本地验证未运行Rust、数据库迁移测试、Tauri安装包构建或桌面人工验收。用户随后授权先拉取dev、中文提交推送，再备份并拉取main、cherry-pick本次提交后推送；Git实际结果以分支历史和交付回复为准，四平台安装包及发布结果由main推送后的新运行确认。
+
 ## 本地验证
 
 ```powershell

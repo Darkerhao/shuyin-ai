@@ -10,6 +10,66 @@ vi.mock('@tauri-apps/api/core', () => ({ isTauri: vi.fn() }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }))
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks() })
 describe('serialized automatic drafts', () => {
+  it.each([false, true])('skips unchanged initialization and still saves edits with retained workspace = %s', async retainSavedDraft => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.mocked(saveDraft).mockResolvedValue(undefined)
+    const harness = {
+      setup() {
+        const content = ref({ text: '', activeSize: 0 })
+        const saved = ref('')
+        const ready = ref(false)
+        useEditorDraft(() => 'book', 'cover', content, () => 'v1', computed(() => content.value.text !== saved.value), ready, () => true, retainSavedDraft)
+        function load() {
+          content.value = { text: '已保存', activeSize: 0 }
+          saved.value = content.value.text
+          ready.value = true
+        }
+        return { content, load }
+      },
+      template: '<button aria-label="载入" @click="load">载入</button><textarea v-model="content.text" /><button aria-label="切换尺寸" @click="content.activeSize = 1">切换尺寸</button>',
+    }
+    const wrapper = mount(harness)
+    try {
+      await wrapper.get('[aria-label="载入"]').trigger('click')
+      await vi.advanceTimersByTimeAsync(400)
+      expect(saveDraft).not.toHaveBeenCalled()
+      await wrapper.get('textarea').setValue('未保存的修改')
+      await vi.advanceTimersByTimeAsync(399)
+      expect(saveDraft).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(saveDraft).toHaveBeenCalledExactlyOnceWith('book', 'cover', { basedOn: 'v1', content: { text: '未保存的修改', activeSize: 0 } })
+      await wrapper.get('textarea').setValue('已保存')
+      await vi.advanceTimersByTimeAsync(400)
+      expect(saveDraft).toHaveBeenLastCalledWith('book', 'cover', retainSavedDraft ? { basedOn: 'v1', content: { text: '已保存', activeSize: 0 } } : null)
+      if (retainSavedDraft) {
+        await wrapper.get('[aria-label="切换尺寸"]').trigger('click')
+        await vi.advanceTimersByTimeAsync(400)
+        expect(saveDraft).toHaveBeenLastCalledWith('book', 'cover', { basedOn: 'v1', content: { text: '已保存', activeSize: 1 } })
+      }
+    } finally { wrapper.unmount() }
+  })
+  it('autosaves unsaved content when asynchronous initialization becomes ready', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.mocked(saveDraft).mockResolvedValue(undefined)
+    const harness = {
+      setup() {
+        const content = ref({ text: '' })
+        const ready = ref(false)
+        useEditorDraft(() => 'book', 'writing', content, () => null, computed(() => !!content.value.text), ready, () => true)
+        return { content, ready }
+      },
+      template: '<textarea v-model="content.text" /><button @click="ready = true">载入完成</button>',
+    }
+    const wrapper = mount(harness)
+    try {
+      await wrapper.get('textarea').setValue('尚未保存的带入内容')
+      await vi.advanceTimersByTimeAsync(400)
+      expect(saveDraft).not.toHaveBeenCalled()
+      await wrapper.get('button').trigger('click')
+      await vi.advanceTimersByTimeAsync(400)
+      expect(saveDraft).toHaveBeenCalledExactlyOnceWith('book', 'writing', { basedOn: null, content: { text: '尚未保存的带入内容' } })
+    } finally { wrapper.unmount() }
+  })
   it('waits for asynchronous close preparation and blocks closing if it fails', async () => {
     vi.mocked(isTauri).mockReturnValue(true)
     let close!: (event: { preventDefault: () => void }) => Promise<void>
