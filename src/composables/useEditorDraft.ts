@@ -22,6 +22,7 @@ export function useEditorDraft<T>(projectId: () => string, kind: DraftKind, cont
   }
   function reset() {
     globalThis.clearTimeout(timer)
+    queue = queue.catch(() => {})
     status.value = ''; error.value = ''
   }
   watch([content, dirty, ready], (_, [, , wasReady]) => {
