@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## 工作台视觉升级（2026-11-10）
+
+书架沿用BookCard及原菜单，使用pointer事件更新书封CSS变量，离开/取消清理；只在鼠标与允许动效时响应。ProjectsPage使用Vue TransitionGroup及有key的单元素容器，避免BookCard多根节点影响位移动画。按钮、导航和书架继续使用全局主题变量及减少动态效果规则。
+
+AutomationTasks的六组阶段直接映射v2流程现有stage，前序完成依据执行器已推进的阶段；v1和未知阶段不推导新流程完成度。任务与版本链接从现有ID派生，不增加业务状态、请求或轮询。RunningTasks继续复用原服务。
+
+成果卡使用用途作为稳定唯一key，初稿与校核材料即使复用同一版本也保持独立节点；不能使用可能相同的跳转URL作key。封面页Ctrl/Cmd+S在存在Dialog/AlertDialog时仅阻止默认动作，不保存后台编辑稿，关闭预览后恢复原保存行为。
+
+CoversPage保持单份三尺寸编辑状态和原Canvas渲染，仅改变外部展示。封面历史展开时挂载最多六个已有CoverThumbnail，复用受限read_cover_export；放大预览复用Reka Dialog原语并Portal到body，与现有快捷键拦截、焦点与主题规则兼容。没有新增依赖、Tauri权限或数据库迁移。见[验收记录](VISUAL-UPGRADE-VERIFICATION.md)。
+
 ## 全局语音提醒（2026-11-10）
 
 Rust `completion.rs`向主窗口发送`workflow-completed`，载荷只含完成类型和任务/版本标识。通知放在原执行器成功写入结果之后，手动与自动文本/图片任务共用入口；音频归档、字幕/分镜/试片/视频、三尺寸封面导出、内容校核及发布流程按各自真实完成点触发。视频使用任务ID与运行代次，封面使用版本ID，抖音只在会话首次进入review时提示最终人工发布。错误或事件发送失败不会改写任务成果，不增加第二套业务状态或轮询。

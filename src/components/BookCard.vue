@@ -19,6 +19,21 @@ const menuReference = shallowRef<DropdownMenuContentProps['reference']>()
 const card = ref<globalThis.HTMLElement>()
 const videos = ref<Asset[]>([])
 const loaded = ref(false)
+function tiltBook(event: globalThis.PointerEvent) {
+  if (event.pointerType !== 'mouse' || !globalThis.matchMedia('(hover: hover) and (prefers-reduced-motion: no-preference)').matches) return
+  const surface = event.currentTarget as globalThis.HTMLElement
+  const bounds = surface.getBoundingClientRect()
+  const horizontal = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width))
+  const vertical = Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height))
+  surface.style.setProperty('--book-rotate-x', `${(0.5 - vertical) * 6}deg`)
+  surface.style.setProperty('--book-rotate-y', `${(horizontal - 0.5) * 10}deg`)
+  surface.style.setProperty('--book-light-x', `${horizontal * 100}%`)
+  surface.style.setProperty('--book-light-y', `${vertical * 100}%`)
+}
+function resetBook(event: globalThis.PointerEvent) {
+  const surface = event.currentTarget as globalThis.HTMLElement
+  for (const property of ['--book-rotate-x', '--book-rotate-y', '--book-light-x', '--book-light-y']) surface.style.removeProperty(property)
+}
 const { busy, error, message, run } = useOperation()
 const to = computed(() => props.resume ? resumeRoute(props.resume) : `/projects/${props.project.id}/writing`)
 const action = computed(() => props.resume ? resumeLabel(props.resume) : '继续创作')
@@ -81,6 +96,9 @@ const remove = async () => {
       :data-tone="tone"
       @contextmenu.prevent="openContextMenu"
       @keydown="menuShortcut"
+      @pointermove="tiltBook"
+      @pointerleave="resetBook"
+      @pointercancel="resetBook"
     >
       <RouterLink
         :to="to"
@@ -197,7 +215,8 @@ const remove = async () => {
 .book-status { padding: 2px 10px; border-radius: 999px; font: 400 10px/15px var(--font-mono); color: var(--warning); border-color: color-mix(in srgb, var(--warning) 30%, transparent); background: color-mix(in srgb, var(--warning) 15%, transparent); }
 .book-status[data-tone='ready'] { color: var(--info); border-color: color-mix(in srgb, var(--info) 30%, transparent); background: color-mix(in srgb, var(--info) 15%, transparent); }
 .book-status[data-tone='success'] { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 30%, transparent); background: color-mix(in srgb, var(--primary) 15%, transparent); }
-.book-jacket { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; height: var(--book-preview-height, 192px); padding: 16px; border: 1px solid #33415599; border-radius: 12px; background: linear-gradient(to bottom, #1e293b, #020617); box-shadow: inset 0 2px 4px #0000000d; text-align: center; transform: perspective(600px) rotateY(-8deg) rotateX(2deg); transition: transform 350ms cubic-bezier(.16,1,.3,1), box-shadow 350ms; }
+.book-jacket { position: relative; isolation: isolate; display: flex; flex-direction: column; align-items: center; justify-content: center; height: var(--book-preview-height, 192px); padding: 16px 22px; border: 1px solid #33415599; border-left: 5px solid #334155; border-radius: 5px 12px 12px 5px; background: linear-gradient(to bottom, #1e293b, #020617); box-shadow: 4px 4px 0 -1px #cbd5e133, 8px 8px 0 -3px #64748b33, 0 12px 22px -12px #00000080; text-align: center; transform: perspective(700px) rotateY(-6deg) rotateX(2deg); transition: transform 240ms cubic-bezier(.2,.8,.2,1), box-shadow 240ms; }
+.book-jacket::after { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none; background: radial-gradient(ellipse at var(--book-light-x, 20%) var(--book-light-y, 0%), #ffffff1f, transparent 65%); opacity: .35; transition: opacity 240ms; }
 .book-jacket::before { content: ''; position: absolute; inset: 0 0 auto; height: 4px; background: linear-gradient(to right, transparent, var(--info), transparent); }
 .project-card[data-tone='neutral'] .book-jacket { background: linear-gradient(to bottom, #0f172a, #020617); }
 .project-card[data-tone='warm'] .book-jacket { background: linear-gradient(to bottom, #451a0366, #0f172a, #020617); border-color: #78350f66; }
@@ -210,8 +229,9 @@ const remove = async () => {
 .book-facts { margin-top: 16px; padding: 4px 12px; border: 1px solid #1e293b; border-radius: 4px; background: #00000080; color: #94a3b8; font: 400 10px/15px var(--font-mono); }
 .project-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted-foreground); font: 400 12px/16px var(--font-mono); }
 .book-more { position: absolute; top: 19px; right: 16px; width: 24px; height: 24px; padding: 4px; border-radius: 8px; color: var(--muted-foreground); background: transparent; }
-@media (hover: hover) { .project-card:hover .book-jacket { transform: perspective(600px) rotateY(-2deg) rotateX(0deg) translateY(-6px); box-shadow: 0 15px 30px -5px #00ff9d40; } }
-@media (prefers-reduced-motion: reduce) { .book-jacket, .project-card:hover .book-jacket { transform: none; } }
+.project-card:focus-within .book-jacket { box-shadow: 4px 4px 0 -1px #cbd5e14d, 0 16px 28px -12px color-mix(in srgb, var(--info) 35%, transparent); }
+@media (hover: hover) and (pointer: fine) { .project-card:hover .book-jacket { transform: perspective(700px) rotateY(var(--book-rotate-y, -2deg)) rotateX(var(--book-rotate-x, 0deg)) translateY(-4px); box-shadow: 4px 4px 0 -1px #cbd5e14d, 0 18px 28px -12px color-mix(in srgb, var(--info) 35%, transparent); } .project-card:hover .book-jacket::after { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .book-jacket, .project-card:hover .book-jacket { transform: none; } .book-jacket::after { background: linear-gradient(135deg, #ffffff12, transparent); } }
 .book-context-menu { z-index: 50; width: 256px; max-width: calc(100vw - 24px); max-height: var(--reka-dropdown-menu-content-available-height); overflow-y: auto; padding: 6px; border: 1px solid var(--input-border); border-radius: 10px; background: var(--card); color: var(--foreground); box-shadow: var(--overlay-shadow); }
 .book-more[data-state="open"] { background: var(--accent); color: var(--primary); }
 .book-menu-label { padding: 8px 10px; font-size: 12px; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere; }

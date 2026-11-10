@@ -43,6 +43,8 @@ const currentSize = computed(() => coverSizes[editor.value.activeSize]!)
 const original = ref(JSON.stringify(editor.value.covers))
 const dirty = computed(() => original.value !== JSON.stringify(editor.value.covers))
 const versions = ref<CoverVersion[]>([])
+const historyOpen = ref(false)
+const recentExports = computed(() => versions.value.filter(version => version.exportedPath).slice(0, 6))
 const linkedCover = computed(() => versions.value.find(version => version.id === route.query.coverVersion))
 const selected = ref<CoverVersion | null>(null)
 const images = ref<Asset[]>([])
@@ -415,6 +417,7 @@ async function showEditor() {
 function saveShortcut(event: globalThis.KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
     event.preventDefault()
+    if (globalThis.document.querySelector('[role="dialog"], [role="alertdialog"]')) return
     if (ready.value && !busy.value && !deletingPreset.value) void save(false)
   }
 }
@@ -484,7 +487,10 @@ onMounted(async () => {
       <p class="text-sm text-muted-foreground">
         本次流程已导出的封面 · 下方编辑草稿保留
       </p>
-      <CoverThumbnail :cover="linkedCover" />
+      <CoverThumbnail
+        :cover="linkedCover"
+        expandable
+      />
     </section>
     <OperationFeedback
       v-else-if="ready && route.query.coverVersion"
@@ -1231,9 +1237,9 @@ onMounted(async () => {
           <div class="section-heading">
             <h2>
               <i
-                class="status-dot animate-ping"
+                class="status-dot"
                 aria-hidden="true"
-              /> 实时全息预览视口
+              /> 封面展示台
             </h2><span class="preview-dimensions">{{ draft.width }} × {{ draft.height }}</span>
           </div>
           <p
@@ -1369,12 +1375,18 @@ onMounted(async () => {
                 :disabled="busy"
                 @click="changeSize(index)"
               >
-                <canvas
-                  :ref="el => setPreviewCanvas(el, index)"
-                  :style="{ aspectRatio: `${size.width}/${size.height}` }"
-                  :aria-label="size.label"
-                  role="img"
-                />
+                <span class="size-preview-stage">
+                  <canvas
+                    :ref="el => setPreviewCanvas(el, index)"
+                    :style="{ aspectRatio: `${size.width}/${size.height}` }"
+                    :aria-label="size.label"
+                    role="img"
+                  />
+                  <span
+                    v-if="editor.activeSize === index"
+                    class="size-preview-selected"
+                  ><AppIcon name="check" /><span class="sr-only">当前编辑</span></span>
+                </span>
                 <strong>{{ size.label.split(' · ')[0] }}</strong><span>{{ size.width }} × {{ size.height }}</span>
                 <span
                   v-if="editor.covers[index]!.backgroundAssetId && !backgrounds[editor.covers[index]!.backgroundAssetId!]?.image"
@@ -1404,6 +1416,7 @@ onMounted(async () => {
         </section>
       </div>
       <Collapsible
+        v-model:open="historyOpen"
         class="history-panel"
         :unmount-on-hide="false"
       >
@@ -1433,6 +1446,21 @@ onMounted(async () => {
           </Button>
         </div>
         <CollapsibleContent>
+          <div
+            v-if="historyOpen && recentExports.length"
+            class="cover-history-gallery"
+            aria-label="最近导出的封面"
+          >
+            <p>最近导出 · 点击封面放大查看，恢复编辑请使用下方版本选择。</p>
+            <div class="cover-history-grid">
+              <CoverThumbnail
+                v-for="version in recentExports"
+                :key="version.id"
+                :cover="version"
+                expandable
+              />
+            </div>
+          </div>
           <label for="cover-history">恢复编辑配置</label><Select
             :model-value="selected?.id ?? null"
             :disabled="busy"
@@ -1613,8 +1641,8 @@ onMounted(async () => {
 .cover-preview h2 { display: flex; align-items: center; gap: 8px; font: 700 12px/16px var(--font-mono); }
 .cover-preview h2 .status-dot { width: 8px; height: 8px; background: var(--primary); }
 .preview-dimensions { font: 400 12px/16px var(--font-mono); color: var(--muted-foreground); }
-.canvas-stage { position: relative; display: flex; align-items: center; justify-content: center; padding: 8px 0; background: color-mix(in srgb, var(--terminal) 90%, transparent); border: 1px solid color-mix(in srgb, var(--secondary) 80%, transparent); border-radius: 16px; overflow: hidden; }
-.canvas-stage > canvas { display: block; max-width: 100%; height: auto; border-radius: 12px; box-shadow: 0 25px 50px -12px #00000040; }
+.canvas-stage { position: relative; display: flex; align-items: center; justify-content: center; padding: 28px 20px; background: radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--cover-accent) 10%, transparent), transparent 70%), var(--terminal); border: 1px solid color-mix(in srgb, var(--cover-accent) 20%, var(--border)); border-radius: 16px; overflow: hidden; }
+.canvas-stage > canvas { display: block; max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 22px 40px -16px #00000080, 0 0 0 1px #ffffff12; }
 .canvas-hint { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); padding: 4px 12px; border: 1px solid color-mix(in srgb, var(--cover-accent) 30%, transparent); border-radius: 999px; background: #000000bf; color: #fcd34d; font: 400 10px/15px var(--font-mono); text-align: center; pointer-events: none; opacity: 0; transition: opacity 150ms; }
 .canvas-stage:hover .canvas-hint, .canvas-stage:focus-within .canvas-hint { opacity: 1; }
 .cover-inline-editor { position: absolute; z-index: 2; min-height: 38px; background: var(--card); color: var(--foreground); }
@@ -1637,11 +1665,19 @@ onMounted(async () => {
 .png-format { display: inline-flex; align-items: center; gap: 4px; color: var(--primary); font-weight: 700; white-space: nowrap; }
 .png-format .status-dot { width: 6px; height: 6px; }
 .cover-thumbnails { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin-top: 12px; }
-.cover-thumbnails > .size-preview { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 0; width: 100%; min-width: 0; height: auto; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--input-surface); color: var(--muted-foreground); text-align: center; white-space: normal; }
-.size-preview[aria-pressed='true'] { border: 2px solid var(--cover-accent); color: var(--cover-accent); box-shadow: var(--panel-shadow); }
-.size-preview canvas { display: block; width: 100%; height: auto; border-radius: 4px; }
-.size-preview > strong { display: block; margin-top: 6px; font: 700 10px/15px var(--font-mono); }
-.size-preview > span { display: block; font: 400 9px/13.5px var(--font-mono); color: var(--muted-foreground); }
+.cover-thumbnails > .size-preview { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 0; width: 100%; min-width: 0; height: auto; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--input-surface); color: var(--muted-foreground); text-align: center; white-space: normal; transition: transform 200ms, border-color 200ms, box-shadow 200ms, background-color 200ms; }
+.size-preview[aria-pressed='true'] { border-color: var(--cover-accent); color: var(--cover-accent); box-shadow: inset 0 0 0 1px var(--cover-accent), var(--cover-glow); background: color-mix(in srgb, var(--cover-accent) 6%, var(--card)); }
+.size-preview-stage { position: relative; display: flex; align-items: center; justify-content: center; height: clamp(88px, 12vw, 148px); padding: 10px; background: var(--terminal); border-radius: 6px; }
+.size-preview canvas { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; border-radius: 2px; box-shadow: 0 8px 12px -5px #00000066; }
+.size-preview-selected { position: absolute; right: 4px; bottom: 4px; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: var(--card); background: var(--cover-accent); }
+.size-preview-selected .app-icon { width: 13px; height: 13px; }
+.size-preview > strong { display: block; margin-top: 10px; font: 700 12px/18px var(--font-mono); }
+.size-preview > span:not(.size-preview-stage) { display: block; font: 400 11px/16px var(--font-mono); color: var(--muted-foreground); }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) { .size-preview:hover:not(:disabled), .size-preview[aria-pressed='true'] { transform: translateY(-3px); } }
+.cover-history-gallery { margin: 16px 0; }
+.cover-history-gallery > p { font-size: 12px; color: var(--muted-foreground); }
+.cover-history-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.cover-history-grid :deep(figure) { min-width: 0; margin: 0; }
 .export-formats { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 8px; font: 400 12px/16px var(--font-mono); }
 .export-formats > div { display: flex; flex-wrap: wrap; gap: 16px; }
 .export-formats label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text-secondary); font: inherit; cursor: pointer; }

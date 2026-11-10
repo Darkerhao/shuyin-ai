@@ -64,6 +64,28 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
 describe('M3 cover workflow', () => {
+  it('keeps save shortcuts inside the history preview from saving the editor and restores saving after close', async () => {
+    const exported = { ...initial, exportedPath: 'D:/export.png' }
+    vi.mocked(api.listCovers).mockResolvedValue([exported])
+    vi.mocked(api.readCoverExport).mockResolvedValue(new ArrayBuffer(4))
+    vi.mocked(renderer.decodeBackground).mockResolvedValue({ src: 'data:image/png;base64,AAAA' } as globalThis.HTMLImageElement)
+    const { wrapper } = await render('/projects/p1/covers?tab=text&coverVersion=v1')
+    await wrapper.get('#cover-title').setValue('预览期间保留编辑')
+    await wrapper.get('button[aria-label="放大查看封面 v1"]').trigger('click'); await flushPromises()
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    for (const modifiers of [{ ctrlKey: true }, { metaKey: true }]) {
+      document.querySelector('[role="dialog"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ...modifiers, bubbles: true, cancelable: true }))
+      await flushPromises()
+      expect(api.saveCover).not.toHaveBeenCalled()
+      expect(wrapper.get('#cover-title').element).toHaveProperty('value', '预览期间保留编辑')
+    }
+    ;(document.querySelector('[aria-label="关闭封面预览"]') as HTMLButtonElement).click(); await flushPromises()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    globalThis.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true }))
+    await flushPromises()
+    expect(api.saveCover).toHaveBeenCalledTimes(3)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '预览期间保留编辑', width: 1440 }), null)
+  })
   it('opens the exact automatic export while retaining the editable recovery draft', async () => {
     const exact = { ...initial, id: 'automatic-cover', versionNo: 3, exportedPath: 'D:/automatic.png', config: { ...initial.config, title: '本次流程封面' } }
     vi.mocked(api.listCovers).mockResolvedValue([initial, exact])
