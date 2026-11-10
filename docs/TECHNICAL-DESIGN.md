@@ -1,5 +1,11 @@
 # 书引 AI 技术设计文档
 
+## 视频制作工作台升级（2026-11-10）
+
+VideoPage将原创建表单及运行环境放入同一Collapsible，根据初次加载的jobs长度设置defaultOpen，忙碌时禁止折叠。选择值与配置仍在原页面ref中；设置子树保持挂载，保留环境检查用途、报告与错误，只按Collapsible的open插槽值挂载AudioPlayer，收起复用其卸载暂停。运行环境保留原内部折叠，内外内容容器关闭时清除padding/border，避免hidden-until-found仍占空白。不复制检查报告或另建展开状态。
+
+字幕、分镜、试片保持同一任务编辑状态，按顺序展示；goToSection只滚动并聚焦带tabindex=-1的语义分区。预览缩略图沿用focusScene；完成视频仍只读。VideoJobProgress复用原阶段与计数，紧凑呈现保存成果，将实际成片播放器前置，完成后不重复展示分镜摘要。删除被替代的框线、光点和整段等宽字体样式，无新持久化状态、请求、轮询、依赖、权限或SQL迁移。详见[设计与验收](VIDEO-WORKBENCH-UPGRADE.md)。
+
 ## 内容创作与作品交付台（2026-11-10）
 
 WritingPage复用generationJobs的preview/status及原versions列表，派生流式候选与尚未取用的最新AI版本；不持有第二份业务稿、不新增请求/轮询。候选采用Vue Transition短入场，正文直接显示真实快照；历史取用、按项提交与自动暂存仍沿原调用链。单列网格使用minmax(0,1fr)，避免历史版本长文本撑开页面。

@@ -252,6 +252,11 @@ function focusScene(index: number) {
   card?.scrollIntoView?.({ block: 'nearest' })
   card?.querySelector('input')?.focus({ preventScroll: true })
 }
+function goToSection(section: 'subtitles' | 'storyboard' | 'preview') {
+  const target = jobPanel.value?.querySelector<globalThis.HTMLElement>(`#video-workbench-${section}`)
+  target?.scrollIntoView({ block: 'start' })
+  target?.focus({ preventScroll: true })
+}
 const regenerate = () => run(async () => {
   if (!selected.value) return
   if (!providerId.value) throw new Error('请选择已启用的文本模型生成分镜。')
@@ -354,7 +359,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
         >{{ config.engineRoot && config.nodePath ? 'Frametell · 已配置路径' : '视频环境待配置' }}</span>
       </div>
       <p class="muted">
-        让书中的观点动起来，逐笔手绘书卷动态，保留原汁原味的声音与思考。
+        听原声、校字幕、调分镜，让这本书成为一支完整的视频。
       </p>
     </header>
     <ProjectNavigation
@@ -392,180 +397,193 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
       v-else
       class="video-workspace"
     >
-      <section class="panel video-inputs">
-        <h2 class="video-section-title">
-          从本书音频开始
-        </h2><p class="muted">
-          横屏 1920 × 1080 · 24 fps · 同款书卷手绘。按原声音频的完整时间轴制作，具体物体逐笔绘制；不重新配音、不加配乐。
-        </p>
-        <div class="video-form-grid">
-          <div class="video-field">
-            <label for="video-audio">制作音频</label><Select
-              v-model="audioId"
-              :disabled="running || busy"
-            >
-              <SelectTrigger
-                id="video-audio"
-                class="w-full min-w-0"
-              >
-                <SelectValue placeholder="选择本书音频" />
-              </SelectTrigger><SelectContent>
-                <SelectItem
-                  v-for="asset in audios"
-                  :key="asset.id"
-                  :value="asset.id"
-                >
-                  {{ asset.originalName }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div class="video-field">
-            <label for="video-provider">字幕校对与分镜模型</label><Select
-              v-model="providerId"
-              :disabled="running || busy"
-            >
-              <SelectTrigger
-                id="video-provider"
-                class="w-full min-w-0"
-              >
-                <SelectValue placeholder="选择已启用的文本模型" />
-              </SelectTrigger><SelectContent>
-                <SelectItem
-                  v-for="provider in providers"
-                  :key="provider.id"
-                  :value="provider.id"
-                >
-                  {{ provider.name }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div class="video-field video-subtitle-source">
-            <label for="video-subtitle-source">字幕来源</label><Select
-              v-model="subtitleId"
-              :disabled="running || busy"
-            >
-              <SelectTrigger
-                id="video-subtitle-source"
-                class="w-full min-w-0"
-              >
-                <SelectValue />
-              </SelectTrigger><SelectContent>
-                <SelectItem value="auto">
-                  从原声自动识别
-                </SelectItem><SelectItem
-                  v-for="asset in subtitles"
-                  :key="asset.id"
-                  :value="asset.id"
-                >
-                  {{ asset.originalName }}
-                </SelectItem>
-              </SelectContent>
-            </Select><p class="muted">
-              已有 SRT 可在发布准备的素材管理中关联；使用已有字幕不需要语音模型。
-            </p>
-          </div>
-        </div>
-        <AudioPlayer
-          v-if="audioId"
-          :project-id="id"
-          :asset-id="audioId"
-          :title="title"
-          :format="audios.find(asset => asset.id === audioId)?.originalName.split('.').pop()?.toUpperCase()"
-          subtitle="制作原声 · 本地音频"
-          aria-label="所选原声音频"
-        />
-        <p
-          v-if="!audios.length"
-          class="notice"
-        >
-          尚无可用音频。请先在音频制作中生成或导入成品。
-        </p>
-        <p
-          v-if="!providers.length"
-          class="notice"
-        >
-          请先在模型设置中配置可用的文本模型，用于字幕校对和生成分镜。
-        </p>
-        <Button
-          class="video-primary-action"
-          :disabled="running || busy || !audioId || !providerId || !config.engineRoot || !config.nodePath"
-          @click="create"
-        >
-          <AppIcon name="bolt" />生成字幕与分镜
-        </Button>
-      </section>
-
       <Collapsible
-        class="panel video-runtime"
-        :default-open="!config.engineRoot || !config.nodePath"
+        v-slot="{ open: setupOpen }"
+        class="panel video-setup"
+        :default-open="!jobs.length"
+        :disabled="busy"
         :unmount-on-hide="false"
       >
-        <CollapsibleTrigger class="disclosure-trigger video-runtime-trigger">
+        <CollapsibleTrigger class="disclosure-trigger video-setup-trigger">
+          <AppIcon name="headphones" />
           <span>
-            <span class="video-section-title">视频运行环境 · 首次使用时配置</span>
-            <span class="muted">独立安装的引擎还需 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘。</span>
+            <span class="video-section-title">制作设置</span>
+            <span class="muted">{{ jobs.length ? '音频、模型与运行环境；从原声制作另一版视频。' : '选择原声与模型，开始制作第一支视频。' }}</span>
           </span>
           <AppIcon name="chevron" />
         </CollapsibleTrigger>
-        <CollapsibleContent class="video-runtime-content">
+        <CollapsibleContent class="video-inputs">
           <p class="muted">
-            独立安装的引擎还需要 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘；不自动下载。字幕生成后自动分批校对，再生成分镜，会增加文本模型用量与等待时间。仅发送字幕、书名、作者及已保存音频提示词的首尾参考，不发送音频。
+            横屏 1920 × 1080 · 24 fps · 同款书卷手绘。按原声音频的完整时间轴制作，具体物体逐笔绘制；不重新配音、不加配乐。
           </p>
           <div class="video-form-grid">
-            <div
-              v-for="field in runtimeFields"
-              :key="field.key"
-              class="video-field"
-            >
-              <label :for="`video-${field.key}`">{{ field.label }}</label><div class="video-path">
-                <Input
-                  :id="`video-${field.key}`"
-                  v-model="config[field.key]"
-                  :disabled="busy || running"
-                  :aria-describedby="`hint-${field.key}`"
-                /><Button
-                  variant="outline"
-                  :disabled="busy || running"
-                  :aria-label="`选择${field.label}`"
-                  @click="choosePath(field.key, field.directory)"
-                >
-                  选择
-                </Button>
-              </div><p
-                :id="`hint-${field.key}`"
-                class="muted"
+            <div class="video-field">
+              <label for="video-audio">制作音频</label><Select
+                v-model="audioId"
+                :disabled="running || busy"
               >
-                {{ field.hint }}
+                <SelectTrigger
+                  id="video-audio"
+                  class="w-full min-w-0"
+                >
+                  <SelectValue placeholder="选择本书音频" />
+                </SelectTrigger><SelectContent>
+                  <SelectItem
+                    v-for="asset in audios"
+                    :key="asset.id"
+                    :value="asset.id"
+                  >
+                    {{ asset.originalName }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div class="video-field">
+              <label for="video-provider">字幕校对与分镜模型</label><Select
+                v-model="providerId"
+                :disabled="running || busy"
+              >
+                <SelectTrigger
+                  id="video-provider"
+                  class="w-full min-w-0"
+                >
+                  <SelectValue placeholder="选择已启用的文本模型" />
+                </SelectTrigger><SelectContent>
+                  <SelectItem
+                    v-for="provider in providers"
+                    :key="provider.id"
+                    :value="provider.id"
+                  >
+                    {{ provider.name }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div class="video-field video-subtitle-source">
+              <label for="video-subtitle-source">字幕来源</label><Select
+                v-model="subtitleId"
+                :disabled="running || busy"
+              >
+                <SelectTrigger
+                  id="video-subtitle-source"
+                  class="w-full min-w-0"
+                >
+                  <SelectValue />
+                </SelectTrigger><SelectContent>
+                  <SelectItem value="auto">
+                    从原声自动识别
+                  </SelectItem><SelectItem
+                    v-for="asset in subtitles"
+                    :key="asset.id"
+                    :value="asset.id"
+                  >
+                    {{ asset.originalName }}
+                  </SelectItem>
+                </SelectContent>
+              </Select><p class="muted">
+                已有 SRT 可在发布准备的素材管理中关联；使用已有字幕不需要语音模型。
               </p>
             </div>
           </div>
-          <div class="actions">
-            <Button
-              :disabled="busy || running"
-              @click="saveConfig"
-            >
-              保存运行环境
-            </Button><Button
-              variant="ghost"
-              :disabled="busy || !configDirty"
-              @click="config = JSON.parse(savedConfig)"
-            >
-              还原配置
-            </Button>
-          </div>
-          <VideoEnvironmentCheck
-            :settings="config"
-            :has-subtitles="subtitleId !== 'auto' || !!selected?.plan.cues.length"
-            :disabled="busy || running"
-            @working="environmentWorking = $event"
-            @apply="config = $event"
-            @choose="choosePath($event, $event === 'engineRoot' || $event === 'modelPath')"
+          <AudioPlayer
+            v-if="audioId && setupOpen"
+            :project-id="id"
+            :asset-id="audioId"
+            :title="title"
+            :format="audios.find(asset => asset.id === audioId)?.originalName.split('.').pop()?.toUpperCase()"
+            subtitle="制作原声 · 本地音频"
+            aria-label="所选原声音频"
           />
-          <p class="muted">
-            Frametell 为 AGPL-3.0 引擎，当前不随书引捆绑分发；首次准备步骤见 MG 视频使用文档。
+          <p
+            v-if="!audios.length"
+            class="notice"
+          >
+            尚无可用音频。请先在音频制作中生成或导入成品。
           </p>
+          <p
+            v-if="!providers.length"
+            class="notice"
+          >
+            请先在模型设置中配置可用的文本模型，用于字幕校对和生成分镜。
+          </p>
+          <Button
+            class="video-primary-action"
+            :disabled="running || busy || !audioId || !providerId || !config.engineRoot || !config.nodePath"
+            @click="create"
+          >
+            <AppIcon name="bolt" />生成字幕与分镜
+          </Button>
+          <Collapsible
+            class="panel video-runtime"
+            :default-open="!config.engineRoot || !config.nodePath"
+            :unmount-on-hide="false"
+          >
+            <CollapsibleTrigger class="disclosure-trigger video-runtime-trigger">
+              <span>
+                <span class="video-section-title">视频运行环境 · 首次使用时配置</span>
+                <span class="muted">独立安装的引擎还需 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘。</span>
+              </span>
+              <AppIcon name="chevron" />
+            </CollapsibleTrigger>
+            <CollapsibleContent class="video-runtime-content">
+              <p class="muted">
+                独立安装的引擎还需要 Chrome/Edge、FFmpeg 和字体。转写在本地 CPU 运行，模型建议放 D 盘；不自动下载。字幕生成后自动分批校对，再生成分镜，会增加文本模型用量与等待时间。仅发送字幕、书名、作者及已保存音频提示词的首尾参考，不发送音频。
+              </p>
+              <div class="video-form-grid">
+                <div
+                  v-for="field in runtimeFields"
+                  :key="field.key"
+                  class="video-field"
+                >
+                  <label :for="`video-${field.key}`">{{ field.label }}</label><div class="video-path">
+                    <Input
+                      :id="`video-${field.key}`"
+                      v-model="config[field.key]"
+                      :disabled="busy || running"
+                      :aria-describedby="`hint-${field.key}`"
+                    /><Button
+                      variant="outline"
+                      :disabled="busy || running"
+                      :aria-label="`选择${field.label}`"
+                      @click="choosePath(field.key, field.directory)"
+                    >
+                      选择
+                    </Button>
+                  </div><p
+                    :id="`hint-${field.key}`"
+                    class="muted"
+                  >
+                    {{ field.hint }}
+                  </p>
+                </div>
+              </div>
+              <div class="actions">
+                <Button
+                  :disabled="busy || running"
+                  @click="saveConfig"
+                >
+                  保存运行环境
+                </Button><Button
+                  variant="ghost"
+                  :disabled="busy || !configDirty"
+                  @click="config = JSON.parse(savedConfig)"
+                >
+                  还原配置
+                </Button>
+              </div>
+              <VideoEnvironmentCheck
+                :settings="config"
+                :has-subtitles="subtitleId !== 'auto' || !!selected?.plan.cues.length"
+                :disabled="busy || running"
+                @working="environmentWorking = $event"
+                @apply="config = $event"
+                @choose="choosePath($event, $event === 'engineRoot' || $event === 'modelPath')"
+              />
+              <p class="muted">
+                Frametell 为 AGPL-3.0 引擎，当前不随书引捆绑分发；首次准备步骤见 MG 视频使用文档。
+              </p>
+            </CollapsibleContent>
+          </Collapsible>
         </CollapsibleContent>
       </Collapsible>
 
@@ -578,10 +596,10 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           <div class="video-job-heading">
             <div>
               <h2 class="video-section-title">
-                任务与成片
+                当前制作任务
               </h2>
               <p class="muted">
-                当前任务进度、错误诊断与本地渲染产物
+                进度与成果随任务更新，可切换查看历史制作。
               </p>
             </div><Select
               :model-value="selectedId"
@@ -678,6 +696,32 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           </VideoJobProgress>
         </section>
         <template v-if="selected">
+          <nav
+            v-if="editable && selected.plan.cues.length"
+            class="video-section-nav"
+            aria-label="视频编辑分区"
+          >
+            <span>继续校对</span>
+            <Button
+              variant="ghost"
+              @click="goToSection('subtitles')"
+            >
+              <AppIcon name="headphones" />字幕校对
+            </Button>
+            <Button
+              variant="ghost"
+              @click="goToSection('storyboard')"
+            >
+              <AppIcon name="pen" />分镜精修
+            </Button>
+            <Button
+              v-if="completePlan"
+              variant="ghost"
+              @click="goToSection('preview')"
+            >
+              <AppIcon name="video" />试片与成片
+            </Button>
+          </nav>
           <Button
             v-if="editorJobId !== selected.id && !['running', 'succeeded'].includes(selected.status)"
             variant="outline"
@@ -687,10 +731,18 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
             重新读取字幕与草稿
           </Button>
           <template v-if="editable && selected.plan.cues.length">
-            <section class="panel video-proofread">
+            <section
+              id="video-workbench-subtitles"
+              class="panel video-proofread"
+              tabindex="-1"
+              aria-labelledby="video-subtitles-heading"
+            >
               <div class="video-editor-heading">
-                <h2 class="video-section-title">
-                  字幕与分镜校对
+                <h2
+                  id="video-subtitles-heading"
+                  class="video-section-title"
+                >
+                  字幕校对
                 </h2><p class="muted">
                   以实际原声为准，AI 校对后仍需试听人名和外语；每条字幕最多32字。“保存字幕并重新生成分镜”会先重新校对全文。原始 SRT 保留在本书素材中。
                 </p>
@@ -753,17 +805,101 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               </div>
             </section>
             <section
+              id="video-workbench-storyboard"
+              class="panel video-refinement"
+              tabindex="-1"
+              aria-labelledby="video-storyboard-heading"
+            >
+              <header class="video-refinement-heading">
+                <div class="video-editor-heading">
+                  <h2
+                    id="video-storyboard-heading"
+                    class="video-section-title"
+                  >
+                    分镜精修
+                  </h2>
+                  <p class="muted">
+                    按原声时间码逐镜调整，试听后再决定画面与文字。
+                  </p>
+                </div>
+                <span class="video-scene-count">{{ scenes.length }} 镜</span>
+              </header>
+              <aside
+                v-if="storyboardNotes.length"
+                class="video-storyboard-notes"
+                aria-label="分镜观看提醒"
+              >
+                <h3>观看提醒</h3>
+                <p class="muted">
+                  请结合原声判断，必要的停留和回扣可以保留；不会自动改稿。
+                </p>
+                <ul>
+                  <li
+                    v-for="note in storyboardNotes"
+                    :key="`${note.sceneIndex}-${note.code}`"
+                  >
+                    <Button
+                      variant="link"
+                      @click="focusScene(note.sceneIndex)"
+                    >
+                      第{{ note.sceneIndex + 1 }}镜
+                    </Button>
+                    <span>{{ note.message }}</span>
+                  </li>
+                </ul>
+              </aside>
+              <div class="video-scenes">
+                <VideoSceneEditor
+                  v-for="(scene, index) in scenes"
+                  :key="index"
+                  :project-id="id"
+                  :scene-index="index"
+                  :scene="scene"
+                  :cues="selected.plan.cues"
+                  :assets="assets"
+                  :providers="imageProviders"
+                  :disabled="busy"
+                  :image-disabled="busy || running || !completePlan"
+                  :revision-disabled="running || !completePlan || !providerId"
+                  :playing="playbackScene === index"
+                  :audio-available="!!subtitleEditor?.audio"
+                  @play="subtitleEditor?.play(scene.first)"
+                  @revise="reviseScene(index)"
+                  @focusin="position = { ...position, section: 'scene', index }"
+                  @update:scene="scenes[index] = $event"
+                  @refresh-assets="refreshImages"
+                  @working="imageWorking = $event"
+                />
+              </div>
+              <p class="muted">
+                共{{ Object.keys(visualCatalog.objects).length }}种手绘物体，每镜最多3个主体。场景只作环境示意，特写突出首个主体，对照保持等权；“重点物体＋特写”在时长允许时轻推近一次。
+              </p>
+            </section>
+            <section
               v-if="completePlan"
+              id="video-workbench-preview"
               class="panel video-preview"
-              aria-label="原声试片"
+              tabindex="-1"
+              aria-labelledby="video-preview-heading"
             >
               <div class="video-editor-heading">
-                <h2 class="video-section-title">
-                  先看一小段，再做整片
+                <h2
+                  id="video-preview-heading"
+                  class="video-section-title"
+                >
+                  试片与成片
                 </h2>
                 <p class="muted">
                   使用当前校对和同一绘图流程。试片不是正式成片，不会登记到发布素材。
                 </p>
+              </div>
+              <div
+                v-if="!previewKey"
+                class="video-preview-empty"
+              >
+                <AppIcon name="video" />
+                <strong>{{ dirty ? '校对有修改，生成试片查看最新画面' : '先看一小段，再做整片' }}</strong>
+                <p>选择起始分镜，先检查原声、字幕与画面是否合拍。</p>
               </div>
               <div class="video-preview-controls">
                 <div class="video-field">
@@ -859,65 +995,14 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   缩略图来自本次试片，最多展示12镜。点击可定位校对；修改后需重新生成试片。
                 </p>
               </template>
-            </section>
-            <aside
-              v-if="storyboardNotes.length"
-              class="video-storyboard-notes"
-              aria-label="分镜观看提醒"
-            >
-              <h2 class="video-section-title">
-                观看提醒
-              </h2><p class="muted">
-                不是格式错误，也不会自动改稿。请结合原声判断，必要的停留和回扣可以保留。
-              </p>
-              <ul>
-                <li
-                  v-for="note in storyboardNotes"
-                  :key="`${note.sceneIndex}-${note.code}`"
-                >
-                  <Button
-                    variant="link"
-                    @click="focusScene(note.sceneIndex)"
-                  >
-                    第{{ note.sceneIndex + 1 }}镜
-                  </Button><span>{{ note.message }}</span>
-                </li>
-              </ul>
-            </aside>
-            <section class="panel video-refinement">
-              <header class="video-refinement-heading">
-                <h2 class="video-section-title">
-                  可视化动画分镜精修台
-                </h2>
-                <span class="muted">共 {{ scenes.length }} 镜分镜 · 按原声时间码调整</span>
-              </header>
-              <div class="video-scenes">
-                <VideoSceneEditor
-                  v-for="(scene, index) in scenes"
-                  :key="index"
-                  :project-id="id"
-                  :scene-index="index"
-                  :scene="scene"
-                  :cues="selected.plan.cues"
-                  :assets="assets"
-                  :providers="imageProviders"
-                  :disabled="busy"
-                  :image-disabled="busy || running || !completePlan"
-                  :revision-disabled="running || !completePlan || !providerId"
-                  :playing="playbackScene === index"
-                  :audio-available="!!subtitleEditor?.audio"
-                  @play="subtitleEditor?.play(scene.first)"
-                  @revise="reviseScene(index)"
-                  @focusin="position = { ...position, section: 'scene', index }"
-                  @update:scene="scenes[index] = $event"
-                  @refresh-assets="refreshImages"
-                  @working="imageWorking = $event"
-                />
-              </div>
               <div class="video-render-action">
-                <p class="muted">
-                  共{{ Object.keys(visualCatalog.objects).length }}种手绘物体，每镜最多3个主体。场景只作环境示意，特写突出首个主体，对照保持等权；“重点物体＋特写”在时长允许时轻推近一次。请先看试片，确认后再生成整片，原音频与旧成片保留。
-                </p><Button
+                <div>
+                  <h3>画面确认后，制作完整视频</h3>
+                  <p class="muted">
+                    使用当前校对与完整原声，保留原音频和已有成片。
+                  </p>
+                </div>
+                <Button
                   data-test="render-video"
                   class="video-primary-action"
                   :disabled="busy || running || !completePlan"
@@ -945,37 +1030,47 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 </template>
 
 <style scoped>
-.video-page, .video-workspace, .video-task-workspace { display: grid; gap: 24px; min-width: 0; }
+.video-page, .video-workspace, .video-task-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; min-width: 0; }
 .video-backbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
 .video-backbar .back-link { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; font: 400 12px/18px var(--font-mono); }
 .video-backbar .back-link:hover, .video-backbar button .app-icon { color: var(--video-accent); }
 .video-backbar button { min-height: 30px; height: auto; padding: 6px 14px; flex-shrink: 0; font: 400 12px/16px var(--font-mono); }
 .video-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
-.video-heading h1 { margin: 0; font-size: 30px; line-height: 36px; font-weight: 900; letter-spacing: -.75px; }
+.video-heading h1 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -.5px; }
 .video-heading p { margin: 4px 0 0; font-size: 14px; line-height: 20px; }
 .video-environment-badge { padding: 2px 10px; border: 1px solid var(--video-border); border-radius: 999px; background: var(--video-surface); color: var(--video-accent); font: 400 12px/16px var(--font-mono); }
 .video-page :deep(.project-navigation) { margin: 0; }
 .video-page :deep(.project-navigation a:not(.is-current) .app-icon) { display: none; }
-.video-inputs, .video-job, .video-proofread, .video-refinement, .video-preview { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; padding: 24px; min-width: 0; }
+.video-inputs, .video-job, .video-proofread, .video-refinement, .video-preview { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 24px; min-width: 0; }
 .video-inputs { gap: 20px; }
+.video-setup { padding: 0; }
+.video-setup-trigger { display: flex; align-items: center; gap: 14px; width: 100%; padding: 18px 24px; text-align: left; }
+.video-setup-trigger > span { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.video-setup-trigger > .app-icon:first-child { color: var(--video-accent); width: 22px; height: 22px; }
+.video-setup-trigger > .app-icon:last-child { transform: rotate(90deg); transition: transform 180ms; }
+.video-setup-trigger[data-state='open'] > .app-icon:last-child { transform: rotate(-90deg); }
+.video-setup-trigger::after { display: none; }
+.video-setup-trigger:hover { background: var(--accent); }
+.video-setup-trigger .video-section-title { border: 0; padding: 0; }
+.video-setup .video-inputs { border-top: 1px solid var(--border); }
+.video-setup .video-inputs[data-state='closed'] { padding: 0; border: 0; }
 .video-workspace .panel { margin: 0; background: var(--panel-surface); box-shadow: var(--panel-shadow); }
-.video-workspace .muted { margin: 0; font: 400 12px/1.65 var(--font-mono); }
+.video-workspace .muted { margin: 0; font: 400 12px/1.75 var(--font-sans); }
 .video-inputs > .muted { line-height: 16px; }
-.video-workspace :deep(button), .video-workspace :deep(input), .video-workspace :deep(textarea) { font-family: var(--font-mono); font-size: 12px; }
+.video-workspace :deep(button), .video-workspace :deep(input) { font-family: var(--font-sans); font-size: 13px; }
 .video-workspace :deep(label) { margin: 0; }
 .video-workspace :deep([data-slot='select-trigger']) { background: var(--input-surface); }
-.video-section-title { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--foreground); font-size: 16px; line-height: 24px; font-weight: 700; letter-spacing: .4px; }
-.video-section-title::before { content: ''; width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%; background: var(--video-accent); box-shadow: 0 0 8px var(--video-accent); }
+.video-section-title { display: flex; align-items: center; margin: 0; padding-left: 12px; border-left: 3px solid var(--video-accent); color: var(--foreground); font-size: 16px; line-height: 24px; font-weight: 650; }
 .video-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 16px; }
 .video-field { display: grid; align-content: start; gap: 6px; min-width: 0; }
-.video-field label { color: var(--muted-foreground); font: 700 12px/16px var(--font-mono); }
+.video-field label { color: var(--text-secondary); font: 500 13px/20px var(--font-sans); }
 .video-field [role='combobox'] { width: 100%; min-width: 0; }
 .video-inputs [role='combobox'] { height: 42px; padding: 12px; }
 #video-audio { color: var(--video-accent); }
 #video-provider { color: var(--primary); }
 .video-subtitle-source { grid-column: 1 / -1; }
 .video-workspace :deep([data-slot='select-value']) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
-.video-field .muted { font-size: 11px; line-height: 16.5px; }
+.video-field .muted { font-size: 12px; line-height: 1.65; }
 .video-inputs :deep(.audio-player:not([data-theme='oled'])) { background: var(--player-surface); border-color: var(--player-line); }
 .video-workspace :deep(.audio-waveform) { padding: 12px; border: 1px solid var(--player-line); border-radius: 12px; background: var(--player-surface); }
 .video-workspace :deep(.waveform-surface), .video-workspace :deep(.waveform-image) { height: 48px; }
@@ -986,51 +1081,63 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-workspace :deep(.player-state) { padding: 4px 12px; border: 1px solid color-mix(in srgb, var(--player-accent) 30%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--player-accent) 10%, transparent); }
 .video-workspace :deep(.player-jump) { width: auto; gap: 4px; background: var(--input-surface); }
 .video-workspace :deep(.player-jump span) { display: inline; font-size: 10px; }
-.video-primary-action { height: auto; min-height: 44px; padding: 12px 24px; border: 0; border-radius: 12px; color: var(--primary-foreground); font-weight: 900; background: var(--action-gradient); box-shadow: var(--primary-glow); }
+.video-primary-action { height: auto; min-height: 44px; padding: 12px 24px; border: 0; border-radius: 10px; color: var(--primary-foreground); font-weight: 650; background: var(--primary); }
 .video-primary-action:hover:not(:disabled) { filter: brightness(1.08); }
 .video-inputs > .video-primary-action { width: 100%; }
 .video-runtime { padding: 0; overflow: hidden; }
 .video-runtime-trigger { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 16px; padding: 20px; text-align: left; }
 .video-runtime-trigger > span { display: grid; gap: 4px; min-width: 0; }
 .video-runtime-trigger .video-section-title { font-size: 14px; }
-.video-runtime-trigger .video-section-title::before { background: var(--info); box-shadow: 0 0 8px var(--info); }
-.video-runtime-trigger .muted { padding-left: 20px; font-size: 11px; }
+.video-runtime-trigger .video-section-title { border-color: var(--info); }
+.video-runtime-trigger .muted { padding-left: 15px; font-size: 12px; }
 .video-runtime-trigger > .app-icon { transform: rotate(90deg); transition: transform 180ms; }
 .video-runtime-trigger::after { display: none; }
 .video-runtime-trigger[data-state='open'] > .app-icon { transform: rotate(-90deg); }
 .video-runtime-trigger:hover { background: color-mix(in srgb, var(--secondary) 40%, transparent); }
 .video-runtime-content { display: grid; gap: 20px; padding: 20px 24px 24px; border-top: 1px solid var(--border); }
+.video-runtime-content[data-state='closed'] { padding: 0; border: 0; }
 .video-path { display: flex; gap: 8px; min-width: 0; }
 .video-path input { min-width: 0; }
 .video-job-heading, .video-refinement-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .video-job-heading > div { min-width: 0; }
-.video-job-heading p { margin-top: 4px; padding-left: 20px; font-size: 11px; }
+.video-job-heading p { margin-top: 4px; padding-left: 15px; font-size: 12px; }
 .video-job-heading [role='combobox'] { width: auto; min-width: 0; max-width: 360px; }
 .video-task-workspace { scroll-margin-top: calc(var(--workspace-sticky-top) + 20px); }
+.video-section-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 0; border-block: 1px solid var(--border); }
+.video-section-nav > span { padding-inline: 12px; font-size: 12px; color: var(--muted-foreground); }
+.video-section-nav button { gap: 8px; }
+.video-section-nav .app-icon { color: var(--video-accent); }
+.video-proofread, .video-refinement, .video-preview { scroll-margin-top: calc(var(--workspace-sticky-top) + 20px); }
+.video-proofread:focus-visible, .video-refinement:focus-visible, .video-preview:focus-visible { outline: 2px solid var(--video-accent); outline-offset: 4px; }
 .video-job-actions { gap: 12px; margin: 0; }
 .video-stop-action { color: var(--destructive); border-color: color-mix(in srgb, var(--destructive) 33%, transparent); }
 .video-publish-action { margin-left: auto; }
-.video-proofread .video-section-title::before, .video-refinement .video-section-title::before { background: var(--primary); box-shadow: 0 0 8px var(--primary); }
+.video-proofread .video-section-title { border-color: var(--info); }
+.video-scene-count { padding: 4px 12px; border-radius: 6px; color: var(--video-accent); background: var(--video-surface); font: 500 12px/20px var(--font-mono); white-space: nowrap; align-self: flex-start; }
 .video-editor-heading { display: grid; gap: 6px; }
 .video-draft-status { margin: -12px 0 0; }
-.video-draft-status p { font-size: 11px; }
+.video-draft-status p { font-size: 12px; }
 .video-editor-actions { margin: 0; padding-top: 16px; border-top: 1px solid var(--border); gap: 12px; }
 .video-preview-controls { display: grid; grid-template-columns: minmax(0, 2fr) minmax(100px, 1fr) auto; gap: 16px; align-items: end; }
-.video-preview .video-section-title::before { background: var(--info); box-shadow: 0 0 8px var(--info); }
+.video-preview .video-section-title { border-color: var(--primary); }
+.video-preview-empty { display: grid; justify-items: center; align-content: center; gap: 10px; min-height: 200px; padding: 24px; border: 1px dashed var(--input-border); border-radius: 12px; background: var(--input-surface); text-align: center; }
+.video-preview-empty > .app-icon { width: 28px; height: 28px; color: var(--video-accent); }
+.video-preview-empty strong { font-size: 14px; font-weight: 500; }
+.video-preview-empty p { margin: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.7; }
 .video-preview-caption { margin: 0; color: var(--primary); font: 400 12px/1.65 var(--font-mono); }
 .video-thumbnails { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .video-thumbnail { display: grid; gap: 8px; text-align: left; border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--card); min-width: 0; }
 .video-thumbnail img { width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 4px; }
 .video-thumbnail span { font-size: 12px; overflow-wrap: anywhere; }
-.video-storyboard-notes { display: grid; gap: 10px; padding: 20px; border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent); background: color-mix(in srgb, var(--primary) 18%, transparent); border-radius: 16px; box-shadow: var(--panel-shadow); }
-.video-storyboard-notes .video-section-title { color: var(--primary); font-size: 14px; }
-.video-storyboard-notes .video-section-title::before { width: 6px; height: 6px; background: currentColor; box-shadow: none; }
+.video-storyboard-notes { display: grid; gap: 8px; padding: 16px; border-left: 3px solid var(--warning); background: var(--warning-surface); border-radius: 0 8px 8px 0; }
+.video-storyboard-notes h3 { margin: 0; color: var(--warning); font-size: 14px; font-weight: 600; }
 .video-storyboard-notes ul { padding: 0; margin: 8px 0 0; max-height: 220px; overflow-y: auto; }
-.video-storyboard-notes li { display: flex; gap: 10px; align-items: baseline; margin-top: 6px; font: 400 12px/1.7 var(--font-mono); }
+.video-storyboard-notes li { display: flex; gap: 10px; align-items: baseline; margin-top: 6px; font: 400 13px/1.7 var(--font-sans); }
 .video-storyboard-notes button { padding: 0; height: auto; color: var(--primary); flex-shrink: 0; }
 .video-scenes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 20px; max-height: 760px; overflow: auto; padding: 3px; }
 .video-render-action { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: 1px solid var(--border); padding-top: 16px; }
 .video-render-action .muted { max-width: 640px; }
+.video-render-action h3 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
 .video-render-action button { flex-shrink: 0; }
 .video-empty { display: grid; justify-items: center; gap: 12px; padding: 40px 24px; text-align: center; }
 .video-empty > .app-icon { width: 32px; height: 32px; color: var(--video-accent); }
@@ -1039,6 +1146,7 @@ video { display: block; width: 100%; max-height: 640px; aspect-ratio: 16 / 9; ba
 @media (max-width: 1100px) { .video-job-heading, .video-refinement-heading, .video-render-action { align-items: stretch; flex-direction: column; gap: 12px; } .video-job-heading [role='combobox'] { width: 100%; max-width: none; } }
 @media (max-width: 980px) { .video-form-grid, .video-scenes, .video-preview-controls { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 600px) { .video-backbar { align-items: flex-start; flex-direction: column; gap: 12px; } .video-backbar button { align-self: flex-end; } .video-publish-action { margin-left: 0; } .video-thumbnails { grid-template-columns: minmax(0, 1fr); } .video-job-actions, .video-editor-actions { align-items: stretch; flex-direction: column; } }
-@media (max-width: 520px) { .video-inputs, .video-job, .video-proofread, .video-refinement, .video-preview { padding: 16px; } .video-runtime-content { padding: 16px; } .video-runtime-trigger { padding: 16px; } .video-runtime-trigger .muted { display: none; } }
+@media (max-width: 520px) { .video-inputs, .video-job, .video-proofread, .video-refinement, .video-preview { padding: 16px; } .video-runtime-content { padding: 16px; } .video-runtime-trigger, .video-setup-trigger { padding: 16px; } .video-runtime-trigger .muted { display: none; } .video-section-nav > span { flex-basis: 100%; } }
+@media (prefers-reduced-motion: reduce) { .video-setup-trigger > .app-icon, .video-runtime-trigger > .app-icon { transition: none; } }
 @media (prefers-reduced-transparency: reduce) { .video-workspace .panel { background: var(--card); } }
 </style>

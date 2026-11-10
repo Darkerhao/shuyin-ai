@@ -209,6 +209,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
       </template>
     </div>
 
+    <slot />
     <div class="creation-output">
       <div class="output-summary">
         <span class="output-label">这次创作</span>
@@ -222,7 +223,10 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
           <strong>{{ job.plan.scenes.length || '待编排' }}<small v-if="job.plan.scenes.length"> 镜</small></strong><span>已保存分镜</span>
         </div>
       </div>
-      <div class="output-preview">
+      <div
+        v-if="job.status !== 'succeeded'"
+        class="output-preview"
+      >
         <template v-if="previewScenes.length">
           <div class="preview-heading">
             <AppIcon name="video" /><span>最近完成的分镜</span><small>已保存</small>
@@ -286,14 +290,13 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
     >
       <slot name="actions" />
     </div>
-    <slot />
   </div>
 </template>
 
 <style scoped>
-.creation-progress { --progress-tone: var(--video-accent); display: grid; gap: 24px; min-width: 0; padding: 24px; border: 1px solid color-mix(in srgb, var(--progress-tone) 40%, transparent); border-radius: 16px; background: var(--card); font-family: var(--font-mono); }
+.creation-progress { --progress-tone: var(--video-accent); display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; min-width: 0; font-family: var(--font-sans); }
 .creation-progress[data-status='succeeded'], .creation-progress[data-status='awaiting_confirmation'] { --progress-tone: var(--primary); }
-.creation-progress[data-status='failed'] { --progress-tone: var(--destructive); background: var(--error-surface); box-shadow: 0 0 30px -5px #ef444426; }
+.creation-progress[data-status='failed'] { --progress-tone: var(--destructive); }
 .creation-progress[data-status='cancelled'], .creation-progress[data-status='draft'] { --progress-tone: var(--muted-foreground); }
 .progress-hero { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .progress-emblem { display: grid; place-items: center; width: 56px; height: 56px; flex-shrink: 0; color: var(--progress-tone); border: 1px solid color-mix(in srgb, var(--progress-tone) 35%, transparent); border-radius: 16px; background: color-mix(in srgb, var(--progress-tone) 10%, transparent); }
@@ -305,16 +308,15 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .progress-dot { width: 8px; height: 8px; background: currentColor; border-radius: 50%; }
 .is-animating .progress-dot { animation: progress-pulse 2s ease-in-out infinite; }
 .progress-intro h3 { margin: 4px 0 2px; color: var(--foreground); font: 700 20px/28px var(--font-sans); }
-.creation-progress[data-status='succeeded'] .progress-intro h3, .creation-progress[data-status='failed'] .progress-intro h3 { font-size: 24px; line-height: 32px; font-weight: 900; }
 .progress-intro p { margin: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.65; }
 .elapsed-time { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; color: var(--muted-foreground); font-size: 12px; padding: 8px 16px; background: var(--input-surface); border: 1px solid var(--border); border-radius: 12px; }
 .elapsed-time .app-icon { width: 14px; height: 14px; }
 .elapsed-time strong { color: var(--foreground); font-weight: 700; font-variant-numeric: tabular-nums; }
 .creation-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 8px 0 0; list-style: none; border-top: 1px solid var(--border); }
-.creation-steps li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 6px; align-content: start; align-items: center; padding: 10px; min-width: 0; color: var(--muted-foreground); font-size: 12px; font-weight: 700; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--input-surface) 50%, transparent); }
+.creation-steps li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; align-content: start; align-items: center; padding: 10px; min-width: 0; color: var(--muted-foreground); font-size: 12px; font-weight: 600; border-bottom: 2px solid var(--border); border-radius: 6px 6px 0 0; }
 .step-marker { display: flex; align-items: center; font-size: 11px; font-variant-numeric: tabular-nums; }
 .step-marker .app-icon { width: 14px; height: 14px; }
-.creation-steps li > small { grid-column: 1 / -1; color: var(--muted-foreground); font-size: 10px; font-weight: 400; }
+.creation-steps li > small { grid-column: 1 / -1; color: var(--muted-foreground); font-size: 12px; font-weight: 400; }
 .creation-steps .is-current { color: var(--progress-tone); border-color: color-mix(in srgb, var(--progress-tone) 40%, transparent); background: color-mix(in srgb, var(--progress-tone) 10%, var(--card)); }
 .creation-steps .is-current > small { color: var(--progress-tone); }
 .creation-steps .is-done { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 30%, transparent); background: var(--accent); }
@@ -336,23 +338,23 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .render-phases li { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted-foreground); font-size: 12px; }
 .render-phase-marker { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 24px; border: 1px solid var(--input-border); border-radius: 8px; font-size: 10px; }
 .render-phase-marker .app-icon { width: 13px; height: 13px; }
-.render-phases small { display: block; margin-top: 2px; font-size: 10px; }
+.render-phases small { display: block; margin-top: 2px; font-size: 12px; }
 .render-phases [data-state='done'] { color: var(--primary); }
 .render-phases [data-state='current'] { color: var(--progress-tone); }
 .render-phases [data-state='current'] .render-phase-marker { border-color: var(--progress-tone); background: var(--video-surface); }
-.creation-output { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 20px; padding-top: 8px; }
-.output-summary, .output-preview { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--terminal) 80%, transparent); }
-.output-summary { display: grid; align-content: start; gap: 8px; }
+.creation-output { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.output-summary, .output-preview { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--input-surface); }
+.output-summary { display: grid; grid-template-columns: auto repeat(3, minmax(0, 1fr)); align-items: center; gap: 16px; }
 .output-label { font-size: 12px; font-weight: 700; color: var(--muted-foreground); }
-.output-metric { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
-.output-metric > strong { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.output-metric { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }
+.output-metric > strong { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .output-metric:nth-last-child(2) > strong { color: var(--info); }
 .output-metric:last-child > strong { color: var(--primary); }
 .output-metric strong small { font-size: 12px; font-weight: 400; }
 .output-metric > span { color: var(--muted-foreground); font-size: 12px; }
 .preview-heading { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-bottom: 8px; margin-bottom: 10px; border-bottom: 1px solid var(--border); color: var(--info); font-size: 12px; font-weight: 700; }
 .preview-heading .app-icon { width: 15px; height: 15px; }
-.preview-heading small { margin-left: auto; font-size: 10px; color: var(--muted-foreground); font-weight: 400; }
+.preview-heading small { margin-left: auto; font-size: 12px; color: var(--muted-foreground); font-weight: 400; }
 .subtitle-preview { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }
 .subtitle-preview li { display: flex; gap: 10px; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--input-surface) 60%, transparent); font-size: 12px; line-height: 1.65; }
 .subtitle-preview time { flex-shrink: 0; color: var(--video-accent); font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -362,12 +364,12 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .scene-preview > div { min-width: 0; }
 .scene-number { flex-shrink: 0; padding: 2px 8px; background: var(--secondary); border-radius: 4px; color: var(--video-accent); font-size: 12px; font-weight: 700; }
 .scene-preview strong { font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
-.scene-preview p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
+.scene-preview p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 12px; overflow-wrap: anywhere; }
 .preview-placeholder { display: grid; min-height: 125px; align-content: center; justify-items: center; text-align: center; gap: 8px; color: var(--muted-foreground); }
 .preview-placeholder .app-icon { width: 24px; height: 24px; }
 .preview-placeholder strong { font-size: 12px; font-weight: 500; }
-.preview-placeholder p { margin: 0; font-size: 11px; }
-.progress-note { display: flex; gap: 8px; align-items: flex-start; margin: 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.7; }
+.preview-placeholder p { margin: 0; font-size: 12px; }
+.progress-note { display: flex; gap: 8px; align-items: flex-start; margin: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.7; }
 .progress-note .app-icon { width: 14px; height: 14px; margin-top: 2px; }
 .sync-warning { color: var(--warning); }
 .progress-error { padding: 16px; border: 1px solid color-mix(in srgb, var(--destructive) 30%, transparent); border-radius: 12px; background: var(--error-surface); color: var(--destructive); font-size: 12px; }
@@ -376,7 +378,7 @@ onBeforeUnmount(() => { if (clock) globalThis.clearInterval(clock) })
 .progress-actions { padding-top: 16px; border-top: 1px solid var(--border); }
 @keyframes progress-pulse { 50% { opacity: .4; } }
 @media (max-width: 1100px) { .progress-hero { flex-wrap: wrap; } .elapsed-time { margin-left: 72px; } .creation-output { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 700px) { .creation-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } .render-phases { grid-template-columns: repeat(2, minmax(0, 1fr)); } .scene-preview-list { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 520px) { .creation-progress { padding: 16px; gap: 20px; } .progress-hero { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 12px; } .progress-emblem { grid-column: 1; grid-row: 1; } .progress-intro { grid-column: 1 / -1; grid-row: 2; } .elapsed-time { grid-column: 2; grid-row: 1; justify-self: end; margin: 0; padding: 8px; } .elapsed-time .app-icon { display: none; } .creation-steps li { padding: 8px; } .render-phases { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 700px) { .creation-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } .render-phases { grid-template-columns: repeat(2, minmax(0, 1fr)); } .scene-preview-list { grid-template-columns: minmax(0, 1fr); } .output-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; } .output-label { grid-column: 1 / -1; } }
+@media (max-width: 520px) { .progress-hero { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 12px; } .progress-emblem { grid-column: 1; grid-row: 1; } .progress-intro { grid-column: 1 / -1; grid-row: 2; } .elapsed-time { grid-column: 2; grid-row: 1; justify-self: end; margin: 0; padding: 8px; } .elapsed-time .app-icon { display: none; } .creation-steps li { padding: 8px; } .render-phases { grid-template-columns: minmax(0, 1fr); } .output-summary { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .progress-dot { animation: none; } }
 </style>

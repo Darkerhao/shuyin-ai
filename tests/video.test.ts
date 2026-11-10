@@ -14,7 +14,7 @@ import VideoSceneRevision from '../src/modules/video/VideoSceneRevision.vue'
 import VideoSubtitleEditor from '../src/modules/video/VideoSubtitleEditor.vue'
 import * as drafts from '../src/services/drafts'
 vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
-vi.mock('../src/services/video', () => ({ originalCues: vi.fn(), settings: vi.fn(), saveSettings: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), chooseRuntimePath: vi.fn(), chooseImage: vi.fn(), importImage: vi.fn(), readImage: vi.fn(), startIllustration: vi.fn(), executeIllustration: vi.fn() }))
+vi.mock('../src/services/video', () => ({ originalCues: vi.fn(), settings: vi.fn(), saveSettings: vi.fn(), checkEnvironment: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), chooseRuntimePath: vi.fn(), chooseImage: vi.fn(), importImage: vi.fn(), readImage: vi.fn(), startIllustration: vi.fn(), executeIllustration: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: () => true, getProject: vi.fn(), listAssets: vi.fn(), mediaSource: vi.fn(), openAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn() }))
 vi.mock('../src/services/audioWaveform', () => ({ loadWaveform: vi.fn().mockResolvedValue([.2, .6, .8, .1]) }))
@@ -36,12 +36,78 @@ beforeEach(() => {
   vi.mocked(projects.mediaSource).mockResolvedValue('http://asset.localhost/audio.m4a')
 })
 afterEach(() => { mounted.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals() })
-async function render(onStoryboardUpdate?: () => void) {
+async function render(onStoryboardUpdate?: () => void, openSetup = true) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/projects/:id/video', component: VideoPage, props: true }, { path: '/:pathMatch(.*)*', component: { template: '<p>其他页面</p>' } }] })
   await router.push('/projects/p1/video?audio=a1'); await router.isReady()
-  const wrapper = mount({ template: '<router-view />' }, { global: { plugins: [router], mixins: [{ updated() { if (this.$options.name === 'UiSelect' && this.$el.parentElement?.closest('.video-scenes')) onStoryboardUpdate?.() } }] } }); mounted.push(wrapper)
-  await flushPromises(); return wrapper
+  const wrapper = mount({ template: '<router-view />' }, { attachTo: document.body, global: { plugins: [router], mixins: [{ updated() { if (this.$options.name === 'UiSelect' && this.$el.parentElement?.closest('.video-scenes')) onStoryboardUpdate?.() } }] } }); mounted.push(wrapper)
+  await flushPromises()
+  if (openSetup && wrapper.get('.video-setup-trigger').attributes('aria-expanded') === 'false') {
+    await wrapper.get('.video-setup-trigger').trigger('click')
+    await flushPromises()
+  }
+  return wrapper
 }
+it('keeps existing tasks foremost and preserves setup choices and editor changes when collapsing settings', async () => {
+  const wrapper = await render(undefined, false)
+  expect(wrapper.get('.video-setup-trigger').attributes('aria-expanded')).toBe('false')
+  expect(wrapper.get('.video-inputs').isVisible()).toBe(false)
+  expect(wrapper.find('audio[aria-label="所选原声音频"]').exists()).toBe(false)
+  await wrapper.get('.video-setup-trigger').trigger('click'); await flushPromises()
+  const selector = wrapper.findAllComponents({ name: 'UiSelect' }).find(select => select.find('#video-audio').exists())!
+  selector.vm.$emit('update:modelValue', 'another-audio'); await flushPromises()
+  await wrapper.get('#video-subtitles').setValue('保留本次校对')
+  await wrapper.get('.video-setup-trigger').trigger('click'); await flushPromises()
+  expect(wrapper.find('audio[aria-label="所选原声音频"]').exists()).toBe(false)
+  expect((wrapper.get('#video-subtitles').element as HTMLTextAreaElement).value).toBe('保留本次校对')
+  await wrapper.get('.video-setup-trigger').trigger('click'); await flushPromises()
+  expect(wrapper.findAllComponents({ name: 'UiSelect' }).find(select => select.find('#video-audio').exists())!.props('modelValue')).toBe('another-audio')
+  expect(api.startJob).not.toHaveBeenCalled()
+  expect(api.savePlan).not.toHaveBeenCalled()
+})
+it('opens creation settings for a book without video tasks', async () => {
+  vi.mocked(api.listJobs).mockResolvedValue([])
+  const wrapper = await render(undefined, false)
+  expect(wrapper.get('.video-setup-trigger').attributes('aria-expanded')).toBe('true')
+  expect(wrapper.find('#video-audio').exists()).toBe(true)
+  expect(wrapper.text()).toContain('还没有视频任务')
+  expect(wrapper.find('[aria-label="视频编辑分区"]').exists()).toBe(false)
+})
+it('retains the chosen environment check purpose and report when settings are collapsed', async () => {
+  const wrapper = await render()
+  await wrapper.get('.video-runtime-trigger').trigger('click'); await flushPromises()
+  await chooseSelect(wrapper, '#environment-mode', '从原声新转写字幕')
+  const settings = await api.settings()
+  vi.mocked(api.checkEnvironment).mockResolvedValue({ settings, items: [{ id: 'python', status: 'error', version: '', path: settings.pythonPath, detail: '缺少语音识别依赖' }] })
+  await wrapper.findAll('button').find(button => button.text() === '一键检查环境')!.trigger('click'); await flushPromises()
+  expect(api.checkEnvironment).toHaveBeenLastCalledWith(settings, true)
+  expect(wrapper.get('.environment-results').text()).toContain('缺少语音识别依赖')
+  await wrapper.get('.video-setup-trigger').trigger('click'); await flushPromises()
+  await wrapper.get('.video-setup-trigger').trigger('click'); await flushPromises()
+  expect(wrapper.get('#environment-mode').text()).toContain('从原声新转写字幕')
+  expect(wrapper.get('.environment-results').text()).toContain('缺少语音识别依赖')
+  expect(api.checkEnvironment).toHaveBeenCalledOnce()
+  expect(api.saveSettings).not.toHaveBeenCalled()
+  await wrapper.findAll('button').find(button => button.text() === '一键检查环境')!.trigger('click'); await flushPromises()
+  expect(api.checkEnvironment).toHaveBeenLastCalledWith(settings, true)
+})
+it('moves keyboard focus to each editor section without saving or changing unsaved content', async () => {
+  const wrapper = await render(undefined, false)
+  await wrapper.get('#video-subtitles').setValue('尚未保存的字幕')
+  await wrapper.get('[aria-label="第1镜标题"]').setValue('尚未保存的分镜')
+  const targets = ['subtitles', 'storyboard', 'preview']
+  const buttons = wrapper.get('[aria-label="视频编辑分区"]').findAll('button')
+  for (const [index, section] of targets.entries()) {
+    const target = wrapper.get(`#video-workbench-${section}`).element as HTMLElement
+    target.scrollIntoView = vi.fn()
+    await buttons[index]!.trigger('click')
+    expect(target.scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+    expect(document.activeElement).toBe(target)
+  }
+  expect((wrapper.get('#video-subtitles').element as HTMLTextAreaElement).value).toBe('尚未保存的字幕')
+  expect((wrapper.get('[aria-label="第1镜标题"]').element as HTMLInputElement).value).toBe('尚未保存的分镜')
+  expect(api.savePlan).not.toHaveBeenCalled()
+  expect(api.continueJob).not.toHaveBeenCalled()
+})
 it('adopts only the selected scene into its existing automatic draft without changing subtitles or other unsaved scenes', async () => {
   vi.useFakeTimers()
   const current = structuredClone(job)
@@ -324,7 +390,7 @@ it('does not show another book after a late background polling response', async 
   await flushPromises()
   finish([{ ...job, status: 'succeeded' }])
   await flushPromises()
-  expect(wrapper.text()).not.toContain('任务与成片')
+  expect(wrapper.text()).not.toContain('当前制作任务')
 })
 it('refreshes intermediate transcription feedback and clears the stale connection notice after recovery', async () => {
   vi.useFakeTimers()
@@ -346,7 +412,7 @@ it('does not render legacy text cards and upgrades only the storyboard while pre
   vi.mocked(api.listJobs).mockResolvedValue([{ ...job, plan: { ...job.plan, scenes: [{ first: 0, last: 0, kind: 'book', title: '旧图解', labels: ['一本书'] }] } }])
   const wrapper = await render()
   expect(wrapper.text()).toContain('旧版文字图解分镜')
-  expect(wrapper.get('[data-test="render-video"]').attributes('disabled')).toBeDefined()
+  expect(wrapper.find('[data-test="render-video"]').exists()).toBe(false)
   vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'storyboard' })
   const upgrade = wrapper.findAll('button').find(button => button.text().includes('保留字幕并升级手绘分镜'))!
   await upgrade.trigger('click'); await flushPromises()
