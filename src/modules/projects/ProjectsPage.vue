@@ -102,7 +102,7 @@ onMounted(() => { if (desktop) void load() })
     class="resume-project"
     aria-label="最近创作"
   >
-    <span class="resume-icon"><small>ACTIVE</small><AppIcon name="pen" /><span>{{ recent.author || '作者待补充' }}</span></span>
+    <span class="resume-icon"><AppIcon name="book" /><span>续作</span></span>
     <div class="min-w-0 flex-1">
       <p class="resume-label">
         <i class="status-dot" />接着上次的灵感继续创作
@@ -251,22 +251,29 @@ onMounted(() => { if (desktop) void load() })
     >
       {{ search ? '搜索“' + search + '” · ' : '' }}共 {{ filtered.length }} 本书
     </p>
-    <section
+    <TransitionGroup
       v-if="filtered.length"
+      name="shelf"
+      tag="section"
       class="library-grid"
       :class="{ 'is-list': view === 'list' }"
       aria-label="项目列表"
       :aria-busy="busy"
     >
-      <BookCard
+      <div
         v-for="project in filtered"
         :key="project.id"
-        :project="project"
-        :resume="continuation(project.id)"
-        @deleted="load"
-      />
+        class="book-slot"
+      >
+        <BookCard
+          :project="project"
+          :resume="continuation(project.id)"
+          @deleted="load"
+        />
+      </div>
       <RouterLink
         v-if="!search && filter === 'all'"
+        key="add-project"
         class="add-project-card flex min-h-72 flex-col items-center justify-center gap-4 rounded-xl border border-dashed bg-muted/20 p-8 text-center text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent/50 hover:text-primary"
         to="/projects/new"
       >
@@ -279,7 +286,7 @@ onMounted(() => { if (desktop) void load() })
           </p>
         </div>
       </RouterLink>
-    </section>
+    </TransitionGroup>
     <section
       v-else
       class="flex flex-col items-center rounded-xl border border-dashed bg-card px-6 py-20 text-center"
