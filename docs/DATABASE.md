@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 自动模型重试状态（2026-11-10，仍为v23）
+
+无SQL迁移。原automation_runs.input_json追加兼容默认的modelRetry（enabled/retries/exhaustedProviderIds），记录同模型额外重试次数及本轮已耗尽模型；重开/备份保留。自动切换在同一事务更新selection、对应Provider快照和失败AI/视频任务模型引用，成功成果不改写。模型计数随阶段完成清零，耗尽名单保留；明确重试才重新开始一轮。旧JSON可读取，用户继续后启用新规则。见[模型重试说明](AUTOMATION-MODEL-RETRY.md)。
+
 ## 语音提醒本机偏好（2026-11-10，仍为v23）
 
 无表、列、迁移或业务数据变化。总开关与界面主题一样属于本机偏好，保存在localStorage的`shuyin.voice-reminders`，未设置默认关闭；不随SQLite备份迁移到另一台设备。完成通知与去重只在应用会话中存在，重开或恢复数据库不会补播历史任务，也不把语音播放结果写成业务成功。原任务表与结果事务继续作为成功的唯一依据。

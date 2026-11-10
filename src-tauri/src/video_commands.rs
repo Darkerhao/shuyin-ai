@@ -554,12 +554,12 @@ async fn proofread_subtitles(
         request.user = subtitles::input(&job.plan, first, end);
         let raw = tokio::select! { biased;
             _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()),
-            response = provider.generate(request) => response.map_err(|e| format!("字幕校对失败：{} 已保存进度保留，可继续重试。", e.message))?,
+            response = provider.generate(request) => response.map_err(|error| video::model_failure(format!("字幕校对失败：{} 已保存进度保留。", error.message)))?,
         };
         if flag.load(Ordering::SeqCst) {
             return Err("视频任务已停止。".into());
         }
-        subtitles::apply(&mut job.plan, first, end, &raw)?;
+        subtitles::apply(&mut job.plan, first, end, &raw).map_err(video::model_failure)?;
         db.save_video_progress(&job.id, job.run_id, &job.plan, "proofreading")?;
     }
     Ok(())
@@ -784,9 +784,9 @@ async fn execute(
             subtitles::PROMPT,
             String::new(),
         )
-        .map_err(|e| e.message)?;
+        .map_err(|error| video::model_failure(error.message))?;
         let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)
-            .map_err(|e| e.message)?
+            .map_err(|error| video::model_failure(error.message))?
             .observed(&db, Some(&job.id), "proofreading");
         proofread_subtitles(&db, &mut job, &provider, &request, flag.clone()).await?;
         if digest(audio.clone()).await? != job.plan.audio_sha256 {
@@ -817,12 +817,12 @@ async fn execute(
             &video::storyboard_prompt(),
             user,
         )
-        .map_err(|e| e.message)?;
+        .map_err(|error| video::model_failure(error.message))?;
         let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)
-            .map_err(|e| e.message)?
+            .map_err(|error| video::model_failure(error.message))?
             .observed(&db, Some(&job.id), "storyboard");
-        let raw = tokio::select! { biased; _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()), response = provider.generate(request) => response.map_err(|e| e.message)? };
-        let scenes = video::parse_storyboard(&raw, first, end)?;
+        let raw = tokio::select! { biased; _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()), response = provider.generate(request) => response.map_err(|error| video::model_failure(error.message))? };
+        let scenes = video::parse_storyboard(&raw, first, end).map_err(video::model_failure)?;
         job.plan.scenes.extend(scenes);
         db.save_video_progress(&job.id, job.run_id, &job.plan, "storyboard")?;
         first = end;

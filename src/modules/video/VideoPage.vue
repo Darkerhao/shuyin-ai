@@ -159,7 +159,7 @@ const load = () => run(async () => {
   const recentDraft = history.filter(j => j.draftUpdatedAt).sort((a, b) => b.draftUpdatedAt!.localeCompare(a.draftUpdatedAt!))[0]
   selectedId.value = history.find(j => j.id === route.query.job)?.id ?? recentDraft?.id ?? history[0]?.id ?? ''
   audioId.value = audios.value.find(a => a.id === route.query.audio)?.id ?? audios.value[0]?.id ?? ''
-  providerId.value = providers.value.find(p => p.isDefault)?.id ?? providers.value[0]?.id ?? ''
+  restoreProvider(selected.value)
   const restored = await adopt(selected.value)
   loaded.value = true
   await nextTick()
@@ -178,6 +178,7 @@ async function poll() {
     if (disposed || projectId !== props.id) return
     progressError.value = ''
     jobs.value = history
+    if (previous?.providerId !== selected.value?.providerId) restoreProvider(selected.value)
     if (previous && (previous.status !== selected.value?.status || previous.runId !== selected.value?.runId)) {
       if (selected.value?.status === 'running') {
         draftReady.value = false
@@ -266,7 +267,12 @@ const regenerate = () => run(async () => {
   await startSavedWork(() => api.continueJob(selected.value!.id, false, providerId.value))
 })
 const stop = () => run(async () => { if (selected.value) { await api.cancelJob(selected.value.id); message.value = '正在停止本任务的识别或渲染进程，原音频不受影响。' } })
-const switchJob = (id: unknown) => run(async () => { await autosave.flush(); selectedId.value = String(id); await adopt(selected.value) })
+function restoreProvider(job: VideoJob | undefined) {
+  providerId.value = job
+    ? providers.value.find(provider => provider.id === job.providerId)?.id ?? ''
+    : providers.value.find(provider => provider.isDefault)?.id ?? providers.value[0]?.id ?? ''
+}
+const switchJob = (id: unknown) => run(async () => { await autosave.flush(); selectedId.value = String(id); restoreProvider(selected.value); await adopt(selected.value) })
 const resetEditor = () => run(async () => {
   await autosave.flush()
   draftReady.value = false

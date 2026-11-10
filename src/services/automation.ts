@@ -15,7 +15,7 @@ export interface AutomationInput {
 export interface AutomationRun {
   id: string
   projectId: string
-  input: { workflowVersion: number; title: string; author: string; targetDurationSeconds: number | null; durationReason: string; selection: AutomationInput }
+  input: { workflowVersion: number; title: string; author: string; targetDurationSeconds: number | null; durationReason: string; selection: AutomationInput; textProvider?: { name: string; modelName: string }; imageProvider?: { name: string; modelName: string } }
   status: 'running' | 'paused' | 'waiting_user' | 'awaiting_publish' | 'completed' | 'cancelled'
   stage: string
   runId: number

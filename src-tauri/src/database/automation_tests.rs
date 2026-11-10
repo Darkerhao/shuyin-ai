@@ -47,6 +47,310 @@ fn account() -> Account {
     }
 }
 
+#[test]
+fn automation_model_retry_preserves_selection_then_switches_and_stops() {
+    let (directory, database, input) = setup();
+    let original = input.text_provider_id.clone();
+    let mut fallback = model();
+    fallback.name = "备用文本".into();
+    fallback.model_name = "fallback-text".into();
+    fallback.is_default = true;
+    let fallback = database
+        .save_provider(None, fallback, None, &Vault::default())
+        .unwrap()
+        .provider;
+    let run = database.create_automation(input, account()).unwrap();
+    let task = database.start_automation_generation(&run).unwrap();
+    for attempt in 0..8 {
+        let current = database.automation_run(&run.id).unwrap();
+        let expected = if attempt < 4 { &original } else { &fallback.id };
+        assert_eq!(&current.input.selection.text_provider_id, expected);
+        let prepared = database.prepare_generation(&task).unwrap();
+        assert_eq!(&prepared.provider.id, expected);
+        database
+            .end_generation(&task, "failed", "http", "HTTP 503")
+            .unwrap();
+        let result = database.retry_automation_model(&current);
+        if attempt == 7 {
+            assert!(result.unwrap_err().contains("均已用尽"));
+            assert_eq!(database.automation_ai_result(&task).unwrap().0, "failed");
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                Some(if attempt == 3 {
+                    2
+                } else {
+                    2_u64 << (attempt % 4)
+                })
+            );
+            database
+                .verify_automation_input(&database.automation_run(&run.id).unwrap())
+                .unwrap();
+        }
+        if attempt == 1 {
+            database.recover_ai_tasks().unwrap();
+            database.recover_automation().unwrap();
+            let reopened = Database::open(directory.path().join("data.sqlite3"));
+            assert_eq!(
+                reopened
+                    .automation_run(&run.id)
+                    .unwrap()
+                    .input
+                    .model_retry
+                    .retries,
+                2
+            );
+            database
+                .retry_automation_generation(&database.automation_run(&run.id).unwrap(), false)
+                .unwrap();
+            database.control_automation(&run.id, "resume").unwrap();
+        }
+    }
+    assert_eq!(database.automation_runs().unwrap().len(), 1);
+    assert_eq!(database.list_ai_tasks(&run.project_id).unwrap().len(), 1);
+    assert!(database
+        .list_versions(&run.project_id, "publishing")
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn automation_model_retry_ignores_storage_cancellation_pause_and_stale_runs() {
+    let (_directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    let task = database.start_automation_generation(&run).unwrap();
+    database
+        .end_generation(&task, "failed", "storage", "磁盘写入失败")
+        .unwrap();
+    assert_eq!(database.retry_automation_model(&run).unwrap(), None);
+    let paused = database.control_automation(&run.id, "pause").unwrap();
+    database.retry_automation_generation(&paused, true).unwrap();
+    let run = database.control_automation(&run.id, "resume").unwrap();
+    database
+        .end_generation(&task, "cancelled", "cancelled", "停止")
+        .unwrap();
+    assert_eq!(database.retry_automation_model(&run).unwrap(), None);
+    let paused = database.control_automation(&run.id, "pause").unwrap();
+    assert_eq!(database.retry_automation_model(&paused).unwrap(), None);
+    database.control_automation(&run.id, "resume").unwrap();
+    assert_eq!(database.retry_automation_model(&run).unwrap(), None);
+    assert!(database.retry_automation_generation(&paused, true).is_err());
+}
+
+#[test]
+fn automation_model_retry_switches_only_enabled_images_and_skips_local_export() {
+    let (_directory, database, input) = setup();
+    let mut replacement = model();
+    replacement.model_kind = "image".into();
+    replacement.name = "备用图片".into();
+    let replacement = database
+        .save_provider(None, replacement, None, &Vault::default())
+        .unwrap()
+        .provider;
+    let mut disabled = model();
+    disabled.model_kind = "image".into();
+    disabled.is_enabled = false;
+    disabled.is_default = false;
+    disabled.name = "不可用图片".into();
+    database
+        .save_provider(None, disabled, None, &Vault::default())
+        .unwrap();
+    let run = database.create_automation(input, account()).unwrap();
+    database
+        .set_automation_stage(&run, "portrait_image")
+        .unwrap();
+    let run = database.automation_run(&run.id).unwrap();
+    let task = database
+        .start_bound_cover_generation(
+            image_generation::ImageGenerationInput {
+                project_id: run.project_id.clone(),
+                provider_id: run.input.selection.image_provider_id.clone(),
+                description: "原书背景".into(),
+                width: 1080,
+                height: 1440,
+            },
+            &run.binding(Slot::PortraitImage),
+        )
+        .unwrap();
+    for _attempt in 0..4 {
+        database.prepare_cover_generation(&task).unwrap();
+        database
+            .end_generation(&task, "failed", "http", "HTTP 503")
+            .unwrap();
+        database
+            .retry_automation_model(&database.automation_run(&run.id).unwrap())
+            .unwrap();
+    }
+    let saved = database.automation_run(&run.id).unwrap();
+    assert_eq!(saved.input.selection.image_provider_id, replacement.id);
+    assert_eq!(
+        saved.input.selection.text_provider_id,
+        run.input.selection.text_provider_id
+    );
+    let prepared = database.prepare_cover_generation(&task).unwrap();
+    assert_eq!(prepared.provider.id, replacement.id);
+    assert_eq!((prepared.width, prepared.height), (1080, 1440));
+    assert_eq!(saved.portrait_task_id.as_deref(), Some(task.as_str()));
+    database
+        .set_automation_stage(&saved, "portrait_cover")
+        .unwrap();
+    assert_eq!(
+        database
+            .retry_automation_model(&database.automation_run(&run.id).unwrap())
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn automation_storyboard_retry_preserves_saved_media_and_partial_plan() {
+    let (_directory, database, run) = transcript_fixture();
+    let fallback = database
+        .save_provider(None, model(), None, &Vault::default())
+        .unwrap()
+        .provider;
+    database.set_automation_stage(&run, "storyboard").unwrap();
+    let run = database.automation_run(&run.id).unwrap();
+    let mut original = database
+        .video_job(run.video_job_id.as_ref().unwrap())
+        .unwrap();
+    original.plan.duration = 4.0;
+    original.plan.cues.push(crate::video::Cue {
+        start: 2.0,
+        end: 4.0,
+        text: "待生成分镜的字幕".into(),
+    });
+    original.plan.scenes = vec![serde_json::from_value(serde_json::json!({"first":0,"last":0,"kind":"opening","title":"已完成镜头","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]})).unwrap()];
+    database
+        .with_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE video_jobs SET plan_json=?1 WHERE id=?2",
+                    rusqlite::params![serde_json::to_string(&original.plan).unwrap(), original.id],
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+    for _attempt in 0..4 {
+        let current = database.automation_run(&run.id).unwrap();
+        let video = database
+            .claim_bound_video_job(
+                &original.id,
+                crate::video::VideoWork::Prepare,
+                Some(&current.input.selection.text_provider_id),
+                Some(&current),
+            )
+            .unwrap();
+        database
+            .save_video_progress(&video.id, video.run_id, &video.plan, "storyboard")
+            .unwrap();
+        database
+            .end_video_job(
+                &video.id,
+                video.run_id,
+                "failed",
+                &crate::video::model_failure("HTTP 503"),
+            )
+            .unwrap();
+        assert!(database.retry_automation_model(&current).unwrap().is_some());
+    }
+    let saved = database.video_job(&original.id).unwrap();
+    assert_eq!(saved.provider_id.as_deref(), Some(fallback.id.as_str()));
+    assert_eq!(
+        serde_json::to_string(&saved.plan).unwrap(),
+        serde_json::to_string(&original.plan).unwrap()
+    );
+    assert_eq!(saved.audio_asset_id, original.audio_asset_id);
+    assert_eq!(saved.subtitle_asset_id, original.subtitle_asset_id);
+    let current = database.automation_run(&run.id).unwrap();
+    assert_eq!(current.writing_version_id, run.writing_version_id);
+    let running = database
+        .claim_bound_video_job(
+            &saved.id,
+            crate::video::VideoWork::Prepare,
+            Some(&fallback.id),
+            Some(&current),
+        )
+        .unwrap();
+    database
+        .save_video_progress(&running.id, running.run_id, &running.plan, "storyboard")
+        .unwrap();
+    database
+        .end_video_job(&running.id, running.run_id, "failed", "本地文件写入失败")
+        .unwrap();
+    assert_eq!(database.retry_automation_model(&current).unwrap(), None);
+}
+
+#[test]
+fn automation_content_check_fallback_keeps_the_original_content_snapshot() {
+    let (_directory, database, run) = transcript_fixture();
+    let mut fallback = model();
+    fallback.model_name = "replacement-text".into();
+    let fallback = database
+        .save_provider(None, fallback, None, &Vault::default())
+        .unwrap()
+        .provider;
+    let task = database.create_content_check_task(&run).unwrap();
+    let original = database.prepare_content_check_task(&task).unwrap();
+    for attempt in 0..4 {
+        if attempt > 0 {
+            assert_eq!(
+                database.prepare_content_check_task(&task).unwrap(),
+                original
+            );
+        }
+        database
+            .end_generation(&task, "failed", "timeout", "HTTP 524")
+            .unwrap();
+        assert!(database
+            .retry_automation_model(&database.automation_run(&run.id).unwrap())
+            .unwrap()
+            .is_some());
+    }
+    let saved = database.automation_run(&run.id).unwrap();
+    assert_eq!(saved.input.selection.text_provider_id, fallback.id);
+    assert_eq!(saved.input.text_provider.model_name, "replacement-text");
+    assert_eq!(
+        database.prepare_content_check_task(&task).unwrap(),
+        original
+    );
+    database
+        .finish_content_check_task(
+            &task,
+            r#"{"verified":true,"reason":"与原音频一致","changes":{}}"#,
+        )
+        .unwrap();
+    assert_eq!(
+        database
+            .automation_run(&run.id)
+            .unwrap()
+            .final_writing_version_id,
+        run.writing_version_id
+    );
+}
+
+#[test]
+fn automation_legacy_retry_state_is_enabled_by_resume_without_losing_saved_input() {
+    let (_directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    database.with_connection(|connection| {
+        connection.execute("UPDATE automation_runs SET input_json=json_remove(input_json,'$.modelRetry') WHERE id=?1", [&run.id]).map_err(|error| error.to_string())?;
+        Ok(())
+    }).unwrap();
+    let old = database.automation_run(&run.id).unwrap();
+    assert!(!old.input.model_retry.enabled);
+    database.control_automation(&old.id, "pause").unwrap();
+    let resumed = database.control_automation(&old.id, "resume").unwrap();
+    assert!(resumed.input.model_retry.enabled);
+    assert_eq!(resumed.input.model_retry.retries, 0);
+    assert_eq!(
+        resumed.input.selection.text_provider_id,
+        old.input.selection.text_provider_id
+    );
+    assert_eq!(resumed.input.source_notes, old.input.source_notes);
+}
+
 fn finish_creation(database: &Database, run: &AutomationRun) -> AutomationRun {
     let run = if run.stage == "duration" {
         let id = database.start_automation_generation(run).unwrap();
@@ -219,7 +523,7 @@ fn automation_frontloaded_restart_keeps_creation_and_requires_explicit_retry() {
     assert_eq!(paused.duration_task_id.as_deref(), Some(id.as_str()));
     assert_eq!(database.automation_ai_result(&id).unwrap().0, "failed");
     assert!(database.prepare_generation(&id).is_err());
-    database.retry_automation_generation(&paused).unwrap();
+    database.retry_automation_generation(&paused, true).unwrap();
     assert!(database.prepare_generation(&id).is_err());
     let resumed = database.control_automation(&run.id, "resume").unwrap();
     database.prepare_generation(&id).unwrap();
@@ -1157,7 +1461,7 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
             let waiting = db.automation_run(&run.id).unwrap();
             assert!(waiting.landscape_cover_id.is_some() && waiting.portrait_cover_id.is_some());
             assert_eq!(db.list_cover_versions(&run.project_id).unwrap().len(), 2);
-            db.retry_automation_generation(&waiting).unwrap();
+            db.retry_automation_generation(&waiting, true).unwrap();
             db.control_automation(&run.id, "resume").unwrap();
         }
         db.prepare_cover_generation(&image).unwrap();

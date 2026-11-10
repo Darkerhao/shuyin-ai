@@ -96,7 +96,7 @@ pub async fn control_automation(
         let run = database.automation_run(&id)?;
         run.require_current_workflow()?;
         if action == "retry" {
-            database.retry_automation_generation(&run)?;
+            database.retry_automation_generation(&run, true)?;
         }
         if run.stage == "publishing" {
             if let Some(task_id) = &run.publish_task_id {
@@ -105,7 +105,15 @@ pub async fn control_automation(
                 }
             }
         }
-        if action == "resume" && run.status == "paused" {
+        if action == "resume" {
+            if let Some(task) = run.generation_task() {
+                if matches!(
+                    database.automation_ai_result(task)?.0.as_str(),
+                    "failed" | "cancelled"
+                ) {
+                    database.retry_automation_generation(&run, false)?;
+                }
+            }
             if let Some(id) = &run.audio_job_id {
                 let audio = database.audio_job(id)?;
                 if audio.status == "paused" {
@@ -116,10 +124,12 @@ pub async fn control_automation(
                 }
             }
             if let Some(id) = &run.video_job_id {
-                if database.video_job(id)?.status == "cancelled"
-                    && matches!(run.stage.as_str(), "transcript" | "storyboard" | "render")
+                if matches!(
+                    database.video_job(id)?.status.as_str(),
+                    "failed" | "cancelled"
+                ) && matches!(run.stage.as_str(), "transcript" | "storyboard" | "render")
                 {
-                    database.retry_automation_generation(&run)?;
+                    database.retry_automation_generation(&run, false)?;
                 }
             }
         }
@@ -291,11 +301,19 @@ async fn drive(app: &AppHandle, id: &str) {
         if run.status != "running" {
             return;
         }
-        let result = match database.verify_automation_input(&run) {
-            Ok(()) => advance(app, &run).await,
-            Err(error) => Err(error),
-        };
-        if let Err(error) = result {
+        if let Err(error) = database.verify_automation_input(&run) {
+            let _ = database.set_automation_status(&run, "waiting_user", &error);
+            return;
+        }
+        if let Err(error) = advance(app, &run).await {
+            let error = match database.retry_automation_model(&run) {
+                Ok(Some(seconds)) => {
+                    tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                    continue;
+                }
+                Ok(None) => error,
+                Err(retry_error) => format!("{retry_error} 最后错误：{error}"),
+            };
             let _ = database.set_automation_status(&run, "waiting_user", &error);
             return;
         }
