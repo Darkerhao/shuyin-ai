@@ -65,6 +65,28 @@ describe('automatic cover execution outside the cover page', () => {
 })
 
 describe('automatic workflow setup', () => {
+  it('shows the active task models after reopening and after an automatic switch', async () => {
+    const providers = await listProviders()
+    vi.mocked(listProviders).mockResolvedValue([...providers,
+      { ...providers[0]!, id: 'chosen-text', name: '本次文本', isDefault: false },
+      { ...providers[1]!, id: 'chosen-image', name: '本次图片', isDefault: false },
+    ])
+    const active = run()
+    active.input.selection.textProviderId = 'chosen-text'
+    active.input.selection.imageProviderId = 'chosen-image'
+    automationRuns.value = [active]
+    const wrapper = mount(AutomationSetup, { props: { saveSource: vi.fn() } })
+    await flushPromises()
+    expect(wrapper.get('#automation-text').text()).toContain('本次文本')
+    expect(wrapper.get('#automation-image').text()).toContain('本次图片')
+    automationRuns.value = [run()]
+    await flushPromises()
+    expect(wrapper.get('#automation-text').text()).toContain('文本')
+    expect(wrapper.get('#automation-text').text()).not.toContain('本次文本')
+    expect(invoke).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('requires explicit consent and the confirmed visible account before starting', async () => {
     const account = { id: null, name: '本次账号', key: 'identity' }
     vi.mocked(invoke).mockImplementation(async command => command === 'prepare_automation_account' ? account : command === 'automation_snapshot' ? [run()] : run())

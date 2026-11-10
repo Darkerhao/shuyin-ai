@@ -31,6 +31,15 @@ it('shows completed preceding stages without treating a created audio task as a 
   expect(wrapper.findAll('a').find(link => link.text() === '音频任务')?.attributes('href')).toBe('/projects/book1/writing?tab=audio&audioJob=audio1')
   expect(wrapper.findAll('a[href*="coverVersion="]')).toHaveLength(0)
 })
+it('announces automatic retries and displays the actual model after fallback', async () => {
+  const run = fixture({ stage: 'storyboard', error: '已自动切换到备用模型，继续当前未完成步骤。' })
+  run.input.textProvider = { name: '备用文本', modelName: 'fallback-text' }
+  run.input.imageProvider = { name: '原图片', modelName: 'image-model' }
+  const wrapper = await render(run)
+  expect(wrapper.get('.automation-note[role="status"]').text()).toContain('已自动切换')
+  expect(wrapper.get('.automation-summary').text()).toContain('备用文本 · fallback-text')
+  expect(wrapper.get('.automation-summary').text()).toContain('原图片 · image-model')
+})
 it('preserves paused and failed phase feedback and only exposes saved cover versions', async () => {
   const wrapper = await render(fixture({ status: 'paused', stage: 'portrait_image', error: '图片生成失败，已有结果保留', actualDurationSeconds: 625, landscapeCoverId: 'cover1' }))
   expect(wrapper.get('[aria-current="step"]').text()).toBe('三尺寸封面已暂停')

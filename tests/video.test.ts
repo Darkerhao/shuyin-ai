@@ -458,6 +458,28 @@ it('saves an image scene as a complete plan without treating it as a legacy text
 })
 
 
+it('restores the task model instead of the global default when continuing a failed storyboard', async () => {
+  const defaultModel = { ...emptyProvider(), id: 'default', name: '默认模型', isDefault: true, credentialStatus: 'available' as const }
+  const selectedModel = { ...defaultModel, id: 'selected', name: '任务所选模型', isDefault: false }
+  vi.mocked(ai.listProviders).mockResolvedValue([defaultModel, selectedModel])
+  const failed = { ...structuredClone(job), status: 'failed' as const, providerId: 'selected' }
+  vi.mocked(api.listJobs).mockResolvedValue([failed])
+  vi.mocked(api.continueJob).mockResolvedValue({ ...failed, status: 'running' })
+  const wrapper = await render()
+  expect(wrapper.get('#video-provider').text()).toContain('任务所选模型')
+  wrapper.get('.video-job').element.scrollIntoView = vi.fn()
+  await wrapper.findAll('button').find(button => button.text() === '继续准备字幕与分镜')!.trigger('click')
+  await flushPromises()
+  expect(api.continueJob).toHaveBeenCalledExactlyOnceWith('j1', false, 'selected')
+})
+
+it('requires an explicit replacement when the saved task model is unavailable', async () => {
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...structuredClone(job), status: 'failed', providerId: 'removed-model' }])
+  const wrapper = await render()
+  expect(wrapper.findAll('button').find(button => button.text() === '继续准备字幕与分镜')!.attributes('disabled')).toBeDefined()
+  expect(api.continueJob).not.toHaveBeenCalled()
+})
+
 it.each(['继续准备字幕与分镜', '保存字幕并重新生成分镜'])('uses the newly selected model for %s on an existing task', async action => {
   const oldModel = { ...emptyProvider(), id: 'm1', name: '旧文本模型', modelName: 'old-model', baseUrl: 'http://localhost:1111/v1', isDefault: true, credentialStatus: 'available' as const }
   const newModel = { ...oldModel, id: 'm2', name: '新文本模型', modelName: 'new-model', baseUrl: 'http://localhost:2222/v1', isDefault: false }

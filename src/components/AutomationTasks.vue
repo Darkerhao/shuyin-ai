@@ -52,7 +52,7 @@ async function poll() {
   timer = globalThis.setTimeout(() => { void poll() }, 1500)
 }
 async function act(run: AutomationRun, action: 'pause' | 'resume' | 'cancel' | 'retry') {
-  if (action === 'retry' && !await requestConfirmation('再次执行当前失败阶段可能产生模型费用。已有成功结果保留，确认重试？')) return
+  if (action === 'retry' && !await requestConfirmation('重新尝试当前失败阶段：每个模型失败后最多自动重试3次，再自动切换其他已启用的同类模型，可能产生额外费用。已有成功结果保留，确认重试？')) return
   if (action === 'cancel' && !await requestConfirmation('停止流程后保留全部成果。已开始的音频、生成或上传可能仍会完成，停止不等于撤稿。确定停止？')) return
   busy.value = true; error.value = ''
   try { await controlAutomation(run.id, action); await refreshAutomation() }
@@ -116,6 +116,10 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
         </li>
       </ol>
       <div class="automation-summary">
+        <p v-if="run.input.textProvider && run.input.imageProvider">
+          当前文本模型：{{ run.input.textProvider.name }} · {{ run.input.textProvider.modelName }}
+          · 当前图片模型：{{ run.input.imageProvider.name }} · {{ run.input.imageProvider.modelName }}
+        </p>
         <p>
           {{ run.input.targetDurationSeconds ? `目标 ${run.input.targetDurationSeconds / 60} 分钟` : '目标时长待推荐' }}<span v-if="run.input.durationReason"> · {{ run.input.durationReason }}</span>
         </p>
@@ -128,6 +132,7 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
       </div>
       <p
         class="automation-note"
+        role="status"
         :class="{ 'needs-attention': run.status === 'waiting_user' || run.status === 'paused' }"
       >
         <AppIcon :name="run.status === 'running' ? 'info' : 'pause'" />{{ run.error || '保持应用运行，可切换页面。完成后请在抖音窗口检查并亲自发布。' }}

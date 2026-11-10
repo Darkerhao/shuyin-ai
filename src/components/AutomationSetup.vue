@@ -22,13 +22,16 @@ const error = ref('')
 const requestKey = ref(globalThis.crypto.randomUUID())
 const textModels = computed(() => providers.value.filter(provider => provider.modelKind === 'text' && provider.isEnabled))
 const imageModels = computed(() => providers.value.filter(provider => provider.modelKind === 'image' && provider.isEnabled))
-const active = computed(() => automationRuns.value.some(run => !['completed', 'cancelled'].includes(run.status)))
+const activeRun = computed(() => automationRuns.value.find(run => !['completed', 'cancelled'].includes(run.status)))
+const active = computed(() => !!activeRun.value)
+watch([activeRun, providers], ([current]) => {
+  textProvider.value = current?.input.selection.textProviderId ?? (textProvider.value || textModels.value.find(provider => provider.isDefault)?.id || textModels.value[0]?.id || '')
+  imageProvider.value = current?.input.selection.imageProviderId ?? (imageProvider.value || imageModels.value.find(provider => provider.isDefault)?.id || imageModels.value[0]?.id || '')
+}, { immediate: true })
 onMounted(async () => {
   if (!isDesktop()) return
   try {
     providers.value = await listProviders()
-    textProvider.value = textModels.value.find(provider => provider.isDefault)?.id ?? textModels.value[0]?.id ?? ''
-    imageProvider.value = imageModels.value.find(provider => provider.isDefault)?.id ?? imageModels.value[0]?.id ?? ''
   } catch { error.value = '模型配置读取失败，请在模型设置中检查。' }
 })
 async function readAccount() {
@@ -139,7 +142,7 @@ async function start() {
         :disabled="busy || active"
         aria-label="允许自动制作和上传"
       />
-      <span>允许将书名、作者及已提供资料发送至文本模型，推荐时长并生成创作方案；将原书和完整音频指导发送至NotebookLM，再根据实际字幕校核发布文案，调用图片模型为三种比例各生成一次背景，自动采用并渲染上传。失败不自动收费重试；最终发布由我完成。</span>
+      <span>允许将书名、作者及已提供资料发送至文本模型，推荐时长并生成创作方案；将原书和完整音频指导发送至NotebookLM，再根据实际字幕校核发布文案，调用图片模型为三种比例生成背景，自动采用并渲染上传。模型失败后最多自动重试3次，再自动切换其他已启用的同类模型继续，可能产生额外费用；已完成成果保留，最终发布由我完成。</span>
     </label>
     <p
       v-if="error"

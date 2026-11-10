@@ -42,7 +42,17 @@ pub struct FrozenInput {
     pub source_sha256: String,
     pub text_provider: ai::ProviderInput,
     pub image_provider: ai::ProviderInput,
+    #[serde(default)]
+    pub model_retry: ModelRetry,
     pub account: crate::douyin::flow::Account,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModelRetry {
+    pub enabled: bool,
+    pub retries: u8,
+    pub exhausted_provider_ids: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -115,6 +125,18 @@ pub struct Binding<'a> {
     pub slot: Slot,
 }
 impl AutomationRun {
+    pub(crate) fn generation_task(&self) -> Option<&str> {
+        match self.stage.as_str() {
+            "duration" => self.duration_task_id.as_deref(),
+            "writing" => self.writing_task_id.as_deref(),
+            "content_check" => self.content_check_task_id.as_deref(),
+            "landscape_image" => self.landscape_task_id.as_deref(),
+            "portrait_image" => self.portrait_task_id.as_deref(),
+            "widescreen_image" => self.widescreen_task_id.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn require_current_workflow(&self) -> Result<(), String> {
         if self.input.workflow_version != 2 {
             return Err("此任务使用旧版制作顺序，已有成果已保留。请在原音频、视频或发布详情继续处理，或停止旧流程后重新制作。".into());
@@ -270,6 +292,20 @@ fn task_version(
     ai::version(connection, &id)
 }
 
+fn reset_generation(connection: &Connection, run: &AutomationRun) -> Result<(), String> {
+    let changed = if let Some(id) = run.generation_task() {
+        connection.execute("UPDATE ai_tasks SET status='pending',error_code=NULL,error_message=NULL,completed_at=NULL WHERE id=?1 AND status IN ('failed','cancelled') AND version_id IS NULL AND asset_id IS NULL", [id])
+    } else if matches!(run.stage.as_str(), "transcript" | "storyboard" | "render") {
+        connection.execute("UPDATE video_jobs SET status=?1,error='' WHERE id=?2 AND status IN ('failed','cancelled')", params![if run.stage == "render" { "awaiting_confirmation" } else { "draft" }, run.video_job_id])
+    } else {
+        return Err("请在原业务页面处理当前问题后继续。".into());
+    }.map_err(|error| error.to_string())?;
+    if changed != 1 {
+        return Err("当前任务不需要重试。".into());
+    }
+    Ok(())
+}
+
 pub(super) fn recover(connection: &Connection) -> Result<(), String> {
     connection.execute(&format!("UPDATE automation_runs SET status='paused',run_id=run_id+1,error='应用已重开或恢复备份。请核对原任务后继续，已有音频和网页上传不会自动重发。',updated_at={NOW} WHERE status IN ('running','waiting_user','awaiting_publish')"), []).map_err(|e| e.to_string())?;
     Ok(())
@@ -330,27 +366,79 @@ impl Database {
     pub fn next_automation_schedule(&self) -> Result<String, String> {
         self.with_connection(|connection| next_schedule(connection, "now"))
     }
-    pub fn retry_automation_generation(&self, run: &AutomationRun) -> Result<(), String> {
+    pub fn retry_automation_generation(
+        &self,
+        run: &AutomationRun,
+        restart_cycle: bool,
+    ) -> Result<(), String> {
         run.require_current_workflow()?;
-        let task = match run.stage.as_str() {
-            "duration" => run.duration_task_id.as_deref(),
-            "writing" => run.writing_task_id.as_deref(),
-            "content_check" => run.content_check_task_id.as_deref(),
-            "landscape_image" => run.landscape_task_id.as_deref(),
-            "portrait_image" => run.portrait_task_id.as_deref(),
-            "widescreen_image" => run.widescreen_task_id.as_deref(),
-            _ => None,
-        };
         self.with_connection(|connection| {
-            if !matches!(run.status.as_str(),"paused"|"waiting_user") { return Err("请先等待流程结束当前操作。".into()); }
-            if let Some(id) = task {
-                let changed = connection.execute("UPDATE ai_tasks SET status='pending',error_code=NULL,error_message=NULL,completed_at=NULL WHERE id=?1 AND status IN ('failed','cancelled') AND version_id IS NULL AND asset_id IS NULL",[id]).map_err(|e|e.to_string())?;
-                if changed != 1 { return Err("当前生成不需要重试。".into()); }
-            } else if matches!(run.stage.as_str(),"transcript"|"storyboard"|"render") {
-                let changed = connection.execute("UPDATE video_jobs SET status=?1,error='' WHERE id=?2 AND status IN ('failed','cancelled')",params![if run.stage=="render" {"awaiting_confirmation"}else{"draft"},run.video_job_id]).map_err(|e|e.to_string())?;
-                if changed != 1 { return Err("当前视频不需要重试。".into()); }
-            } else { return Err("请在原业务页面处理当前问题后继续。".into()); }
-            Ok(())
+            let transaction = connection.transaction().map_err(|error| error.to_string())?;
+            let current = load(&transaction, &run.id)?;
+            if current.run_id != run.run_id || !matches!(current.status.as_str(), "paused" | "waiting_user") { return Err("请先等待流程结束当前操作。".into()); }
+            reset_generation(&transaction, &current)?;
+            if restart_cycle {
+                transaction.execute("UPDATE automation_runs SET input_json=json_set(input_json,'$.modelRetry',json(?1)) WHERE id=?2", params![serde_json::to_string(&ModelRetry { enabled: true, ..Default::default() }).map_err(|error| error.to_string())?, run.id]).map_err(|error| error.to_string())?;
+            }
+            transaction.commit().map_err(|error| error.to_string())
+        })
+    }
+
+    pub fn retry_automation_model(&self, run: &AutomationRun) -> Result<Option<u64>, String> {
+        self.with_connection(|connection| {
+            let transaction = connection.transaction().map_err(|error| error.to_string())?;
+            let mut current = load(&transaction, &run.id)?;
+            if current.run_id != run.run_id || current.stage != run.stage || current.status != "running" || !current.input.model_retry.enabled {
+                return Ok(None);
+            }
+            let failed = if let Some(task) = current.generation_task() {
+                transaction.query_row("SELECT status='failed' AND version_id IS NULL AND asset_id IS NULL AND COALESCE(error_code,'') NOT IN ('storage','internal','cancelled') FROM ai_tasks WHERE id=?1", [task], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?
+            } else if matches!(current.stage.as_str(), "transcript" | "storyboard") {
+                transaction.query_row("SELECT status='failed' AND stage IN ('proofreading','storyboard') AND instr(error,?2)=1 FROM video_jobs WHERE id=?1", params![current.video_job_id, crate::video::MODEL_FAILURE_PREFIX], |row| row.get::<_, bool>(0)).optional().map_err(|error| error.to_string())?.unwrap_or(false)
+            } else { false };
+            if !failed { return Ok(None); }
+            let image = cover_step(&current.stage).is_some_and(|step| step.image_stage == current.stage);
+            let provider_id = if image { &current.input.selection.image_provider_id } else { &current.input.selection.text_provider_id }.clone();
+            let message;
+            let delay;
+            if current.input.model_retry.retries < 3 {
+                current.input.model_retry.retries += 1;
+                delay = 1_u64 << current.input.model_retry.retries;
+                let name = if image { &current.input.image_provider.name } else { &current.input.text_provider.name };
+                message = format!("模型「{name}」失败，{delay}秒后自动重试（{}/3），已有成果保留。", current.input.model_retry.retries);
+            } else {
+                if !current.input.model_retry.exhausted_provider_ids.contains(&provider_id) {
+                    current.input.model_retry.exhausted_provider_ids.push(provider_id);
+                }
+                let next = {
+                    let mut query = transaction.prepare("SELECT id FROM model_providers WHERE is_enabled=1 AND model_kind=?1 ORDER BY is_default DESC,name,id").map_err(|error| error.to_string())?;
+                    let ids = query.query_map([if image { "image" } else { "text" }], |row| row.get::<_, String>(0)).map_err(|error| error.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|error| error.to_string())?;
+                    ids.into_iter().find(|id| !current.input.model_retry.exhausted_provider_ids.contains(id))
+                };
+                let Some(next) = next else {
+                    return Err("当前及其他已启用的同类模型均已用尽重试次数。已有成果保留，请检查模型服务后重试当前阶段。".into());
+                };
+                let provider = ai::provider(&transaction, &next)?;
+                message = format!("原模型重试3次仍失败，已自动切换到「{}」，继续当前未完成步骤。", provider.input.name);
+                if let Some(task) = current.generation_task() {
+                    transaction.execute("UPDATE ai_tasks SET provider_id=?1,model_name=?2,input_json=CASE WHEN kind='content_check' THEN input_json ELSE json_set(input_json,'$.providerId',?1) END WHERE id=?3", params![next, provider.input.model_name, task]).map_err(|error| error.to_string())?;
+                } else {
+                    transaction.execute("UPDATE video_jobs SET provider_id=?1 WHERE id=?2", params![next, current.video_job_id]).map_err(|error| error.to_string())?;
+                }
+                if image {
+                    current.input.selection.image_provider_id = next;
+                    current.input.image_provider = provider.input;
+                } else {
+                    current.input.selection.text_provider_id = next;
+                    current.input.text_provider = provider.input;
+                }
+                current.input.model_retry.retries = 0;
+                delay = 2;
+            }
+            reset_generation(&transaction, &current)?;
+            transaction.execute(&format!("UPDATE automation_runs SET input_json=?1,error=?2,updated_at={NOW} WHERE id=?3"), params![serde_json::to_string(&current.input).map_err(|error| error.to_string())?, message, current.id]).map_err(|error| error.to_string())?;
+            transaction.commit().map_err(|error| error.to_string())?;
+            Ok(Some(delay))
         })
     }
     pub fn automation_run(&self, id: &str) -> Result<AutomationRun, String> {
@@ -400,7 +488,7 @@ impl Database {
             let id = new_id(&transaction)?;
             let target_duration_seconds = book.audio_duration_source.as_ref().map(|_| book.input.target_duration_seconds);
             if let Some(seconds) = target_duration_seconds { crate::ai::audio::validate_duration(seconds)?; }
-            let frozen = FrozenInput { workflow_version:2,title:book.input.title,author:book.input.author,description:book.input.description,source_notes:book.input.source_notes,target_duration_seconds,duration_reason:if target_duration_seconds.is_some() {"使用本书已保存的目标时长".into()} else {String::new()},source_sha256,text_provider:text.input,image_provider:image.input,selection:input.clone(),account };
+            let frozen = FrozenInput { workflow_version:2,title:book.input.title,author:book.input.author,description:book.input.description,source_notes:book.input.source_notes,target_duration_seconds,duration_reason:if target_duration_seconds.is_some() {"使用本书已保存的目标时长".into()} else {String::new()},source_sha256,text_provider:text.input,image_provider:image.input,model_retry:ModelRetry { enabled:true,..Default::default() },selection:input.clone(),account };
             transaction.execute(&format!("INSERT INTO automation_runs(id,request_key,project_id,input_json,status,stage,created_at,updated_at) VALUES(?1,?2,?3,?4,'running',?5,{NOW},{NOW})"),params![id,input.request_key,input.project_id,serde_json::to_string(&frozen).map_err(|e|e.to_string())?,if target_duration_seconds.is_some() {"writing"} else {"duration"}]).map_err(|e|e.to_string())?;
             transaction.commit().map_err(|e|e.to_string())?;
             load(connection,&id)
@@ -455,7 +543,7 @@ impl Database {
     }
     pub fn set_automation_stage(&self, run: &AutomationRun, stage: &str) -> Result<(), String> {
         self.with_connection(|connection| {
-            let changed = connection.execute(&format!("UPDATE automation_runs SET stage=?1,error='',updated_at={NOW} WHERE id=?2 AND run_id=?3 AND status='running'"),params![stage,run.id,run.run_id]).map_err(|e|e.to_string())?;
+            let changed = connection.execute(&format!("UPDATE automation_runs SET stage=?1,error='',input_json=json_set(input_json,'$.modelRetry.retries',0),updated_at={NOW} WHERE id=?2 AND run_id=?3 AND status='running'"),params![stage,run.id,run.run_id]).map_err(|e|e.to_string())?;
             if changed != 1 { return Err("自动流程已暂停或结束。".into()); }
             Ok(())
         })
@@ -480,7 +568,7 @@ impl Database {
             if matches!(run.status.as_str(),"completed"|"cancelled") { return Err("该流程已经结束。".into()); }
             if action == "resume" { run.require_current_workflow()?; }
             let status = match action { "pause" => "paused", "resume" if run.status != "running" => "running", "cancel" => "cancelled", _ => return Err("当前流程不支持此操作。".into()) };
-            connection.execute(&format!("UPDATE automation_runs SET status=?1,run_id=run_id+1,error='',updated_at={NOW} WHERE id=?2"),params![status,id]).map_err(|e|e.to_string())?;
+            connection.execute(&format!("UPDATE automation_runs SET status=?1,run_id=run_id+1,error='',input_json=CASE WHEN ?1='running' THEN json_set(input_json,'$.modelRetry.enabled',json('true')) ELSE input_json END,updated_at={NOW} WHERE id=?2"),params![status,id]).map_err(|e|e.to_string())?;
             load(connection,id)
         })
     }

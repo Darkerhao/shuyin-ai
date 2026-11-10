@@ -7,6 +7,11 @@ pub mod subtitles;
 
 pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v5.md");
 pub const BATCH_SIZE: usize = 24;
+pub const MODEL_FAILURE_PREFIX: &str = "模型生成失败：";
+
+pub fn model_failure(message: impl std::fmt::Display) -> String {
+    format!("{MODEL_FAILURE_PREFIX}{message}")
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
