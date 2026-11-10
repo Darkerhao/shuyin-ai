@@ -8,6 +8,8 @@ Rust `completion.rs`向主窗口发送`workflow-completed`，载荷只含完成�
 
 顶栏`VoiceReminderToggle`生命周期覆盖整个应用，注册一个事件监听并在卸载时释放。`services/voiceReminders.ts`按类型与标识去重，以Web Audio的同一时钟串行调度短语音；不依赖页面计时器轮播。开关关闭时停止所有当前/预约节点，并用代次丢弃尚在下载或解码的旧请求。重开后首次用户交互恢复音频上下文，播放失败给出可试听的提示，不让提醒错误影响业务。
 
+播放反馈复用同一音频节点集合：成功启动节点后公开只读`playing`，最后一个节点`ended`或显式停止时复位；排队语音之间的短间隔保持播报状态，旧节点的迟到结束事件不能清除新队列状态。顶栏据此切换喇叭/声波、试听/停止图标及可访问名称；停止试听复用原停止入口并保留总开关。CSS只为按钮及图标提供短过渡和状态声波，遵循`prefers-reduced-motion`，不增加计时器、依赖或持久化状态。
+
 中文音频、文案清单和生成脚本均随仓库保存，运行时不依赖系统中文语音或新增第三方服务。开发者可在装有中文语音的Windows运行`scripts/generate-voice-reminders.ps1`重新生成WAV；发布仅包含静态音频。CSP的connect-src增加同源`'self'`以读取已打包资源，不增加外部网络域名或Tauri命令权限。总开关为本机界面偏好，使用`shuyin.voice-reminders` localStorage键，详见[验收](VOICE-REMINDERS-VERIFICATION.md)。
 
 ## 视频任务外部推进与页面同步（2026-11-09）

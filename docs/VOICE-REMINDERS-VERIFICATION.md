@@ -1,5 +1,46 @@
 # 流程完成语音提醒验收（2026-11-10）
 
+## 播放状态与按钮动效补充（2026-11-10）
+
+根因：原服务只公开开启和错误状态，顶栏只能显示开/关喇叭与固定试听图标，无法反映正在播报。现沿用实际音频节点的启动、结束和停止更新只读播放状态；整轮提醒未结束时保持声波，旧节点迟到结束不清除新播放。开启待命显示喇叭，关闭显示静音，播报显示四条律动声波；试听切换方形停止图标并可停止本轮语音，保持总开关开启。增加短过渡、按压、焦点和减少动态效果样式。
+
+修改`src/components/VoiceReminderToggle.vue`、`src/components/AppIcon.vue`、`src/services/voiceReminders.ts`和`tests/voice-reminders.test.ts`，同步PRD、技术设计、使用手册、开发计划及本记录。无数据库迁移、新依赖、计时器或业务流程改动，版本影响为`fix`/patch。
+
+| 实际命令 | 结果 |
+| --- | --- |
+| `npx vitest run tests/voice-reminders.test.ts`（修复前） | 原12项通过，新增3项失败，确认缺少播放状态与播放中图标 |
+| `npx vitest run tests/voice-reminders.test.ts tests/ui-refinement.test.ts` | 24项通过，包括自然结束、队列结束、停止、迟到事件和界面控制 |
+| `npm run lint` | 通过，0警告 |
+| `npm run build` | TypeScript与Vite生产构建通过，保留已有大于500kB分包警告 |
+| `node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=voice-motion run-code --filename output/playwright/voice-reminders/check-motion.js` | 真实内置WAV/AudioContext播放与自然结束、队列停止、再次试听、浅深色、375px图标、减少动态效果和键盘关闭均通过；无页面异常 |
+| `git diff --check` | 通过 |
+
+已查看`output/playwright/voice-reminders/motion-dark-playing.png`、`motion-light-playing.png`与`motion-narrow-reduced.png`，播放状态清晰且窄窗图标可见。浏览器使用本地预览与显式测试完成事件，没有触发模型或真实任务；本轮未构建Windows安装包或验证桌面WebView2新动效。验收标准在前端与浏览器范围已满足，下一步在包含本次改动的桌面构建中试听确认。
+
+收尾浏览器检查发现新增焦点描边引用了未定义的颜色变量，已改用项目现有`--info`；实际键盘模式下可见焦点、播放状态和减少动态效果整套脚本复验通过，随后重新执行生产构建通过。测试脚本支持重置开关、主题及动态效果，并为每轮完成事件使用独立ID，避免真实去重规则干扰重复验收。
+
+### 本次动效增量评审与测试
+
+用户追加评审测试后，以`f2d11210c82b49c9c3137790fc6d2fec641579f5`（HEAD）为固定基准，检查当前9个未提交文件。两名只读代理分别检查工程规范和当前PRD/技术设计，主代理另对照用户原始播放图标及动效要求。
+
+- Standards：0项确定问题。沿用原播放队列、停止入口及组件，未引入新依赖、计时器或持久化状态；可访问名称、焦点及减少动态效果具备对应实现。
+- Spec：0项确定偏差。关闭/开启待命/播放中的图标、结束复位、停止保持总开关及按钮动效符合当前需求；主代理核对原始要求无遗漏。
+- 新增3项回归：停止时丢弃尚在解码的旧语音且后续完成仍可提醒；播放失败维持待命图标并可试听恢复；快速关闭后不残留播放或声波。无需修改生产实现。
+
+| 本轮实际命令 | 结果 |
+| --- | --- |
+| `npx vitest run tests/voice-reminders.test.ts` | Spec评审代理执行，18项通过 |
+| `npx vitest run tests/voice-reminders.test.ts tests/ui-refinement.test.ts` | Standards评审代理执行，27项通过；此前实施阶段的24项记录保留为历史结果 |
+| `npx vitest run --maxWorkers=2` | 主代理首次33文件/465项通过；补齐3项边界测试后最终33文件/468项通过 |
+| `npm run lint` | 主代理复跑通过，0警告 |
+| `npm run typecheck` | 主代理复跑通过 |
+| `node D:/DevCache/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js -s=voice-motion run-code --filename output/playwright/voice-reminders/check-motion.js --raw` | 主代理复跑通过：真实WAV自然结束、队列停止、再试听、浅深色、375px、减少动态效果与键盘关闭；页面异常0 |
+| `git diff --check` | 通过 |
+
+浏览器结果保存为`output/playwright/voice-reminders/motion-review-result.json`：正常状态四条声波有动画；减少动态效果时动画为none、过渡为0s、图标可见；键盘焦点为2px实线。验收标准在代码、前端回归及浏览器范围满足。
+
+评审轮修改`tests/voice-reminders.test.ts`、本记录和开发计划；本地浏览器脚本与结果保存在忽略的output目录。数据库仍无变更。本轮未重跑Rust、桌面WebView2或安装包测试；生产实现与此前通过`npm run build`的版本相同，既有大于500kB分包提示仍存在。未提交、推送或发布。下一步在包含本次改动的Windows桌面构建中试听确认。
+
 ## 评审与修复结论
 
 评审范围为HEAD之后本功能的未提交修改及新增文件，需求依据为用户原始语音提醒/总开关要求及PRD当前章节；工程依据为AGENTS.md。两名独立代理分别检查Standards与Spec，修复后由另一代理只读复核。没有提交、推送或发布。

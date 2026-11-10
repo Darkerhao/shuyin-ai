@@ -19,6 +19,7 @@ const paths = {
   image: 'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM3 16l6-6 5 5 3-3 4 4M16 7h.01',
   headphones: 'M4 14v-3a8 8 0 0 1 16 0v3M4 12H3v8h4v-8H4ZM20 12h1v8h-4v-8h3Z',
   play: 'M8 5l11 7-11 7V5Z',
+  stop: 'M6 6h12v12H6V6Z',
   pause: 'M6 5h4v14H6V5ZM14 5h4v14h-4V5Z',
   volume: 'm11 5-5 4H3v6h3l5 4V5ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14',
   volumeOff: 'm11 5-5 4H3v6h3l5 4V5ZM16 9l5 6M21 9l-5 6',
