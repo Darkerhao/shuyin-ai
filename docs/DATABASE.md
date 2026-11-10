@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 自动视频局部恢复（2026-11-10，仍为v23）
+
+无表结构或迁移变更。视频页恢复当前失败字幕/分镜时，在同一事务领取原video_jobs并将关联automation_runs保留为paused、递增run_id、更新恢复提示；按本次选择同步input_json.selection.textProviderId和textProvider，重置本轮modelRetry。已有阶段、子任务关联、字幕、分镜及素材不清空。运行中、错阶段、无效模型或视频领取失败时不修改流程。见[恢复说明](AUTOMATION-VIDEO-RECOVERY.md)。
+
 ## 自动模型重试状态（2026-11-10，仍为v23）
 
 无SQL迁移。原automation_runs.input_json追加兼容默认的modelRetry（enabled/retries/exhaustedProviderIds），记录同模型额外重试次数及本轮已耗尽模型；重开/备份保留。自动切换在同一事务更新selection、对应Provider快照和失败AI/视频任务模型引用，成功成果不改写。模型计数随阶段完成清零，耗尽名单保留；明确重试才重新开始一轮。旧JSON可读取，用户继续后启用新规则。见[模型重试说明](AUTOMATION-MODEL-RETRY.md)。

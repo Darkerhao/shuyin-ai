@@ -313,21 +313,39 @@ impl Database {
         automation: Option<&super::automation::AutomationRun>,
     ) -> Result<VideoJob, String> {
         self.with_connection(|c| {
+            let tx = c.transaction().map_err(|error| error.to_string())?;
+            let mut recovery = None;
             if let Some(run) = automation {
-                if !c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE id=?1 AND video_job_id=?2 AND status='running' AND run_id=?3)",params![run.id,id,run.run_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程已暂停或结束，未启动视频。".into()); }
-            } else if c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE video_job_id=?1 AND json_extract(input_json,'$.workflowVersion')=2 AND status NOT IN ('completed','cancelled'))",[id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? {
-                return Err("视频由自动流程管理，请在全局任务中继续，或停止流程后手动制作。".into());
+                if !tx.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE id=?1 AND video_job_id=?2 AND status='running' AND run_id=?3)",params![run.id,id,run.run_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程已暂停或结束，未启动视频。".into()); }
+            } else if let Some(run) = super::automation::video_run(&tx, id)? {
+                if !matches!(run.status.as_str(), "paused" | "waiting_user") {
+                    return Err("自动流程仍在运行或等待发布，请先暂停当前阶段再单独处理视频。".into());
+                }
+                if !matches!((run.stage.as_str(), work), ("transcript", VideoWork::Transcript) | ("storyboard", VideoWork::Prepare)) {
+                    return Err("只能单独继续自动流程当前的字幕或分镜准备阶段，请在全局任务中查看当前步骤。".into());
+                }
+                recovery = Some(run);
             }
-            let job = get(c, id)?;
+            let job = get(&tx, id)?;
             if matches!(job.status.as_str(), "running" | "succeeded") { return Err("该视频已完成或正在执行。".into()); }
             work.window(&job.plan)?;
             if let Some(id) = provider_id {
                 if !matches!(work, VideoWork::Prepare | VideoWork::Transcript) { return Err("仅准备字幕与分镜时可更换文本模型。".into()); }
-                let provider = super::ai::provider(c, id)?;
+                let provider = super::ai::provider(&tx, id)?;
                 if provider.input.model_kind != "text" || !provider.input.is_enabled { return Err("请选择已启用的文本模型生成分镜。".into()); }
+                if let Some(run) = &mut recovery {
+                    run.input.selection.text_provider_id = id.to_owned();
+                    run.input.text_provider = provider.input;
+                }
             }
-            c.execute(&format!("UPDATE video_jobs SET status='running',stage=?1,provider_id=COALESCE(?2,provider_id),run_id=run_id+1,error='',editor_draft_json=NULL,updated_at={NOW} WHERE id=?3"), params![work.stage(), provider_id, id]).map_err(|_| "已有视频任务正在执行，请等待或停止后重试。")?;
-            get(c, id)
+            tx.execute(&format!("UPDATE video_jobs SET status='running',stage=?1,provider_id=COALESCE(?2,provider_id),run_id=run_id+1,error='',editor_draft_json=NULL,updated_at={NOW} WHERE id=?3"), params![work.stage(), provider_id, id]).map_err(|_| "已有视频任务正在执行，请等待或停止后重试。")?;
+            if let Some(mut run) = recovery {
+                run.input.model_retry = super::automation::ModelRetry { enabled: true, ..Default::default() };
+                tx.execute(&format!("UPDATE automation_runs SET status='paused',run_id=run_id+1,input_json=?1,error='已在视频页单独处理当前阶段，完成后可继续自动流程。已有成果保留。',updated_at={NOW} WHERE id=?2"), params![serde_json::to_string(&run.input).map_err(|error| error.to_string())?, run.id]).map_err(|error| error.to_string())?;
+            }
+            let job = get(&tx, id)?;
+            tx.commit().map_err(|error| error.to_string())?;
+            Ok(job)
         })
     }
 
