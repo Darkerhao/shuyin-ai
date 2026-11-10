@@ -283,6 +283,180 @@ fn automation_storyboard_retry_preserves_saved_media_and_partial_plan() {
 }
 
 #[test]
+fn automation_video_can_recover_locally_without_cancelling_the_flow() {
+    for status in ["paused", "waiting_user"] {
+        for (stage, work) in [
+            ("transcript", crate::video::VideoWork::Transcript),
+            ("storyboard", crate::video::VideoWork::Prepare),
+        ] {
+            let (_directory, database, run) = transcript_fixture();
+            database.set_automation_stage(&run, stage).unwrap();
+            let run = database.automation_run(&run.id).unwrap();
+            let mut original = database
+                .claim_bound_video_job(run.video_job_id.as_ref().unwrap(), work, None, Some(&run))
+                .unwrap();
+            if stage == "storyboard" {
+                original.plan.duration = 4.0;
+                original.plan.cues.push(crate::video::Cue {
+                    start: 2.0,
+                    end: 4.0,
+                    text: "尚未编排的字幕".into(),
+                });
+                original.plan.scenes = vec![serde_json::from_value(serde_json::json!({"first":0,"last":0,"kind":"opening","title":"已保存镜头","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]})).unwrap()];
+                database
+                    .save_video_progress(
+                        &original.id,
+                        original.run_id,
+                        &original.plan,
+                        "storyboard",
+                    )
+                    .unwrap();
+            }
+            database
+                .end_video_job(&original.id, original.run_id, "failed", "物体分镜无效")
+                .unwrap();
+            database
+                .set_automation_status(&run, status, "当前阶段失败")
+                .unwrap();
+            let replacement = database
+                .save_provider(None, model(), None, &Vault::default())
+                .unwrap()
+                .provider;
+            let recovered = database
+                .claim_video_job(&original.id, work, Some(&replacement.id))
+                .unwrap();
+            assert_eq!(recovered.id, original.id);
+            assert_eq!(recovered.status, "running");
+            assert_eq!(recovered.run_id, original.run_id + 1);
+            assert_eq!(
+                recovered.provider_id.as_deref(),
+                Some(replacement.id.as_str())
+            );
+            assert_eq!(recovered.audio_asset_id, original.audio_asset_id);
+            assert_eq!(recovered.subtitle_asset_id, original.subtitle_asset_id);
+            assert_eq!(
+                serde_json::to_value(&recovered.plan).unwrap(),
+                serde_json::to_value(&original.plan).unwrap()
+            );
+            let paused = database.automation_run(&run.id).unwrap();
+            assert_eq!(paused.status, "paused");
+            assert_eq!(paused.stage, stage);
+            assert_eq!(paused.video_job_id, run.video_job_id);
+            assert_eq!(paused.writing_version_id, run.writing_version_id);
+            assert_eq!(paused.input.selection.text_provider_id, replacement.id);
+            assert_eq!(
+                paused.input.text_provider.model_name,
+                replacement.input.model_name
+            );
+            assert!(database.claim_video_job(&original.id, work, None).is_err());
+            assert!(database.set_automation_stage(&run, "render").is_err());
+            if stage == "transcript" {
+                database
+                    .finish_video_transcript(&recovered.id, recovered.run_id)
+                    .unwrap();
+                assert_eq!(
+                    database.video_job(&recovered.id).unwrap().stage,
+                    "transcript_ready"
+                );
+            } else {
+                database
+                    .end_video_job(&recovered.id, recovered.run_id, "awaiting_confirmation", "")
+                    .unwrap();
+            }
+            let resumed = database.control_automation(&run.id, "resume").unwrap();
+            assert_eq!(resumed.status, "running");
+            assert_eq!(resumed.video_job_id, run.video_job_id);
+        }
+    }
+}
+
+#[test]
+fn automation_video_local_recovery_rejects_conflicts_without_changing_state() {
+    use crate::video::VideoWork;
+    for (status, stage, work, valid_provider) in [
+        ("running", "storyboard", VideoWork::Prepare, true),
+        ("awaiting_publish", "storyboard", VideoWork::Prepare, true),
+        ("paused", "content_check", VideoWork::Prepare, true),
+        ("waiting_user", "landscape_image", VideoWork::Prepare, true),
+        ("paused", "transcript", VideoWork::Prepare, true),
+        ("paused", "storyboard", VideoWork::Transcript, true),
+        ("paused", "storyboard", VideoWork::Render, true),
+        (
+            "paused",
+            "storyboard",
+            VideoWork::Preview(crate::video::PreviewRequest {
+                first_scene: 0,
+                seconds: 30,
+            }),
+            true,
+        ),
+        ("paused", "storyboard", VideoWork::Prepare, false),
+    ] {
+        let (_directory, database, run) = transcript_fixture();
+        database.set_automation_stage(&run, stage).unwrap();
+        if status != "running" {
+            database
+                .set_automation_status(&run, status, "保留原错误")
+                .unwrap();
+        }
+        let before = database.automation_run(&run.id).unwrap();
+        let video = database
+            .video_job(run.video_job_id.as_ref().unwrap())
+            .unwrap();
+        let provider = if valid_provider {
+            run.input.selection.text_provider_id.as_str()
+        } else {
+            "missing-model"
+        };
+        assert!(database
+            .claim_video_job(&video.id, work, Some(provider))
+            .is_err());
+        assert_eq!(
+            serde_json::to_value(database.automation_run(&run.id).unwrap()).unwrap(),
+            serde_json::to_value(before).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(database.video_job(&video.id).unwrap()).unwrap(),
+            serde_json::to_value(video).unwrap()
+        );
+    }
+}
+
+#[test]
+fn automation_video_local_recovery_rolls_back_when_flow_update_fails() {
+    let (_directory, database, run) = transcript_fixture();
+    database.set_automation_stage(&run, "storyboard").unwrap();
+    database
+        .set_automation_status(&run, "waiting_user", "保留原错误")
+        .unwrap();
+    let before = database.automation_run(&run.id).unwrap();
+    let video = database
+        .video_job(run.video_job_id.as_ref().unwrap())
+        .unwrap();
+    database
+        .with_connection(|connection| {
+            connection.execute_batch("CREATE TEMP TRIGGER reject_flow_recovery BEFORE UPDATE ON automation_runs BEGIN SELECT RAISE(ABORT, 'injected flow write failure'); END;").map_err(|error| error.to_string())
+        })
+        .unwrap();
+    let error = database
+        .claim_video_job(
+            &video.id,
+            crate::video::VideoWork::Prepare,
+            Some(&run.input.selection.text_provider_id),
+        )
+        .expect_err("flow update failure must abort video recovery");
+    assert!(error.contains("injected flow write failure"));
+    assert_eq!(
+        serde_json::to_value(database.automation_run(&run.id).unwrap()).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(database.video_job(&video.id).unwrap()).unwrap(),
+        serde_json::to_value(video).unwrap()
+    );
+}
+
+#[test]
 fn automation_content_check_fallback_keeps_the_original_content_snapshot() {
     let (_directory, database, run) = transcript_fixture();
     let mut fallback = model();
@@ -1528,8 +1702,21 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
     plan.scenes = vec![serde_json::from_value(serde_json::json!({"first":0,"last":0,"kind":"opening","title":"阅读","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]})).unwrap()];
     db.save_video_progress(&job.id, job.run_id, &plan, "storyboard")
         .unwrap();
-    db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")
+    db.end_video_job(&job.id, job.run_id, "failed", "分镜请求中断")
         .unwrap();
+    db.set_automation_status(&run, "waiting_user", "分镜失败")
+        .unwrap();
+    let recovered = db
+        .claim_video_job(
+            &job.id,
+            crate::video::VideoWork::Prepare,
+            Some(&run.input.selection.text_provider_id),
+        )
+        .unwrap();
+    db.end_video_job(&recovered.id, recovered.run_id, "awaiting_confirmation", "")
+        .unwrap();
+    let run = db.control_automation(&run.id, "resume").unwrap();
+    assert_eq!(db.list_cover_versions(&run.project_id).unwrap().len(), 3);
     db.verify_automation_content(&run).unwrap();
     db.prepare_automation_render(&run).unwrap();
     db.verify_automation_video(&run).unwrap();

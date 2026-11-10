@@ -298,19 +298,23 @@ pub(crate) fn continue_bound_video_job(
     if !render && provider_id.is_none() {
         return Err("请选择已启用的文本模型生成分镜。".into());
     }
+    let database = app.state::<Database>();
+    let owner = if automation.is_none() {
+        database.video_automation(&id)?
+    } else {
+        None
+    };
     let work = if render {
         VideoWork::Render
-    } else if automation.is_some_and(|run| run.stage == "transcript") {
+    } else if automation
+        .or(owner.as_ref())
+        .is_some_and(|run| run.stage == "transcript")
+    {
         VideoWork::Transcript
     } else {
         VideoWork::Prepare
     };
-    let job = app.state::<Database>().claim_bound_video_job(
-        &id,
-        work,
-        provider_id.as_deref(),
-        automation,
-    )?;
+    let job = database.claim_bound_video_job(&id, work, provider_id.as_deref(), automation)?;
     spawn(&app, &mut active, &job, work);
     Ok(job)
 }

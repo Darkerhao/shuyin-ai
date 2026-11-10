@@ -255,6 +255,17 @@ fn load(connection: &Connection, id: &str) -> Result<AutomationRun, String> {
     }).map_err(|error| format!("自动流程不可读取：{error}"))
 }
 
+pub(super) fn video_run(
+    connection: &Connection,
+    video_id: &str,
+) -> Result<Option<AutomationRun>, String> {
+    let id: Option<String> = connection.query_row(
+        "SELECT id FROM automation_runs WHERE video_job_id=?1 AND json_extract(input_json,'$.workflowVersion')=2 AND status NOT IN ('completed','cancelled')",
+        [video_id], |row| row.get(0),
+    ).optional().map_err(|error| error.to_string())?;
+    id.map(|id| load(connection, &id)).transpose()
+}
+
 pub(super) fn generation_run(
     connection: &Connection,
     task_id: &str,
@@ -443,6 +454,9 @@ impl Database {
     }
     pub fn automation_run(&self, id: &str) -> Result<AutomationRun, String> {
         self.with_connection(|connection| load(connection, id))
+    }
+    pub fn video_automation(&self, id: &str) -> Result<Option<AutomationRun>, String> {
+        self.with_connection(|connection| video_run(connection, id))
     }
     pub fn automation_runs(&self) -> Result<Vec<AutomationRun>, String> {
         self.with_connection(|connection| {
