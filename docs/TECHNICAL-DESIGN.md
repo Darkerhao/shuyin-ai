@@ -1,5 +1,11 @@
 # 书引 AI 技术设计文档
 
+## 资料页原生文件拖入（2026-11-10）
+
+ProjectPage通过现有Tauri 2 `getCurrentWindow().onDragDropEvent`监听本页文件拖放，依据当前`getBoundingClientRect()`与物理坐标`toLogical(devicePixelRatio)`判断是否落在文件区域，支持窗口缩放及滚动；页面卸载移除监听，异步注册晚于卸载时立即清理。App原书架拖入新建入口保持原职责，资料页只修改当前表单。
+
+按钮与拖入统一进入`stageSource`，校验单文件及既有五种扩展名、去重后更新唯一的`sourcePaths`，不覆盖非空书名。正式保存、失败保留、草稿恢复和自动制作继续复用原数据流。页面未就绪、保存或自动制作期间忽略拖入；局部错误与拖入高亮不持久化。使用已有主题变量、Button与AppIcon，无新增依赖、权限、Rust命令或数据库迁移。
+
 ## 视频制作工作台升级（2026-11-10）
 
 VideoPage将原创建表单及运行环境放入同一Collapsible，根据初次加载的jobs长度设置defaultOpen，忙碌时禁止折叠。选择值与配置仍在原页面ref中；设置子树保持挂载，保留环境检查用途、报告与错误，只按Collapsible的open插槽值挂载AudioPlayer，收起复用其卸载暂停。运行环境保留原内部折叠，内外内容容器关闭时清除padding/border，避免hidden-until-found仍占空白。不复制检查报告或另建展开状态。

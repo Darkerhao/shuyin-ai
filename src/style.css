@@ -412,7 +412,15 @@
   .book-form-guide p { margin: 0 0 8px; font: inherit; color: inherit; }
   .book-source-section { margin: 24px 0; }
   .book-source-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
-  .book-source-heading h2 { margin: 0; font: 400 12px/16px var(--font-mono); color: var(--text-secondary); }
+  .book-source-heading h2 { margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; color: var(--foreground); }
+  .book-source-dropzone { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 20px; border: 2px dashed color-mix(in srgb, var(--info) 55%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--info) 6%, var(--input-surface)); }
+  .book-source-dropzone:focus-within, .book-source-dropzone.is-drag-over { border-color: var(--info); background: color-mix(in srgb, var(--info) 13%, var(--input-surface)); box-shadow: var(--info-glow); }
+  .book-source-drop-icon { width: 32px; height: 32px; flex-shrink: 0; color: var(--info); }
+  .book-source-drop-copy { flex: 1 1 180px; min-width: 0; }
+  .book-source-drop-copy p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 20px; }
+  .book-source-drop-copy .book-source-drop-title { margin-bottom: 4px; color: var(--foreground); font-size: 14px; font-weight: 600; }
+  .book-source-select { min-height: 44px; }
+  .book-source-help { margin: 10px 0 12px; color: var(--muted-foreground); font-size: 12px; line-height: 20px; }
   .book-source-file { padding: 14px; border-radius: 12px; background: color-mix(in srgb, var(--terminal) 80%, transparent); border: 1px solid var(--border); }
   .book-source-name { margin: 0 0 8px; font: 700 12px/16px var(--font-mono); color: var(--info); }
   .book-source-file .file-path { padding: 0; margin: 0; background: transparent; }

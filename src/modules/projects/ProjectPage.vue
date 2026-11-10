@@ -5,7 +5,8 @@ import ConfirmAction from '../../components/ConfirmAction.vue'
 import { useEditorDraft } from '../../composables/useEditorDraft'
 import { readDraft } from '../../services/drafts'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter, useRoute } from 'vue-router'
 import * as api from '../../services/projects'
 import { appendNote, chooseNote, importNote, type ImportedNote } from '../../services/notes'
@@ -25,6 +26,11 @@ const project = ref<Project | null>(null)
 const form = ref(emptyProject())
 const original = ref(JSON.stringify(form.value))
 const sourcePaths = ref<string[]>([])
+const sourceDropZone = ref<globalThis.HTMLElement | null>(null)
+const sourceDragOver = ref(false)
+const sourceError = ref('')
+let unlistenSourceDrop: (() => void) | undefined
+let disposed = false
 if (!props.id && typeof route.query.source === 'string' && /\.(txt|md|epub|pdf|docx)$/i.test(route.query.source)) {
   sourcePaths.value = [route.query.source]
   form.value.title = route.query.source.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, '')
@@ -59,15 +65,25 @@ const load = () => run(async () => {
   ready.value = true
 }, '正在读取书籍资料…')
 const sourceName = (path: string) => path.split(/[\\/]/).pop() ?? path
-const chooseSource = () => run(async () => {
-  const path = await api.chooseSourceDocument()
-  if (!path) return
+function stageSource(paths: string[]) {
+  sourceError.value = ''
+  if (paths.length !== 1) { sourceError.value = '请每次添加一个书籍文件。'; return }
+  const path = paths[0]!
+  if (!/\.(txt|md|epub|pdf|docx)$/i.test(path)) {
+    sourceError.value = '暂不支持此格式，请选择 EPUB、PDF、TXT、Markdown 或 DOCX 文件。'
+    return
+  }
   if (sourcePaths.value.includes(path) || documents.value.some(asset => asset.filePath === path)) {
     message.value = '这份文件已在本书资料中。'
     return
   }
   sourcePaths.value.push(path)
+  if (!form.value.title.trim()) form.value.title = sourceName(path).replace(/\.[^.]+$/, '')
   message.value = '已选择本地文件，保存并继续后可在音频制作中直接使用。'
+}
+const chooseSource = () => run(async () => {
+  const path = await api.chooseSourceDocument()
+  if (path) stageSource([path])
 }, '正在选择书籍文件…')
 const chooseImport = () => run(async () => { const path = await chooseNote(); if (path) imported.value = await importNote(path) }, '正在读取导入资料…')
 const applyImport = () => run(async () => {
@@ -114,8 +130,26 @@ onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate(canLeave)
 onMounted(async () => {
   if (desktop) await load()
+  if (disposed) return
   if (route.query.focus === 'title') globalThis.document.getElementById('title')?.focus()
+  if (!desktop) return
+  try {
+    const unlisten = await getCurrentWindow().onDragDropEvent(({ payload }) => {
+      sourceDragOver.value = false
+      if (disposed || !ready.value || busy.value || automationBusy.value || payload.type === 'leave') return
+      const bounds = sourceDropZone.value?.getBoundingClientRect()
+      if (!bounds) return
+      const position = payload.position.toLogical(globalThis.devicePixelRatio)
+      const inside = position.x >= bounds.left && position.x <= bounds.right && position.y >= bounds.top && position.y <= bounds.bottom
+      if (!inside) return
+      if (payload.type === 'drop') stageSource(payload.paths)
+      else sourceDragOver.value = true
+    })
+    if (disposed) unlisten()
+    else unlistenSourceDrop = unlisten
+  } catch { sourceError.value = '拖拽暂不可用，请点击「选择本地文件」添加。' }
 })
+onBeforeUnmount(() => { disposed = true; unlistenSourceDrop?.() })
 </script>
 <template>
   <div class="page-return-row">
@@ -200,23 +234,48 @@ onMounted(async () => {
         >
           <div class="book-source-heading">
             <h2 id="source-documents-title">
-              本地书籍文件 <span class="optional">(EPUB / PDF / TXT)</span>
+              本地书籍文件
             </h2>
+          </div>
+          <div
+            ref="sourceDropZone"
+            class="book-source-dropzone"
+            :class="{ 'is-drag-over': sourceDragOver && !busy && !automationBusy }"
+          >
+            <AppIcon
+              name="upload"
+              class="book-source-drop-icon"
+            />
+            <div class="book-source-drop-copy">
+              <p
+                class="book-source-drop-title"
+                role="status"
+              >
+                {{ sourceDragOver && !busy && !automationBusy ? '松开鼠标，添加这本书' : '将书籍文件拖到这里' }}
+              </p>
+              <p>也可以点击按钮，从电脑中选择原书</p>
+            </div>
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
-              class="h-6 px-2 font-mono text-muted-foreground"
+              class="book-source-select text-sm"
+              aria-describedby="source-documents-help"
               @click="chooseSource"
             >
-              选择本地文件
+              <AppIcon name="folder" />选择本地文件
             </Button>
           </div>
           <p
             id="source-documents-help"
-            class="sr-only"
+            class="book-source-help"
           >
-            绑定 PDF、EPUB、DOCX、TXT 或 Markdown，生成音频时可直接使用。仅关联本地路径，保存后生效。
+            支持 EPUB、PDF、TXT、Markdown、DOCX，每次一个文件。仅关联本地路径，保存后可用于音频制作。
+          </p>
+          <p
+            v-if="sourceError"
+            class="error"
+            role="alert"
+          >
+            {{ sourceError }}
           </p>
           <ul
             v-if="documents.length || sourcePaths.length"
@@ -274,12 +333,6 @@ onMounted(async () => {
               </p>
             </li>
           </ul>
-          <p
-            v-else
-            class="book-source-file muted"
-          >
-            选择本地原书，保存后可用于音频制作。
-          </p>
           <RouterLink
             v-if="documents.length && project"
             :to="`/projects/${project.id}/publishing`"
