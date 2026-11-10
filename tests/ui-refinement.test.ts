@@ -3,6 +3,8 @@ import * as drafts from '../src/services/drafts'
 vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { PhysicalPosition } from '@tauri-apps/api/dpi'
+import type { DragDropEvent } from '@tauri-apps/api/webview'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import App from '../src/App.vue'
 import ProjectsPage from '../src/modules/projects/ProjectsPage.vue'
@@ -45,7 +47,7 @@ beforeEach(() => {
   vi.mocked(workflow.workflowSnapshot).mockResolvedValue({ resume: [], running: [] })
   vi.mocked(workflow.projectProgress).mockResolvedValue(['', 'writing', 'covers', 'video', 'publishing'].map(path => ({ path, status: path === 'covers' ? '已导出 2/2' : '未开始', tone: path === 'covers' ? 'ready' : 'neutral' })))
 })
-afterEach(() => { mounted.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = ''; vi.restoreAllMocks() })
+afterEach(() => { mounted.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = ''; vi.restoreAllMocks(); vi.unstubAllGlobals() })
 async function render(path = '/projects') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/projects', component: ProjectsPage }, { path: '/projects/new', component: ProjectPage },
@@ -136,6 +138,102 @@ it('rejects multiple and unsupported dropped files without creating books, and r
   for (const paths of [['D:/a.pdf', 'D:/b.pdf'], ['D:/movie.mp4']]) { handler({ payload: { type: 'drop', paths } }); await flushPromises(); expect(router.currentRoute.value.path).toBe('/projects') }
   expect(projects.saveProject).not.toHaveBeenCalled()
   wrapper.unmount(); expect(unlisten).toHaveBeenCalledOnce()
+})
+function sourceDrag(type: DragDropEvent['type'], paths = ['D:/书籍/新书.PDF'], position = new PhysicalPosition(300, 300)) {
+  const payload = type === 'leave' ? { type } : { type, paths, position }
+  for (const [handler] of native.onDragDropEvent.mock.calls) handler({ payload })
+}
+function sourceBounds(wrapper: ReturnType<typeof mount>) {
+  vi.spyOn(wrapper.get('.book-source-dropzone').element, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 100, 500, 200))
+  vi.stubGlobal('devicePixelRatio', 2)
+}
+it.each(['/projects/new', '/projects/p1'])('accepts a file only inside the book drop zone at scaled coordinates on %s', async path => {
+  const { wrapper, router } = await render(path)
+  sourceBounds(wrapper)
+  await wrapper.get('#title').setValue('我的书名')
+  await wrapper.get('#notes').setValue('保留我的读书笔记')
+  sourceDrag('enter'); await flushPromises()
+  expect(wrapper.get('.book-source-dropzone').classes()).toContain('is-drag-over')
+  expect(wrapper.get('.book-source-dropzone').text()).toContain('松开鼠标')
+  sourceDrag('over', [], new PhysicalPosition(20, 20)); await flushPromises()
+  expect(wrapper.get('.book-source-dropzone').classes()).not.toContain('is-drag-over')
+  sourceDrag('drop', ['D:/书籍/外部.pdf'], new PhysicalPosition(20, 20)); await flushPromises()
+  expect(wrapper.find('[aria-label="本地书籍文件"]').exists()).toBe(false)
+  sourceDrag('enter'); sourceDrag('leave'); await flushPromises()
+  expect(wrapper.get('.book-source-dropzone').classes()).not.toContain('is-drag-over')
+  sourceDrag('drop'); sourceDrag('drop'); await flushPromises()
+  expect(wrapper.get('[aria-label="本地书籍文件"]').findAll('li')).toHaveLength(1)
+  expect(wrapper.get('[aria-label="本地书籍文件"]').text()).toContain('新书.PDF')
+  expect(wrapper.get('#title').element).toHaveProperty('value', '我的书名')
+  expect(wrapper.get('#notes').element).toHaveProperty('value', '保留我的读书笔记')
+  expect(projects.saveProject).not.toHaveBeenCalled()
+  expect(router.currentRoute.value.path).toBe(path)
+  await wrapper.get('[aria-label="取消绑定 新书.PDF"]').trigger('click')
+  expect(wrapper.find('[aria-label="本地书籍文件"]').exists()).toBe(false)
+})
+it('rejects unsupported or multiple drops inline and stages supported files without duplicating saved documents', async () => {
+  vi.mocked(projects.listAssets).mockResolvedValue([{ id: 'doc', projectId: 'p1', assetType: 'document', filePath: 'D:/原书.pdf', originalName: '原书.pdf', fileSize: 10, modifiedAt: 1, existsStatus: 'available', createdAt: saved.createdAt }])
+  const { wrapper } = await render('/projects/p1')
+  sourceBounds(wrapper)
+  sourceDrag('drop', ['D:/原书.pdf']); await flushPromises()
+  expect(wrapper.get('[aria-label="本地书籍文件"]').findAll('li')).toHaveLength(1)
+  for (const paths of [['D:/视频.mp4'], ['D:/a.pdf', 'D:/b.epub']]) {
+    sourceDrag('drop', paths); await flushPromises()
+    expect(wrapper.get('.book-source-section [role="alert"]').text()).toMatch(/暂不支持|每次添加一个/)
+    expect(wrapper.get('[aria-label="本地书籍文件"]').findAll('li')).toHaveLength(1)
+  }
+  for (const extension of ['epub', 'txt', 'md', 'docx']) sourceDrag('drop', [`D:/补充.${extension}`])
+  await flushPromises()
+  expect(wrapper.find('.book-source-section [role="alert"]').exists()).toBe(false)
+  expect(wrapper.get('[aria-label="本地书籍文件"]').findAll('li')).toHaveLength(5)
+  expect(projects.saveProject).not.toHaveBeenCalled()
+})
+it('fills an empty title, keeps a dropped source on save failure and ignores drops while saving', async () => {
+  const { wrapper } = await render('/projects/new')
+  sourceBounds(wrapper)
+  sourceDrag('drop'); await flushPromises()
+  expect(wrapper.get('#title').element).toHaveProperty('value', '新书')
+  let failSave!: (reason: Error) => void
+  vi.mocked(projects.saveProject).mockReturnValueOnce(new Promise((_, reject) => { failSave = reject }))
+  await wrapper.get('form').trigger('submit'); await flushPromises()
+  sourceDrag('drop', ['D:/保存期间.pdf']); await flushPromises()
+  expect(wrapper.get('[aria-label="本地书籍文件"]').findAll('li')).toHaveLength(1)
+  failSave(new Error('文件不可读')); await flushPromises()
+  expect(wrapper.get('[aria-label="本地书籍文件"]').text()).toContain('新书.PDF')
+  expect(projects.saveProject).toHaveBeenCalledWith(null, expect.objectContaining({ title: '新书' }), ['D:/书籍/新书.PDF'])
+})
+it('removes the form drop listener on navigation and ignores its stale callback', async () => {
+  const unlisteners: ReturnType<typeof vi.fn>[] = []
+  native.onDragDropEvent.mockImplementation(() => { const unlisten = vi.fn(); unlisteners.push(unlisten); return Promise.resolve(unlisten) })
+  const { wrapper, router } = await render('/projects/new')
+  sourceBounds(wrapper)
+  await router.push('/settings/models'); await flushPromises()
+  expect(unlisteners.filter(unlisten => unlisten.mock.calls.length)).toHaveLength(1)
+  sourceDrag('drop'); await flushPromises()
+  expect(router.currentRoute.value.path).toBe('/settings/models')
+  expect(projects.saveProject).not.toHaveBeenCalled()
+})
+it('ignores file drops during automatic production and resumes when it finishes', async () => {
+  const { wrapper } = await render('/projects/new')
+  sourceBounds(wrapper)
+  const setup = wrapper.findComponent({ name: 'AutomationSetup' })
+  setup.vm.$emit('busy', true); await flushPromises()
+  sourceDrag('enter'); sourceDrag('drop'); await flushPromises()
+  expect(wrapper.get('.book-source-dropzone').classes()).not.toContain('is-drag-over')
+  expect(wrapper.find('[aria-label="本地书籍文件"]').exists()).toBe(false)
+  setup.vm.$emit('busy', false); await flushPromises()
+  sourceDrag('drop'); await flushPromises()
+  expect(wrapper.get('[aria-label="本地书籍文件"]').text()).toContain('新书.PDF')
+})
+it('cleans up a listener whose registration finishes after the form unmounts', async () => {
+  const { router } = await render()
+  let finishRegistration!: (unlisten: () => void) => void
+  native.onDragDropEvent.mockReturnValueOnce(new Promise(resolve => { finishRegistration = resolve }))
+  await router.push('/projects/new'); await flushPromises()
+  await router.push('/settings/models'); await flushPromises()
+  const unlisten = vi.fn()
+  finishRegistration(unlisten); await flushPromises()
+  expect(unlisten).toHaveBeenCalledOnce()
 })
 it('opens the same context menu from More and Shift+F10, restores focus on Escape and cancels deletion', async () => {
   const { wrapper } = await render()
