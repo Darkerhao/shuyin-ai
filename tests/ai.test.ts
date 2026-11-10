@@ -257,6 +257,18 @@ describe('publishing workflow', () => {
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(api.saveWriting).toHaveBeenCalledWith(expect.objectContaining({ basedOn: 'v1', content: { ...initial.content, title: generated.content.title } }))
   })
+  it('describes a manually edited AI version without claiming an item revision ran', async () => {
+    vi.mocked(api.saveWriting).mockResolvedValue({ ...initial, id: 'v2', versionNo: 2, sourceType: 'mixed', content: { ...initial.content, title: '我手动修改的标题' } })
+    const { wrapper } = await render()
+    await wrapper.get('#result-title').setValue('我手动修改的标题')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(wrapper.get('.writing-editor-heading').text()).toContain('基于 v2 · AI 生成后修改')
+    expect(wrapper.get('.writing-editor-heading').text()).not.toContain('按项调整')
+    await wrapper.get('.writing-editor-heading [data-slot="collapsible-trigger"]').trigger('click'); await flushPromises()
+    await chooseSelect(wrapper, '#writing-version', /^v2 ·/)
+    expect(wrapper.get('.history-version-meta').text()).toContain('AI 生成后修改')
+    expect(api.startGeneration).not.toHaveBeenCalled()
+  })
   it('restores the saved current version after generating an unused alternative and reopening the editor', async () => {
     vi.mocked(api.executeGeneration).mockResolvedValue(generated)
     const { wrapper, router } = await render()

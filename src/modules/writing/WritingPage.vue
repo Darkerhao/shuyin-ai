@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { displayPath } from '@/lib/displayPath'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter, useRoute } from 'vue-router'
 import * as api from '../../services/ai'
 import * as audioApi from '../../services/audio'
@@ -93,6 +93,17 @@ const copyLabel = ref('')
 const historyOpen = ref(false)
 const historyVersionId = ref<string | null>(null)
 const historyVersion = computed(() => versions.value.find(version => version.id === historyVersionId.value))
+const candidateVersion = computed(() => versions.value[0]?.sourceType === 'ai' && versions.value[0]?.id !== selected.value?.id ? versions.value[0] : null)
+const candidateVisible = computed(() => !preview.value && (generating.value ? !recommending.value : !!candidateVersion.value))
+const candidateContent = computed(() => generating.value ? liveContent.value : candidateVersion.value?.content ?? {})
+const candidateStatus = computed(() => generating.value ? Object.keys(liveContent.value).length ? '正在接收' : '等待返回' : '生成完成')
+const versionSource = (version: WritingVersion) => version.sourceType === 'ai' ? 'AI 生成' : version.sourceType === 'mixed' ? 'AI 生成后修改' : '手动修改'
+async function viewCandidate() {
+  historyVersionId.value = candidateVersion.value?.id ?? null
+  historyOpen.value = true
+  await nextTick()
+  globalThis.document.getElementById('writing-version')?.focus()
+}
 const savedFlash = ref(false)
 const waitingSeconds = ref(0)
 let savedTimer: ReturnType<typeof globalThis.setTimeout> | undefined
@@ -729,44 +740,16 @@ onMounted(async () => {
       {{ recommending ? '正在推荐时长，可停止后手动设置。' : revising ? '正在调整选中内容，完成后先预览再采用。' : '正在生成备选，你可以继续编辑，当前内容保留。' }}可切换页面继续创作，请保持应用运行。已等待 {{ waitingSeconds }} 秒，单次最多等待 5 分钟。
     </p>
     <section
-      v-if="taskId && !recommending && (!revising || revisionFields.some(field => field !== 'coverDesign'))"
-      class="panel"
-      aria-label="生成中的候选预览"
-    >
-      <h2>生成中的候选预览</h2>
-      <p class="muted text-sm">
-        以下内容尚未校验或保存，停止或失败后会清除。当前稿和历史版本保留。
-      </p>
-      <p
-        v-if="!Object.keys(liveContent).length"
-        class="muted text-sm"
-        role="status"
-      >
-        等待正文返回…
-      </p>
-      <div class="max-h-80 space-y-5 overflow-y-auto pr-2">
-        <section
-          v-for="field in fields.filter(item => liveContent[item.key])"
-          :key="field.key"
-          :aria-label="`候选${field.label}`"
-        >
-          <h3 class="text-sm font-medium">
-            {{ field.label }}
-          </h3>
-          <p class="m-0 whitespace-pre-wrap break-words text-sm leading-relaxed">
-            {{ liveContent[field.key] }}
-          </p>
-        </section>
-      </div>
-    </section>
-    <section
       v-if="revisionOpen"
-      class="panel mb-6 space-y-5"
+      class="panel revision-panel mb-6 space-y-5"
       aria-labelledby="revision-heading"
     >
       <div>
-        <h2 id="revision-heading">
-          按项调整
+        <h2
+          id="revision-heading"
+          class="studio-section-title"
+        >
+          <AppIcon name="sliders" />按项调整
         </h2>
         <p class="muted">
           只重新生成选中的内容。生成前会保存当前修改，候选结果经你采用后才成为新版本。
@@ -776,12 +759,13 @@ onMounted(async () => {
         <legend class="mb-3 text-sm font-medium">
           选择要调整的内容
         </legend>
-        <div class="grid gap-3 sm:grid-cols-2">
+        <div class="revision-options">
           <label
             v-for="field in revisionOptions"
             :key="field.key"
             :for="`revision-${field.key}`"
-            class="flex items-center gap-2 text-sm"
+            class="revision-option"
+            :class="{ 'is-selected': revisionFields.includes(field.key) }"
           >
             <Checkbox
               :id="`revision-${field.key}`"
@@ -806,14 +790,14 @@ onMounted(async () => {
       <template v-if="preview">
         <section
           v-if="preview.fields.includes('coverDesign')"
-          class="space-y-3 border-t pt-4"
+          class="comparison-section"
           aria-label="封面字号与配色调整对比"
         >
           <h3 class="text-sm font-semibold">
             封面字号与配色
           </h3>
-          <div class="grid gap-4 lg:grid-cols-2">
-            <div class="space-y-3">
+          <div class="version-comparison">
+            <div class="comparison-current space-y-3">
               <p>原推荐</p>
               <CoverDesignPreview
                 v-if="preview.before.coverDesign"
@@ -823,7 +807,7 @@ onMounted(async () => {
                 此版本还没有排版推荐。
               </p>
             </div>
-            <div class="space-y-3">
+            <div class="comparison-candidate space-y-3">
               <p>候选推荐</p>
               <CoverDesignPreview
                 v-if="preview.content.coverDesign"
@@ -835,14 +819,14 @@ onMounted(async () => {
         <section
           v-for="field in fields.filter(item => preview?.fields.includes(item.key))"
           :key="field.key"
-          class="space-y-3 border-t pt-4"
+          class="comparison-section"
           :aria-label="`${field.label}调整对比`"
         >
           <h3 class="text-sm font-semibold">
             {{ field.label }}
           </h3>
-          <div class="grid gap-4 lg:grid-cols-2">
-            <div>
+          <div class="version-comparison">
+            <div class="comparison-current">
               <label :for="`revision-before-${field.key}`">原内容</label>
               <Textarea
                 :id="`revision-before-${field.key}`"
@@ -851,7 +835,7 @@ onMounted(async () => {
                 readonly
               />
             </div>
-            <div>
+            <div class="comparison-candidate">
               <label :for="`revision-after-${field.key}`">候选内容</label>
               <Textarea
                 :id="`revision-after-${field.key}`"
@@ -863,7 +847,7 @@ onMounted(async () => {
           </div>
         </section>
       </template>
-      <div class="actions wrap">
+      <div class="actions wrap revision-actions">
         <Button
           v-if="preview"
           :disabled="busy"
@@ -893,12 +877,30 @@ onMounted(async () => {
     <Collapsible
       v-model:open="historyOpen"
       class="writing-workspace"
+      :class="{ 'has-candidate': candidateVisible }"
       :unmount-on-hide="false"
     >
       <form
         class="writing-editor"
         @submit.prevent="save"
       >
+        <div class="writing-editor-heading">
+          <div>
+            <h2 class="studio-section-title">
+              <AppIcon name="pen" />当前稿
+            </h2>
+            <p>{{ selected ? `基于 v${selected.versionNo} · ${versionSource(selected)}` : '从这一期想分享的内容开始' }}</p>
+          </div>
+          <CollapsibleTrigger as-child>
+            <Button
+              type="button"
+              variant="ghost"
+              :disabled="!versions.length || busy"
+            >
+              <AppIcon name="clock" />历史版本<span class="history-count">{{ versions.length }}</span>
+            </Button>
+          </CollapsibleTrigger>
+        </div>
         <Tabs
           v-model="activeTab"
           class="gap-0"
@@ -973,18 +975,11 @@ onMounted(async () => {
                     @click="copy(field.key, field.label)"
                   />
                 </div>
-                <p
-                  v-if="field.help"
-                  :id="`result-help-${field.key}`"
-                  class="muted"
-                >
-                  {{ field.help }}
-                </p>
                 <div class="editor-input-wrap">
                   <Textarea
                     :id="`result-${field.key}`"
                     v-model="draft[field.key]"
-                    :class="['editor-input text-sm', field.rows === 2 ? 'block min-h-0 resize-none max-sm:pr-20' : '', field.key === 'title' ? 'h-[46px] py-3 leading-5 font-medium text-foreground' : field.rows === 2 ? 'h-[42px] py-2.5 leading-5 font-medium' : '', field.key === 'tags' ? 'font-mono font-normal text-info' : '', field.key === 'audioPrompt' ? 'block h-56 bg-terminal p-4 leading-relaxed' : field.key.startsWith('coverPrompt') ? 'p-3.5' : '']"
+                    :class="['editor-input text-sm leading-[1.8]', field.rows === 2 ? 'block min-h-0 resize-none' : '', field.key === 'title' ? 'h-16 py-4 pr-24 text-xl leading-[30px] font-semibold text-foreground' : field.rows === 2 ? 'h-[42px] py-2.5 leading-5 font-medium' : '', field.key === 'coverTitle' || field.key === 'coverSubtitle' ? 'pr-20' : '', field.key === 'description' ? 'min-h-60 text-[15px] leading-[1.9]' : '', tab.value === 'publishing' ? 'bg-transparent' : '', field.key === 'tags' ? 'font-mono font-normal text-info' : '', field.key === 'audioPrompt' ? 'block h-56 bg-terminal p-4 leading-relaxed' : field.key.startsWith('coverPrompt') ? 'p-3.5' : '']"
                     :rows="field.rows === 2 ? 1 : field.key === 'description' ? 5 : field.key.startsWith('coverPrompt') ? 3 : field.rows"
                     :wrap="field.rows === 2 ? 'off' : undefined"
                     :maxlength="field.limit"
@@ -999,6 +994,13 @@ onMounted(async () => {
                     {{ [...draft[field.key]].length }} / {{ field.limit }}
                   </p>
                 </div>
+                <p
+                  v-if="field.help"
+                  :id="`result-help-${field.key}`"
+                  class="muted editor-field-help"
+                >
+                  {{ field.help }}
+                </p>
               </section>
             </div>
             <section
@@ -1426,12 +1428,85 @@ onMounted(async () => {
           </div>
         </div>
       </form>
+      <Transition name="candidate-panel">
+        <aside
+          v-if="candidateVisible"
+          class="writing-candidate panel"
+          :aria-label="generating ? '生成中的候选预览' : '已完成的生成候选'"
+          :data-state="generating ? 'receiving' : 'complete'"
+        >
+          <div class="candidate-heading">
+            <h2 class="studio-section-title">
+              <AppIcon name="sparkle" />生成候选
+            </h2>
+            <span
+              class="candidate-status"
+              role="status"
+            ><AppIcon :name="generating ? 'clock' : 'check'" />{{ candidateStatus }}</span>
+          </div>
+          <p class="candidate-help">
+            {{ generating ? '以下内容尚未校验或保存，停止或失败后会清除。当前稿和历史版本保留。' : `已保存为 v${candidateVersion?.versionNo}，当前稿保留。对照后选择需要的内容。` }}
+          </p>
+          <div
+            v-if="!Object.keys(candidateContent).length"
+            class="candidate-waiting"
+          >
+            <AppIcon name="pen" />
+            <p>{{ revising && revisionFields.every(field => field === 'coverDesign') ? '正在调整封面字号与配色…' : '等待正文返回…' }}</p>
+            <span>返回的内容将在这里显示</span>
+          </div>
+          <div
+            v-else
+            class="candidate-content"
+            tabindex="0"
+            aria-label="候选内容，可滚动阅读"
+          >
+            <section
+              v-for="field in fields.filter(item => candidateContent[item.key])"
+              :key="field.key"
+              :aria-label="`候选${field.label}`"
+            >
+              <h3>{{ field.label }}</h3>
+              <p>{{ candidateContent[field.key] }}</p>
+            </section>
+          </div>
+          <div class="candidate-footer">
+            <span v-if="generating">已等待 {{ waitingSeconds }} 秒 · 最长 5 分钟</span>
+            <Button
+              v-else
+              type="button"
+              variant="outline"
+              @click="viewCandidate"
+            >
+              <AppIcon name="eye" />查看对照并取用
+            </Button>
+          </div>
+        </aside>
+      </Transition>
       <section
         v-if="versions.length"
         v-show="historyOpen"
         class="history-panel"
+        aria-label="历史版本对照"
       >
         <CollapsibleContent>
+          <div class="history-heading">
+            <div>
+              <h2 class="studio-section-title">
+                <AppIcon name="clock" />历史版本对照
+              </h2><p>查看只做对照，取用后才会改变当前稿。</p>
+            </div>
+            <CollapsibleTrigger as-child>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="收起历史版本"
+              >
+                <AppIcon name="close" />
+              </Button>
+            </CollapsibleTrigger>
+          </div>
           <label for="writing-version">预览历史版本</label>
           <Select
             v-model="historyVersionId"
@@ -1449,12 +1524,16 @@ onMounted(async () => {
                 :key="version.id"
                 :value="version.id"
               >
-                v{{ version.versionNo }} · {{ version.sourceType === 'ai' ? '生成' : '修改' }} · {{ version.modelName || '手动保存' }} · {{ new Date(version.createdAt).toLocaleString() }}{{ selected?.id === version.id ? ' · 当前编辑来源' : '' }}
+                v{{ version.versionNo }} · {{ versionSource(version) }} · {{ version.modelName || '手动保存' }} · {{ new Date(version.createdAt).toLocaleString() }}{{ selected?.id === version.id ? ' · 当前编辑来源' : '' }}
               </SelectItem>
             </SelectContent>
           </Select>
           <template v-if="historyVersion">
-            <div class="actions">
+            <div class="history-version-meta">
+              <span><Badge variant="secondary">{{ versionSource(historyVersion) }}</Badge> v{{ historyVersion.versionNo }} <span v-if="historyVersion.id === selected?.id">· 当前编辑来源</span></span>
+              <time :datetime="historyVersion.createdAt">{{ new Date(historyVersion.createdAt).toLocaleString() }}</time>
+            </div>
+            <div class="actions history-actions">
               <Button
                 variant="outline"
                 :disabled="busy || revisionLocked"
@@ -1469,7 +1548,7 @@ onMounted(async () => {
               :key="field.key"
               class="version-comparison"
             >
-              <div>
+              <div class="comparison-current">
                 <label :for="`history-current-${field.key}`">当前稿 · {{ field.label }}</label><Textarea
                   :id="`history-current-${field.key}`"
                   :model-value="draft[field.key]"
@@ -1477,7 +1556,7 @@ onMounted(async () => {
                   :rows="Math.min(field.rows, 5)"
                 />
               </div>
-              <div>
+              <div class="comparison-candidate">
                 <label :for="`history-candidate-${field.key}`">v{{ historyVersion.versionNo }} · {{ field.label }}</label><Textarea
                   :id="`history-candidate-${field.key}`"
                   :model-value="historyVersion.content[field.key]"

@@ -476,7 +476,15 @@ describe('M4 publish preparation', () => {
     await dialog().get('form').trigger('submit'); await flushPromises()
     expect(api.recordPublishSuccess).toHaveBeenLastCalledWith('t1', expect.objectContaining({ confirmed: true, notes: '真实发布备注' }))
     expect(!!document.querySelector('[role="alertdialog"]')).toBe(false); expect(wrapper.text()).toContain('已记录发布成功')
-    expect(wrapper.findAll('fieldset')[0]!.element.disabled).toBe(true)
+    for (const id of ['publish-title', 'publish-description', 'publish-tags', 'publish-writing-version', 'publish-audio', 'publish-video', 'publish-landscape', 'publish-portrait', 'publish-allow-download', 'publish-mode']) {
+      expect(wrapper.get(`#${id}`).element.matches(':disabled'), id).toBe(true)
+    }
+    expect(button(wrapper, '复制内容').element.disabled).toBe(false)
+    const preview = wrapper.get('button[aria-label="放大查看封面 v1"]')
+    expect(preview.element.matches(':disabled')).toBe(false)
+    await preview.trigger('click'); await flushPromises()
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('封面 v1 放大预览')
+    expect(api.recordPublishSuccess).toHaveBeenCalledTimes(2)
   })
   it('locks task editing and repeated confirmation while entering the publication result', async () => {
     const { wrapper } = await render()

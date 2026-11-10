@@ -1,5 +1,13 @@
 # 书引 AI 技术设计文档
 
+## 内容创作与作品交付台（2026-11-10）
+
+WritingPage复用generationJobs的preview/status及原versions列表，派生流式候选与尚未取用的最新AI版本；不持有第二份业务稿、不新增请求/轮询。候选采用Vue Transition短入场，正文直接显示真实快照；历史取用、按项提交与自动暂存仍沿原调用链。单列网格使用minmax(0,1fr)，避免历史版本长文本撑开页面。
+
+来源`mixed`同时包括手工修改AI稿与按项采用，统一显示「AI 生成后修改」，不从该字段推断具体操作。封面主、副标题为内嵌计数预留右侧空间，浏览器按实际几何尺寸验证宽窄窗口均不遮挡。
+
+PublishingPage复用CoverThumbnail的expandable预览、openAsset和videoAssetMetadata，集中显示所选素材；所有编辑控件明确应用原busy/published/recordOpen锁，预览与复制保持可用。DouyinVerification依据session.completed和当前step派生阶段样式，review阶段始终表示待人工检查，记录仍通过recordPublishSuccess原确认入口。删除被替代的封面预览和全局阶段样式；无SQL迁移、依赖、权限或后台变更。见[验收记录](CREATOR-DELIVERY-STYLE-VERIFICATION.md)。
+
 ## 工作台视觉升级（2026-11-10）
 
 书架沿用BookCard及原菜单，使用pointer事件更新书封CSS变量，离开/取消清理；只在鼠标与允许动效时响应。ProjectsPage使用Vue TransitionGroup及有key的单元素容器，避免BookCard多根节点影响位移动画。按钮、导航和书架继续使用全局主题变量及减少动态效果规则。
