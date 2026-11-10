@@ -649,7 +649,7 @@ impl Database {
             height: step.height,
             title: cover_title,
             subtitle: cover_subtitle,
-            brand: String::new(),
+            brand: "甲子 · 读书".into(),
             font_family: "sans".into(),
             title_size: design.title_size,
             subtitle_size: design.subtitle_size,
