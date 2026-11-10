@@ -6,6 +6,7 @@ export interface WorkflowCompletion { id: string; kind: ReminderKind }
 const clips = import.meta.glob<string>('../assets/voice/*.wav', { eager: true, query: '?url', import: 'default' })
 const storageKey = 'shuyin.voice-reminders'
 const enabled = ref(false)
+const playing = ref(false)
 const error = ref('')
 const received = new Set<string>()
 const sources = new Set<globalThis.AudioBufferSourceNode>()
@@ -41,6 +42,7 @@ export function stopVoiceReminders() {
   epoch += 1
   for (const source of sources) { source.stop(); source.disconnect() }
   sources.clear()
+  playing.value = false
   nextStart = 0
   pending = Promise.resolve()
 }
@@ -60,10 +62,11 @@ export function playVoiceReminder(kind: ReminderKind) {
     const source = audio.createBufferSource()
     source.buffer = buffer
     source.connect(audio.destination)
-    source.onended = () => { sources.delete(source); source.disconnect() }
+    source.onended = () => { sources.delete(source); source.disconnect(); playing.value = sources.size > 0 }
     const start = Math.max(audio.currentTime, nextStart)
     source.start(start)
     sources.add(source)
+    playing.value = true
     nextStart = start + buffer.duration + 0.15
     error.value = ''
   }).catch(() => {
@@ -98,4 +101,4 @@ export function previewVoiceReminder() {
   playVoiceReminder('enabled')
 }
 
-export const voiceReminders = { enabled: readonly(enabled), error: readonly(error) }
+export const voiceReminders = { enabled: readonly(enabled), playing: readonly(playing), error: readonly(error) }

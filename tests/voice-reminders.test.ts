@@ -84,6 +84,51 @@ it('stops both playing and scheduled audio immediately when disabled', async () 
   expect(sources).toHaveLength(2)
 })
 
+it('exposes playback only after audio starts and clears it when the entire queue ends', async () => {
+  expect(service.voiceReminders.playing.value).toBe(false)
+  service.setVoiceReminders(true)
+  expect(service.voiceReminders.playing.value).toBe(false)
+  service.receiveWorkflowCompletion({ id: 'render', kind: 'video' })
+  await flushPromises()
+  expect(service.voiceReminders.playing.value).toBe(true)
+  sources[0]!.onended!()
+  expect(service.voiceReminders.playing.value).toBe(true)
+  sources[1]!.onended!()
+  expect(service.voiceReminders.playing.value).toBe(false)
+})
+
+it('resets playback on stop without letting an old ended event clear a new reminder', async () => {
+  service.setVoiceReminders(true)
+  await flushPromises()
+  service.stopVoiceReminders()
+  expect(service.voiceReminders.playing.value).toBe(false)
+  service.previewVoiceReminder()
+  await flushPromises()
+  sources[0]!.onended!()
+  expect(service.voiceReminders.playing.value).toBe(true)
+  service.setVoiceReminders(false)
+  expect(service.voiceReminders.playing.value).toBe(false)
+})
+
+it('stops queued decoding with the preview control and accepts future completion reminders', async () => {
+  service.setVoiceReminders(true)
+  await flushPromises()
+  let finish!: (value: { duration: number }) => void
+  audioContexts[0]!.decodeAudioData.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  service.receiveWorkflowCompletion({ id: 'decoding', kind: 'audio' })
+  await flushPromises()
+  service.stopVoiceReminders()
+  finish({ duration: 3 })
+  await flushPromises()
+  expect(service.voiceReminders.enabled.value).toBe(true)
+  expect(service.voiceReminders.playing.value).toBe(false)
+  expect(sources).toHaveLength(1)
+  service.receiveWorkflowCompletion({ id: 'next-completion', kind: 'video' })
+  await flushPromises()
+  expect(sources).toHaveLength(2)
+  expect(service.voiceReminders.playing.value).toBe(true)
+})
+
 it('announces each exported package while ignoring repeated delivery of the same export', async () => {
   service.receiveWorkflowCompletion({ id: 'book/publish/package-1', kind: 'publish-package' })
   service.setVoiceReminders(true)
@@ -160,7 +205,7 @@ it('keeps a single global event listener with a labelled switch and preview cont
   await wrapper.get('[role="switch"]').trigger('click')
   await flushPromises()
   expect(wrapper.get('[role="switch"]').attributes('aria-checked')).toBe('true')
-  expect(wrapper.find('[aria-label="试听语音提醒"]').exists()).toBe(true)
+  expect(wrapper.find('[aria-label="停止语音播放"]').exists()).toBe(true)
   const callback = events.listen.mock.calls[0]![1] as (event: { payload: WorkflowCompletion }) => void
   callback({ payload: { id: 'background', kind: 'audio' } })
   await flushPromises()
@@ -179,6 +224,56 @@ it('cleans up a listener whose registration finishes after the control unmounts'
   finish(events.unlisten)
   await flushPromises()
   expect(events.unlisten).toHaveBeenCalledOnce()
+})
+
+it('shows the playing icon during reminders and lets the preview control stop without disabling reminders', async () => {
+  const Toggle = (await import('../src/components/VoiceReminderToggle.vue')).default
+  const wrapper = mount(Toggle)
+  await wrapper.get('[role="switch"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.find('.voice-wave').exists()).toBe(true)
+  expect(wrapper.get('[role="status"]').text()).toBe('正在播放语音提醒')
+  await wrapper.get('[aria-label="停止语音播放"]').trigger('click')
+  expect(wrapper.find('.voice-wave').exists()).toBe(false)
+  expect(wrapper.get('[role="switch"]').attributes('aria-checked')).toBe('true')
+  await wrapper.get('[aria-label="试听语音提醒"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.find('.voice-wave').exists()).toBe(true)
+  sources[1]!.onended!()
+  await flushPromises()
+  expect(wrapper.find('.voice-wave').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="试听语音提醒"]').exists()).toBe(true)
+  wrapper.unmount()
+})
+
+it('keeps the idle icon after playback failure and switches only when retry starts audio', async () => {
+  vi.mocked(fetch).mockRejectedValueOnce(new Error('clip unavailable'))
+  const Toggle = (await import('../src/components/VoiceReminderToggle.vue')).default
+  const wrapper = mount(Toggle)
+  await wrapper.get('[role="switch"]').trigger('click')
+  await flushPromises()
+  expect(service.voiceReminders.error.value).toContain('未能播放')
+  expect(wrapper.find('.voice-wave').exists()).toBe(false)
+  expect(wrapper.get('[role="status"]').text()).toBe('')
+  await wrapper.get('[aria-label="试听语音提醒"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.find('.voice-wave').exists()).toBe(true)
+  expect(service.voiceReminders.error.value).toBe('')
+  wrapper.unmount()
+  expect(service.voiceReminders.playing.value).toBe(false)
+})
+
+it('does not leave a playing icon or start audio when the switch is quickly turned off', async () => {
+  const Toggle = (await import('../src/components/VoiceReminderToggle.vue')).default
+  const wrapper = mount(Toggle)
+  await wrapper.get('[role="switch"]').trigger('click')
+  await wrapper.get('[role="switch"]').trigger('click')
+  await flushPromises()
+  expect(sources).toHaveLength(0)
+  expect(wrapper.find('.voice-wave').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="停止语音播放"]').exists()).toBe(false)
+  expect(wrapper.get('[role="switch"]').attributes('aria-checked')).toBe('false')
+  wrapper.unmount()
 })
 
 it('ships a playable, nonempty PCM recording for every phrase', () => {
