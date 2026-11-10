@@ -304,7 +304,7 @@ onBeforeUnmount(stop)
 </template>
 
 <style scoped>
-.subtitle-review { display: grid; gap: 20px; min-width: 0; font: 400 12px/1.65 var(--font-mono); }
+.subtitle-review { display: grid; gap: 20px; min-width: 0; font: 400 14px/1.75 var(--font-sans); }
 .subtitle-toolbar, .subtitle-row-heading { margin: 0; gap: 12px; }
 .subtitle-follow { padding: 6px 0; }
 .subtitle-follow-mark { display: grid; place-items: center; width: 14px; height: 14px; border: 1px solid var(--input-border); border-radius: 3px; }
@@ -316,7 +316,7 @@ onBeforeUnmount(stop)
 .subtitle-count strong { color: var(--info); font-weight: 700; }
 .subtitle-review :deep(.audio-player:not([data-theme='oled'])) { --player-accent: var(--info); --player-accent-light: var(--info); --player-glow: color-mix(in srgb, var(--info) 35%, transparent); background: var(--player-surface); border-color: var(--border); }
 .subtitle-list { display: grid; gap: 16px; max-height: 680px; overflow: auto; padding: 3px; }
-.subtitle-row { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: color-mix(in srgb, var(--terminal) 40%, transparent); min-width: 0; }
+.subtitle-row { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); min-width: 0; }
 .subtitle-row-active { border-color: color-mix(in srgb, var(--info) 50%, transparent); }
 .subtitle-row-playing { background: color-mix(in srgb, var(--info) 5%, transparent); box-shadow: inset 3px 0 var(--info); }
 .subtitle-row-heading button { height: auto; min-height: 28px; padding: 2px 0; font-size: 12px; }
@@ -325,12 +325,12 @@ onBeforeUnmount(stop)
 .playback-status { margin: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
 .subtitle-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .subtitle-columns > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.subtitle-columns label { margin: 0; color: var(--info); font-size: 11px; font-weight: 700; }
-.subtitle-columns > div > span { font-size: 11px; }
+.subtitle-columns label { margin: 0; color: var(--info); font-size: 12px; font-weight: 600; }
+.subtitle-columns > div > span { font-size: 12px; }
 .subtitle-original { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; min-height: 68px; padding: 10px; border: 1px solid var(--border); border-radius: 12px; color: var(--muted-foreground); background: color-mix(in srgb, var(--input-surface) 50%, transparent); }
-.subtitle-columns textarea { flex: 1; min-height: 68px; padding: 10px; border-radius: 12px; font-size: 12px; line-height: 1.65; }
-.subtitle-change { padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--info) 30%, transparent); border-radius: 6px; color: var(--info); background: color-mix(in srgb, var(--info) 10%, transparent); font-size: 10px; }
-.subtitle-time { max-width: 100%; padding: 2px 8px; border-radius: 6px; background: var(--input-surface); font-size: 11px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.subtitle-columns textarea { flex: 1; min-height: 68px; padding: 10px; border-radius: 10px; font-size: 14px; line-height: 1.75; }
+.subtitle-change { padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--info) 30%, transparent); border-radius: 6px; color: var(--info); background: color-mix(in srgb, var(--info) 10%, transparent); font-size: 12px; }
+.subtitle-time { max-width: 100%; padding: 2px 8px; border-radius: 6px; background: var(--input-surface); font: 400 12px/1.65 var(--font-mono); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .subtitle-pagination { margin: 0; gap: 12px; }
 .subtitle-pagination button { padding: 6px 12px; }
 .subtitle-raw { padding-top: 12px; border-top: 1px solid var(--border); }

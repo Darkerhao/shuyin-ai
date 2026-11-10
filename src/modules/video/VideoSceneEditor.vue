@@ -248,26 +248,26 @@ function setSceneImage(image: VideoSceneImage | undefined) {
 </template>
 
 <style scoped>
-.video-scene { display: grid; align-content: start; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: color-mix(in srgb, var(--terminal) 40%, transparent); scroll-margin-block: 16px; min-width: 0; font: 400 12px/1.65 var(--font-mono); }
+.video-scene { display: grid; align-content: start; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); scroll-margin-block: 16px; min-width: 0; font: 400 14px/1.75 var(--font-sans); }
 .video-scene-playing { background: color-mix(in srgb, var(--info) 5%, transparent); border-color: var(--info); }
 .video-scene-actions { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-.video-scene-actions button { min-height: 28px; padding: 4px 8px; font-size: 11px; }
+.video-scene-actions button { min-height: 32px; padding: 4px 8px; font-size: 12px; }
 .video-scene-actions button:first-child { padding-left: 0; color: var(--info); font-weight: 700; }
 .video-scene-actions button:last-child { color: var(--text-secondary); }
-.video-scene > .muted { margin: 0 0 -6px; font-size: 11px; }
+.video-scene > .muted { margin: 0 0 -6px; font-size: 12px; }
 .video-scene-title { min-height: 42px; padding: 12px; color: var(--foreground); font-weight: 700; }
 .video-scene-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .video-scene-kind { grid-column: 1 / -1; }
 .video-scene-kind :deep([role='combobox']) { border-color: var(--video-border); color: var(--video-accent); }
-.video-scene :deep(.scene-image-editor > button) { justify-content: flex-start; height: auto; padding: 4px 0; color: var(--info); font-size: 11px; }
+.video-scene :deep(.scene-image-editor > button) { justify-content: flex-start; height: auto; padding: 4px 0; color: var(--info); font-size: 12px; }
 .video-beat { display: grid; gap: 6px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--border); }
-.video-beat label { color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
+.video-beat label { color: var(--muted-foreground); font-size: 12px; overflow-wrap: anywhere; }
 .video-beat input { min-height: 36px; font-size: 12px; }
-.video-beat-settings > button { color: var(--info); font-size: 11px; font-weight: 400; }
+.video-beat-settings > button { color: var(--info); font-size: 12px; font-weight: 400; }
 .video-beat-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-block: 10px; }
 .video-anchor { grid-column: 1 / -1; }
 .video-field { display: grid; align-content: start; gap: 6px; min-width: 0; }
-.video-field label { color: var(--muted-foreground); font-size: 11px; }
+.video-field label { color: var(--muted-foreground); font-size: 12px; }
 .video-field [role='combobox'] { width: 100%; min-width: 0; min-height: 34px; height: auto; font-size: 12px; }
 .video-field .muted { margin: 4px 0 0; }
 @media (max-width: 520px) { .video-scene { padding: 12px; } .video-scene-controls, .video-beat-controls { grid-template-columns: minmax(0, 1fr); } }
