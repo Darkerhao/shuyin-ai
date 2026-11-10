@@ -86,7 +86,8 @@ watch(() => [draft.value.videoAssetId, video.value?.filePath, video.value?.modif
 const titleCount = computed(() => [...draft.value.title].length)
 const descriptionCount = computed(() => [...draft.value.description].length)
 const savedChecksPassed = computed(() => !!selected.value?.checklist.length && selected.value.checklist.every(item => item.passed))
-const canReview = computed(() => !scheduleError.value && titleCount.value > 0 && titleCount.value <= 30 && descriptionCount.value > 0 && descriptionCount.value <= 1000 && audio.value?.existsStatus === 'available' && video.value?.existsStatus === 'available' && !!videoInfo.value?.hasAudio && videoInfo.value.width > 0 && videoInfo.value.height > 0 && videoInfo.value.durationSeconds > 0 && !!selectedLandscape.value && !!selectedPortrait.value)
+const videoReady = computed(() => video.value?.existsStatus === 'available' && !!videoInfo.value?.hasAudio && videoInfo.value.width > 0 && videoInfo.value.height > 0 && videoInfo.value.durationSeconds > 0)
+const canReview = computed(() => !scheduleError.value && titleCount.value > 0 && titleCount.value <= 30 && descriptionCount.value > 0 && descriptionCount.value <= 1000 && audio.value?.existsStatus === 'available' && videoReady.value && !!selectedLandscape.value && !!selectedPortrait.value)
 const recordOpen = ref(false)
 const assetsOpen = ref(false)
 const record = ref({ publishedAt: '', postUrl: '', notes: '' })
@@ -319,9 +320,9 @@ onMounted(() => { if (desktop) void loadTask() })
     <header class="page-heading">
       <div>
         <div class="publish-title-row">
-          <h1>准备好，分享你的作品</h1>
+          <h1>作品交付台</h1>
           <Badge class="publish-step-badge">
-            Step 5 · 交付
+            发布准备
           </Badge>
         </div>
         <p class="muted">
@@ -431,12 +432,11 @@ onMounted(() => { if (desktop) void loadTask() })
         </CollapsibleContent>
       </Collapsible>
       <form @submit.prevent="save">
-        <fieldset
-          class="publish-form-grid"
-          :disabled="busy || published || recordOpen"
-        >
+        <div class="publish-form-grid">
           <section class="panel publish-copy-panel">
-            <h2>发布文字</h2>
+            <div class="delivery-section-heading">
+              <span class="delivery-section-icon"><AppIcon name="pen" /></span><div><h2>发布文字</h2><p>把这一期内容介绍给观众</p></div>
+            </div>
             <label for="publish-writing-version">文案来源版本</label>
             <Select
               :model-value="draft.writingVersionId"
@@ -472,6 +472,7 @@ onMounted(() => { if (desktop) void loadTask() })
             <Input
               id="publish-title"
               v-model="draft.title"
+              :disabled="busy || published || recordOpen"
               maxlength="30"
               aria-describedby="publish-title-count"
               @input="draft.titleConfirmed = false"
@@ -483,6 +484,7 @@ onMounted(() => { if (desktop) void loadTask() })
             <Textarea
               id="publish-description"
               v-model="draft.description"
+              :disabled="busy || published || recordOpen"
               rows="6"
               maxlength="1000"
               aria-describedby="publish-description-count"
@@ -491,6 +493,7 @@ onMounted(() => { if (desktop) void loadTask() })
             <Input
               id="publish-tags"
               v-model="draft.tags"
+              :disabled="busy || published || recordOpen"
               maxlength="500"
               placeholder="#读书 #好书分享"
               aria-describedby="publish-tags-help"
@@ -501,9 +504,54 @@ onMounted(() => { if (desktop) void loadTask() })
             >
               从所选文案版本带入，多个 #标签 用空格分隔；辅助发布时自动追加到抖音内容末尾。旧文案可在内容创作中按项生成标签，也可留空。
             </p>
+            <div
+              class="publish-actions"
+              aria-label="复制发布文字"
+            >
+              <div class="actions wrap">
+                <CopyButton
+                  label="复制标题"
+                  :copied="copiedField === 'title'"
+                  :disabled="!draft.title"
+                  @click="copy('title')"
+                />
+                <CopyButton
+                  label="复制内容"
+                  :copied="copiedField === 'description'"
+                  :disabled="!draft.description"
+                  @click="copy('description')"
+                />
+                <CopyButton
+                  label="复制标签"
+                  :copied="copiedField === 'tags'"
+                  :disabled="!draft.tags"
+                  @click="copy('tags')"
+                />
+                <CopyButton
+                  label="一键复制全部"
+                  class="publish-copy-all"
+                  :copied="copiedField === 'all'"
+                  :disabled="!draft.title || !draft.description"
+                  @click="copy('all')"
+                />
+              </div>
+              <span
+                class="sr-only"
+                role="status"
+                aria-live="polite"
+              >{{ copiedField ? '已复制' : '' }}</span>
+            </div>
           </section>
           <section class="panel publish-media-panel">
-            <h2>音频、成片与封面</h2>
+            <div class="delivery-section-heading">
+              <span class="delivery-section-icon"><AppIcon name="video" /></span><div><h2>作品素材</h2><p>核对原声、最终成片与发布封面</p></div>
+            </div>
+            <div class="delivery-asset-heading">
+              <AppIcon name="headphones" /><span>制作原声</span><span
+                class="delivery-asset-status"
+                :class="{ 'is-ready': audio?.existsStatus === 'available' }"
+              >{{ audio?.existsStatus === 'available' ? '文件可用' : audio ? '文件不可用' : '待选择' }}</span>
+            </div>
             <label for="publish-audio">音频成品</label>
             <Select
               v-model="draft.audioAssetId"
@@ -536,6 +584,16 @@ onMounted(() => { if (desktop) void loadTask() })
             >
               {{ displayPath(audio.filePath) }}
             </p>
+            <Button
+              v-if="audio"
+              type="button"
+              variant="ghost"
+              size="sm"
+              :disabled="busy || audio.existsStatus !== 'available'"
+              @click="run(() => openAsset(audio!.id))"
+            >
+              <AppIcon name="play" />试听原声
+            </Button>
             <p
               v-if="audio && audio.existsStatus !== 'available'"
               class="error"
@@ -550,6 +608,12 @@ onMounted(() => { if (desktop) void loadTask() })
                 音频制作
               </RouterLink> 导入音频成品；音频仅用于制作记录，不会上传抖音。
             </p>
+            <div class="delivery-asset-heading">
+              <AppIcon name="video" /><span>最终成片</span><span
+                class="delivery-asset-status"
+                :class="{ 'is-ready': videoReady }"
+              >{{ !video ? '待选择' : videoInfoError || video.existsStatus !== 'available' ? '文件不可用' : !videoInfo ? '读取中' : videoReady ? '已读取' : '需要更换' }}</span>
+            </div>
             <label for="publish-video">最终成片</label>
             <Select
               v-model="draft.videoAssetId"
@@ -583,6 +647,28 @@ onMounted(() => { if (desktop) void loadTask() })
               {{ displayPath(video.filePath) }}
             </p>
             <p
+              v-if="videoInfo"
+              class="delivery-video-meta"
+            >
+              {{ videoInfo.width }} × {{ videoInfo.height }}<span>{{ Math.round(videoInfo.durationSeconds) }} 秒</span><span>{{ videoInfo.hasAudio ? '含音轨' : '缺少音轨' }}</span>
+            </p>
+            <p
+              v-if="videoInfoError"
+              class="error"
+            >
+              {{ videoInfoError }}
+            </p>
+            <Button
+              v-if="video"
+              type="button"
+              variant="ghost"
+              size="sm"
+              :disabled="busy || video.existsStatus !== 'available'"
+              @click="run(() => openAsset(video!.id))"
+            >
+              <AppIcon name="play" />预览成片
+            </Button>
+            <p
               v-if="video && video.existsStatus !== 'available'"
               class="error"
             >
@@ -598,10 +684,37 @@ onMounted(() => { if (desktop) void loadTask() })
               v-if="!published"
               type="button"
               variant="outline"
+              :disabled="busy || recordOpen"
               @click="showAssets"
             >
               关联或重新定位素材
             </Button>
+            <div class="delivery-asset-heading delivery-cover-heading">
+              <AppIcon name="image" /><span>封面展示台</span><span class="delivery-asset-status">已选 {{ Number(!!selectedLandscape) + Number(!!selectedPortrait) }} / 2</span>
+            </div>
+            <div
+              class="publish-cover-gallery"
+              aria-label="本次发布封面"
+            >
+              <div
+                v-for="(cover, index) in [selectedLandscape, selectedPortrait]"
+                :key="index === 0 ? 'landscape' : 'portrait'"
+                class="delivery-cover"
+              >
+                <CoverThumbnail
+                  v-if="cover"
+                  :cover="cover"
+                  expandable
+                />
+                <div
+                  v-else
+                  class="delivery-cover-empty"
+                >
+                  <AppIcon name="image" /><span>待选择{{ index === 0 ? '横版' : '竖版' }}封面</span>
+                </div>
+                <p>{{ index === 0 ? '横版 4:3' : '竖版 3:4' }}</p>
+              </div>
+            </div>
             <div class="form-grid publish-cover-selects">
               <div>
                 <label for="publish-landscape">横版封面 · 4:3</label><Select
@@ -741,7 +854,7 @@ onMounted(() => { if (desktop) void loadTask() })
           >
             <Button
               type="submit"
-              :disabled="!!selected && !dirty"
+              :disabled="busy || recordOpen || (!!selected && !dirty)"
               variant="outline"
             >
               <AppIcon name="save" />保存发布草稿
@@ -754,45 +867,14 @@ onMounted(() => { if (desktop) void loadTask() })
               v-if="autosave.error.value"
               type="button"
               variant="outline"
+              :disabled="busy || recordOpen"
               @click="run(() => autosave.flush())"
             >
               重试暂存
             </Button>
           </div>
-        </fieldset>
-      </form>
-      <section class="panel publish-actions">
-        <h2>复制发布文字</h2>
-        <div class="actions wrap">
-          <CopyButton
-            label="复制标题"
-            :copied="copiedField === 'title'"
-            :disabled="!draft.title"
-            @click="copy('title')"
-          /><CopyButton
-            label="复制内容"
-            :copied="copiedField === 'description'"
-            :disabled="!draft.description"
-            @click="copy('description')"
-          /><CopyButton
-            label="复制标签"
-            :copied="copiedField === 'tags'"
-            :disabled="!draft.tags"
-            @click="copy('tags')"
-          /><CopyButton
-            label="一键复制全部"
-            class="publish-copy-all"
-            :copied="copiedField === 'all'"
-            :disabled="!draft.title || !draft.description"
-            @click="copy('all')"
-          />
         </div>
-        <span
-          class="sr-only"
-          role="status"
-          aria-live="polite"
-        >{{ copiedField ? '已复制' : '' }}</span>
-      </section>
+      </form>
       <section
         id="publish-preflight"
         class="panel publish-preflight"
@@ -800,44 +882,64 @@ onMounted(() => { if (desktop) void loadTask() })
       >
         <div class="preflight-heading">
           <h2 id="publish-preflight-title">
-            发布前自检
+            <AppIcon name="shield" />发布前自检
           </h2>
           <span
             class="preflight-status"
             :class="{ 'check-pending': dirty || !savedChecksPassed }"
           >
-            <span class="status-dot" />
+            <AppIcon :name="!dirty && savedChecksPassed ? 'check' : 'info'" />
             {{ dirty ? '当前修改待保存' : savedChecksPassed ? '已保存检查全部通过' : canReview ? '素材已选齐，待确认' : '请补齐发布所需素材' }}
           </span>
         </div>
         <dl class="preflight-summary">
           <div>
-            <dt>发布标题</dt><dd>{{ titleCount }} / 30 字 · {{ draft.titleConfirmed ? '已核对' : '待核对' }}</dd>
-          </div>
-          <div>
-            <dt>发布内容</dt><dd>{{ descriptionCount }} / 1000 字</dd>
-          </div>
-          <div>
-            <dt>保存权限</dt><dd>{{ draft.allowDownload ? '允许保存视频' : '不允许保存视频' }}</dd>
-          </div>
-          <div>
-            <dt>发布时间</dt><dd>{{ draft.scheduledAt ? `${scheduledTime.replace('T', ' ')}（北京时间）` : publishMode === 'scheduled' ? '待选择定时时间' : '立即发布' }}</dd>
-          </div>
-          <div>
-            <dt>制作原声</dt><dd>
-              <span>{{ audio ? assetLabel(audio) : '尚未选择' }}</span><Button
-                v-if="audio"
+            <dt><AppIcon name="pen" />发布标题</dt><dd>
+              {{ titleCount }} / 30 字 · {{ draft.titleConfirmed ? '已核对' : '待核对' }}<Button
+                v-if="!draft.title.trim() && !published"
                 variant="link"
                 size="sm"
-                :disabled="busy || audio.existsStatus !== 'available'"
-                @click="run(() => openAsset(audio!.id))"
+                :disabled="busy || recordOpen"
+                @click="locateMissing('title')"
               >
-                试听原声
+                去填写
               </Button>
             </dd>
           </div>
           <div>
-            <dt>最终成片</dt><dd>
+            <dt><AppIcon name="book" />发布内容</dt><dd>
+              {{ descriptionCount }} / 1000 字<Button
+                v-if="!draft.description.trim() && !published"
+                variant="link"
+                size="sm"
+                :disabled="busy || recordOpen"
+                @click="locateMissing('description')"
+              >
+                去填写
+              </Button>
+            </dd>
+          </div>
+          <div>
+            <dt><AppIcon name="download" />保存权限</dt><dd>{{ draft.allowDownload ? '允许保存视频' : '不允许保存视频' }}</dd>
+          </div>
+          <div>
+            <dt><AppIcon name="clock" />发布时间</dt><dd>{{ draft.scheduledAt ? `${scheduledTime.replace('T', ' ')}（北京时间）` : publishMode === 'scheduled' ? '待选择定时时间' : '立即发布' }}</dd>
+          </div>
+          <div>
+            <dt><AppIcon name="headphones" />制作原声</dt><dd>
+              <span>{{ audio ? assetLabel(audio) : '尚未选择' }}</span><Button
+                v-if="audio?.existsStatus !== 'available' && !published"
+                variant="link"
+                size="sm"
+                :disabled="busy || recordOpen"
+                @click="audio ? showAssets() : locateMissing('audio')"
+              >
+                {{ audio ? '重新定位' : '去选择原声' }}
+              </Button>
+            </dd>
+          </div>
+          <div>
+            <dt><AppIcon name="video" />最终成片</dt><dd>
               <span>{{ video ? assetLabel(video) : '尚未选择' }}</span><span
                 v-if="videoInfo"
                 class="block"
@@ -853,36 +955,37 @@ onMounted(() => { if (desktop) void loadTask() })
               >
                 在文件夹中定位
               </Button>
+              <Button
+                v-if="video?.existsStatus !== 'available' && !published"
+                variant="link"
+                size="sm"
+                :disabled="busy || recordOpen"
+                @click="video ? showAssets() : locateMissing('video')"
+              >
+                {{ video ? '重新定位' : '去选择成片' }}
+              </Button>
             </dd>
           </div>
           <div>
-            <dt>发布封面</dt><dd :class="{ 'preflight-ready': draft.coversConfirmed || automaticCoversChecked }">
+            <dt><AppIcon name="image" />发布封面</dt><dd :class="{ 'preflight-ready': draft.coversConfirmed || automaticCoversChecked }">
               已选 {{ Number(!!selectedLandscape) + Number(!!selectedPortrait) }} / 2 · {{ draft.coversConfirmed ? '已核对' : automaticCoversChecked ? '自动流程已校验，发布前请检查' : '待核对横竖两张图' }}
+              <Button
+                v-if="(!selectedLandscape || !selectedPortrait) && !published"
+                variant="link"
+                size="sm"
+                :disabled="busy || recordOpen"
+                @click="locateMissing(!selectedLandscape ? 'landscape' : 'portrait')"
+              >
+                去选择封面
+              </Button>
             </dd>
           </div>
           <div>
-            <dt>任务包</dt><dd :class="{ 'preflight-ready': !dirty && selected?.status !== 'draft' && selected }">
+            <dt><AppIcon name="folder" />任务包</dt><dd :class="{ 'preflight-ready': !dirty && selected?.status !== 'draft' && selected }">
               {{ dirty ? '修改后需重新准备' : selected?.status === 'ready' ? '已就绪' : selected?.status === 'published' ? '已归档发布记录' : '尚未准备' }}
             </dd>
           </div>
         </dl>
-        <div
-          class="preflight-covers"
-          aria-label="本次发布封面"
-        >
-          <div
-            v-if="selectedLandscape"
-            class="preflight-cover preflight-landscape"
-          >
-            <CoverThumbnail :cover="selectedLandscape" /><p>横版 4:3 · v{{ selectedLandscape.versionNo }}</p>
-          </div>
-          <div
-            v-if="selectedPortrait"
-            class="preflight-cover preflight-portrait"
-          >
-            <CoverThumbnail :cover="selectedPortrait" /><p>竖版 3:4 · v{{ selectedPortrait.versionNo }}</p>
-          </div>
-        </div>
         <template v-if="!published">
           <p
             id="publish-confirmation-help"
@@ -963,7 +1066,7 @@ onMounted(() => { if (desktop) void loadTask() })
                 :key="item.key"
                 :class="{ 'check-pending': !item.passed }"
               >
-                {{ item.passed ? '✓' : '○' }} {{ item.label }}
+                <AppIcon :name="item.passed ? 'check' : 'info'" /><span>{{ item.label }}</span>
                 <Button
                   v-if="!item.passed && !published"
                   variant="ghost"
@@ -1029,18 +1132,31 @@ onMounted(() => { if (desktop) void loadTask() })
           >
             打开抖音创作者中心
           </Button>
-          <Button
-            v-if="!published"
-            :disabled="busy || dirty || recordOpen || selected?.status !== 'ready'"
-            type="button"
-            @click="confirmPublish"
-          >
-            记录发布成功
-          </Button>
         </div>
         <p class="muted">
           任务包保留视频原路径，上传和最终发布由你在平台完成。打开入口或生成任务包不会标记已发布。
         </p>
+      </section>
+      <section
+        class="panel publish-record-panel"
+        aria-labelledby="publish-record-heading"
+      >
+        <div class="delivery-section-heading">
+          <span class="delivery-section-icon"><AppIcon name="check" /></span><div>
+            <h2 id="publish-record-heading">
+              实际发布记录
+            </h2><p>在官方页面发布成功后，再回来归档结果。</p>
+          </div>
+        </div>
+        <Button
+          v-if="!published"
+          :disabled="busy || dirty || recordOpen || selected?.status !== 'ready'"
+          type="button"
+          variant="outline"
+          @click="confirmPublish"
+        >
+          记录发布成功
+        </Button>
         <div
           v-if="selected?.record"
           class="notice publish-success"
@@ -1176,12 +1292,12 @@ onMounted(() => { if (desktop) void loadTask() })
   :global(.publish-record-dialog > .actions) { flex-direction: column; align-items: stretch; }
 }
 
-.publishing-page { display: grid; gap: 24px; min-width: 0; padding-bottom: 80px; }
+.publishing-page { display: grid; gap: 20px; min-width: 0; padding-bottom: 48px; }
 .publishing-page > .page-return-row, .publishing-page > .page-heading, .publishing-page > :deep(.project-navigation) { margin-bottom: 0; }
 .publishing-page .panel { margin: 0; padding: 24px; box-shadow: var(--panel-shadow); }
-.publishing-page h2 { color: var(--heading); font-family: var(--font-mono); }
+.publishing-page h2 { color: var(--heading); font: 600 16px/1.5 var(--font-sans); }
 .publishing-page .actions { margin-top: 16px; }
-.publishing-page :deep(button), .publishing-page input, .publishing-page textarea { font-family: var(--font-mono); }
+.publishing-page :deep(button), .publishing-page input, .publishing-page textarea { font-family: var(--font-sans); }
 .publishing-page :deep(button[data-slot='button']) { border-radius: 12px; }
 .publish-return { flex-wrap: wrap; }
 .publish-return-actions, .publish-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
@@ -1199,69 +1315,85 @@ onMounted(() => { if (desktop) void loadTask() })
 .publishing-page :deep([data-slot='select-trigger']), .publishing-page input, .publishing-page textarea { border-radius: 12px; background: var(--input-surface); border-color: var(--input-border); }
 .publishing-page :deep([data-slot='select-value']) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .publishing-page :deep([data-slot='select-trigger']:focus-visible), .publishing-page input:focus-visible, .publishing-page textarea:focus-visible { border-color: var(--info); }
-.publish-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.publish-form-grid { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: 20px; align-items: start; }
 .publish-form-grid .panel { box-shadow: none; }
 .publish-form-grid h2 { margin: 0 0 18px; }
+.delivery-section-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+.delivery-section-heading h2 { margin: 0; }
+.delivery-section-heading p { margin: 4px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted-foreground); }
+.delivery-section-icon { display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 40px; border: 1px solid var(--active-border); border-radius: 12px; color: var(--primary); background: var(--accent); }
+.publish-copy-panel .delivery-section-icon { color: var(--info); border-color: color-mix(in srgb, var(--info) 30%, var(--border)); background: color-mix(in srgb, var(--info) 7%, transparent); }
+.delivery-asset-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+.delivery-section-heading + .delivery-asset-heading { border: 0; padding: 0; margin: 0; }
+.delivery-asset-heading > .app-icon { color: var(--primary); }
+.delivery-asset-status { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--warning); }
+.delivery-asset-status.is-ready { color: var(--primary); }
+.delivery-video-meta { display: flex; gap: 12px; flex-wrap: wrap; margin: 10px 0 0; font-size: 12px; color: var(--muted-foreground); }
+.delivery-cover-heading > .app-icon, .delivery-cover-heading > span { color: var(--cover-accent); }
+.publish-cover-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; padding: 16px 12px 12px; border: 1px solid var(--cover-border); border-radius: 12px; background: color-mix(in srgb, var(--cover-accent) 3%, var(--terminal)); }
+.delivery-cover { min-width: 0; }
+.delivery-cover :deep(figure) { padding: 0; margin: 0; border: 0; background: transparent; }
+.delivery-cover :deep(.cover-thumbnail-open) { height: 188px; padding: 8px; background: transparent; }
+.delivery-cover :deep(.cover-thumbnail-open img) { width: auto; height: auto; max-height: 168px; max-width: 100%; }
+.delivery-cover :deep(figcaption) { margin-top: 12px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.delivery-cover > p { margin: 8px 0 0; font-size: 12px; color: var(--cover-accent); }
+.delivery-cover-empty { display: grid; align-content: center; justify-items: center; gap: 12px; height: 188px; border: 1px dashed var(--cover-border); border-radius: 8px; font-size: 12px; color: var(--muted-foreground); }
+.delivery-cover-empty .app-icon { width: 28px; height: 28px; color: var(--cover-accent); }
 .publish-form-grid label { margin: 16px 0 6px; }
 .publish-form-grid h2 + label { margin-top: 0; }
 .publish-settings-panel { grid-column: 1 / -1; }
 .publish-settings-panel .form-grid > div { min-width: 0; }
 .publish-settings-panel .form-grid label:first-child { margin-top: 0; }
-.publish-form-grid .muted { margin: 6px 0 0; font: 400 11px/1.65 var(--font-mono); }
-.publish-form-grid input { padding: 10px 14px; font-size: 12px; font-weight: 400; }
-.publish-form-grid textarea { display: block; padding: 14px; min-height: 146px; }
+.publish-form-grid .muted { margin: 8px 0 0; font: 400 12px/1.8 var(--font-sans); }
+.publish-form-grid input { padding: 12px 14px; font-size: 14px; font-weight: 400; }
+.publish-form-grid textarea { display: block; padding: 16px; min-height: 300px; font-size: 15px; line-height: 1.9; }
+#publish-title { height: 52px; font-size: 18px; font-weight: 600; }
 .publish-copy-panel :deep(#publish-writing-version) { color: var(--info); }
 .publish-field-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 16px 0 6px; }
 .publish-field-label label { margin: 0; color: var(--foreground); font-weight: 700; }
-.publish-field-label > span { color: var(--muted-foreground); font: 400 11px/16px var(--font-mono); }
+.publish-field-label > span { color: var(--muted-foreground); font: 400 12px/18px var(--font-mono); }
 .publish-copy-panel label[for='publish-tags'] { color: var(--foreground); font-weight: 700; }
 #publish-tags { color: var(--primary); }
-.publish-media-panel > button { margin-top: 16px; }
+.publish-media-panel > button { margin-top: 8px; }
 .publish-cover-selects { margin-top: 4px; }
 .publish-cover-selects > div { min-width: 0; }
 .publish-cover-selects :deep([data-slot='select-trigger']) { color: var(--cover-accent); }
-.publishing-page .file-path { padding: 12px; margin: 10px 0 0; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--terminal) 80%, transparent); color: var(--muted-foreground); font: 400 11px/1.65 var(--font-mono); overflow-wrap: anywhere; }
+.publishing-page .file-path { padding: 8px 10px; margin: 8px 0 0; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--terminal) 80%, transparent); color: var(--muted-foreground); font: 400 12px/1.65 var(--font-sans); overflow-wrap: anywhere; }
 .publish-save { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
-.publish-save .muted { margin: 0; font: 400 11px/1.65 var(--font-mono); }
+.publish-save .muted { margin: 0; font: 400 12px/1.65 var(--font-sans); }
 .is-published .publish-form-grid :deep(:disabled) { opacity: 1; }
-.publish-actions h2 { margin: 0; }
+.publish-actions { margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--border); }
 .publish-actions :deep(.app-icon) { color: var(--info); }
 .publishing-page :deep(.publish-copy-all), .publishing-page .publish-primary-action { border-color: transparent; background: var(--action-gradient); color: var(--primary-foreground); font-weight: 800; box-shadow: var(--primary-glow); }
 .publish-actions :deep(.publish-copy-all .app-icon) { color: inherit; }
 .publishing-page :deep(.publish-copy-all:hover), .publishing-page .publish-primary-action:hover { filter: brightness(1.1); }
 .publish-preflight { scroll-margin-top: 90px; }
 .preflight-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
-.preflight-heading h2 { margin: 0; }
+.preflight-heading h2 { display: flex; align-items: center; gap: 8px; margin: 0; }
+.preflight-heading h2 .app-icon { color: var(--primary); }
 .preflight-status { display: inline-flex; align-items: center; gap: 6px; color: var(--primary); font: 400 12px/18px var(--font-mono); }
-.preflight-status .status-dot { background: currentColor; }
-.preflight-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 24px 0 0; gap: 12px 32px; font: 400 12px/1.65 var(--font-mono); }
+.preflight-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 20px 0 0; gap: 12px 32px; font: 400 13px/1.8 var(--font-sans); }
 .preflight-summary > div { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; min-width: 0; padding: 4px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
-.preflight-summary dt { flex-shrink: 0; color: var(--muted-foreground); }
+.preflight-summary dt { display: flex; align-items: center; gap: 8px; flex-shrink: 0; color: var(--muted-foreground); }
+.preflight-summary dt .app-icon { width: 15px; height: 15px; }
 .preflight-summary dd { min-width: 0; margin: 0; text-align: right; overflow-wrap: anywhere; }
 .preflight-summary dd > span:first-child { display: block; }
 .preflight-summary :deep(button) { height: auto; padding: 0; color: var(--info); font-size: 12px; }
+.preflight-summary dd > button { display: block; margin-left: auto; }
 .preflight-ready { color: var(--primary); font-weight: 700; }
-.preflight-covers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 24px; max-width: 672px; margin-top: 28px; }
-.preflight-covers:empty { display: none; }
-.preflight-cover { min-width: 0; }
-.preflight-cover :deep(figure) { margin: 0; padding: 14px; border-radius: 12px; border-color: var(--input-border); background: var(--terminal); }
-.preflight-cover :deep(img) { width: 100%; max-height: none; border-radius: 8px; object-fit: contain; }
-.preflight-landscape :deep(img) { aspect-ratio: 4 / 3; }
-.preflight-portrait :deep(img) { aspect-ratio: 3 / 4; }
-.preflight-cover :deep(figcaption) { margin-top: 12px; color: var(--foreground); font: 700 12px/18px var(--font-mono); }
-.preflight-cover :deep(figcaption span) { font-size: 11px; font-weight: 400; }
-.preflight-cover > p { margin: 8px 4px 0; color: var(--muted-foreground); font: 400 12px/18px var(--font-mono); }
 #publish-confirmation-help { margin-top: 24px; }
 .publish-preflight .publish-assistant { margin-top: 24px; padding: 20px; background: var(--input-surface); box-shadow: none; }
 .publish-assistant :deep(.douyin-steps) { font-size: 12px; }
 .preflight-details { margin-top: 28px; }
 .preflight-details .disclosure-trigger { min-height: 32px; }
 .publish-checklist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; margin: 12px 0 0; padding: 0; list-style: none; font: 400 12px/2 var(--font-mono); }
-.publish-checklist li { padding: 8px 0; overflow-wrap: anywhere; }
+.publish-checklist li { display: flex; align-items: center; gap: 8px; padding: 8px 0; overflow-wrap: anywhere; }
+.publish-checklist li > .app-icon { flex-shrink: 0; width: 16px; height: 16px; color: var(--primary); }
+.publish-checklist li.check-pending > .app-icon { color: var(--warning); }
+.publish-checklist li > button { flex-shrink: 0; margin-left: auto; }
 .check-pending { color: var(--warning); }
-.publish-preflight .publish-portal { background: linear-gradient(90deg, #e11d48, #db2777, #9333ea); border-color: transparent; color: #fff; font-weight: 700; box-shadow: var(--video-glow); }
-.publish-preflight .publish-portal:hover { filter: brightness(1.1); }
-.publish-preflight > .muted { font: 400 11px/1.65 var(--font-mono); }
+.publish-preflight > .muted { font: 400 12px/1.8 var(--font-sans); }
+.publish-record-panel { border-left: 2px solid var(--primary); }
 .publish-success { margin: 24px 0 0; font-family: var(--font-mono); }
 .publish-success strong { display: flex; align-items: center; gap: 8px; }
 .publish-success p { margin: 4px 0 0; font-size: 11px; }
@@ -1275,8 +1407,10 @@ onMounted(() => { if (desktop) void loadTask() })
   .publish-return-actions { width: 100%; justify-content: space-between; }
   .publish-return-actions .back-link, .publish-stage-badge { font-size: 11px; }
   .publish-title-row h1 { font-size: 26px; line-height: 1.4; }
-  .publish-cover-selects, .preflight-covers, .publish-checklist { grid-template-columns: minmax(0, 1fr); }
-  .preflight-covers { max-width: 320px; }
+  .publish-cover-selects, .publish-checklist { grid-template-columns: minmax(0, 1fr); }
+  .publish-cover-gallery { gap: 8px; padding: 12px 8px; }
+  .delivery-cover :deep(.cover-thumbnail-open), .delivery-cover-empty { height: 156px; }
+  .delivery-cover :deep(.cover-thumbnail-open img) { max-height: 136px; }
   .preflight-summary > div { gap: 10px; }
   .publishing-page .actions > :deep(button), .publish-save > button { flex: 1 1 auto; }
 }

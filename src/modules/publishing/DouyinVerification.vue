@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { continueDouyinTask, getDouyinSession, onDouyinProgress, openDouyinWindow, startDouyinTask, stopDouyinTask, type DouyinDecision, type DouyinSession } from '../../services/douyin'
 import type { PublishTask } from '../../types/publishing'
 import OperationFeedback from '../../components/OperationFeedback.vue'
+import AppIcon from '../../components/AppIcon.vue'
 
 const props = defineProps<{ desktop: boolean; task?: PublishTask | null; disabled?: boolean; hideStart?: boolean; prepareTask?: () => Promise<PublishTask> }>()
 const emit = defineEmits<{ working: [active: boolean] }>()
@@ -29,8 +30,14 @@ const steps = [
   { key: 'text', label: '填写内容', fields: ['text'] },
   { key: 'covers', label: '封面与合集', fields: ['covers', 'collection'] },
   { key: 'settings', label: '发布设置', fields: ['settings'] },
-  { key: 'review', label: '检查并发布', fields: [] },
+  { key: 'review', label: '官方页面检查', fields: [] },
 ]
+function stepState(step: typeof steps[number]) {
+  if (step.fields.length && step.fields.every(field => session.value?.completed.includes(field))) return 'done'
+  if (session.value?.step === step.key || (step.key === 'covers' && session.value?.step === 'collection')) return 'current'
+  return 'pending'
+}
+const sessionLabel = computed(() => pending.value ? '正在准备' : session.value?.status === 'review' ? '准备完成，待人工发布' : session.value?.status === 'waiting' ? '等待你确认' : session.value?.status === 'running' ? '正在辅助发布' : session.value?.status === 'failed' ? '未完成' : session.value?.status === 'stopped' ? '已停止接管' : '等待开始')
 let dispose: (() => void) | undefined
 let unmounted = false
 function accept(value: DouyinSession | null) {
@@ -92,12 +99,19 @@ defineExpose({ start })
 <template>
   <section
     v-show="!hideStart || session || pending || error"
-    class="panel"
+    class="panel douyin-workbench"
+    :data-status="session?.status"
     aria-labelledby="douyin-verification-heading"
   >
-    <h2 id="douyin-verification-heading">
-      抖音辅助发布
-    </h2>
+    <div class="douyin-heading">
+      <h2 id="douyin-verification-heading">
+        <AppIcon name="upload" />抖音辅助发布
+      </h2>
+      <span
+        class="douyin-session-status"
+        role="status"
+      >{{ sessionLabel }}</span>
+    </div>
     <p class="muted">
       一次开始，自动准备当前任务。请在官方页面检查预览、声明和发布设置，亲自发布后回来记录实际结果。
     </p>
@@ -121,13 +135,20 @@ defineExpose({ start })
       <li
         v-for="(step, index) in steps"
         :key="step.key"
+        :data-state="stepState(step)"
         :aria-current="session?.step === step.key || (step.key === 'covers' && session?.step === 'collection') ? 'step' : undefined"
       >
-        <strong>{{ index + 1 }}. {{ step.label }}</strong>
-        <span v-if="step.fields.length && step.fields.every(field => session?.completed.includes(field))">
+        <span class="douyin-step-marker"><AppIcon
+          v-if="stepState(step) === 'done'"
+          name="check"
+        /><template v-else>{{ index + 1 }}</template></span>
+        <strong>{{ step.label }}</strong>
+        <span v-if="stepState(step) === 'done'">
           {{ step.fields.some(field => session?.manual.includes(field)) ? '人工确认' : '已核对' }}
         </span>
         <span v-else-if="step.key === 'review' && session?.status === 'review'">等待你检查并发布</span>
+        <span v-else-if="stepState(step) === 'current'">{{ session?.status === 'running' ? '进行中' : session?.status === 'waiting' ? '待确认' : session?.status === 'failed' ? '未完成' : '已停止' }}</span>
+        <span v-else>待进行</span>
       </li>
     </ol>
     <p
@@ -313,7 +334,7 @@ defineExpose({ start })
         :disabled="!desktop"
         @click="show"
       >
-        {{ session?.status === 'review' ? '查看抖音并发布' : '显示抖音窗口' }}
+        <AppIcon name="eye" />{{ session?.status === 'review' ? '去官方页面检查' : '显示抖音窗口' }}
       </Button>
       <Button
         v-if="active || pending || session?.status === 'review'"
@@ -335,3 +356,26 @@ defineExpose({ start })
     />
   </section>
 </template>
+
+<style scoped>
+.douyin-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.douyin-heading h2 { display: flex; align-items: center; gap: 8px; margin: 0; }
+.douyin-heading .app-icon { color: var(--primary); }
+.douyin-session-status { padding: 5px 10px; border: 1px solid var(--input-border); border-radius: 8px; color: var(--info); font-size: 12px; }
+.douyin-workbench[data-status='review'] .douyin-session-status { border-color: var(--active-border); background: var(--accent); color: var(--primary); }
+.douyin-workbench[data-status='waiting'] .douyin-session-status, .douyin-workbench[data-status='stopped'] .douyin-session-status { color: var(--warning); }
+.douyin-workbench[data-status='failed'] .douyin-session-status { color: var(--destructive); }
+.douyin-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; padding: 0; margin: 20px 0; list-style: none; }
+.douyin-steps li { display: grid; align-content: start; justify-items: start; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); font-size: 12px; line-height: 1.6; }
+.douyin-steps li > span:last-child { color: var(--muted-foreground); }
+.douyin-step-marker { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--input-border); border-radius: 50%; color: var(--muted-foreground); }
+.douyin-step-marker .app-icon { width: 15px; height: 15px; }
+.douyin-steps li[data-state='done'] .douyin-step-marker { background: var(--accent); color: var(--primary); border-color: var(--active-border); }
+.douyin-steps li[data-state='current'] { border-color: color-mix(in srgb, var(--info) 45%, var(--border)); background: color-mix(in srgb, var(--info) 5%, var(--card)); }
+.douyin-steps li[data-state='current'] .douyin-step-marker { color: var(--info); border-color: var(--info); }
+.douyin-workbench[data-status='review'] { animation: preparation-ready 220ms ease-out; }
+@keyframes preparation-ready { from { opacity: .6; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 1200px) { .douyin-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .douyin-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (prefers-reduced-motion: reduce) { .douyin-workbench[data-status='review'] { animation: none; } }
+</style>
