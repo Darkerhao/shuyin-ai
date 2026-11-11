@@ -36,6 +36,7 @@ fn setup() -> (tempfile::TempDir, Database, StartAutomationInput) {
             image_provider_id: image.id,
             format: "deep_dive".into(),
             request_key: "start-one".into(),
+            collection_name: None,
         },
     )
 }
@@ -45,6 +46,152 @@ fn account() -> Account {
         name: "测试账号".into(),
         key: "window-account-identity".into(),
     }
+}
+
+#[test]
+fn automation_collection_is_frozen_and_bound_to_the_publish_task_transaction() {
+    let (directory, database, mut input) = setup();
+    input.collection_name = Some("  甲子读书 | 读懂一本书  ".into());
+    let run = database
+        .create_automation(input.clone(), account())
+        .unwrap();
+    assert_eq!(
+        run.input.selection.collection_name.as_deref(),
+        Some("甲子读书 | 读懂一本书")
+    );
+    assert_eq!(
+        database
+            .create_automation(input.clone(), account())
+            .unwrap()
+            .id,
+        run.id
+    );
+    input.collection_name = Some("其他合集".into());
+    assert!(database.create_automation(input, account()).is_err());
+
+    let project = database.get_project(&run.project_id).unwrap();
+    let publish = m4_tests::input(&database, &project);
+    let task = database
+        .save_bound_publish_task(None, publish.clone(), Some(&run.binding(Slot::Publish)))
+        .unwrap();
+    let expected = publishing::CollectionChoice {
+        account_id: None,
+        account_name: account().name,
+        id: None,
+        name: Some("甲子读书 | 读懂一本书".into()),
+    };
+    assert_eq!(task.douyin_collection.as_ref(), Some(&expected));
+    assert!(database
+        .save_bound_publish_task(None, publish, Some(&run.binding(Slot::Publish)))
+        .is_err());
+    assert_eq!(
+        database.list_publish_tasks(&run.project_id).unwrap().len(),
+        1
+    );
+    let ready = database.prepare_publish_task(&task.id).unwrap();
+    assert_eq!(ready.status, "ready");
+    assert_eq!(ready.douyin_collection.as_ref(), Some(&expected));
+    let backup = database
+        .create_backup(directory.path().to_str().unwrap())
+        .unwrap();
+    database.control_automation(&run.id, "pause").unwrap();
+    database.restore_backup(&backup).unwrap();
+    drop(database);
+
+    let reopened = Database::open(directory.path().join("data.sqlite3"));
+    let saved = reopened.automation_run(&run.id).unwrap();
+    assert_eq!(saved.input.selection.collection_name, expected.name);
+    assert_eq!(saved.input.account, account());
+    assert_eq!(
+        reopened.douyin_collection(&task.id).unwrap(),
+        Some(expected)
+    );
+    assert!(reopened
+        .default_douyin_collection("unrelated-account")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn automation_collection_validates_before_creating_work_and_old_inputs_keep_no_collection() {
+    let (_directory, database, mut input) = setup();
+    for name in [" ".to_owned(), "书".repeat(201)] {
+        input.collection_name = Some(name);
+        assert!(database
+            .create_automation(input.clone(), account())
+            .is_err());
+        assert!(database.automation_runs().unwrap().is_empty());
+    }
+    let mut old = serde_json::to_value(&input).unwrap();
+    old.as_object_mut().unwrap().remove("collectionName");
+    let legacy: StartAutomationInput = serde_json::from_value(old).unwrap();
+    assert!(legacy.collection_name.is_none());
+    let run = database.create_automation(legacy, account()).unwrap();
+    let project = database.get_project(&run.project_id).unwrap();
+    let task = database
+        .save_bound_publish_task(
+            None,
+            m4_tests::input(&database, &project),
+            Some(&run.binding(Slot::Publish)),
+        )
+        .unwrap();
+    assert_eq!(task.douyin_collection.unwrap().name, None);
+}
+
+#[test]
+fn automation_collection_write_failure_rolls_back_publish_task_and_binding() {
+    let (_directory, database, mut input) = setup();
+    input.collection_name = Some("本次合集".into());
+    let run = database.create_automation(input, account()).unwrap();
+    let project = database.get_project(&run.project_id).unwrap();
+    let publish = m4_tests::input(&database, &project);
+    database.with_connection(|connection| {
+        connection.execute_batch("CREATE TRIGGER fail_collection_write BEFORE UPDATE OF douyin_collection ON publish_tasks BEGIN SELECT RAISE(ABORT,'fixture collection write failed'); END;").map_err(|error| error.to_string())
+    }).unwrap();
+    let result =
+        database.save_bound_publish_task(None, publish.clone(), Some(&run.binding(Slot::Publish)));
+    assert!(result
+        .unwrap_err()
+        .contains("fixture collection write failed"));
+    assert!(database
+        .list_publish_tasks(&run.project_id)
+        .unwrap()
+        .is_empty());
+    assert!(database
+        .automation_run(&run.id)
+        .unwrap()
+        .publish_task_id
+        .is_none());
+    database
+        .with_connection(|connection| {
+            let policy: Option<String> = connection
+                .query_row(
+                    "SELECT publish_input_json FROM automation_runs WHERE id=?1",
+                    [&run.id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            assert!(policy.is_none());
+            connection
+                .execute_batch("DROP TRIGGER fail_collection_write;")
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    let task = database
+        .save_bound_publish_task(None, publish, Some(&run.binding(Slot::Publish)))
+        .unwrap();
+    assert_eq!(
+        task.douyin_collection.unwrap().name.as_deref(),
+        Some("本次合集")
+    );
+    assert_eq!(
+        database
+            .automation_run(&run.id)
+            .unwrap()
+            .publish_task_id
+            .as_deref(),
+        Some(task.id.as_str())
+    );
 }
 
 #[test]

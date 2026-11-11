@@ -59,11 +59,11 @@ impl Collections {
         self.available && self.selected.as_deref() == name
     }
 
-    fn validate_choice(&self, name: Option<&str>) -> Result<(), String> {
+    fn validate_choice(&self, name: Option<&str>, require_unique: bool) -> Result<(), String> {
         if !self.available {
             return Err("无法读取官方页合集，请在官方页设置并人工确认。".into());
         }
-        if self.matches_choice(name) {
+        if self.matches_choice(name) && (!require_unique || name.is_none()) {
             return Ok(());
         }
         if name.is_none() {
@@ -168,6 +168,50 @@ impl Session {
         self.options.clear();
         self.collection_authorized = false;
     }
+    fn use_account(
+        &mut self,
+        observed: &Account,
+        confirmed: Option<&Account>,
+        expected: Option<&Account>,
+    ) -> bool {
+        if expected.is_some() && !same_account(expected, Some(observed)) {
+            self.reset_page_proofs();
+            self.account = Some(observed.clone());
+            self.wait(
+                "account",
+                "当前抖音账号与自动流程启动时不同，请恢复原账号；不会上传到另一账号。",
+            );
+            return false;
+        }
+        if !same_account(self.account.as_ref(), Some(observed)) {
+            self.reset_page_proofs();
+        }
+        if !self.account_confirmed {
+            if let Some(account) = confirmed.filter(|a| same_account(Some(a), Some(observed))) {
+                self.account = Some(account.clone());
+                self.account_confirmed = true;
+            } else {
+                self.account = Some(observed.clone());
+                self.wait("account", "请在官方窗口核对账号，并确认使用这个账号继续。");
+                return false;
+            }
+        }
+        true
+    }
+    fn restore_collection(&mut self, choice: CollectionChoice, expected: Option<&Account>) {
+        if self.account_confirmed
+            && self.account.as_ref().is_some_and(|account| {
+                choice.account_id == account.id
+                    && match expected {
+                        Some(expected) => same_account(Some(expected), Some(account)),
+                        None => choice.account_id.is_some(),
+                    }
+            })
+        {
+            self.collection = Some(choice);
+            self.collection_authorized = expected.is_some();
+        }
+    }
     fn validate_decision(&self, run_id: u64, stopped: bool) -> Result<(), String> {
         if self.run_id != run_id || self.status != "waiting" || stopped {
             return Err("此操作已过期，请重新读取当前进度。".into());
@@ -222,7 +266,15 @@ pub(crate) fn automation_session(publisher: &DouyinPublisher) -> Result<Option<S
     current(publisher)
 }
 
-pub(crate) fn require_automation_account(publisher: &DouyinPublisher) -> Result<Account, String> {
+pub(crate) async fn require_automation_account(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    publisher: &DouyinPublisher,
+) -> Result<Account, String> {
+    let _operation = publisher
+        .operation
+        .try_lock()
+        .map_err(|_| "正在核对抖音账号，请稍后开始。")?;
     let account = publisher
         .confirmed
         .lock()
@@ -231,6 +283,11 @@ pub(crate) fn require_automation_account(publisher: &DouyinPublisher) -> Result<
         .ok_or("请先打开抖音窗口、登录并确认本次自动制作使用的账号。")?;
     if publisher.task.lock().map_err(|e| e.to_string())?.is_some() {
         return Err("抖音窗口仍绑定其他发布任务，请先完成原任务并关闭窗口。".into());
+    }
+    let observed = read_automation_account(app, window, publisher).await?;
+    if !same_account(Some(&account), Some(&observed)) {
+        *publisher.confirmed.lock().map_err(|e| e.to_string())? = None;
+        return Err("账号已变化，请在开始区域重新读取并确认；尚未开始制作。".into());
     }
     Ok(account)
 }
@@ -242,23 +299,56 @@ pub async fn prepare_automation_account(
     publisher: tauri::State<'_, DouyinPublisher>,
 ) -> Result<Account, String> {
     local_main(&window)?;
+    let _operation = publisher
+        .operation
+        .try_lock()
+        .map_err(|_| "正在核对抖音账号，请稍后再试。")?;
     if publisher.task.lock().map_err(|e| e.to_string())?.is_some() {
         return Err("请先完成当前抖音任务。".into());
     }
+    publisher.stopped.store(false, Ordering::SeqCst);
+    *publisher.confirmed.lock().map_err(|e| e.to_string())? = None;
     open_douyin_window(app.clone(), window.clone(), publisher.clone()).await?;
-    let page = inspect_douyin_window(app.clone(), window.clone()).await?;
-    if !page.authenticated || page.login_visible || !page.online {
-        return Err("请在打开的抖音窗口登录后，再读取账号。".into());
+    let mut account = read_automation_account(&app, &window, &publisher).await?;
+    if account.name.is_empty() {
+        account.name = app.state::<Database>().douyin_account_name()?;
     }
-    if page.kind == "home" {
-        publish_window(&app)?
+    Ok(account)
+}
+
+async fn read_automation_account(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    publisher: &DouyinPublisher,
+) -> Result<Account, String> {
+    let mut page = inspect_douyin_window(app.clone(), window.clone()).await?;
+    if !page.blocked && page.kind == "home" {
+        publish_window(app)?
             .navigate(
                 "https://creator.douyin.com/creator-micro/content/upload"
                     .parse()
                     .unwrap(),
             )
             .map_err(|e| e.to_string())?;
-        return Err("已打开视频入口，请页面就绪后再次读取账号。".into());
+    }
+    if !page.blocked && (page.kind == "home" || (page.kind == "upload" && !page.upload_ready)) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            page = inspect_douyin_window(app.clone(), window.clone()).await?;
+            if upload_navigation_finished(&page) {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err("发布视频入口加载超时，请检查官方窗口后重新读取账号。".into());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+    if page.login_visible {
+        *publisher.confirmed.lock().map_err(|e| e.to_string())? = None;
+    }
+    if !page.authenticated || page.login_visible || !page.online {
+        return Err("请在打开的抖音窗口登录后，再读取账号。".into());
     }
     if page.kind != "upload" || !page.upload_ready || page.blocked {
         return Err("抖音页面已有草稿或不在空白上传页，请先处理原内容。".into());
@@ -273,13 +363,25 @@ pub async fn confirm_automation_account(
     window: WebviewWindow,
     publisher: tauri::State<'_, DouyinPublisher>,
     expected: Account,
-) -> Result<(), String> {
-    let observed = prepare_automation_account(app, window, publisher.clone()).await?;
+) -> Result<Account, String> {
+    local_main(&window)?;
+    let _operation = publisher
+        .operation
+        .try_lock()
+        .map_err(|_| "正在核对抖音账号，请稍后再试。")?;
+    if publisher.task.lock().map_err(|e| e.to_string())?.is_some() {
+        return Err("请先完成当前抖音任务。".into());
+    }
+    *publisher.confirmed.lock().map_err(|e| e.to_string())? = None;
+    let mut observed = read_automation_account(&app, &window, &publisher).await?;
     if !same_account(Some(&expected), Some(&observed)) {
         return Err("账号已变化，请重新读取并核对。".into());
     }
-    *publisher.confirmed.lock().map_err(|e| e.to_string())? = Some(observed);
-    Ok(())
+    app.state::<Database>()
+        .save_douyin_account_name(&expected.name)?;
+    observed.name = expected.name.trim().into();
+    *publisher.confirmed.lock().map_err(|e| e.to_string())? = Some(observed.clone());
+    Ok(observed)
 }
 
 fn resumable_session(
@@ -492,7 +594,7 @@ pub async fn continue_douyin_task(
                     options =
                         load_collection_options(&publish_window, &publisher, &snapshot).await?;
                 }
-                options.validate_choice(name.as_deref())?;
+                options.validate_choice(name.as_deref(), false)?;
             }
             let account = session.account.as_ref().ok_or("请先确认账号。")?;
             let choice = CollectionChoice {
@@ -709,36 +811,17 @@ async fn drive(
         .account
         .as_ref()
         .ok_or("无法识别账号，请在官方窗口检查。")?;
-    if let Some(expected) = database.automation_publish_account(&session.task_id)? {
-        if !same_account(Some(&expected), Some(account)) {
-            session.wait(
-                "account",
-                "当前抖音账号与自动流程启动时不同，请恢复原账号；不会上传到另一账号。",
-            );
-            return Ok(());
+    let automatic_account = database.automation_publish_account(&session.task_id)?;
+    let confirmed = publisher
+        .confirmed
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    if !session.use_account(account, confirmed.as_ref(), automatic_account.as_ref()) {
+        if let Some(account) = session.account.as_mut().filter(|a| a.name.is_empty()) {
+            account.name = database.douyin_account_name()?;
         }
-    }
-    if !same_account(session.account.as_ref(), Some(account)) {
-        session.reset_page_proofs();
-    }
-    if !session.account_confirmed {
-        let confirmed = publisher
-            .confirmed
-            .lock()
-            .map_err(|e| e.to_string())?
-            .clone();
-        if same_account(confirmed.as_ref(), Some(account)) {
-            session.account = confirmed;
-            session.account_confirmed = true;
-        } else {
-            let mut account = account.clone();
-            if account.name.is_empty() {
-                account.name = database.douyin_account_name()?;
-            }
-            session.account = Some(account);
-            session.wait("account", "请在官方窗口核对账号，并确认使用这个账号继续。");
-            return Ok(());
-        }
+        return Ok(());
     }
     session.done("connect", false);
     if session.cover_pending {
@@ -1061,10 +1144,12 @@ async fn drive(
     ensure_account(app, main, session).await?;
     if session.collection.is_none() {
         let saved = database.douyin_collection(&session.task_id)?;
-        let account = session.account.as_ref().unwrap();
         let had_choice = saved.is_some();
-        session.collection = saved.filter(|c| c.account_id.is_some() && c.account_id == account.id);
+        if let Some(choice) = saved {
+            session.restore_collection(choice, automatic_account.as_ref());
+        }
         if session.collection.is_none() && !had_choice {
+            let account = session.account.as_ref().unwrap();
             if let Some(id) = account.id.as_ref() {
                 session.collection = database.default_douyin_collection(id)?;
                 if let Some(choice) = &session.collection {
@@ -1077,7 +1162,7 @@ async fn drive(
     if session.collection.is_none()
         && collections.available
         && collections.selected.is_none()
-        && database.is_automatic_publish(&session.task_id)?
+        && automatic_account.is_some()
     {
         let account = session.account.as_ref().ok_or("账号尚未核对。")?;
         session.collection = Some(CollectionChoice {
@@ -1088,11 +1173,18 @@ async fn drive(
         });
     }
     if !session.manual.iter().any(|s| s == "collection") {
-        if collections.available
-            && !session
+        let require_unique = automatic_account.is_some()
+            && !session.completed.iter().any(|field| field == "collection")
+            && session
                 .collection
                 .as_ref()
-                .is_some_and(|c| collections.matches_choice(c.name.as_deref()))
+                .is_some_and(|choice| choice.name.is_some());
+        if collections.available
+            && (require_unique
+                || !session
+                    .collection
+                    .as_ref()
+                    .is_some_and(|c| collections.matches_choice(c.name.as_deref())))
         {
             collections = load_collection_options(&window, publisher, snapshot).await?;
             session.options = collections.options.clone();
@@ -1111,9 +1203,15 @@ async fn drive(
         }
         session.completed.retain(|s| s != "collection");
         if let Some(choice) = &session.collection {
+            if let Err(message) =
+                collections.validate_choice(choice.name.as_deref(), require_unique)
+            {
+                session.wait("collection", &message);
+                return Ok(());
+            }
             if collections.matches_choice(choice.name.as_deref()) {
                 session.done("collection", false);
-            } else if collections.validate_choice(choice.name.as_deref()).is_ok() {
+            } else {
                 running(publisher, snapshot)?;
                 ensure_account(app, main, session).await?;
                 running(publisher, snapshot)?;
@@ -1368,29 +1466,57 @@ mod tests {
             ..Default::default()
         };
         assert!(collections
-            .validate_choice(collections.selected.as_deref())
+            .validate_choice(collections.selected.as_deref(), false)
             .is_ok());
-        assert!(collections.validate_choice(Some("另一个合集")).is_err());
+        assert!(collections
+            .validate_choice(Some("另一个合集"), false)
+            .is_err());
     }
 
     #[test]
     fn collection_changes_require_a_loaded_unique_option_and_no_collection_requires_readback() {
         let mut collections = Collections::default();
-        assert!(collections.validate_choice(None).is_err());
+        assert!(collections.validate_choice(None, false).is_err());
         collections.available = true;
-        assert!(collections.validate_choice(None).is_ok());
+        assert!(collections.validate_choice(None, false).is_ok());
         collections.options = vec![CollectionOption {
             id: None,
             name: "读书".into(),
         }];
-        assert!(collections.validate_choice(Some("读书")).is_err());
+        assert!(collections.validate_choice(Some("读书"), false).is_err());
         collections.loaded = true;
-        assert!(collections.validate_choice(Some("读书")).is_ok());
+        assert!(collections.validate_choice(Some("读书"), false).is_ok());
         collections.options.push(collections.options[0].clone());
-        assert!(collections.validate_choice(Some("读书")).is_err());
-        assert!(collections.validate_choice(Some("已失效")).is_err());
+        assert!(collections.validate_choice(Some("读书"), false).is_err());
+        assert!(collections.validate_choice(Some("已失效"), false).is_err());
         collections.selected = Some("手工合集".into());
-        assert!(collections.validate_choice(None).is_err());
+        assert!(collections.validate_choice(None, false).is_err());
+    }
+
+    #[test]
+    fn initial_automatic_collection_checks_uniqueness_even_when_already_selected() {
+        let mut collections = Collections {
+            available: true,
+            loaded: true,
+            selected: Some("读书".into()),
+            options: vec![
+                CollectionOption {
+                    id: None,
+                    name: "读书".into()
+                };
+                2
+            ],
+        };
+        assert!(collections.validate_choice(Some("读书"), true).is_err());
+        collections.options.pop();
+        assert!(collections.validate_choice(Some("读书"), true).is_ok());
+        collections.loaded = false;
+        collections.options.clear();
+        assert!(collections.validate_choice(Some("读书"), true).is_err());
+        // A previously verified choice may be read back with its dropdown closed.
+        assert!(collections.validate_choice(Some("读书"), false).is_ok());
+        collections.selected = None;
+        assert!(collections.validate_choice(None, true).is_ok());
     }
 
     #[test]
@@ -1538,6 +1664,97 @@ mod tests {
         assert!(same_account(Some(&a), Some(&b)));
         b.key = "0".into();
         assert!(!same_account(Some(&b), Some(&b)));
+    }
+    #[test]
+    fn startup_account_confirmation_is_reused_across_steps_and_same_task_recovery() {
+        let confirmed = Account {
+            id: None,
+            name: "开始时核对的昵称".into(),
+            key: "visible-account".into(),
+        };
+        let mut observed = confirmed.clone();
+        observed.name.clear();
+        let mut session = Session::new(1, "automatic-task".into());
+        assert!(session.use_account(&observed, Some(&confirmed), Some(&confirmed)));
+        assert_eq!(session.account.as_ref(), Some(&confirmed));
+        let choice = CollectionChoice {
+            account_id: None,
+            account_name: confirmed.name.clone(),
+            id: None,
+            name: Some("开始时选定的合集".into()),
+        };
+        session.restore_collection(choice.clone(), Some(&confirmed));
+        assert_eq!(session.collection.as_ref(), Some(&choice));
+        assert!(session.collection_authorized);
+        for step in [
+            "video",
+            "text",
+            "covers",
+            "collection",
+            "settings",
+            "review",
+        ] {
+            session.done(step, false);
+            assert!(session.use_account(&observed, None, Some(&confirmed)));
+            assert!(session.waiting_for.is_none());
+            assert_eq!(session.collection.as_ref(), Some(&choice));
+            assert!(session.completed.iter().any(|field| field == step));
+        }
+        // Stopping/continuing the same window keeps proofs; closing it does not.
+        session.status = "stopped".into();
+        assert!(session.use_account(&observed, Some(&confirmed), Some(&confirmed)));
+        session.reset_page_proofs();
+        assert!(!session.use_account(&observed, None, Some(&confirmed)));
+        assert_eq!(session.waiting_for.as_deref(), Some("account"));
+    }
+
+    #[test]
+    fn automatic_confirmation_never_transfers_to_a_different_account_or_manual_task() {
+        let original = Account {
+            id: None,
+            name: "同名昵称".into(),
+            key: "original".into(),
+        };
+        let another = Account {
+            key: "another".into(),
+            ..original.clone()
+        };
+        let choice = CollectionChoice {
+            account_id: None,
+            account_name: original.name.clone(),
+            id: None,
+            name: Some("原账号合集".into()),
+        };
+        let mut session = Session::new(1, "automatic-task".into());
+        assert!(session.use_account(&original, Some(&original), Some(&original)));
+        session.restore_collection(choice.clone(), Some(&original));
+        assert!(!session.use_account(&another, Some(&another), Some(&original)));
+        assert!(!session.account_confirmed);
+        assert!(session.collection.is_none());
+        session.restore_collection(choice.clone(), Some(&original));
+        assert!(session.collection.is_none());
+
+        let mut manual = Session::new(2, "manual-task".into());
+        assert!(manual.use_account(&original, Some(&original), None));
+        manual.restore_collection(choice, None);
+        assert!(manual.collection.is_none());
+        let stable = Account {
+            id: Some("public-account-id".into()),
+            ..original
+        };
+        let mut manual = Session::new(3, "manual-stable-account-task".into());
+        assert!(manual.use_account(&stable, Some(&stable), None));
+        manual.restore_collection(
+            CollectionChoice {
+                account_id: stable.id,
+                account_name: stable.name,
+                id: None,
+                name: Some("手动任务合集".into()),
+            },
+            None,
+        );
+        assert!(manual.collection.is_some());
+        assert!(!manual.collection_authorized);
     }
     #[test]
     fn recovery_requires_the_same_video_and_marks_manual_results() {

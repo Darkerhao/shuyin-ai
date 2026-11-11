@@ -709,6 +709,7 @@ impl Database {
             if let Some(binding) = binding {
                 super::automation::bind(&tx,binding,&input.project_id,&id)?;
                 tx.execute("UPDATE automation_runs SET publish_input_json=?1 WHERE id=?2",params![serde_json::to_string(&input).map_err(|e|e.to_string())?,binding.id]).map_err(|e|e.to_string())?;
+                tx.execute("UPDATE publish_tasks SET douyin_collection=(SELECT json_object('accountId',json_extract(input_json,'$.account.id'),'accountName',json_extract(input_json,'$.account.name'),'id',NULL,'name',json_extract(input_json,'$.selection.collectionName')) FROM automation_runs WHERE id=?1) WHERE id=?2",params![binding.id,id]).map_err(|e|e.to_string())?;
             } else {
                 tx.execute("DELETE FROM editor_drafts WHERE kind='publishing' AND owner_id=?1", [&draft_owner]).map_err(|e| e.to_string())?;
             }

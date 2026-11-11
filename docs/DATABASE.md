@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 自动制作预选合集（2026-11-11，仍为v23）
+
+无表、列或SQL迁移。automation_runs.input_json.selection新增可省略的collectionName：null或旧JSON缺字段表示不加入合集，非空字符串保存去首尾空白后的完整名称（1—200字）。与原账号快照一起保留，不回填旧任务、不创建账号默认值。
+
+save_bound_publish_task在创建发布任务、绑定流程及保存发布策略的同一事务，将冻结账号和collectionName写入既有publish_tasks.douyin_collection；accountId/id保持真实可空值。合集仍独立于媒体任务包，不将自动授权写成title_confirmed/covers_confirmed。数据库重开、SQLite备份恢复沿用原结构；昵称提示仍存app_settings.douyin_account_name，窗口确认权限不持久化。新程序可读取旧输入；旧程序不识别新增的流程输入字段，回退需使用更新前备份。
+
 ## 自动视频局部恢复（2026-11-10，仍为v23）
 
 无表结构或迁移变更。视频页恢复当前失败字幕/分镜时，在同一事务领取原video_jobs并将关联automation_runs保留为paused、递增run_id、更新恢复提示；按本次选择同步input_json.selection.textProviderId和textProvider，重置本轮modelRetry。已有阶段、子任务关联、字幕、分镜及素材不清空。运行中、错阶段、无效模型或视频领取失败时不修改流程。见[恢复说明](AUTOMATION-VIDEO-RECOVERY.md)。
