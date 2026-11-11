@@ -197,14 +197,26 @@ defineExpose({ start })
       >
         已在官方页确认上传和处理完成
       </Button>
-      <Button
+      <div
         v-else-if="session.waitingFor === 'text'"
-        type="button"
-        :disabled="pending || stopping"
-        @click="decide({ kind: 'text' })"
+        class="actions wrap"
       >
-        采用当前网页文案
-      </Button>
+        <Button
+          type="button"
+          :disabled="pending || stopping"
+          @click="decide({ kind: 'page' })"
+        >
+          重新核对文案与话题
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          :disabled="pending || stopping"
+          @click="decide({ kind: 'text' })"
+        >
+          采用当前网页文案
+        </Button>
+      </div>
       <Button
         v-else-if="session.waitingFor === 'covers'"
         type="button"

@@ -157,6 +157,62 @@ describe('official editor adapter safeguards (local DOM fixtures)', () => {
     expect(act('prepareText', generated)).toMatchObject({ ok: true, needsInput: false, text: expected })
     expect(document.execCommand).not.toHaveBeenCalled()
   })
+  it('distinguishes typed hashtags from confirmed official topic nodes', () => {
+    const editor = document.querySelector('[contenteditable]')!
+    editor.textContent = '正文\n#读书 #美国历史'
+    expect(act('read')).toMatchObject({ topics: [] })
+    editor.innerHTML = '正文\n<span contenteditable="false"><div data-mention="#">&nbsp;<span>#读书</span>&nbsp;</div></span>  #美国历史'
+    expect(act('read')).toMatchObject({ description: '正文\n#读书 #美国历史', topics: ['#读书'] })
+  })
+  it('focuses an unconfirmed whole hashtag and selects only the exact official suggestion', () => {
+    const editor = document.querySelector('[contenteditable]')!
+    editor.textContent = '正文\n#读书分享 #读书'
+    expect(act('prepareTopic', { tag: '#读书', occurrence: 1 })).toMatchObject({ ok: true, confirmed: false })
+    expect(window.getSelection()!.anchorOffset).toBe(editor.textContent.length)
+    document.body.insertAdjacentHTML('beforeend', '<div class="mention-suggest-mount-dom"><div class="tag-a tag-hash-a"><span class="tag-hash-view-name-a">读书分享</span></div><div class="tag-a tag-hash-a"><span class="tag-hash-view-name-a">读书</span></div></div>')
+    const options = document.querySelectorAll('[class^="tag-hash-view-name-"]')
+    const wrong = vi.fn(); options[0]!.parentElement!.addEventListener('click', wrong)
+    const correct = vi.fn(); options[1]!.parentElement!.addEventListener('click', correct)
+    expect(act('selectTopic', { tag: '#读书' })).toMatchObject({ ok: true, selected: true })
+    expect(correct).toHaveBeenCalledOnce()
+    expect(wrong).not.toHaveBeenCalled()
+    options[1]!.parentElement!.after(options[1]!.parentElement!.cloneNode(true))
+    expect(act('selectTopic', { tag: '#读书' })).toMatchObject({ ok: false })
+    editor.textContent = '#不存在'
+    act('prepareTopic', { tag: '#不存在', occurrence: 1 })
+    expect(act('selectTopic', { tag: '#不存在' })).toMatchObject({ ok: true, selected: false })
+    expect(act('selectTopic', { tag: '#读书' })).toMatchObject({ ok: false })
+  })
+  it('resumes partially confirmed topics without modifying or duplicating text', () => {
+    const editor = document.querySelector('[contenteditable]')!
+    editor.innerHTML = '正文\n<span contenteditable="false"><div data-mention="#">&nbsp;<span>#读书</span>&nbsp;</div></span>  #美国历史'
+    const before = editor.innerHTML
+    expect(act('prepareTopic', { tag: '#读书', occurrence: 1 })).toMatchObject({ ok: true, confirmed: true })
+    expect(act('prepareTopic', { tag: '#美国历史', occurrence: 1 })).toMatchObject({ ok: true, confirmed: false })
+    expect(editor.innerHTML).toBe(before)
+    expect(act('prepareTopic', { tag: '#不存在', occurrence: 1 })).toMatchObject({ ok: false })
+    expect(act('prepareTopic', { tag: '无井号', occurrence: 1 })).toMatchObject({ ok: false })
+    document.body.insertAdjacentHTML('beforeend', '<div role="dialog">提示</div>')
+    expect(act('prepareTopic', { tag: '#美国历史', occurrence: 1 })).toMatchObject({ ok: false })
+    expect(act('selectTopic', { tag: '#美国历史' })).toMatchObject({ ok: false })
+  })
+  it('does not select a topic after the cursor moves inside a longer hashtag', () => {
+    const editor = document.querySelector('[contenteditable]')!
+    editor.textContent = '#读书 #读书分享'
+    document.body.insertAdjacentHTML('beforeend', '<div class="mention-suggest-mount-dom"><div class="tag-a tag-hash-a"><span class="tag-hash-view-name-a">读书</span></div></div>')
+    const click = vi.fn()
+    document.querySelector('.tag-hash-a')!.addEventListener('click', click)
+    expect(act('prepareTopic', { tag: '#读书', occurrence: 1 })).toMatchObject({ ok: true, confirmed: false })
+    const range = document.createRange()
+    range.setStart(editor.firstChild!, '#读书 #读书'.length)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    expect(act('selectTopic', { tag: '#读书' })).toMatchObject({ ok: false })
+    expect(click).not.toHaveBeenCalled()
+    expect(editor.textContent).toBe('#读书 #读书分享')
+  })
   it('selects only the description and sends paragraph boundaries without empty placeholder lines', () => {
     const editor = document.querySelector<HTMLElement>('[contenteditable]')!
     const multiline = { ...payload, description: '第一段\n\n第二段\n第三段', tags: '#读书 #阅读' }
