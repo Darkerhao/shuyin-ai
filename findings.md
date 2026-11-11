@@ -1,3 +1,28 @@
+# 模型调用诊断：Git交付核对（2026-11-11）
+
+- 新拉取的origin/dev为0b73b21、origin/main为60c4486，均只增加v0.61.0发布版本，业务代码树一致。已评审25份功能文件在切分支/拉取后字节保持一致。
+- 新功能包含用户可用分页与清理，发布类型为feat/minor；沿用流水线决定版本，不手动改版本或把本次功能标为纯修复。
+- main的push触发现有跨平台构建与版本同步；Git推送成功不等于安装包发布完成，最终报告分别说明。
+
+# 模型调用诊断：评审发现（2026-11-11）
+
+- 固定基线main/411320d898470fecd55916f48be59242f2eb6c2c，当前已有改动均为上一轮分页/清理实现与文档。3份未跟踪文件为索引迁移、组件测试和验收文档，必须一起评审。
+- 标准来自用户工程原则、AGENTS.md和当前AI-RULES；需求来自本会话与PRD/技术设计/数据库/使用说明顶部的分页清理章节，无需外部问题跟踪器。
+- 独立Standards初审0项；Spec初审2项P2：策略保存成功但回读失败时，已保存天数仍为旧值，选回0误禁用；维护结束刷新会被在途读取的busy拦截，迟到旧结果或旧错误仍写回。
+- 主线程挂载真实Vue组件补测确证：15项中4失败/11通过，分别覆盖无法关闭策略、维护后旧读取成功/失败、维护中旧结果写回。根因均为组件状态衔接，无需更改SQLite删除/Provider逻辑。
+- 修复后双轴复审均PASS/剩余0；新增9项补测覆盖完整SettingsPage维护边界，全量npm与Rust及静态检查通过。数据库结构仍为上一轮24，无追加迁移或业务数据变更。
+
+# 模型调用诊断分页与清理发现（2026-11-11）
+
+- 当前每次请求由 ai/diagnostics.rs 在开始/结束时写入 model_calls，已经持久化全部记录；database/diagnostics.rs 固定 LIMIT 200，ModelDiagnostics.vue 一次渲染全部返回值，是列表过长与旧记录不可浏览的直接原因。
+- 数据库当前23个迁移；model_calls 原有 started_at DESC 索引，查询已使用 started_at DESC,id DESC 稳定排序。app_settings 可保存保留天数，不需另建日志或配置表。
+- 统一 Provider 已覆盖文本和图片；启动将 running 改为 interrupted，备份快照也保留调用并将运行中状态标记为中断。清理必须排除 running，避免结束回写丢失。
+- UI 复用项目现有 Button、Select、ConfirmAction。ui-ux-pro-max 的相关查询建议按需加载、提供 aria-busy、窄窗表格独立横向滚动；无需更换整页视觉体系。
+- 新分页按总数夹取有效页码，限制每次最多100条；schema24仅将旧索引替换为started_at/id联合倒序索引，不重写调用数据。清理设置使用app_settings，保存与立即清理同事务；后台首次立即执行、每小时再次执行，错过的时钟不补跑多次。
+- 已核对本地当前版本Reka UI 2.11.0的Select公开props/源码注释、rusqlite 0.40.2的查询/事务/整型转换实现及Tokio 1.54.1的interval文档。u64的ToSql/FromSql受fallible_uint feature控制，现有配置未开启，因此采用已有i64边界；不更改依赖。
+- 所有新版调用字段与原Provider诊断保持一致，原调用表没有200条存储上限。7项数据库诊断回归和全部旧版备份测试通过，确认无需补造历史或另建存储。
+- 浏览器深浅主题各4宽度均无页面横向溢出；20行渲染、限高固定表头、245条末页、50条切换和两类确认/取消正常。演示清理保留running，请求结束可继续删除；清空后仍有正确页码与错误重试。
+
 # 计划收尾验收发现（2026-11-09）
 
 - 第一册真实启动在NotebookLM上传前报file_input_missing。当前官方上传器xapScottyUploaderTrigger只在focus/mouseover时创建input；真实原生网页document.hasFocus=false时focus()不触发，稳定复现0个input。Playwright默认焦点模拟会掩盖该条件，关闭Emulation.setFocusEmulationEnabled后旧代码失败、新代码通过。最小修复以mouseover替代focus，保留唯一来源弹窗与输入校验，无额外请求/状态。45项音频脚本通过；证据和当前官方源码在output/playwright/acceptance-20261109。

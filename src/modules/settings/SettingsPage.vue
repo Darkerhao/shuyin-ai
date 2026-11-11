@@ -25,15 +25,17 @@ const desktop = api.isDesktop()
 const settings = ref<WorkspaceSettings | null>(null)
 const backupRecord = ref<BackupRecord | null>(null)
 const storageWorking = ref(false)
+const diagnosticsWorking = ref(false)
 const restorePath = ref('')
 const includeVideos = ref(false)
 const fullRestore = ref<fullBackup.BackupSummary | null>(null)
 const restoreDirectory = ref('')
 const { busy: operationBusy, error, message, operation, run } = workspaceOperation
 const loading = useOperation()
-const busy = computed(() => operationBusy.value || loading.busy.value || storageWorking.value)
-const closeGuard = useWindowCloseGuard(() => operationBusy.value || storageWorking.value, () => !operationBusy.value && !storageWorking.value)
-onBeforeRouteLeave(() => !operationBusy.value && !storageWorking.value)
+const maintenanceWorking = computed(() => storageWorking.value || diagnosticsWorking.value)
+const busy = computed(() => operationBusy.value || loading.busy.value || maintenanceWorking.value)
+const closeGuard = useWindowCloseGuard(() => operationBusy.value || maintenanceWorking.value, () => !operationBusy.value && !maintenanceWorking.value)
+onBeforeRouteLeave(() => !operationBusy.value && !maintenanceWorking.value)
 const load = () => loading.run(async () => { settings.value = await api.workspaceSettings(); backupRecord.value = await lastBackup(); await preferences.initialize() })
 const chooseRoot = () => run(async () => { const path = await api.chooseDirectory(); if (path) { settings.value = await api.setWorkspaceRoot(path); message.value = '新项目将使用此目录，已有项目保持原位置。' } }, '正在设置工作目录…')
 const backup = () => run(async () => { const path = await api.chooseDirectory(); if (path) { message.value = `备份已保存：${await api.createBackup(path)}`; backupRecord.value = await lastBackup() } }, '正在创建数据库备份，请等待完成后离开…')
@@ -254,10 +256,14 @@ onMounted(() => { if (desktop) void load() })
     </section>
     <StorageManager
       v-if="desktop"
-      :disabled="operationBusy || loading.busy.value"
+      :disabled="operationBusy || loading.busy.value || diagnosticsWorking"
       @working="storageWorking = $event"
     />
-    <ModelDiagnostics v-if="desktop" />
+    <ModelDiagnostics
+      v-if="desktop"
+      :disabled="operationBusy || loading.busy.value || storageWorking"
+      @working="diagnosticsWorking = $event"
+    />
     <Collapsible
       class="history-panel"
       :unmount-on-hide="false"

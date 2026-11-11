@@ -37,7 +37,7 @@ async fn call_diagnostics_record_returned_usage_timing_errors_and_cancellation_w
         .unwrap();
     assert_eq!(result, "PRIVATE_ANSWER");
     thread.join().unwrap();
-    let calls = serde_json::to_value(db.list_model_calls().unwrap()).unwrap();
+    let calls = serde_json::to_value(db.list_model_calls(1, 20).unwrap().rows).unwrap();
     assert_eq!(calls[0]["inputTokens"], 12);
     assert_eq!(calls[0]["outputTokens"], 7);
     assert_eq!(calls[0]["totalTokens"], 19);
@@ -90,7 +90,7 @@ async fn call_diagnostics_record_returned_usage_timing_errors_and_cancellation_w
         .join()
         .unwrap()
         .starts_with("POST /v1/chat/completions HTTP/1.1"));
-    let calls = serde_json::to_value(db.list_model_calls().unwrap()).unwrap();
+    let calls = serde_json::to_value(db.list_model_calls(1, 20).unwrap().rows).unwrap();
     let cancelled = calls
         .as_array()
         .unwrap()
@@ -108,7 +108,7 @@ async fn call_diagnostics_record_returned_usage_timing_errors_and_cancellation_w
     drop(provider);
     drop(db);
     let db = crate::database::Database::open(dir.path().join("data.sqlite3"));
-    assert_eq!(db.list_model_calls().unwrap().len(), 3);
+    assert_eq!(db.list_model_calls(1, 20).unwrap().rows.len(), 3);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -527,7 +527,7 @@ async fn streaming_collects_only_content_and_preserves_reasoning_setting() {
     assert_eq!(body["stream"], true);
     assert_eq!(body["reasoning_effort"], "high");
     assert_eq!(body["stream_options"]["include_usage"], true);
-    let calls = serde_json::to_value(db.list_model_calls().unwrap()).unwrap();
+    let calls = serde_json::to_value(db.list_model_calls(1, 20).unwrap().rows).unwrap();
     assert_eq!(calls[0]["totalTokens"], 10);
     assert!(calls[0]["inputTokens"].is_null());
     assert!(calls[0]["outputTokens"].is_null());

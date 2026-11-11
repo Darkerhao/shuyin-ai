@@ -109,10 +109,42 @@ pub async fn clean_video_cache(
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub fn list_model_calls(
-    database: State<'_, Database>,
-) -> Result<Vec<crate::database::diagnostics::ModelCall>, String> {
-    database.list_model_calls()
+pub async fn list_model_calls(
+    app: tauri::AppHandle,
+    page: u32,
+    page_size: u32,
+) -> Result<crate::database::diagnostics::ModelCallPage, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Database>().list_model_calls(page, page_size)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn clear_model_calls(app: tauri::AppHandle, confirmed: bool) -> Result<usize, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Database>().clear_model_calls(confirmed)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn set_model_call_retention(
+    app: tauri::AppHandle,
+    retention_days: u32,
+    confirmed: bool,
+) -> Result<usize, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Database>()
+            .set_model_call_retention(retention_days, confirmed)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

@@ -43,7 +43,7 @@ it('shows cleanup refusal and allows a fresh preview without hiding the failure'
   expect(document.querySelector('[role="alertdialog"]')).toBeNull()
 })
 it('shows only returned tokens and separates response timing from whole request timing', async () => {
-  vi.mocked(api.modelCalls).mockResolvedValue([{ id: 'c', projectId: 'p', title: '书', taskId: 'j', model: 'test-model', stage: 'proofreading', status: 'succeeded', startedAt: '2026-11-03T00:00:00Z', elapsedMs: 2500, firstResponseMs: 100, inputTokens: 20, outputTokens: null, totalTokens: null, errorCode: null }])
+  vi.mocked(api.modelCalls).mockResolvedValue({ rows: [{ id: 'c', projectId: 'p', title: '书', taskId: 'j', model: 'test-model', stage: 'proofreading', status: 'succeeded', startedAt: '2026-11-03T00:00:00Z', elapsedMs: 2500, firstResponseMs: 100, inputTokens: 20, outputTokens: null, totalTokens: null, errorCode: null }], total: 1, page: 1, pageSize: 20, runningCount: 0, retentionDays: 0 })
   wrapper = mount(ModelDiagnostics); await flushPromises()
   expect(wrapper.text()).toContain('字幕校对')
   expect(wrapper.text()).toContain('0.10秒 / 2.50秒')

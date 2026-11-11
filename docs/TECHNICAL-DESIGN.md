@@ -1,5 +1,17 @@
 # 书引 AI 技术设计文档
 
+## 模型诊断分页与保留策略（2026-11-11）
+
+`list_model_calls(page, page_size)`在同一数据库连接锁内读取总数、全局运行数、保留设置与当前页，返回`{rows,total,page,pageSize,runningCount,retentionDays}`。SQL使用`ORDER BY started_at DESC,id DESC LIMIT/OFFSET`；每页1—100条，页码须为正，记录减少时夹取最后有效页，空表返回第1页。v24将原时间索引替换为同名的时间/ID联合倒序索引，旧记录保持原值。
+
+`clear_model_calls(confirmed)`只删除非running记录；`set_model_call_retention(retention_days, confirmed)`只接受0/7/30/90，0表示全部保留，启用时必须确认。保留天数存入`app_settings.model_call_retention_days`，设置写入与首次过期清理使用同一事务。过期判断为开始时间早于当前UTC时间减去保留天数，running始终排除。`cleanup_expired_model_calls`被启动后的Tokio间隔任务复用，首次立即执行、随后每小时执行，错过的时钟跳过补跑；失败记录本地错误，不阻止应用启动。
+
+查询、手动清理和后台清理由`spawn_blocking`执行，沿用数据库连接锁；主窗口在原projects权限组增加两条窄命令。ModelDiagnostics复用现有Select/Button/ConfirmAction，默认20条，滚动区域最高520px、表头固定。只有最新页且存在运行请求时每3秒刷新，历史页保持浏览位置，失败停止自动重试；清理后重新读取第1页。未保存的保留选项不被轮询覆盖，恢复备份等维护结束后重读；维护写入期间共用设置页离页/关闭保护。未新增依赖、模型调用或日志存储副本。
+
+评审修复：策略写入成功时立即更新同一结果对象的已保存天数，后续列表失败不阻止改回全部保留；列表重试只执行读取。恢复维护结束时通过单个待刷新标记保留重读需求，维护中的旧结果/旧错误不写回；原读取结束后完成延期刷新，卸载后停止。详见[独立评审与补测](MODEL-DIAGNOSTICS-REVIEW.md)。
+
+当前版本依据：本地Reka UI 2.11.0的SelectRoot/SelectTrigger公开props及源码注释、rusqlite 0.40.2的查询/事务/SQL整型实现、Tokio 1.54.1的interval与MissedTickBehavior文档。实际检查见[分页验收](MODEL-DIAGNOSTICS-VERIFICATION.md)。
+
 ## 自动制作账号与合集前置（2026-11-11）
 
 AutomationSetup复用现有Input、Select与账号命令；确认状态从共享已确认账号派生，移除独立accountReady布尔状态。读取失败清除旧确认，昵称可在启动前补齐。prepare_automation_account串行打开并等待空白上传页，首页跳转完成后直接返回；窗口已关闭后可重新准备。confirm_automation_account回读身份、保存昵称提示并返回实际确认账号；启动前再次只读核对账号，不增加人工确认。
@@ -266,7 +278,7 @@ TypeScript `PublishingContent/emptyPublishing`同步该字符串；WritingPage�
 - 成功备份复用`app_settings.last_successful_backup`，记录kind/path/completedAt；只有SQLite快照或完整目录写完才更新。恢复前自动安全快照不刷新用户备份时间。备份中的数据库快照早于成功记录更新，恢复后可能显示更早的成功时间。设置页只提醒，不增加自动备份调度。
 - `OpenAiCompatible.observed(database, task, stage)`挂载请求级诊断，保持TextProvider/String、ImageProvider/bytes接口不变。`ai/diagnostics.rs::Call`进入请求时计时，`send().await`返回响应头时记录首响应，Provider完成时记录总耗时；总耗时含响应接收、解析，图片请求还包括base64解码和图片校验，不含后续业务存储/用户采用。Future被丢弃时Drop记录cancelled；启动及备份恢复将遗留running记录置interrupted，不编造中断时长。
 - 文本请求发送`stream_options.include_usage=true`，SSE每个完整事件与普通JSON响应读取usage；图片JSON也读取实际usage。兼容prompt_tokens/input_tokens、completion_tokens/output_tokens，只保存有效非负整数；缺项保持NULL，不通过输入+输出补总数，不累加服务已返回的整次请求累计值。OpenAI官方[流式响应定义](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)已读取核对：最后一块可为空choices并带全请求usage，中断/取消可能收不到此块。兼容服务是否提供用量仍以其实际返回为准，不增加重试或协议回退。
-- 连接测试、文案生成/调整/时长建议、封面/视频插画、字幕校对、分镜批次和单镜调整均挂载诊断。设置页读取最近200条，运行记录存在时轮询，支持手动刷新。新表和恢复规则见[数据库](DATABASE.md)，受限主窗口命令在原projects权限登记，不新增依赖、网络权限或供应商。
+- 连接测试、文案生成/调整/时长建议、封面/视频插画、字幕校对、分镜批次和单镜调整均挂载诊断。设置页按页读取全部保留记录，最新页存在运行记录时轮询，支持手动刷新；当前分页与清理机制见上方2026-11-11章节。表结构和恢复规则见[数据库](DATABASE.md)，受限主窗口命令在原projects权限登记，不新增依赖、网络权限或供应商。
 
 验收及真实Windows边界见[剩余三项验收](CREATOR-COMPLETION-VERIFICATION.md)。
 

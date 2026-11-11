@@ -1,4 +1,37 @@
 
+# 模型调用诊断：Git交付（2026-11-11）
+
+- 用户明确授权拉取、中文提交、推送dev，再拉取main并cherry-pick/推送；正式数据与模型调用不在此次授权范围。
+- 核对25个待提交文件、真实作者配置及main自动打包流水线；远端main/dev仅新增v0.61.0版本提交，分支文件树一致。
+- 已在本机保存本次文件快照和补丁；保留main旧提交为backup/main-before-model-diagnostics-20261111，携带改动切dev并完成git pull --ff-only origin dev。25份文件摘要一致，未覆盖评审修复。
+- 提交与最终远端SHA不提前写成功；准确Git回执保存到output/model-diagnostics-git-20261111/delivery.json，避免为写回SHA再生成无意义提交。
+
+# 模型调用诊断：评审与测试（2026-11-11）
+
+- 用户要求继续评审测试；已核对main基线、全部工作区变化和3份新文件，复读相关规格与验证边界。
+- 使用code-review技能的两条独立评审；固定点采用上一轮改动前HEAD，实际命令git diff 411320d898470fecd55916f48be59242f2eb6c2c --，另读未跟踪文件。主线程补充场景回归并负责修复，评审线程只读。
+- 独立审查：Standards 0，Spec 2项P2。主线程npx vitest run tests/modelDiagnostics.test.ts --maxWorkers=4先得到4失败/11通过，证明保存成功/回读失败的关闭策略错误，以及维护结束与在途读取竞态。
+- 按diagnosing-bugs保留确定性回归后最小修复：保存成功立即更新同一result里的已保存天数；只增加一个维护后重读标记，旧结果/错误失效，旧读取结束后完成被延期的刷新。根因已直接复现，未为此生成猜测或增加新状态框架。
+- 修复后相关55项通过；新增9项包含真实SettingsPage备份恢复、冲突维护/离页/关闭保护。Standards与Spec增量复审均PASS/剩余0；一次空跟进回复不计为复审，已重新要求实际读取最终增量并收到具体结论。
+- 本轮新执行Rust285通过/2原有忽略、lint、TypeScript/生产构建、fmt/Clippy通过。全量npm使用已有D盘Node24.22.2和4个Vitest worker，前端518、视频40已通过，其余脚本运行中；不以旧轮结果冒充新执行。
+- 全量npm最终退出0：35个前端文件/518项、视频40、发布/音频78（1 macOS跳过）、队列19全部通过。日志output/diagnostics-review-20261111/npm-test.log；源码版本/依赖文件未变，暂存区为空，没有Git交付。
+- 评审报告MODEL-DIAGNOSTICS-REVIEW.md已记录两个P2的原始触发、回归失败与修复证据及双轴复审结果，技术设计/使用说明/开发计划同步。原生桌面、小时实钟和新安装包未在本轮执行。
+- 收尾：全部11份修改/新增Markdown的198个本地链接通过，git diff --check通过；本轮评审测试完成，剩余发现0项，源码与测试保留未提交。
+
+# 模型调用诊断分页与清理（2026-11-11）
+
+- 已核对工作区干净、实际组件/服务/Command/SQLite/Provider 记录链及现有确认和下拉组件；已读取项目约束与相关产品、技术、数据库、AI规则、开发计划内容。
+- 使用 planning-with-files-zh 和 ui-ux-pro-max；复用本文件历史，不继承历史任务的付费调用、正式数据库变更或 Git 交付授权。
+- 已明确按数据库分页与默认不清理实现；手动清除和7/30/90天保留策略需排除运行中记录。
+- 操作记录：两次过宽的文档/规划读取导致工具输出截断，后续用有界片段；两个猜测的相邻文件路径不存在，已通过实际文件清单定位 workflow.rs 和 storage.rs。尚未运行产品测试或声称验证通过。
+- 基线：npx vitest run tests/maintenance.test.ts 为5通过；cargo test --manifest-path src-tauri/Cargo.toml --locked database::diagnostics::tests 为1通过。Rust使用仓库env.ps1和D盘隔离临时目录。
+- 实现后相关前端测试14通过（maintenance与modelDiagnostics）；首次lint发现DOM类型限定问题，首次build发现projects测试仍返回数组；首次Rust编译发现库的默认整型特性不支持u64 SQL值，均已修正后待复验。未改变测试断言或增加依赖。
+- 后续检查：46项相关前端测试、lint、TypeScript/生产构建通过；Rust全量最终285通过/2既有忽略。新增数据保护测试的准备快照时点已修正，旧版模拟备份补齐旧索引形状后保持严格结构校验通过。
+- 浏览器已启动独立1427生产预览及ego任务空间7。首轮误用普通路由，已按实际createWebHashHistory修正；跨轮导航后需再次在当前CDP会话安装演示IPC，正在核对隔离页面。正式用户数据未操作。
+- 最终检查：npm run check:rust通过；浏览器8组深浅布局及分页/条数/保留设置/两类取消/清理保护/关闭策略/空表/错误重试通过，未知IPC与页面错误0。Ego空间7已通过finish关闭；截图、layouts.json、interactions.json保存在output/diagnostics-browser-20261111。
+- 已同步6份长期文档并新增MODEL-DIAGNOSTICS-VERIFICATION.md，列出所有修改文件、schema24索引、实际命令和原生/安装/小时调度未验边界。没有正式数据、付费调用、提交或推送操作。
+- 收尾：10份Markdown、195个本地链接和git diff --check通过，深浅宽/窄截图及空状态已查看；浏览器演示数据按确认流程由245→60→1→0，运行中记录在结束前保留，错误读取和重试通过。
+
 # 计划收尾验收（2026-11-09）
 
 - 第一册辅助验收完成：345.125秒/1080p/24fps/H.264/AAC视频30575168字节、162字幕/35分镜、三张准确PNG。snapshot核对PASS，源文件摘要/版本/视频任务/发布引用全部一致，6抽帧和3封面已看，声音-20.82LUFS偏轻、横版标题单字换行列为质量备注。

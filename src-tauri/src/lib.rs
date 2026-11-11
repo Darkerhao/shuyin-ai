@@ -52,6 +52,25 @@ pub fn run() {
                 database.recover_automation()?;
             }
             app.manage(database);
+            let cleanup_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    // The first tick runs at startup; later ticks also cover long-running sessions.
+                    interval.tick().await;
+                    let handle = cleanup_app.clone();
+                    let result = tauri::async_runtime::spawn_blocking(move || {
+                        handle.state::<Database>().cleanup_expired_model_calls()
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result);
+                    if let Err(error) = result {
+                        eprintln!("模型调用记录自动清理失败：{error}");
+                    }
+                }
+            });
             app.manage(video_commands::VideoRuntime::default());
             app.manage(audio::AudioAutomation::initialize(app.handle()));
             app.state::<audio::AudioAutomation>()
@@ -117,6 +136,8 @@ pub fn run() {
             commands::preview_cache_cleanup,
             commands::clean_video_cache,
             commands::list_model_calls,
+            commands::clear_model_calls,
+            commands::set_model_call_retention,
             video_commands::read_video_draft,
             video_commands::save_video_draft,
             video_commands::original_video_cues,

@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 模型调用分页与保留设置（2026-11-11，v24）
+
+`0024_model_call_pagination.sql`仅将`model_calls_recent`替换为`(started_at DESC,id DESC)`联合索引，匹配分页排序；不新增调用表、不修改旧调用或业务数据。保留设置复用`app_settings`，键为`model_call_retention_days`，值为0/7/30/90的数字字符串；缺省或0表示全部保留。调用和设置均沿用数据库及完整备份恢复。
+
+查询通过SQL LIMIT/OFFSET返回当前页与总数，每页最多100条。清理只删除`status <> 'running'`的model_calls行，过期按UTC的started_at与保留天数判断。保存策略和立即清理同事务，任一失败均回滚。自动清理在启动后及运行期间每小时复用同一删除函数，关闭策略不删除任何记录。索引页空闲空间由SQLite继续复用，不自动执行全库VACUUM。
+
+v16/v23升级、超过200条的完整分页、同时间记录稳定顺序、运行中结束回写、删除隔离、策略重启/备份恢复与失败回滚均有回归。旧schema19—22模拟备份同步恢复其真实的单列索引，继续严格比较备份结构。旧程序不能打开v24数据库，回退需使用升级前备份。证据见[分页验收](MODEL-DIAGNOSTICS-VERIFICATION.md)。
+
 ## 自动制作预选合集（2026-11-11，仍为v23）
 
 无表、列或SQL迁移。automation_runs.input_json.selection新增可省略的collectionName：null或旧JSON缺字段表示不加入合集，非空字符串保存去首尾空白后的完整名称（1—200字）。与原账号快照一起保留，不回填旧任务、不创建账号默认值。
@@ -109,7 +117,7 @@ save_project_with_documents/save_publish_task的同一事务在正式保存成�
 
 ## 模型调用诊断与备份时间（2026-11-03，v17）
 
-`0017_model_calls.sql`新增请求记录表model_calls：id主键；project_id可空外键，删除书籍时SET NULL；task_id为可空任务标识；model、stage、status、started_at必填；elapsed_ms、first_response_ms、input_tokens、output_tokens、total_tokens、error_code可空。status限定running/succeeded/failed/cancelled/interrupted；按started_at倒序建立索引，设置页读取最近200条。表不保存提示词、响应正文、密钥或原始供应商错误。书籍删除后保留请求元数据，未增加自动清理历史的规则。
+`0017_model_calls.sql`新增请求记录表model_calls：id主键；project_id可空外键，删除书籍时SET NULL；task_id为可空任务标识；model、stage、status、started_at必填；elapsed_ms、first_response_ms、input_tokens、output_tokens、total_tokens、error_code可空。status限定running/succeeded/failed/cancelled/interrupted。初次接入按started_at倒序建立索引并只展示最近200条；当前索引、分页及可选清理策略见顶部v24规则。表不保存提示词、响应正文、密钥或原始供应商错误，书籍删除后保留请求元数据。
 
 每次真实Provider请求各写一条记录，长字幕/分镜的不同批次分别记录。首响应为HTTP响应头到达耗时，总耗时为Provider请求处理完成耗时；字段未知即NULL。响应完成状态只说明Provider返回有效文本/图片，不表示业务输出校验、正式保存或人工采用成功。启动和备份恢复把未完成running置interrupted，取消沿用请求Future生命周期，不把未知用量补成零。
 
