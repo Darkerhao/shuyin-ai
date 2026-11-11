@@ -6,7 +6,8 @@
     return elements[0]
   }
   const exact = (root, text) => [...root.querySelectorAll('*')].filter(e => e.children.length === 0 && e.textContent.trim() === text && visible(e))
-  const clean = text => text.replace(/\u200b/g, '').replace(/\r\n/g, '\n').replace(/\n+/g, '\n').trim()
+  const clean = text => text.replace(/\u200b/g, '').replace(/\r\n/g, '\n').replace(/\n+/g, '\n').trim().split('\n')
+    .map(line => /^(?:\s*#[\p{L}\p{N}_]+\s*)+$/u.test(line) ? line.trim().split(/\s+/).join(' ') : line).join('\n')
   const setting = (heading, names) => {
     const root = unique(exact(document, heading), `${heading}入口已变化，请人工核对。`).closest('[class^="content-"]')
     if (!root) throw new Error(`${heading}区域无法读取。`)
@@ -47,6 +48,46 @@
     if (location.pathname !== '/creator-micro/content/post/video') throw new Error('尚未进入视频编辑页。')
     const titleInput = unique([...document.querySelectorAll('input[placeholder="填写作品标题，为作品获得更多流量"]')].filter(visible), '标题控件已变化。')
     const descriptionInput = unique([...document.querySelectorAll('[contenteditable="true"][data-slate-editor="true"].editor-comp-publish')].filter(visible), '简介控件已变化。')
+    const topics = () => [...descriptionInput.querySelectorAll('[data-mention="#"]')].map(element => element.textContent.trim())
+    if (['prepareTopic', 'selectTopic'].includes(action)) {
+      if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) throw new Error('请先处理官方页弹窗，再确认话题。')
+      const tag = payload.tag
+      if (typeof tag !== 'string' || !/^#[\p{L}\p{N}_]+$/u.test(tag)) throw new Error('标签格式无效，请使用空格分隔的 #话题。')
+      if (action === 'prepareTopic') {
+        if (!Number.isInteger(payload.occurrence) || payload.occurrence < 1) throw new Error('话题序号无效。')
+        if (topics().filter(topic => topic === tag).length >= payload.occurrence) return { ok: true, confirmed: true }
+        const walker = document.createTreeWalker(descriptionInput, window.NodeFilter.SHOW_TEXT)
+        let target = null
+        while (walker.nextNode()) {
+          const node = walker.currentNode
+          if (node.parentElement.closest('[contenteditable="false"]')) continue
+          for (const match of node.textContent.matchAll(/#[\p{L}\p{N}_]+/gu)) {
+            const end = match.index + match[0].length
+            if (match[0] === tag && (match.index === 0 || /\s/.test(node.textContent[match.index - 1])) && (end === node.textContent.length || /[\s\u200b]/.test(node.textContent[end]))) target = { node, end }
+          }
+        }
+        if (!target) throw new Error(`未找到待确认话题 ${tag}，请人工检查。`)
+        descriptionInput.focus()
+        const range = document.createRange()
+        range.setStart(target.node, target.end)
+        range.collapse(true)
+        const selection = window.getSelection()
+        selection.removeAllRanges()
+        selection.addRange(range)
+        return { ok: true, confirmed: false }
+      }
+      const selection = window.getSelection()
+      const node = selection?.anchorNode
+      const prefix = node?.textContent.slice(0, selection.anchorOffset) ?? ''
+      const suffix = node?.textContent.slice(selection.anchorOffset) ?? ''
+      if (!selection?.isCollapsed || !descriptionInput.contains(node) || !prefix.endsWith(tag) || (prefix.length > tag.length && !/\s/.test(prefix[prefix.length - tag.length - 1])) || (suffix && !/^[\s\u200b]/.test(suffix))) throw new Error('话题光标已变化，请重新核对。')
+      const candidates = [...document.querySelectorAll('.mention-suggest-mount-dom [class^="tag-hash-view-name-"]')].filter(element => visible(element) && element.textContent.trim() === tag.slice(1))
+      if (!candidates.length) return { ok: true, selected: false }
+      const option = unique(candidates, `话题 ${tag} 存在重复选项，请人工选择。`).parentElement.closest('[class^="tag-hash-"], [class*=" tag-hash-"]')
+      if (!option) throw new Error('话题选项结构已变化，请人工选择。')
+      option.click()
+      return { ok: true, selected: true }
+    }
     if (['settings', 'setDownload', 'setPublishMode', 'setSchedule'].includes(action)) {
       if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) throw new Error('请先处理官方页弹窗，再核对发布设置。')
       if (action === 'setDownload') {
@@ -98,6 +139,7 @@
         ok: true,
         title: titleInput.value,
         description: clean(descriptionInput.innerText),
+        topics: topics(),
         videoPreview: videos.some(v => v.readyState >= 2 && Number.isFinite(v.duration) && v.duration > 0),
         coverDialog: [...document.querySelectorAll('[role="dialog"]')].some(visible),
         covers: ['landscape', 'portrait'].map(ratio => {

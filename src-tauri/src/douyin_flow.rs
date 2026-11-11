@@ -104,7 +104,7 @@ pub struct Session {
     #[serde(skip)]
     covers: Vec<CoverSnapshot>,
     #[serde(skip)]
-    verified_text: Option<(String, String)>,
+    verified_text: Option<(String, String, Vec<String>)>,
     #[serde(skip)]
     account_confirmed: bool,
     #[serde(skip)]
@@ -462,7 +462,7 @@ pub async fn continue_douyin_task(
         Decision::Text if reason == "text" => {
             let editor = read_video_editor(&publish_window, &publisher, &snapshot).await?;
             verify_video(&session, &editor)?;
-            session.verified_text = Some((editor.title, editor.description));
+            session.verified_text = Some((editor.title, editor.description, editor.topics));
             session.done("text", true);
         }
         Decision::Covers if reason == "covers" => {
@@ -524,6 +524,7 @@ pub async fn continue_douyin_task(
             }
             session.done("settings", true);
         }
+        Decision::Page if reason == "text" => session.verified_text = None,
         Decision::Page if reason == "page" || reason == "collection" || reason == "settings" => {}
         _ => return Err("此决定不适用于当前步骤。".into()),
     }
@@ -852,8 +853,9 @@ async fn drive(
     session.step = "text".into();
     session.message = "正在填写并回读发布内容…".into();
     publish(app, publisher, session)?;
-    if let Some((title, description)) = &session.verified_text {
-        if &editor.title != title || &editor.description != description {
+    if let Some((title, description, topics)) = &session.verified_text {
+        if &editor.title != title || &editor.description != description || &editor.topics != topics
+        {
             session.wait(
                 "text",
                 "网页文案已被修改。可保留并采用网页结果，或停止后人工处理。",
@@ -894,9 +896,59 @@ async fn drive(
             crate::webview_host::call(&window, "Input.insertText", json!({ "text": text })).await?;
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        let editor = read_editor(&window).await?;
-        verify_editor(&editor, snapshot)?;
-        session.verified_text = Some((editor.title, editor.description));
+        let result = async {
+            let tags = snapshot.input.tags.split_whitespace().collect::<Vec<_>>();
+            for (index, tag) in tags.iter().enumerate() {
+                session.message = format!("正在确认话题 {tag}（{}/{}）…", index + 1, tags.len());
+                publish(app, publisher, session)?;
+                ensure_account(app, main, session).await?;
+                running(publisher, snapshot)?;
+                let occurrence = tags[..=index].iter().filter(|name| *name == tag).count();
+                let prepared = page_action(
+                    &window,
+                    "prepareTopic",
+                    json!({"tag":tag,"occurrence":occurrence}),
+                )
+                .await?;
+                if prepared["confirmed"] == true {
+                    continue;
+                }
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                let mut selected = false;
+                loop {
+                    running(publisher, snapshot)?;
+                    let editor = read_editor(&window).await?;
+                    if editor.topics.iter().filter(|name| name.as_str() == *tag).count()
+                        >= occurrence
+                    {
+                        break;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(format!("话题 {tag} 未能自动确认，请在官方页选择同名话题后重试，或核对并采用网页结果。已填写内容保留。"));
+                    }
+                    if !selected {
+                        running(publisher, snapshot)?;
+                        selected = page_action(&window, "selectTopic", json!({"tag":tag}))
+                            .await?["selected"]
+                            == true;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                }
+            }
+            let editor = read_editor(&window).await?;
+            verify_editor(&editor, snapshot)?;
+            Ok::<_, String>(editor)
+        }
+        .await;
+        running(publisher, snapshot)?;
+        let editor = match result {
+            Ok(editor) => editor,
+            Err(error) => {
+                session.wait("text", &error);
+                return Ok(());
+            }
+        };
+        session.verified_text = Some((editor.title, editor.description, editor.topics));
         session.done("text", false);
     }
     session.step = "covers".into();
@@ -1133,7 +1185,11 @@ async fn drive(
     let final_editor = read_video_editor(&window, publisher, snapshot).await?;
     verify_video(session, &final_editor)?;
     if session.verified_text.as_ref()
-        != Some(&(final_editor.title.clone(), final_editor.description.clone()))
+        != Some(&(
+            final_editor.title.clone(),
+            final_editor.description.clone(),
+            final_editor.topics.clone(),
+        ))
     {
         session.wait("text", "最终核对发现文案变化，请确认网页结果。");
         return Ok(());
@@ -1489,6 +1545,7 @@ mod tests {
         let mut editor = EditorSnapshot {
             title: "".into(),
             description: "".into(),
+            topics: vec![],
             video_preview: true,
             cover_dialog: false,
             covers: vec![],

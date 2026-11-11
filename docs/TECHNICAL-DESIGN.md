@@ -200,7 +200,7 @@ BookCard采用横向展示并复用原菜单；网格/列表通过继承CSS变�
 
 TypeScript `PublishingContent/emptyPublishing`同步该字符串；WritingPage仅向现有字段配置增加「发布标签」，共用编辑、复制、自动草稿、版本对照与按项预览。`PublishingField::Tags`进入既有流式只读文字投影，未完成片段不保存。无新状态、生成接口或Provider请求。
 
-`PublishingPage.selectWriting`带入来源版本的tags，同时扩大原替换确认到已有标签；任务保存仍写既有 `publish_tasks.tags`。抖音页适配器的 `[description, tags].join('\n\n')`及宿主回读保持同一路径，已有一致内容继续时不重复插入。任务包 `tags.txt`与manifest沿用本次快照，不改源版本、官方最终发布操作或表结构。旧Prompt文件保留作为历史版本追溯资料，运行时只引用新版本。
+`PublishingPage.selectWriting`带入来源版本的tags，同时扩大原替换确认到已有标签；任务保存仍写既有 `publish_tasks.tags`。抖音页适配器的 `[description, tags].join('\n\n')`及宿主回读保持同一路径，已有一致内容继续时不重复插入。2026-11-11补齐语义话题：`prepareTopic`将光标定位到尚未确认的完整标签末尾，由官方编辑器展示建议；`selectTopic`只点击唯一同名选项。宿主每项最多等待5秒，每次点击后回读 `[data-mention="#"]`，部分完成可续作；缺失、歧义或失败进入原文案待处理状态。`EditorSnapshot.topics`进入既有文案确认凭据和最终比较，纯文本不能通过自动话题核验。只统一纯标签行中官方加入的空白，正文内部空格继续严格比较。任务包 `tags.txt`与manifest沿用本次快照，不改源版本、官方最终发布操作或表结构。旧Prompt文件保留作为历史版本追溯资料，运行时只引用新版本。当前官方源码、空白编辑页验证及边界见[话题确认记录](DOUYIN-TOPICS-VERIFICATION.md)。
 
 ## 书架十二套配色（2026-11-04）
 

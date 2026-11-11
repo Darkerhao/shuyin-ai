@@ -31,6 +31,17 @@ beforeEach(() => {
 afterEach(() => wrappers.splice(0).forEach(w => w.unmount()))
 
 describe('single host-owned Douyin workflow', () => {
+  it('retries topic confirmation without adopting unconfirmed text or starting another task', async () => {
+    vi.mocked(api.getDouyinSession).mockResolvedValue(state({ step: 'text', waitingFor: 'text', message: '话题未能自动确认' }))
+    const wrapper = render({ hideStart: true }); await flushPromises()
+    expect(api.continueDouyinTask).not.toHaveBeenCalled()
+    await button(wrapper, '重新核对文案与话题').trigger('click'); await flushPromises()
+    expect(api.continueDouyinTask).toHaveBeenCalledExactlyOnceWith(1, { kind: 'page' })
+    expect(api.startDouyinTask).not.toHaveBeenCalled()
+    progress(state({ step: 'text', waitingFor: 'text' })); await flushPromises()
+    await button(wrapper, '采用当前网页文案').trigger('click'); await flushPromises()
+    expect(api.continueDouyinTask).toHaveBeenLastCalledWith(1, { kind: 'text' })
+  })
   it('lets an embedded failed session resume its original task without confirming publication', async () => {
     vi.mocked(api.getDouyinSession).mockResolvedValue(state({ status: 'failed', step: 'text', waitingFor: null, message: '文案回读不一致' }))
     const w = render({ hideStart: true }); await flushPromises()

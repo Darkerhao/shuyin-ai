@@ -165,6 +165,7 @@ impl DouyinPage {
 pub struct EditorSnapshot {
     pub title: String,
     pub description: String,
+    pub topics: Vec<String>,
     pub video_preview: bool,
     pub cover_dialog: bool,
     pub covers: Vec<CoverSnapshot>,
@@ -394,6 +395,15 @@ fn verify_editor(editor: &EditorSnapshot, snapshot: &PublishSnapshot) -> Result<
     {
         return Err("文案回读与任务不一致，请人工检查。".into());
     }
+    let mut remaining = editor.topics.iter().collect::<Vec<_>>();
+    for tag in snapshot.input.tags.split_whitespace() {
+        let Some(index) = remaining.iter().position(|topic| topic.as_str() == tag) else {
+            return Err(format!(
+                "话题 {tag} 尚未确认为蓝色标签，请在官方页选择同名话题。"
+            ));
+        };
+        remaining.remove(index);
+    }
     Ok(())
 }
 
@@ -404,6 +414,20 @@ fn normalize_editor_text(value: &str) -> String {
         .trim()
         .split('\n')
         .filter(|line| !line.is_empty())
+        .map(|line| {
+            let words = line.split_whitespace().collect::<Vec<_>>();
+            if !words.is_empty()
+                && words.iter().all(|word| {
+                    word.strip_prefix('#').is_some_and(|name| {
+                        !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_')
+                    })
+                })
+            {
+                words.join(" ")
+            } else {
+                line.to_owned()
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -509,6 +533,7 @@ mod tests {
         let mut editor = EditorSnapshot {
             title: original.input.title.clone(),
             description: "第一行\n第二行\n\n#读书\u{200b}".into(),
+            topics: vec!["#读书".into()],
             video_preview: true,
             cover_dialog: false,
             covers: vec![],
@@ -521,5 +546,33 @@ mod tests {
         assert!(verify_editor(&editor, &original).is_err());
         editor.description = "用户改动".into();
         assert!(verify_editor(&editor, &original).is_err());
+    }
+
+    #[test]
+    fn readback_requires_confirmed_topics_and_preserves_body_spacing() {
+        let mut original = snapshot();
+        original.input.tags = "#读书 #美国历史".into();
+        let mut editor = EditorSnapshot {
+            title: original.input.title.clone(),
+            description: "第一行\n第二行\n#读书 #美国历史".into(),
+            topics: vec![],
+            video_preview: true,
+            cover_dialog: false,
+            covers: vec![],
+            video_key: String::new(),
+        };
+        assert!(verify_editor(&editor, &original).is_err());
+        editor.topics.push("#读书".into());
+        assert!(verify_editor(&editor, &original).is_err());
+        editor.topics.push("#美国历史".into());
+        editor.description = "第一行\n第二行\n\u{a0}#读书\u{a0}  \u{a0}#美国历史\u{a0}".into();
+        assert!(verify_editor(&editor, &original).is_ok());
+        editor.description = "第一 行\n第二行\n#读书 #美国历史".into();
+        assert!(verify_editor(&editor, &original).is_err());
+        original.input.tags = "#读书 #读书".into();
+        editor.description = "第一行\n第二行\n#读书 #读书".into();
+        assert!(verify_editor(&editor, &original).is_err());
+        editor.topics = vec!["#读书".into(), "#读书".into()];
+        assert!(verify_editor(&editor, &original).is_ok());
     }
 }
