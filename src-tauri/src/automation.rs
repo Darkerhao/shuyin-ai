@@ -48,7 +48,9 @@ pub async fn start_automation(
         return Err("上一个自动流程仍在结束当前阶段，请稍后再开始。".into());
     }
     app.state::<AudioAutomation>().require_available()?;
-    let account = douyin::flow::require_automation_account(&app.state::<DouyinPublisher>())?;
+    let account =
+        douyin::flow::require_automation_account(&app, &window, &app.state::<DouyinPublisher>())
+            .await?;
     let database = app.state::<Database>();
     for id in [&input.text_provider_id, &input.image_provider_id] {
         ai_commands::provider_key(

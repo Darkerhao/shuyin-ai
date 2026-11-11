@@ -89,22 +89,122 @@ describe('automatic workflow setup', () => {
 
   it('requires explicit consent and the confirmed visible account before starting', async () => {
     const account = { id: null, name: '本次账号', key: 'identity' }
-    vi.mocked(invoke).mockImplementation(async command => command === 'prepare_automation_account' ? account : command === 'automation_snapshot' ? [run()] : run())
+    vi.mocked(invoke).mockImplementation(async command => ['prepare_automation_account', 'confirm_automation_account'].includes(command) ? account : command === 'automation_snapshot' ? [run()] : run())
     const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', sourceAssetId: 'source1' })
     const wrapper = mount(AutomationSetup, { props: { saveSource } })
     await flushPromises()
     const button = (label: string) => wrapper.findAll('button').find(button => button.text() === label)!
     expect(button('自动制作并准备发布').attributes('disabled')).toBeDefined()
     await button('打开抖音并读取账号').trigger('click'); await flushPromises()
-    expect(wrapper.text()).toContain('本次账号')
+    expect(wrapper.get('#automation-account-name').element).toHaveProperty('value', '本次账号')
     await button('确认使用此账号').trigger('click'); await flushPromises()
     expect(button('自动制作并准备发布').attributes('disabled')).toBeDefined()
     await wrapper.get('[role="checkbox"]').trigger('click'); await flushPromises()
     expect(button('自动制作并准备发布').attributes('disabled')).toBeUndefined()
     await button('自动制作并准备发布').trigger('click'); await flushPromises()
     expect(saveSource).toHaveBeenCalledTimes(1)
-    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ projectId: 'book1', sourceAssetId: 'source1', textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive' }) })
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ projectId: 'book1', sourceAssetId: 'source1', textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', collectionName: null }) })
     expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
+    wrapper.unmount()
+  })
+  it('saves the chosen collection at startup and does not ask for the same account after remounting', async () => {
+    const account = { id: null, name: '本次账号', key: 'identity' }
+    automationConsent.value = true
+    vi.mocked(invoke).mockImplementation(async command => ['prepare_automation_account', 'confirm_automation_account'].includes(command) ? account : command === 'automation_snapshot' ? [] : run())
+    const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', sourceAssetId: 'source1' })
+    const wrapper = mount(AutomationSetup, { props: { saveSource } })
+    await flushPromises()
+    const button = (label: string) => wrapper.findAll('button').find(button => button.text() === label)!
+    await button('打开抖音并读取账号').trigger('click'); await flushPromises()
+    await button('确认使用此账号').trigger('click'); await flushPromises()
+    wrapper.findAllComponents({ name: 'UiSelect' }).at(-1)!.vm.$emit('update:modelValue', 'named')
+    await flushPromises()
+    expect(button('自动制作并准备发布').attributes('disabled')).toBeDefined()
+    await wrapper.get('#automation-collection-name').setValue('  甲子读书 | 读懂一本书  ')
+    wrapper.findAllComponents({ name: 'UiSelect' }).at(-1)!.vm.$emit('update:modelValue', 'named'); await flushPromises()
+    expect(wrapper.get('#automation-collection-name').element).toHaveProperty('value', '  甲子读书 | 读懂一本书  ')
+    await button('自动制作并准备发布').trigger('click'); await flushPromises()
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ collectionName: '甲子读书 | 读懂一本书' }) })
+    expect(vi.mocked(invoke).mock.calls.filter(call => call[0] === 'confirm_automation_account')).toHaveLength(1)
+    wrapper.unmount()
+    const reopened = mount(AutomationSetup, { props: { saveSource } }); await flushPromises()
+    expect(reopened.text()).toContain('账号已确认，后续步骤自动沿用')
+    expect(reopened.findAll('button').find(button => button.text() === '确认使用此账号')).toBeUndefined()
+    expect(vi.mocked(invoke).mock.calls.filter(call => call[0] === 'confirm_automation_account')).toHaveLength(1)
+    reopened.unmount()
+  })
+  it('lets the user confirm the nickname at the start when the upload page cannot display it', async () => {
+    const account = { id: null, name: '', key: 'identity' }
+    vi.mocked(invoke).mockImplementation(async (command, args) => command === 'prepare_automation_account' ? account : command === 'confirm_automation_account' ? (args as { expected: typeof account }).expected : undefined)
+    const wrapper = mount(AutomationSetup, { props: { saveSource: vi.fn() } }); await flushPromises()
+    const button = (label: string) => wrapper.findAll('button').find(button => button.text() === label)!
+    await button('打开抖音并读取账号').trigger('click'); await flushPromises()
+    expect(button('确认使用此账号').attributes('disabled')).toBeDefined()
+    await wrapper.get('#automation-account-name').setValue('已核对的昵称')
+    await button('确认使用此账号').trigger('click'); await flushPromises()
+    expect(automationAccount.value).toEqual({ ...account, name: '已核对的昵称' })
+    expect(invoke).toHaveBeenCalledWith('confirm_automation_account', { expected: { ...account, name: '已核对的昵称' } })
+    wrapper.unmount()
+  })
+  it('clears stale account confirmation on a failed reread without discarding the collection', async () => {
+    automationConsent.value = true
+    automationAccount.value = { id: null, name: '原账号', key: 'old' }
+    const wrapper = mount(AutomationSetup, { props: { saveSource: vi.fn() } }); await flushPromises()
+    wrapper.findAllComponents({ name: 'UiSelect' }).at(-1)!.vm.$emit('update:modelValue', 'named'); await flushPromises()
+    await wrapper.get('#automation-collection-name').setValue('本次合集')
+    vi.mocked(invoke).mockRejectedValue('请先登录')
+    await wrapper.findAll('button').find(button => button.text() === '打开抖音并读取账号')!.trigger('click'); await flushPromises()
+    expect(automationAccount.value).toBeNull()
+    expect(wrapper.get('#automation-collection-name').element).toHaveProperty('value', '本次合集')
+    expect(wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+  it('recovers a failed account confirmation by rereading the account while retaining the chosen collection', async () => {
+    automationConsent.value = true
+    let observed = { id: null, name: '原账号', key: 'old' }
+    let confirmationFails = true
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === 'prepare_automation_account') return { ...observed }
+      if (command === 'confirm_automation_account') {
+        if (confirmationFails) throw '账号已变化，请重新读取并核对。'
+        return (args as { expected: typeof observed }).expected
+      }
+      if (command === 'automation_snapshot') return []
+      return run()
+    })
+    const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', sourceAssetId: 'source1' })
+    const wrapper = mount(AutomationSetup, { props: { saveSource } }); await flushPromises()
+    const button = (label: string) => wrapper.findAll('button').find(button => button.text() === label)!
+    wrapper.findAllComponents({ name: 'UiSelect' }).at(-1)!.vm.$emit('update:modelValue', 'named'); await flushPromises()
+    await wrapper.get('#automation-collection-name').setValue('本次合集')
+    await button('打开抖音并读取账号').trigger('click'); await flushPromises()
+    await button('确认使用此账号').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('账号已变化')
+    expect(automationAccount.value).toBeNull()
+    expect(button('自动制作并准备发布').attributes('disabled')).toBeDefined()
+    expect(saveSource).not.toHaveBeenCalled()
+    observed = { id: null, name: '新账号', key: 'new' }; confirmationFails = false
+    await button('打开抖音并读取账号').trigger('click'); await flushPromises()
+    await button('确认使用此账号').trigger('click'); await flushPromises()
+    expect(automationAccount.value).toEqual(observed)
+    expect(wrapper.get('#automation-collection-name').element).toHaveProperty('value', '本次合集')
+    await button('自动制作并准备发布').trigger('click'); await flushPromises()
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ collectionName: '本次合集' }) })
+    wrapper.unmount()
+  })
+  it('restores a paused task account and collection without treating the saved nickname as a new confirmation', async () => {
+    const active = run({ status: 'paused' })
+    active.input.account = { id: null, name: '已保存账号', key: 'saved' }
+    active.input.selection.collectionName = '已保存合集'
+    automationRuns.value = [active]
+    const wrapper = mount(AutomationSetup, { props: { saveSource: vi.fn() } }); await flushPromises()
+    expect(wrapper.get('#automation-account-name').element).toHaveProperty('value', '已保存账号')
+    expect(wrapper.get('#automation-collection-name').element).toHaveProperty('value', '已保存合集')
+    expect(wrapper.get('#automation-collection').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('已保存本次任务的账号与合集')
+    expect(wrapper.text()).not.toContain('账号已确认，后续步骤自动沿用')
+    expect(automationAccount.value).toBeNull()
+    expect(invoke).not.toHaveBeenCalled()
     wrapper.unmount()
   })
   it('keeps the request identity on failed start and exposes the error without starting from partial input', async () => {

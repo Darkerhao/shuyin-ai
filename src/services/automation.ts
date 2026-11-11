@@ -11,11 +11,12 @@ export interface AutomationInput {
   imageProviderId: string
   format: 'deep_dive' | 'brief'
   requestKey: string
+  collectionName?: string | null
 }
 export interface AutomationRun {
   id: string
   projectId: string
-  input: { workflowVersion: number; title: string; author: string; targetDurationSeconds: number | null; durationReason: string; selection: AutomationInput; textProvider?: { name: string; modelName: string }; imageProvider?: { name: string; modelName: string } }
+  input: { workflowVersion: number; title: string; author: string; targetDurationSeconds: number | null; durationReason: string; selection: AutomationInput; account?: AutomationAccount; textProvider?: { name: string; modelName: string }; imageProvider?: { name: string; modelName: string } }
   status: 'running' | 'paused' | 'waiting_user' | 'awaiting_publish' | 'completed' | 'cancelled'
   stage: string
   runId: number
@@ -51,10 +52,15 @@ export const stages: Record<string, string> = {
 }
 export const startAutomation = (input: AutomationInput) => invoke<AutomationRun>('start_automation', { input })
 export const controlAutomation = (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => invoke<AutomationRun>('control_automation', { id, action })
-export const prepareAccount = () => invoke<AutomationAccount>('prepare_automation_account')
+export function prepareAccount() {
+  automationAccount.value = null
+  return invoke<AutomationAccount>('prepare_automation_account')
+}
 export async function confirmAccount(expected: AutomationAccount) {
-  await invoke<void>('confirm_automation_account', { expected })
-  automationAccount.value = expected
+  automationAccount.value = null
+  const confirmed = await invoke<AutomationAccount>('confirm_automation_account', { expected })
+  automationAccount.value = confirmed
+  return confirmed
 }
 
 let refreshing: Promise<void> | null = null

@@ -1,5 +1,53 @@
 # 书引 AI 开发计划与验收标准
 
+## 账号与合集前置：独立评审测试（2026-11-11）
+
+已完成工程规范与需求符合性两条独立评审。Standards首审/复审0项；Spec发现1项P2：页面已选同名合集时，前置名称绕过列表唯一性检查。新增回归先失败后修复，首次自动选择必须读取唯一官方选项，已核对的同任务恢复继续复用回读。复审剩余0项。
+
+补测账号确认失败后的重新读取、合集输入保留、暂停任务展示不冒充确认，以及合集写入失败时发布任务/关联/策略一起回滚。实际`npm test`为前端500、视频40、发布/音频78、队列19项通过，1项macOS跳过；Rust279通过/2项原有忽略；lint、TypeScript/构建、fmt/Clippy、diff检查通过。使用既有Node24.22.2及4个Vitest worker，未弱化检查。
+
+无新增迁移、依赖、权限、版本或提交。本轮未实测真实抖音/原生整链或安装升级；下一步在新版桌面构建补验。范围、修复原因、具体命令与结果见[评审测试记录](AUTOMATION-SETUP-REVIEW.md)。
+
+## 自动制作开始时确认账号与合集（2026-11-11）
+
+已实现起步区域的账号昵称核对、一次确认、指定现有合集名称或明确不加入，以及本条任务的选择持久化和后续自动匹配。合集列表目前只能通过上传后的编辑页适配器读取，因此起步输入完整名称；后续仍核对官方唯一同名选项。属于用户功能增强`feat`/minor，本轮未修改版本、提交或发布。
+
+实现复用原账号会话、自动流程、发布任务和合集适配器。账号确认从共享结果派生；首页自动等待上传页，启动前只读复核；同一窗口切页、暂停/继续不重复询问。预选合集随发布任务事务保存，原自动任务账号验证通过后恢复本次合集授权，官方页带入其他合集时可直接选择目标。账号变化、窗口重开或官方选项无法验证时仍按原流程处理，最终提交由用户完成。
+
+修改文件：
+
+- 前端：`src/components/AutomationSetup.vue`、`src/components/AutomationTasks.vue`、`src/services/automation.ts`。
+- 后端：`src-tauri/src/automation.rs`、`src-tauri/src/douyin_flow.rs`、`src-tauri/src/database/automation.rs`、`src-tauri/src/database/publishing.rs`。
+- 回归：`tests/automation.test.ts`、`src-tauri/src/database/automation_tests.rs`，以及`douyin_flow.rs`内原会话测试。
+- 文档：`docs/PRD.md`、`docs/TECHNICAL-DESIGN.md`、`docs/DATABASE.md`、`docs/AI-RULES.md`、`docs/USER-GUIDE.md`、本开发记录。
+
+数据库仍为schema23，无SQL迁移或新依赖。原input_json.selection追加兼容读取的可空collectionName，发布任务继续用douyin_collection；未创建跨账号默认值或持久登录授权。新程序兼容旧输入，旧程序回退应使用更新前备份。
+
+验收对应：
+
+| 标准 | 实际结果与范围 |
+| --- | --- |
+| 启动前指定合集，不加入仍可用 | 组件回归及浏览器键盘选择通过；空名称不能开始，提交使用去首尾空白的完整名称 |
+| 昵称在开始时补齐并确认一次 | 组件、Rust会话和隔离浏览器通过；失败重试及切页返回的账号确认调用总计1次 |
+| 后续沿用本任务的账号和合集 | Rust验证各阶段及同窗口续作保留确认，恢复预选合集授权；不同账号与普通手动任务不套用自动授权 |
+| 保存、重开和备份保留选择 | SQLite回归通过，合集与任务绑定同事务，重复绑定失败不留下第二条发布任务 |
+| 失败保留输入与成果 | 起步失败保留昵称、合集和请求标识；合集仍用原精确匹配与回读，未改为自动选择近似项 |
+| 页面风格、键盘及窄窗口 | 深浅主题×1440/1366/800/360px共8组无横向溢出，缩放/减少动态效果检查通过，已目视桌面深色和窄窗浅色截图 |
+
+实际验证命令与结果：
+
+- `npx vitest run tests/automation.test.ts`：修复前新增3项回归失败，复现缺少合集输入、空昵称不能前置补齐和旧确认残留；最终全部包含在下列全量验证中。
+- `npm test`：使用本机已有`D:/MyWork/software/shuyin-video-node/v24.22.2`置于本次进程PATH首位，`VITEST_MAX_WORKERS=4`，TEMP/TMP指向仓库`output/automation-publish-setup-tests`。前端498项、视频40项、发布/音频脚本78项、队列19项通过；1项macOS检查按原配置跳过。
+- `npm run lint`、`npm run build`：通过，构建包含TypeScript检查；保留已有大于500kB分块提示。
+- `. ./.tools/env.ps1`后执行`cargo test --manifest-path src-tauri/Cargo.toml --locked --quiet`：277通过、2项原有专项忽略，包含数据库迁移与备份回归。Rust测试的TEMP/TMP/SQLITE_TMPDIR也指向上述D盘隔离目录。
+- 最后补齐合集授权后执行`cargo test --manifest-path src-tauri/Cargo.toml --locked douyin::flow::tests --quiet`：15项通过；`npm run check:rust`：fmt与Clippy全目标零警告通过。
+- `git diff --check`：通过。
+- `npm run dev -- --port 14371 --strictPort`启动隔离预览；`ego-browser nodejs -e "await import('file:///D:/MyWork/project/JIAZI-PROJECT/shuyin-ai/output/automation-publish-setup-20261111-1125/round-07.mjs')"`完成键盘及起步表单，按相同命令执行`round-08.mjs`完成布局、`round-09.mjs`完成失败重试/切页恢复、`round-10.mjs`关闭测试空间。结果JSON、截图和日志保存在同一忽略目录；页面异常0，预览服务已停止。
+
+验证过程中的环境问题：默认Node24.11.0下的完整Vitest两项5秒超时，单独运行`npx vitest run tests/updates.test.ts tests/voice-reminders.test.ts`为34项通过，4 workers全量为498通过；默认Node的`npm run test:video`有7项被现有Windows运行时版本检查拒绝。随后使用已安装的24.22.2和上述worker设置完整通过，未更改系统Node、项目测试超时或隔离规则。浏览器早期临时IPC注入被热更新清空，最终采用固定隔离入口重新完成验收。
+
+未执行本轮真实抖音账号/合集/成片上传、Tauri安装升级或最终发布验收；浏览器IPC夹具不代表原生或平台整链通过。下一步在包含改动的Windows桌面构建中，用本人的账号和已有合集核对一次真实准备流程，最后仍亲自检查并发布。
+
 ## 抖音话题未转为蓝色标签修复（2026-11-11）
 
 补齐文字填写后的逐项官方话题选择与节点回读，继续任务复用已经确认的项；失败保留内容并进入原文案待处理流程。标签状态纳入最终核对，避免仅凭文字一致误报完成。无数据库、依赖、权限或版本号变更，归类fix/patch。修复前失败回归、官方空白编辑页5话题验证及实际命令见[本轮记录](DOUYIN-TOPICS-VERIFICATION.md)；正式桌面新构建和真实成片整链待验。

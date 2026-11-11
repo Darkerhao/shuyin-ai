@@ -1,5 +1,17 @@
 # 书引 AI 技术设计文档
 
+## 自动制作账号与合集前置（2026-11-11）
+
+AutomationSetup复用现有Input、Select与账号命令；确认状态从共享已确认账号派生，移除独立accountReady布尔状态。读取失败清除旧确认，昵称可在启动前补齐。prepare_automation_account串行打开并等待空白上传页，首页跳转完成后直接返回；窗口已关闭后可重新准备。confirm_automation_account回读身份、保存昵称提示并返回实际确认账号；启动前再次只读核对账号，不增加人工确认。
+
+StartAutomationInput新增可空collectionName，Rust去首尾空白并验证1—200字；随原FrozenInput写入automation_runs.input_json。创建发布任务时，在原事务内将账号及合集写入publish_tasks.douyin_collection，任务、关联或合集任一写入失败均回滚。旧JSON默认null，无新SQL迁移。
+
+douyin_flow的Session复用当前窗口确认，并以自动任务冻结账号约束身份。恢复合集时，自动任务允许通过已核实的冻结账号接续其本条任务选择，同时沿用本次合集授权，避免官方页带入其他合集后重复询问；普通任务仍要求稳定公开账号ID且不自动授权替换。选择和完成继续使用已有官方选项精确匹配及回读，不建立第二套上传流程、不把昵称作为身份。当前合集适配器仅在上传后编辑页读取选项，因此起步采用完整名称输入，不推测不存在的上传前列表接口。任务卡显示启动时账号与合集。
+
+评审修正：自动任务首次使用命名合集时，即使官方页已选同名值，也要读取完整可见选项并要求唯一精确匹配；不得仅凭已选名称跳过重名检查。原Session.completed记录的合集已通过且当前值未变时，继续使用回读，不重复加载或选择。无合集与明确人工采用结果保持原规则。新增同名/未加载回归及合集写入失败的事务回滚验证，详见[评审测试](AUTOMATION-SETUP-REVIEW.md)。
+
+依赖保持原版本：核对本地Reka UI 2.11.0 SelectRoot/SelectItem公开props与源码注释、rusqlite 0.40.2 transaction源码及其内嵌文档；没有增加依赖或权限。回归覆盖起步输入、单次确认、账号隔离、合集持久化及原发布流程。
+
 ## 自动视频局部恢复（2026-11-10）
 
 `claim_bound_video_job`原先把所有未结束自动流程一律视为手动续作禁区。现仅允许paused/waiting_user流程的当前transcript/Transcript或storyboard/Prepare配对局部执行；全局运行、错阶段、渲染/试片及重复视频执行继续拒绝。领取原视频与暂停流程、递增流程代次、同步选中模型快照、重置显式重试记录放在同一事务，失败不改变状态。命令根据实际流程阶段选择Transcript，避免手动入口越过字幕检查点；执行仍使用同一VideoRuntime及原worker。局部完成不自动启动后续步骤，全局继续后识别原任务成果。见[验收](AUTOMATION-VIDEO-RECOVERY.md)。

@@ -22,6 +22,8 @@ pub struct StartAutomationInput {
     pub image_provider_id: String,
     pub format: String,
     pub request_key: String,
+    #[serde(default)]
+    pub collection_name: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -363,17 +365,6 @@ impl Database {
             Ok(())
         })
     }
-    pub fn is_automatic_publish(&self, task_id: &str) -> Result<bool, String> {
-        self.with_connection(|connection| {
-            connection
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM automation_runs WHERE publish_task_id=?1)",
-                    [task_id],
-                    |row| row.get(0),
-                )
-                .map_err(|e| e.to_string())
-        })
-    }
     pub fn next_automation_schedule(&self) -> Result<String, String> {
         self.with_connection(|connection| next_schedule(connection, "now"))
     }
@@ -473,7 +464,7 @@ impl Database {
     }
     pub fn create_automation(
         &self,
-        input: StartAutomationInput,
+        mut input: StartAutomationInput,
         account: crate::douyin::flow::Account,
     ) -> Result<AutomationRun, String> {
         if input.request_key.trim().is_empty()
@@ -481,6 +472,12 @@ impl Database {
             || !matches!(input.format.as_str(), "deep_dive" | "brief")
         {
             return Err("自动任务标识或音频形式无效。".into());
+        }
+        if let Some(name) = &mut input.collection_name {
+            *name = name.trim().into();
+            if name.is_empty() || name.chars().count() > 200 {
+                return Err("请填写1—200字的合集完整名称，或选择不加入合集。".into());
+            }
         }
         self.with_connection(|connection| {
             if let Some(id) = connection.query_row("SELECT id FROM automation_runs WHERE request_key=?1",[&input.request_key],|row|row.get::<_,String>(0)).optional().map_err(|e|e.to_string())? {
