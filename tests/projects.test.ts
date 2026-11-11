@@ -17,7 +17,7 @@ import * as fullBackup from '../src/services/backup'
 import * as maintenance from '../src/services/maintenance'
 import { workflowSnapshot } from '../src/services/workflow'
 vi.mock('../src/services/workflow', async original => ({ ...await original<typeof import('../src/services/workflow')>(), workflowSnapshot: vi.fn() }))
-vi.mock('../src/services/maintenance', async original => ({ ...await original<typeof maintenance>(), lastBackup: vi.fn(), modelCalls: vi.fn(), storageUsage: vi.fn(), previewCleanup: vi.fn(), cleanCache: vi.fn() }))
+vi.mock('../src/services/maintenance', async original => ({ ...await original<typeof maintenance>(), lastBackup: vi.fn(), modelCalls: vi.fn(), storageUsage: vi.fn(), previewCleanup: vi.fn(), cleanCache: vi.fn(), clearModelCalls: vi.fn() }))
 vi.mock('../src/services/notes', () => ({ chooseNote: vi.fn(), importNote: vi.fn(), appendNote: vi.fn() }))
 vi.mock('../src/services/backup', () => ({ createFullBackup: vi.fn(), inspectFullBackup: vi.fn(), restoreFullBackup: vi.fn(), chooseFullBackup: vi.fn() }))
 import { emptyProject, type Asset, type Project } from '../src/types/project'
@@ -29,6 +29,7 @@ vi.mock('../src/services/projects', async (original) => ({
 }))
 const saved: Project = { ...emptyProject(), id: 'p1', title: '活着', author: '余华', workspacePath: 'D:/books/p1', createdAt: '2026-10-23T00:00:00Z', updatedAt: '2026-10-23T00:00:00Z', archivedAt: null }
 const asset: Asset = { id: 'a1', projectId: 'p1', assetType: 'video', filePath: 'D:/视频.mp4', originalName: '视频.mp4', fileSize: 1000, modifiedAt: 1, existsStatus: 'missing', createdAt: saved.createdAt }
+const diagnostic: maintenance.ModelCall = { id: 'call-1', projectId: 'p1', title: '活着', taskId: null, model: 'test-model', stage: 'writing', status: 'succeeded', startedAt: saved.createdAt, elapsedMs: 1000, firstResponseMs: 100, inputTokens: 20, outputTokens: 10, totalTokens: 30, errorCode: null }
 const wrappers: ReturnType<typeof mount>[] = []
 async function render(path: string, { pendingNavigation = false } = {}) {
   const router = createRouter({ history: createMemoryHistory(), routes: [
@@ -49,7 +50,7 @@ beforeEach(() => {
   vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   vi.mocked(workflowSnapshot).mockResolvedValue({ resume: [], running: [] })
   vi.mocked(maintenance.lastBackup).mockResolvedValue(null)
-  vi.mocked(maintenance.modelCalls).mockResolvedValue([])
+  vi.mocked(maintenance.modelCalls).mockResolvedValue({ rows: [], total: 0, page: 1, pageSize: 20, runningCount: 0, retentionDays: 0 })
   workspaceOperation.error.value = ''; workspaceOperation.message.value = ''
   vi.mocked(api.isDesktop).mockReturnValue(true)
   vi.mocked(api.listProjects).mockResolvedValue([saved])
@@ -254,6 +255,50 @@ describe('M1 projects and materials', () => {
     expect(fullBackup.restoreFullBackup).toHaveBeenCalledWith(preview.manifestPath, 'D:/恢复目录')
     expect(!!document.querySelector('[role="alertdialog"]')).toBe(false)
     expect(wrapper.get('[data-sonner-toast][data-type=success]:not([data-removed=true])').text()).toContain('D:/恢复前.sqlite3')
+  })
+  it('reloads diagnostics after restoring a backup while an earlier diagnostics read is pending', async () => {
+    let resolveEarlier!: (value: maintenance.ModelCallPage) => void
+    vi.mocked(maintenance.modelCalls)
+      .mockReturnValueOnce(new Promise(resolve => { resolveEarlier = resolve }))
+      .mockResolvedValue({ rows: [diagnostic], total: 1, page: 1, pageSize: 20, runningCount: 0, retentionDays: 90 })
+    const { wrapper } = await render('/settings')
+    vi.mocked(api.chooseBackup).mockResolvedValueOnce('D:/restore.sqlite3')
+    vi.mocked(api.restoreBackup).mockResolvedValueOnce('D:/previous.sqlite3')
+    await button(wrapper, '选择备份恢复').trigger('click'); await flushPromises()
+    await button(wrapper, '确认恢复').trigger('click'); await flushPromises()
+    expect(api.restoreBackup).toHaveBeenCalledExactlyOnceWith('D:/restore.sqlite3')
+    resolveEarlier({ rows: [], total: 0, page: 1, pageSize: 20, runningCount: 0, retentionDays: 0 })
+    await flushPromises()
+    expect(maintenance.modelCalls).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('.diagnostics-count').text()).toContain('共 1 条')
+    expect(wrapper.get('#model-call-retention').text()).toBe('保留最近 90 天')
+    expect(wrapper.findAll('.model-diagnostics tbody tr')).toHaveLength(1)
+  })
+  it('blocks conflicting maintenance, navigation and closing until diagnostic cleanup settles', async () => {
+    vi.mocked(maintenance.modelCalls).mockResolvedValue({ rows: [diagnostic], total: 1, page: 1, pageSize: 20, runningCount: 0, retentionDays: 0 })
+    let finishCleanup!: (count: number) => void
+    vi.mocked(maintenance.clearModelCalls).mockReturnValueOnce(new Promise(resolve => { finishCleanup = resolve }))
+    const { wrapper, router } = await render('/settings')
+    await button(wrapper, '清除记录').trigger('click'); await flushPromises()
+    await button(wrapper, '确认清除').trigger('click'); await flushPromises()
+    expect(maintenance.clearModelCalls).toHaveBeenCalledTimes(1)
+    for (const label of ['创建完整备份', '选择工作目录', '扫描占用']) {
+      expect(button(wrapper, label).attributes('disabled')).toBeDefined()
+    }
+    await router.push('/projects'); await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/settings')
+    const protectedClose = new globalThis.Event('beforeunload', { cancelable: true })
+    globalThis.dispatchEvent(protectedClose)
+    expect(protectedClose.defaultPrevented).toBe(true)
+    vi.mocked(maintenance.modelCalls).mockResolvedValueOnce({ rows: [], total: 0, page: 1, pageSize: 20, runningCount: 0, retentionDays: 0 })
+    finishCleanup(1); await flushPromises()
+    expect(wrapper.text()).toContain('已清除 1 条')
+    expect(button(wrapper, '创建完整备份').attributes('disabled')).toBeUndefined()
+    const finishedClose = new globalThis.Event('beforeunload', { cancelable: true })
+    globalThis.dispatchEvent(finishedClose)
+    expect(finishedClose.defaultPrevented).toBe(false)
+    await router.push('/projects'); await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/projects')
   })
   it('creates a full backup without videos by default and supports opting in', async () => {
     vi.mocked(api.chooseDirectory).mockResolvedValue('D:/备份')

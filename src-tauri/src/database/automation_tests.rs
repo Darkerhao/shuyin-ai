@@ -899,6 +899,7 @@ fn automation_v21_upgrade_preserves_post_audio_writing_and_publish_markers() {
     database.with_connection(|connection| {
         super::migrate(connection)?;
         connection.execute_batch("ALTER TABLE automation_runs DROP COLUMN duration_task_id; ALTER TABLE automation_runs DROP COLUMN content_check_task_id; ALTER TABLE automation_runs DROP COLUMN widescreen_task_id; ALTER TABLE automation_runs DROP COLUMN widescreen_cover_id; ALTER TABLE automation_runs DROP COLUMN render_plan_sha256;").map_err(|e|e.to_string())?;
+        freeze_model_call_index(connection);
         connection.execute("UPDATE automation_runs SET writing_task_id=?1,input_json=json_remove(input_json,'$.workflowVersion'),status='awaiting_publish',publish_started=1,publish_handed_off=1",[run.writing_task_id.as_deref().unwrap()]).map_err(|e|e.to_string())?;
         connection.pragma_update(None,"user_version",21).map_err(|e|e.to_string())
     }).unwrap();
@@ -1248,7 +1249,7 @@ fn automation_v19_upgrade_keeps_previous_data_and_manual_defaults() {
                 connection
                     .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                     .unwrap(),
-                23
+                MIGRATIONS.len() as u32
             );
             assert_eq!(
                 connection
@@ -1272,6 +1273,10 @@ fn automation_v19_upgrade_keeps_previous_data_and_manual_defaults() {
         .unwrap();
 }
 
+fn freeze_model_call_index(connection: &Connection) {
+    connection.execute_batch("DROP INDEX model_calls_recent; CREATE INDEX model_calls_recent ON model_calls(started_at DESC);").unwrap();
+}
+
 fn freeze_v20_schema(database: &Database, missing_markers: bool) {
     database
         .with_connection(|connection| {
@@ -1289,6 +1294,7 @@ fn freeze_v20_schema(database: &Database, missing_markers: bool) {
                 tx.execute_batch("UPDATE automation_runs SET publish_started=(SELECT publish_started FROM automation_previous WHERE id=automation_runs.id),publish_handed_off=(SELECT publish_handed_off FROM automation_previous WHERE id=automation_runs.id);").unwrap();
             }
             tx.execute_batch("DROP TABLE automation_previous; PRAGMA user_version=20;").unwrap();
+            freeze_model_call_index(&tx);
             tx.commit().unwrap();
             Ok(())
         })
@@ -1887,6 +1893,7 @@ fn automation_v23_upgrades_old_authorization_and_restores_exact_new_artifacts() 
     let audio = db.start_automatic_audio(&run).unwrap();
     db.with_connection(|c| {
         c.execute_batch("ALTER TABLE automation_runs DROP COLUMN widescreen_task_id; ALTER TABLE automation_runs DROP COLUMN widescreen_cover_id; ALTER TABLE automation_runs DROP COLUMN render_plan_sha256; PRAGMA user_version=22;").map_err(|e|e.to_string())?;
+        freeze_model_call_index(c);
         c.execute("UPDATE automation_runs SET input_json=json_set(input_json,'$.workflowVersion',1),publish_started=1,publish_handed_off=1 WHERE id=?1",[&run.id]).map_err(|e|e.to_string())?;
         Ok(())
     }).unwrap();
