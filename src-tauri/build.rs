@@ -52,6 +52,8 @@ fn main() {
             "start_cover_generation",
             "execute_cover_generation",
             "list_model_providers",
+            "model_field_options",
+            "save_model_field_options",
             "save_model_provider",
             "delete_model_provider",
             "test_model_connection",

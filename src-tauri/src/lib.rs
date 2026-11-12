@@ -168,6 +168,8 @@ pub fn run() {
             cover_commands::start_cover_generation,
             cover_commands::execute_cover_generation,
             ai_commands::list_model_providers,
+            ai_commands::model_field_options,
+            ai_commands::save_model_field_options,
             ai_commands::save_model_provider,
             ai_commands::delete_model_provider,
             ai_commands::test_model_connection,

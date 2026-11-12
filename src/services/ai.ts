@@ -1,6 +1,9 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
 import type { GenerationTextPreview, GenerationInput, GenerationResult, ModelProvider, ProviderInput, SaveWritingInput, WritingKind, WritingVersion } from '../types/ai'
 export const listProviders = () => invoke<ModelProvider[]>('list_model_providers')
+export type ModelOptionField = 'baseUrl' | 'modelName'
+export const modelFieldOptions = (field: ModelOptionField) => invoke<string[]>('model_field_options', { field })
+export const saveModelFieldOptions = (field: ModelOptionField, values: string[]) => invoke<string[]>('save_model_field_options', { field, values })
 export const setAudioDuration = (projectId: string, seconds: number) => invoke<void>('set_audio_duration', { projectId, seconds })
 export const saveProvider = (id: string | null, input: ProviderInput, apiKey: string | null) => invoke<{ provider: ModelProvider; warning: string | null }>('save_model_provider', { id, input, apiKey })
 export const deleteProvider = (id: string) => invoke<void>('delete_model_provider', { id })

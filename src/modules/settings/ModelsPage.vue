@@ -14,6 +14,7 @@ import { emptyProvider, type ModelProvider, type ProviderInput, type ReasoningEf
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
+import ModelOptionInput from './ModelOptionInput.vue'
 const reasoningEffortOptions: { value: ReasoningEffort; label: string }[] = [
   { value: 'none', label: '关闭 · none' },
   { value: 'minimal', label: '极低 · minimal' },
@@ -27,6 +28,8 @@ const desktop = isDesktop()
 const route = useRoute()
 const router = useRouter()
 const providers = ref<ModelProvider[]>([])
+const fieldOptions = ref<Record<api.ModelOptionField, string[]>>({ baseUrl: [], modelName: [] })
+const optionsBusy = ref(false)
 const id = ref<string | null>(null)
 const form = ref(emptyProvider())
 const apiKey = ref('')
@@ -55,10 +58,10 @@ const deleting = ref(false)
 const loaded = ref(false)
 let initialized = false
 const { busy, error, message, operation, run } = useOperation()
-const controlsDisabled = computed(() => !desktop || busy.value || !loaded.value)
-const canLeave = () => !busy.value && (!dirty.value || requestConfirmation('模型配置尚未保存，确定放弃修改？'))
+const controlsDisabled = computed(() => !desktop || busy.value || optionsBusy.value || !loaded.value)
+const canLeave = () => !busy.value && !optionsBusy.value && (!dirty.value || requestConfirmation('模型配置尚未保存，确定放弃修改？'))
 onBeforeRouteLeave(canLeave)
-function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value) event.preventDefault() }
+function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value || optionsBusy.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { apiKey.value = ''; globalThis.removeEventListener('beforeunload', beforeUnload) })
 async function edit(provider?: ModelProvider) {
@@ -77,11 +80,21 @@ function selectProvider(provider?: ModelProvider) {
   error.value = ''; message.value = ''
 }
 const load = () => run(async () => {
-  providers.value = await api.listProviders()
+  const [models, baseUrl, modelName] = await Promise.all([api.listProviders(), api.modelFieldOptions('baseUrl'), api.modelFieldOptions('modelName')])
+  providers.value = models
+  fieldOptions.value = { baseUrl, modelName }
   if (!initialized && !dirty.value) selectProvider(route.query.model === 'new' ? undefined : providers.value.find(p => p.id === route.query.model) ?? providers.value.find(p => p.modelKind === 'text' && p.isDefault) ?? providers.value[0])
   initialized = true
   loaded.value = true
 }, '正在读取模型列表…')
+async function saveOptions(field: api.ModelOptionField, values: string[]) {
+  optionsBusy.value = true
+  try {
+    const saved = await api.saveModelFieldOptions(field, values)
+    fieldOptions.value[field] = saved
+    return saved
+  } finally { optionsBusy.value = false }
+}
 const save = () => run(async () => {
   const input: ProviderInput = { ...form.value, reasoningEffort: form.value.modelKind === 'text' ? form.value.reasoningEffort : null }
   const result = await api.saveProvider(id.value, input, apiKey.value || null)
@@ -164,7 +177,7 @@ onMounted(() => { if (desktop) void load() })
         <div class="library-title">
           <h2>模型库 <span>{{ providers.length }}</span></h2>
           <Button
-            :disabled="!desktop || busy"
+            :disabled="!desktop || busy || optionsBusy"
             aria-label="刷新列表"
             title="刷新列表"
             variant="ghost"
@@ -362,14 +375,16 @@ onMounted(() => { if (desktop) void load() })
                       class="required-mark"
                       aria-hidden="true"
                     >*</span></label>
-                    <Input
+                    <ModelOptionInput
                       id="base-url"
                       v-model="form.baseUrl"
+                      label="服务地址"
+                      :options="fieldOptions.baseUrl"
+                      :save-options="values => saveOptions('baseUrl', values)"
+                      :disabled="controlsDisabled"
                       type="url"
-                      required
                       placeholder="https://api.example.com/v1"
-                      aria-describedby="base-url-help"
-                      spellcheck="false"
+                      described-by="base-url-help"
                     />
                     <p
                       id="base-url-help"
@@ -383,13 +398,15 @@ onMounted(() => { if (desktop) void load() })
                       class="required-mark"
                       aria-hidden="true"
                     >*</span></label>
-                    <Input
+                    <ModelOptionInput
                       id="model-name"
                       v-model="form.modelName"
-                      required
-                      maxlength="200"
+                      label="模型名称"
+                      :options="fieldOptions.modelName"
+                      :save-options="values => saveOptions('modelName', values)"
+                      :disabled="controlsDisabled"
+                      :maxlength="200"
                       placeholder="填写服务实际支持的模型 ID"
-                      spellcheck="false"
                     />
                   </div>
                   <div class="model-field field-full">

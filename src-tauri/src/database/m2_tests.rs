@@ -128,6 +128,111 @@ fn duration_is_saved_independently_and_generation_snapshots_the_selected_value()
 }
 
 #[test]
+fn model_options_import_once_and_survive_reopen_and_backup_without_changing_providers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("options.sqlite3");
+    let db = Database::open(path.clone());
+    let vault = Vault::default();
+    let provider = db
+        .save_provider(None, model(), Some("test-key"), &vault)
+        .unwrap()
+        .provider;
+    assert_eq!(
+        db.model_field_options(ModelOptionField::BaseUrl).unwrap(),
+        ["https://example.com/v1"]
+    );
+    assert_eq!(
+        db.model_field_options(ModelOptionField::ModelName).unwrap(),
+        ["test"]
+    );
+    assert_eq!(
+        db.save_model_field_options(
+            ModelOptionField::BaseUrl,
+            vec![
+                " https://other.example/v1/ ".into(),
+                "https://other.example/v1".into()
+            ]
+        )
+        .unwrap(),
+        ["https://other.example/v1"]
+    );
+    assert_eq!(
+        db.save_model_field_options(
+            ModelOptionField::ModelName,
+            vec![" new-model ".into(), "new-model".into()]
+        )
+        .unwrap(),
+        ["new-model"]
+    );
+    db.save_model_field_options(ModelOptionField::ModelName, vec![])
+        .unwrap();
+    let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    db.save_model_field_options(ModelOptionField::ModelName, vec!["temporary".into()])
+        .unwrap();
+    db.restore_backup(&backup).unwrap();
+    drop(db);
+    let db = Database::open(path);
+    assert!(db
+        .model_field_options(ModelOptionField::ModelName)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        db.model_field_options(ModelOptionField::BaseUrl).unwrap(),
+        ["https://other.example/v1"]
+    );
+    let unchanged = db.get_provider(&provider.id).unwrap();
+    assert_eq!(unchanged.input.base_url, provider.input.base_url);
+    assert_eq!(unchanged.input.model_name, provider.input.model_name);
+    assert_eq!(
+        vault
+            .get(unchanged.credential_ref.as_deref().unwrap())
+            .unwrap()
+            .as_deref(),
+        Some("test-key")
+    );
+}
+
+#[test]
+fn model_options_reject_invalid_values_without_overwriting_saved_choices() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("options.sqlite3"));
+    db.save_model_field_options(
+        ModelOptionField::BaseUrl,
+        vec!["https://example.com/v1".into()],
+    )
+    .unwrap();
+    db.save_model_field_options(ModelOptionField::ModelName, vec!["saved".into()])
+        .unwrap();
+    for value in [
+        "",
+        "invalid",
+        "http://example.com/v1",
+        "https://example.com/v1?key=secret",
+        "https://user:secret@example.com/v1",
+    ] {
+        assert!(db
+            .save_model_field_options(
+                ModelOptionField::BaseUrl,
+                vec!["https://valid.example/v1".into(), value.into()]
+            )
+            .is_err());
+        assert_eq!(
+            db.model_field_options(ModelOptionField::BaseUrl).unwrap(),
+            ["https://example.com/v1"]
+        );
+    }
+    for value in [" ".to_string(), "a".repeat(201)] {
+        assert!(db
+            .save_model_field_options(ModelOptionField::ModelName, vec![value])
+            .is_err());
+        assert_eq!(
+            db.model_field_options(ModelOptionField::ModelName).unwrap(),
+            ["saved"]
+        );
+    }
+}
+
+#[test]
 fn saving_project_details_preserves_duration_completed_after_the_form_was_loaded() {
     use crate::ai::audio::DurationRecommendation;
     let dir = tempfile::tempdir().unwrap();

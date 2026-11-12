@@ -14,6 +14,45 @@ use crate::{
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelOptionField {
+    BaseUrl,
+    ModelName,
+}
+impl ModelOptionField {
+    fn storage(self) -> (&'static str, &'static str) {
+        match self {
+            Self::BaseUrl => ("model_options_base_url", "base_url"),
+            Self::ModelName => ("model_options_model_name", "model_name"),
+        }
+    }
+    fn normalize(self, value: &str) -> Result<String, String> {
+        match self {
+            Self::BaseUrl => ai::normalize_base_url(value),
+            Self::ModelName => normalize_model_name(value),
+        }
+    }
+}
+
+fn write_model_options(c: &Connection, key: &str, values: &[String]) -> Result<(), String> {
+    let json = serde_json::to_string(values).map_err(|e| e.to_string())?;
+    c.execute(
+        "INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![key, json],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn normalize_model_name(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 200 {
+        return Err("模型 ID 不能为空且不能超过 200 字节。".into());
+    }
+    Ok(value.into())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderInput {
@@ -212,6 +251,50 @@ pub(super) fn append(
     version(c, &id)
 }
 impl Database {
+    pub fn model_field_options(&self, field: ModelOptionField) -> Result<Vec<String>, String> {
+        self.with_connection(|c| {
+            let (key, column) = field.storage();
+            let stored: Option<String> = c
+                .query_row("SELECT value FROM app_settings WHERE key=?1", [key], |r| {
+                    r.get(0)
+                })
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if let Some(json) = stored {
+                return serde_json::from_str(&json).map_err(|e| e.to_string());
+            }
+            // Import existing values once; removed suggestions must not reappear on reload.
+            let mut query = c
+                .prepare(&format!(
+                    "SELECT DISTINCT {column} FROM model_providers ORDER BY {column}"
+                ))
+                .map_err(|e| e.to_string())?;
+            let values = query
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| e.to_string())?;
+            write_model_options(c, key, &values)?;
+            Ok(values)
+        })
+    }
+
+    pub fn save_model_field_options(
+        &self,
+        field: ModelOptionField,
+        values: Vec<String>,
+    ) -> Result<Vec<String>, String> {
+        let mut normalized = Vec::new();
+        for value in values {
+            let value = field.normalize(&value)?;
+            if !normalized.contains(&value) {
+                normalized.push(value);
+            }
+        }
+        self.with_connection(|c| write_model_options(c, field.storage().0, &normalized))?;
+        Ok(normalized)
+    }
+
     pub fn list_providers(&self, vault: &impl Credentials) -> Result<Vec<ProviderConfig>, String> {
         self.with_connection(|c| {
             let mut q=c.prepare("SELECT id,name,base_url,model_name,is_default,is_enabled,credential_ref,model_kind,reasoning_effort FROM model_providers ORDER BY is_default DESC,name,id").map_err(|e|e.to_string())?;
@@ -233,12 +316,11 @@ impl Database {
     ) -> Result<SavedProvider, String> {
         input.base_url = ai::normalize_base_url(&input.base_url)?;
         input.name = input.name.trim().into();
-        input.model_name = input.model_name.trim().into();
+        input.model_name = normalize_model_name(&input.model_name)
+            .map_err(|_| "请填写服务名称、模型名；默认模型必须启用。")?;
         if !matches!(input.model_kind.as_str(), "text" | "image")
             || input.name.is_empty()
             || input.name.chars().count() > 100
-            || input.model_name.is_empty()
-            || input.model_name.len() > 200
             || (input.is_default && !input.is_enabled)
         {
             return Err("请填写服务名称、模型名；默认模型必须启用。".into());
