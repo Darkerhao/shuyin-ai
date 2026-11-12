@@ -1,5 +1,19 @@
 # 书引 AI 开发计划与验收标准
 
+## 模型认证与请求拒绝提示区分（2026-11-12）
+
+用户反馈连接测试通过、动画分镜仍显示“模型服务拒绝认证”。当前调用链中，连接测试和分镜共用`ai_commands::request`与`OpenAiCompatible`；测试只发送短文本，分镜另带绘图目录、字幕及上下文。已确认旧实现将HTTP 401/403合并为authentication，并隐藏状态码，无法据旧提示判断密钥是否有误，也不能反推服务商拒绝具体请求的原因。
+
+最小修复仅在统一HTTP错误处理处分开401/authentication与403/forbidden，两者显示实际状态码，403提示检查模型权限或服务访问限制。文本、图片与调用诊断共用分类，仍不记录响应正文或密钥、不增加重试；历史记录不回填。属于fix/patch，不修改版本或发布。
+
+修改文件：`src-tauri/src/ai.rs`、`src-tauri/src/ai/tests.rs`、`docs/TECHNICAL-DESIGN.md`、`docs/USER-GUIDE.md`及本开发记录。无数据库迁移、依赖或权限变更。
+
+实际验证：先运行`cargo test --manifest-path src-tauri/Cargo.toml --locked authentication_and_forbidden_responses_are_distinct_in_errors_and_diagnostics -- --nocapture`，新增回归因旧错误不含HTTP状态码而失败；修复后`cargo test --manifest-path src-tauri/Cargo.toml --locked ai::tests --quiet`为20通过、1项原有忽略。命令执行前加载`. ./.tools/env.ps1`。回归覆盖两种状态的提示与持久化分类、文本/图片403、响应脱敏及单次请求，无远程模型调用。
+
+最终`cargo fmt --manifest-path src-tauri/Cargo.toml --check`、`cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings`及`git diff --check`通过。首次fmt检查发现新增断言需合并排版，修正后通过。验收对应：两种状态可区分、403不误报认证、诊断保存正确分类、敏感响应不外泄均由本地Provider契约回归通过；真实服务拒绝原因与完整分镜生成未作为已通过事项。
+
+现场只读观察：用户自行切换为“万川智能 · gpt-6.1-sol”并续作后，同一任务从截图16镜增加到20镜，说明新模型已成功接续部分批次；不代表全部分镜或成片完成，也不能证明原服务的拒绝原因。用户按Esc后停止客户端操作。未替换正在运行的0.62.0安装版，未执行安装包或完整桌面验收；下一步使用含修复的新版本复查，若仍失败，依据明确状态码联系对应服务商。
+
 ## 模型地址与 Model ID 复用选项（2026-11-12）
 
 模型设置中的服务地址与模型名称改为可筛选下拉输入。输入后回车保存候选，候选项可编辑或删除；选择候选只带入当前表单，模型配置继续由原「保存模型」提交。候选项分字段存入既有`app_settings`，首次读取带入现有模型值，空列表和删除结果持续保留。实现复用现有Reka UI Popover、Tauri命令权限和模型地址校验，无新依赖、SQL迁移、版本或发布操作。属于兼容功能增强`feat`/minor。

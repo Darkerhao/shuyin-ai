@@ -157,6 +157,7 @@ async fn image_contract_uses_portrait_size_for_a_portrait_cover() {
 async fn image_errors_timeout_and_unusable_content_never_return_an_asset() {
     for (status, code) in [
         (401, "authentication"),
+        (403, "forbidden"),
         (429, "rate_limit"),
         (302, "redirect"),
         (503, "http"),
@@ -348,6 +349,7 @@ async fn unsupported_reasoning_effort_returns_the_error_without_retrying() {
 async fn provider_errors_are_sanitized_and_redirects_are_rejected() {
     for (status, code) in [
         (401, "authentication"),
+        (403, "forbidden"),
         (429, "rate_limit"),
         (503, "http"),
         (302, "redirect"),
@@ -369,6 +371,37 @@ async fn provider_errors_are_sanitized_and_redirects_are_rejected() {
         h.join().unwrap();
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn authentication_and_forbidden_responses_are_distinct_in_errors_and_diagnostics() {
+    let (_dir, db, input) = crate::database::video::tests::fixture();
+    let job = db.create_video_job(input).unwrap();
+    for (status, code) in [(401, "authentication"), (403, "forbidden")] {
+        let (url, handle) = server(status, "PRIVATE_BODY contract-only-secret", Duration::ZERO);
+        let error = OpenAiCompatible::new(TIMEOUT, &url)
+            .unwrap()
+            .observed(&db, Some(&job.id), "storyboard")
+            .generate(request(url))
+            .await
+            .unwrap_err();
+        let received = handle.join().unwrap();
+        assert_eq!(received.matches("POST /v1/chat/completions").count(), 1);
+        assert_eq!(error.code, code, "HTTP {status}");
+        assert!(error.message.contains(&format!("HTTP {status}")));
+        if status == 403 {
+            assert!(!error.message.contains("认证"));
+            assert!(error.message.contains("连接测试"));
+        }
+        let calls = serde_json::to_value(db.list_model_calls(1, 20).unwrap().rows).unwrap();
+        assert!(calls.as_array().unwrap().iter().any(|call| {
+            call["stage"] == "storyboard" && call["status"] == "failed" && call["errorCode"] == code
+        }));
+        let output = format!("{}{}", serde_json::to_string(&error).unwrap(), calls);
+        assert!(!output.contains("contract-only-secret"));
+        assert!(!output.contains("PRIVATE_BODY"));
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_timeouts_are_reported_as_timeouts_without_retrying_or_exposing_secrets() {
     for status in [524, 504] {
