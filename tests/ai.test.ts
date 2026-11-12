@@ -19,7 +19,7 @@ vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn(
 import { emptyProject, type Asset } from '../src/types/project'
 import { emptyProvider, emptyPublishing, type ModelProvider, type WritingVersion } from '../src/types/ai'
 import type { AudioJob, AudioJobStatus, AudioJobView } from '../src/types/audio'
-vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), setAudioDuration: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
+vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), modelFieldOptions: vi.fn(), saveModelFieldOptions: vi.fn(), setAudioDuration: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/audio', () => ({ getAudioJobView: vi.fn(), startAudioJob: vi.fn(), controlAudioJob: vi.fn() }))
 vi.mock('../src/services/audioWaveform', () => ({ loadWaveform: vi.fn().mockResolvedValue([.2, .6, .8, .1]) }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn(), mediaSource: vi.fn() }))
@@ -73,6 +73,8 @@ beforeEach(() => {
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), audioDurationSource: 'manual', id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
   vi.mocked(api.setAudioDuration).mockResolvedValue(undefined)
   vi.mocked(api.listProviders).mockResolvedValue([provider])
+  vi.mocked(api.modelFieldOptions).mockImplementation(async field => [provider[field]])
+  vi.mocked(api.saveModelFieldOptions).mockImplementation(async (_field, values) => [...new Set(values.map(value => value.trim()))])
   vi.mocked(api.listVersions).mockImplementation(async (_id, kind) => kind === 'publishing' ? [initial] : [])
   vi.mocked(api.startGeneration).mockResolvedValue('t1')
   vi.mocked(projects.listAssets).mockResolvedValue([])
@@ -1142,6 +1144,35 @@ describe('audio automation', () => {
 })
 
 describe('model configuration', () => {
+  it('saves dropdown entries with Enter independently of model configuration and restores them on return', async () => {
+    const { wrapper, router } = await render('/settings/models')
+    await wrapper.get('#base-url').setValue('https://new.example.com/v1')
+    await wrapper.get('#base-url').trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(api.saveModelFieldOptions).toHaveBeenLastCalledWith('baseUrl', ['https://new.example.com/v1', provider.baseUrl])
+    await wrapper.get('#model-name').setValue('new-model')
+    await wrapper.get('#model-name').trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(api.saveModelFieldOptions).toHaveBeenLastCalledWith('modelName', ['new-model', provider.modelName])
+    expect(api.saveProvider).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('有修改尚未保存')
+    vi.mocked(api.modelFieldOptions).mockImplementation(async field => field === 'modelName' ? ['new-model', provider.modelName] : [provider.baseUrl])
+    const leave = router.push('/projects'); await flushPromises(); await answerConfirmation(true); await leave
+    await router.push('/settings/models'); await flushPromises()
+    await wrapper.get('[aria-label="展开模型名称选项"]').trigger('click'); await flushPromises()
+    const choice = document.querySelector<HTMLButtonElement>('[aria-label="选择 new-model"]')!
+    expect(choice).not.toBeNull()
+    choice.click(); await flushPromises()
+    expect(wrapper.get('#model-name').element).toHaveProperty('value', 'new-model')
+    expect(api.saveProvider).not.toHaveBeenCalled()
+  })
+  it('keeps model controls disabled when saved options fail to load', async () => {
+    vi.mocked(api.modelFieldOptions).mockRejectedValueOnce('选项暂时无法读取')
+    const { wrapper } = await render('/settings/models')
+    expect(wrapper.get('#base-url').element.matches(':disabled')).toBe(true)
+    expect(wrapper.get('#model-name').element.matches(':disabled')).toBe(true)
+    expect(button(wrapper, '保存模型').element.matches(':disabled')).toBe(true)
+    await button(wrapper, '重新读取').trigger('click'); await flushPromises()
+    expect(wrapper.get('#base-url').element.matches(':disabled')).toBe(false)
+  })
   it('filters models by name or ID without changing the current unsaved editor', async () => {
     vi.mocked(api.listProviders).mockResolvedValue([provider, { ...provider, id: 'image-1', name: '封面绘图', modelName: 'IMAGE-Pro', modelKind: 'image' }])
     const { wrapper } = await render('/settings/models')

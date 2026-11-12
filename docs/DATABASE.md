@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 模型地址与 Model ID 复用选项（2026-11-12，仍为v24）
+
+无表、列或迁移变更。复用`app_settings`保存两组普通设置：`model_options_base_url`与`model_options_model_name`，值为JSON字符串数组，分别对应服务地址和模型名称候选。候选增删改只更新上述设置，不修改`model_providers`、已有模型凭据或历史创作。
+
+设置键首次不存在时，读取已保存`model_providers`中对应字段的非重复值并写回；之后即使候选项被删空，也保存空数组，不会从模型表重新生成。地址写入复用模型配置的规范化及安全校验，模型名称按现有200字节限制校验。两组设置随数据库备份、恢复和应用重启保留，旧schema24数据库无需迁移。
+
 ## 模型调用分页与保留设置（2026-11-11，v24）
 
 `0024_model_call_pagination.sql`仅将`model_calls_recent`替换为`(started_at DESC,id DESC)`联合索引，匹配分页排序；不新增调用表、不修改旧调用或业务数据。保留设置复用`app_settings`，键为`model_call_retention_days`，值为0/7/30/90的数字字符串；缺省或0表示全部保留。调用和设置均沿用数据库及完整备份恢复。

@@ -765,6 +765,14 @@ Tauri 通过三个平台配置自动选择 NSIS、APP/DMG、DEB/RPM/AppImage，`
 - 基础备份使用 SQLite `VACUUM INTO` 创建唯一新文件，恢复使用现有 rusqlite 的 `backup` feature；未新增依赖包。备份不包括外部媒体文件。恢复先核验版本、完整性、schema 和外键，再自动备份当前数据库，最后使用 SQLite backup 原子替换数据库内容。
 - M1 备份恢复只接受 schema v2；M0 数据通过正常启动迁移升级。目录重定位不自动迁移文件；媒体时长、分辨率、校验和提取不在本里程碑。
 
+## 模型地址与 Model ID 复用选项（2026-11-12）
+
+`/settings/models` 的服务地址与模型名称复用同一个`ModelOptionInput`，基于项目现有 Reka UI Popover 提供键盘可用的候选、编辑和删除操作。主输入保留原`baseUrl`/`modelName`数据绑定；回车只通过`model_field_options`和`save_model_field_options`维护候选，选中候选也不调用`save_model_provider`。正式请求仍只读取用户保存后的`model_providers`。
+
+候选分两组存放在既有`app_settings`，键为`model_options_base_url`与`model_options_model_name`，值为去重后的JSON字符串数组。某个键首次不存在时才从`model_providers`导入现有值并立即写回，因此用户显式删除的空列表不会被重新导入。地址保存前复用`ai::normalize_base_url`，模型名称去首尾空白并按现有200字节上限校验；写入失败不改前端原列表或表单输入。没有表结构、迁移、依赖或Tauri网络权限变更，列表随数据库备份和恢复保留。
+
+无障碍交互采用`role="combobox"`控制`aria-haspopup="dialog"`，下拉按钮、选择、编辑、删除均有可访问名称；输入法仍处于组合态时忽略回车确认。成功或失败反馈紧邻字段显示，下拉关闭后焦点返回主输入。深浅主题复用现有语义颜色。
+
 ## M2 实际实现（2026-10-23）
 
 - 页面：`/settings/models` 模型配置与测试，`/projects/:id/writing` 创作。业务组件只依赖 `services/ai.ts` 和 `types/ai.ts`，没有供应商请求、密钥读取或 SQL。

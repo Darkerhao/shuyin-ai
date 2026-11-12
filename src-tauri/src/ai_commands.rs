@@ -8,8 +8,8 @@ use crate::{
     credentials::{Credentials, SystemCredentials},
     database::{
         ai::{
-            AiTask, GenerationInput, GenerationResult, ProviderConfig, ProviderInput,
-            SaveWritingInput, SavedProvider, WritingVersion,
+            AiTask, GenerationInput, GenerationResult, ModelOptionField, ProviderConfig,
+            ProviderInput, SaveWritingInput, SavedProvider, WritingVersion,
         },
         Database,
     },
@@ -23,6 +23,23 @@ pub fn set_audio_duration(
     seconds: i64,
 ) -> Result<(), String> {
     database.set_audio_duration(&project_id, seconds)
+}
+
+#[tauri::command]
+pub fn model_field_options(
+    database: State<'_, Database>,
+    field: ModelOptionField,
+) -> Result<Vec<String>, String> {
+    database.model_field_options(field)
+}
+
+#[tauri::command]
+pub fn save_model_field_options(
+    database: State<'_, Database>,
+    field: ModelOptionField,
+    values: Vec<String>,
+) -> Result<Vec<String>, String> {
+    database.save_model_field_options(field, values)
 }
 
 #[tauri::command]
