@@ -311,9 +311,13 @@ impl OpenAiCompatible<'_> {
         if !response.status().is_success() {
             // Never surface provider response bodies/headers: some gateways echo secrets.
             return Err(match status {
-                401 | 403 => AiError::new(
+                401 => AiError::new(
                     "authentication",
-                    "模型服务拒绝认证，请检查 API Key 和模型权限。",
+                    "模型服务认证失败（HTTP 401），请检查当前服务的 API Key 是否有效。",
+                ),
+                403 => AiError::new(
+                    "forbidden",
+                    "模型服务拒绝本次请求（HTTP 403）。请检查模型权限或联系服务商排查访问限制；连接测试成功不代表生成请求一定获准。",
                 ),
                 429 => AiError::new("rate_limit", "模型服务限流或额度不足，请稍后重试。"),
                 504 | 524 => AiError::new(
