@@ -193,19 +193,28 @@ test('long prompts round-trip exactly and over-limit prompts are not truncated',
   assert.equal(document.querySelector('#short').value, '')
 })
 
-test('pastes a complete chapter into the replacement Chinese text dialog', async () => {
-  const { core, document } = page('<textarea id="prompt" aria-label="Audio instructions">保留音频指导</textarea><button id="add">添加来源</button><div id="portal"></div>')
+test('pastes a complete chapter after the Chinese Insert button becomes enabled', async (t) => {
+  const { core, document, window } = page('<textarea id="prompt" aria-label="Audio instructions">保留音频指导</textarea><button id="add">添加来源</button><div id="portal"></div>')
+  t.after(() => window.close())
   const text = `《测试书》·第三章\n\n${'章节原文保持完整。\n'.repeat(900)}末尾不丢失。`
   let inserted = ''
+  let insertClicks = 0
   document.querySelector('#add').addEventListener('click', () => {
     document.querySelector('#portal').innerHTML = '<section role="dialog"><button id="copied">复制的文字</button></section>'
     document.querySelector('#copied').addEventListener('click', () => {
-      document.querySelector('#portal').innerHTML = '<section role="dialog"><h2>粘贴复制的文字</h2><textarea placeholder="在此处粘贴文字"></textarea><button id="insert">插入</button></section>'
-      document.querySelector('#insert').addEventListener('click', () => { inserted = document.querySelector('#portal textarea').value })
+      document.querySelector('#portal').innerHTML = '<section role="dialog"><h2>粘贴复制的文字</h2><textarea placeholder="在此处粘贴文字"></textarea><button id="insert" disabled>插入</button></section>'
+      document.querySelector('#portal textarea').addEventListener('input', () => {
+        window.setTimeout(() => { document.querySelector('#insert').disabled = false }, 0)
+      })
+      document.querySelector('#insert').addEventListener('click', () => {
+        insertClicks += 1
+        inserted = document.querySelector('#portal textarea').value
+      })
     })
   })
   const result = await core.runStep(textJob({ source: { kind: 'text', text } }))
-  assert.equal(result.kind, 'source_submitted')
+  assert.equal(result.kind, 'source_submitted', JSON.stringify(result))
+  assert.equal(insertClicks, 1)
   assert.equal(inserted, text)
   assert.equal(document.querySelector('#prompt').value, '保留音频指导')
 })
@@ -219,6 +228,67 @@ test('a text source never uses an Insert button outside the current source dialo
   assert.equal(unrelatedClicks, 0)
   assert.equal(result.kind, 'page_error')
   assert.equal(result.code, 'text_source_insert_missing')
+})
+
+test('a text Insert button that stays disabled times out without losing the source', async (t) => {
+  const { core, document, window } = page('<section role="dialog"><button id="copied">复制的文字</button><textarea placeholder="在此处粘贴文字" hidden></textarea><button id="insert" disabled>插入</button></section>')
+  t.after(() => window.close())
+  let insertClicks = 0
+  document.querySelector('#copied').addEventListener('click', () => { document.querySelector('textarea').hidden = false })
+  document.querySelector('#insert').addEventListener('click', () => { insertClicks += 1 })
+  const job = textJob()
+  const result = await core.runStep(job)
+  assert.equal(result.kind, 'page_error')
+  assert.equal(result.code, 'text_source_insert_missing')
+  assert.match(result.message, /插入.*未就绪/)
+  assert.equal(insertClicks, 0)
+  assert.equal(document.querySelector('#insert').disabled, true)
+  assert.equal(document.querySelector('textarea').value, job.source.text)
+})
+
+test('switching source dialogs while waiting never submits a different source', async (t) => {
+  for (const replaceDialog of [false, true]) {
+    await t.test(replaceDialog ? 'replacement dialog' : 'same dialog with a different input', async (t) => {
+      const { core, document, window } = page('<section role="dialog"><button id="copied">复制的文字</button><textarea placeholder="在此处粘贴文字" hidden></textarea><button id="insert" disabled>插入</button></section>')
+      t.after(() => window.close())
+      const input = document.querySelector('textarea')
+      let unrelatedClicks = 0
+      document.querySelector('#copied').addEventListener('click', () => { input.hidden = false })
+      input.addEventListener('input', () => {
+        window.setTimeout(() => {
+          const otherSource = '<input aria-label="网站网址" value="https://example.com"><button id="other-insert">插入</button>'
+          const dialog = document.querySelector('[role="dialog"]')
+          if (replaceDialog) dialog.outerHTML = `<section role="dialog">${otherSource}</section>`
+          else dialog.innerHTML = otherSource
+          document.querySelector('#other-insert').addEventListener('click', () => { unrelatedClicks += 1 })
+        }, 0)
+      })
+      const result = await core.runStep(textJob())
+      assert.equal(unrelatedClicks, 0, JSON.stringify(result))
+      assert.equal(result.kind, 'page_error')
+      assert.equal(result.code, 'text_source_input_changed')
+    })
+  }
+})
+
+test('pausing while the text Insert button becomes enabled prevents submission', async (t) => {
+  const { core, document, window } = page('<section role="dialog"><button id="copied">复制的文字</button><textarea placeholder="在此处粘贴文字" hidden></textarea><button id="insert" disabled>插入</button></section>')
+  t.after(() => window.close())
+  let insertClicks = 0
+  document.querySelector('#copied').addEventListener('click', () => { document.querySelector('textarea').hidden = false })
+  document.querySelector('textarea').addEventListener('input', () => {
+    window.setTimeout(() => {
+      window.__shuyinAudioRun = 'paused'
+      document.querySelector('#insert').disabled = false
+    }, 0)
+  })
+  document.querySelector('#insert').addEventListener('click', () => { insertClicks += 1 })
+  const job = textJob()
+  const result = await core.runStep(job)
+  assert.equal(result.kind, 'page_error')
+  assert.equal(result.code, 'stale_run')
+  assert.equal(insertClicks, 0)
+  assert.equal(document.querySelector('textarea').value, job.source.text)
 })
 
 test('adds a text source through the copied-text dialog without changing the prompt', async () => {

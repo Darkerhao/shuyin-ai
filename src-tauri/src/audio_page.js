@@ -379,10 +379,15 @@
       return current === document ? null : findEditable(UI.pastedText, current)
     }, 3000)
     if (!input) throw new UiError('text_source_input_missing', '未找到资料文本输入框。')
+    const textDialog = input.closest('[role="dialog"], dialog')
     writeAndVerify(input, job.source.text)
-    const current = dialogScope()
-    const insert = current === document ? null : findInteractive(UI.insert, current)
-    if (!insert) throw new UiError('text_source_insert_missing', '未找到插入资料文本按钮。')
+    const insert = await waitFor(() => {
+      if (dialogScope() !== textDialog || !textDialog.contains(input) || !visible(input)) {
+        throw new UiError('text_source_input_changed', '资料文本弹窗已变化，已停止插入；请查看网站后继续跟进。')
+      }
+      return findInteractive(UI.insert, textDialog)
+    }, 3000)
+    if (!insert) throw new UiError('text_source_insert_missing', '资料文本弹窗的“插入”按钮未就绪，请查看网站后继续跟进。')
     click(insert, '插入资料')
   }
 
