@@ -40,7 +40,7 @@ impl Database {
             let snapshot = serde_json::to_string(&Snapshot { source: source(&job)?, input }).map_err(|e| e.to_string())?;
             if snapshot.len() > 4 * 1024 * 1024 { return Err("分镜编辑快照超过4MB。".into()); }
             let id = projects::new_id(c)?;
-            c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW})"), params![id,job.project_id,KIND,provider_id,provider.input.model_name,PROMPT_VERSION,snapshot]).map_err(|e| e.to_string())?;
+            c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at,chapter_id) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW},?8)"), params![id,job.project_id,KIND,provider_id,provider.input.model_name,PROMPT_VERSION,snapshot,job.chapter_id]).map_err(|e| e.to_string())?;
             Ok(id)
         })
     }
@@ -108,7 +108,35 @@ mod tests {
     use crate::video::revision::tests::{candidate, input};
 
     fn fixture() -> (tempfile::TempDir, Database, SceneRevisionInput) {
-        let (dir, db, start) = super::super::tests::fixture();
+        fixture_for(false)
+    }
+
+    fn fixture_for(chapter: bool) -> (tempfile::TempDir, Database, SceneRevisionInput) {
+        let (dir, db, mut start) = super::super::tests::fixture();
+        if chapter {
+            let chapter = db
+                .save_chapter(
+                    &start.project_id,
+                    None,
+                    crate::database::chapters::ChapterInput {
+                        title: "本章精讲".into(),
+                        content: "本章字幕和分镜的来源".into(),
+                        target_duration_seconds: Some(600),
+                    },
+                )
+                .unwrap();
+            let audio = dir.path().join("chapter-audio.wav");
+            std::fs::write(&audio, b"chapter audio fixture").unwrap();
+            start.audio_asset_id = db
+                .link_asset(
+                    &start.project_id,
+                    audio.to_str().unwrap(),
+                    None,
+                    Some(&chapter.id),
+                )
+                .unwrap();
+            start.chapter_id = Some(chapter.id);
+        }
         let job = db.create_video_job(start).unwrap();
         let mut active = db
             .claim_video_job(&job.id, VideoWork::Prepare, None)
@@ -124,6 +152,30 @@ mod tests {
         db.end_video_job(&input.job_id, input.run_id, "awaiting_confirmation", "")
             .unwrap();
         (dir, db, input)
+    }
+
+    #[test]
+    fn chapter_review_scene_revision_preserves_scope_in_history_and_resume_entries() {
+        let (_dir, db, input) = fixture_for(true);
+        let job = db.video_job(&input.job_id).unwrap();
+        let task = db.start_video_scene_revision(input).unwrap();
+        let history = db
+            .list_ai_tasks(&job.project_id, job.chapter_id.as_deref())
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, task);
+        assert_eq!(history[0].chapter_id, job.chapter_id);
+        assert!(db.list_ai_tasks(&job.project_id, None).unwrap().is_empty());
+        let resume = db.workflow_snapshot().unwrap();
+        let running = resume
+            .running
+            .iter()
+            .find(|entry| entry.task_id == task)
+            .unwrap();
+        assert_eq!(running.chapter_id, job.chapter_id);
+        assert_eq!(running.kind, "video");
+        assert_eq!(running.stage, KIND);
+        assert!(running.title.contains("本章精讲"));
     }
 
     #[test]
@@ -157,7 +209,7 @@ mod tests {
             "保留"
         );
         let task = db
-            .list_ai_tasks(&db.video_job(&input.job_id).unwrap().project_id)
+            .list_ai_tasks(&db.video_job(&input.job_id).unwrap().project_id, None)
             .unwrap();
         assert_eq!(task[0].kind, KIND);
         assert_eq!(task[0].status, "succeeded");

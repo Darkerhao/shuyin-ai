@@ -1,4 +1,5 @@
 export interface PublishInput {
+  chapterId?: string | null
   writingVersionId: string | null
   projectId: string
   title: string
@@ -29,7 +30,7 @@ export const publishStatuses = { draft: '草稿', ready: '待发布', published:
 export interface PublishQueueItem extends PublishTask { projectTitle: string }
 export function publishInput(task: PublishInput): PublishInput {
   const { projectId, title, description, tags, videoAssetId, audioAssetId, landscapeCoverId, portraitCoverId, titleConfirmed, coversConfirmed } = task
-  return { projectId, title, description, tags, videoAssetId, audioAssetId, landscapeCoverId, portraitCoverId, titleConfirmed, coversConfirmed, allowDownload: task.allowDownload, scheduledAt: task.scheduledAt, writingVersionId: task.writingVersionId ?? null }
+  return { ...(task.chapterId ? { chapterId: task.chapterId } : {}), projectId, title, description, tags, videoAssetId, audioAssetId, landscapeCoverId, portraitCoverId, titleConfirmed, coversConfirmed, allowDownload: task.allowDownload, scheduledAt: task.scheduledAt, writingVersionId: task.writingVersionId ?? null }
 }
 
 export function publishScheduleError(scheduledAt: string | null, now = Date.now()): string {

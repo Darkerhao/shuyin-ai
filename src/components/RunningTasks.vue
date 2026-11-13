@@ -5,6 +5,7 @@ import { isDesktop } from '../services/projects'
 import { useWorkflow } from '../composables/useWorkflow'
 import { resumeLabel, resumeRoute } from '../services/workflow'
 import { generationJobs, isGenerating } from '../services/generation'
+import { chapterQuery } from '../types/chapter'
 import { useWindowCloseGuard } from '../composables/useWindowCloseGuard'
 import { requestConfirmation } from '../composables/useConfirmation'
 import AppIcon from './AppIcon.vue'
@@ -51,10 +52,10 @@ onBeforeUnmount(() => { globalThis.clearInterval(timer) })
       </li>
       <li
         v-for="job in jobs"
-        :key="`${job.projectId}:${job.kind}`"
+        :key="`${job.projectId}:${job.chapterId ?? 'book'}:${job.kind}`"
       >
         <RouterLink
-          :to="`/projects/${job.projectId}/${job.kind === 'cover' ? 'covers' : 'writing'}`"
+          :to="{ path: `/projects/${job.projectId}/${job.kind === 'cover' ? 'covers' : 'writing'}`, query: chapterQuery(job.chapterId ?? null) }"
           class="running-task-link"
           :data-status="isGenerating(job) ? 'running' : job.status === 'failed' ? 'failed' : 'done'"
         >

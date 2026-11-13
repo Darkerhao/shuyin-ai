@@ -15,7 +15,7 @@ import VideoSubtitleEditor from '../src/modules/video/VideoSubtitleEditor.vue'
 import * as drafts from '../src/services/drafts'
 vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
 vi.mock('../src/services/video', () => ({ originalCues: vi.fn(), settings: vi.fn(), saveSettings: vi.fn(), checkEnvironment: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), chooseRuntimePath: vi.fn(), chooseImage: vi.fn(), importImage: vi.fn(), readImage: vi.fn(), startIllustration: vi.fn(), executeIllustration: vi.fn() }))
-vi.mock('../src/services/projects', () => ({ isDesktop: () => true, getProject: vi.fn(), listAssets: vi.fn(), mediaSource: vi.fn(), openAsset: vi.fn(), openProjectDirectory: vi.fn() }))
+vi.mock('../src/services/projects', () => ({ isDesktop: () => true, getChapter: vi.fn(), listChapters: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), mediaSource: vi.fn(), openAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn() }))
 vi.mock('../src/services/audioWaveform', () => ({ loadWaveform: vi.fn().mockResolvedValue([.2, .6, .8, .1]) }))
 const job: VideoJob = { id: 'j1', projectId: 'p1', audioAssetId: 'a1', sourceSubtitleId: null, providerId: 'm1', status: 'awaiting_confirmation', stage: 'storyboard', runId: 1, plan: { title: '原书', audioSha256: 'hash', duration: 8, cues: [{ start: 0, end: 7, text: '原声字幕' }], scenes: [{ first: 0, last: 0, kind: 'opening', title: '观点', beats: [{ cue: 0, object: 'book', action: 'draw', label: '一本书' }] }] }, error: '', subtitleAssetId: 's1', videoAssetId: null, createdAt: '', updatedAt: '' }
@@ -437,7 +437,7 @@ it('makes a separate hand-drawn version from the completed task audio and saved 
   const wrapper = await render()
   const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版手绘'))!
   await remake.trigger('click'); await flushPromises()
-  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1')
+  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null)
   expect(api.savePlan).not.toHaveBeenCalled()
 })
 

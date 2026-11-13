@@ -36,6 +36,7 @@ export interface VideoProgress {
 }
 export interface VideoPreview { start: number; end: number; signature: string; scenes: number[] }
 export interface VideoJob {
+  chapterId?: string | null
   id: string; projectId: string; audioAssetId: string | null; sourceSubtitleId: string | null; providerId: string | null
   status: 'draft' | 'running' | 'awaiting_confirmation' | 'succeeded' | 'failed' | 'cancelled'
   stage: string; runId: number; plan: VideoPlan; error: string

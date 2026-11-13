@@ -11,6 +11,8 @@ use std::{path::Path, time::UNIX_EPOCH};
 pub struct Asset {
     pub id: String,
     pub project_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     pub asset_type: String,
     pub file_path: String,
     pub original_name: String,
@@ -82,8 +84,25 @@ pub(super) fn register_existing(
     path: &Path,
     expected_kind: Option<&str>,
     existing_id: Option<&str>,
+    chapter_id: Option<&str>,
 ) -> Result<String, String> {
     get(connection, project_id)?;
+    let scope = if let Some(id) = existing_id {
+        let owner: Option<String> = connection
+            .query_row(
+                "SELECT chapter_id FROM assets WHERE id=?1 AND project_id=?2",
+                params![id, project_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| "素材关联不存在。")?;
+        if chapter_id.is_some() && owner.as_deref() != chapter_id {
+            return Err("素材不属于本次章节。".into());
+        }
+        owner
+    } else {
+        chapter_id.map(str::to_owned)
+    };
+    super::chapters::require_scope(connection, project_id, scope.as_deref())?;
     let path = std::fs::canonicalize(path).map_err(|e| format!("素材文件不可用：{e}"))?;
     let kind = asset_type(&path)?;
     if expected_kind.is_some_and(|value| value != kind) {
@@ -126,8 +145,8 @@ pub(super) fn register_existing(
         new_id(connection)?
     };
     connection.execute(
-        &format!("INSERT INTO assets(id,project_id,asset_type,file_path,original_name,file_size,modified_at,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,{NOW}) ON CONFLICT(id) DO UPDATE SET file_path=excluded.file_path,original_name=excluded.original_name,file_size=excluded.file_size,modified_at=excluded.modified_at"),
-        params![id, project_id, kind, path.to_string_lossy().as_ref(), original_name, size, modified],
+        &format!("INSERT INTO assets(id,project_id,asset_type,file_path,original_name,file_size,modified_at,created_at,chapter_id) VALUES(?1,?2,?3,?4,?5,?6,?7,{NOW},?8) ON CONFLICT(id) DO UPDATE SET file_path=excluded.file_path,original_name=excluded.original_name,file_size=excluded.file_size,modified_at=excluded.modified_at"),
+        params![id, project_id, kind, path.to_string_lossy().as_ref(), original_name, size, modified,scope],
     ).map_err(|error| match error {
         rusqlite::Error::SqliteFailure(ref code, _) if code.code == rusqlite::ErrorCode::ConstraintViolation => "该项目已关联此文件。".to_owned(),
         _ => error.to_string(),
@@ -136,6 +155,20 @@ pub(super) fn register_existing(
 }
 
 impl Database {
+    pub fn media_asset_path(
+        &self,
+        project_id: &str,
+        asset_id: &str,
+    ) -> Result<std::path::PathBuf, String> {
+        let kind: String = self.with_connection(|connection| {
+            connection.query_row(
+                "SELECT asset_type FROM assets WHERE id=?1 AND project_id=?2 AND asset_type IN ('audio','video')",
+                params![asset_id, project_id], |row| row.get(0),
+            ).map_err(|_| "只能预览本书已登记的音频或视频。".into())
+        })?;
+        self.video_asset_path(project_id, asset_id, &kind)
+    }
+
     pub fn video_asset_metadata(
         &self,
         project: &str,
@@ -193,16 +226,21 @@ impl Database {
         Ok(())
     }
 
-    pub fn list_assets(&self, project_id: &str) -> Result<Vec<Asset>, String> {
+    pub fn list_assets(
+        &self,
+        project_id: &str,
+        chapter_id: Option<&str>,
+    ) -> Result<Vec<Asset>, String> {
         self.with_connection(|c| {
-            get(c,project_id)?;
-            let mut query = c.prepare("SELECT id,project_id,asset_type,file_path,original_name,file_size,modified_at,created_at
+            super::chapters::require_scope(c,project_id,chapter_id)?;
+            let mut query = c.prepare("SELECT id,project_id,asset_type,file_path,original_name,file_size,modified_at,created_at,chapter_id
                 FROM assets
-                WHERE project_id=?1
+                WHERE project_id=?1 AND (chapter_id IS ?2 OR (?2 IS NOT NULL AND chapter_id IS NULL AND asset_type IN ('image','document')))
                 ORDER BY created_at DESC,id").map_err(|e|e.to_string())?;
-            let rows = query.query_map([project_id], |r| Ok(Asset {
+            let rows = query.query_map(params![project_id,chapter_id], |r| Ok(Asset {
                 id: r.get(0)?,
                 project_id: r.get(1)?,
+                chapter_id: r.get(8)?,
                 asset_type: r.get(2)?,
                 file_path: r.get(3)?,
                 original_name: r.get(4)?,
@@ -236,6 +274,7 @@ impl Database {
         project_id: &str,
         path: &str,
         asset_id: Option<&str>,
+        chapter_id: Option<&str>,
     ) -> Result<String, String> {
         self.with_connection(|connection| {
             if let Some(id) = asset_id {
@@ -243,7 +282,7 @@ impl Database {
                     return Err("素材正在用于视频生成，请先停止任务再重新定位。".into());
                 }
             }
-            register_existing(connection, project_id, Path::new(path), None, asset_id)
+            register_existing(connection, project_id, Path::new(path), None, asset_id, chapter_id)
         })
     }
     pub fn unlink_asset(&self, id: &str) -> Result<(), String> {

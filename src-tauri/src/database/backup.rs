@@ -74,7 +74,7 @@ fn validate_backup(connection: &Connection) -> Result<(), String> {
     }
     Ok(())
 }
-fn backup_to(connection: &Connection, directory: &Path) -> Result<PathBuf, String> {
+pub(super) fn backup_to(connection: &Connection, directory: &Path) -> Result<PathBuf, String> {
     if !directory.is_dir() {
         return Err("备份目录不存在。".into());
     }

@@ -10,7 +10,7 @@ import type { ModelProvider } from '../../types/ai'
 import { visualCatalog, type VideoCue, type VideoScene, type VideoSceneImage } from '../../types/video'
 
 defineProps<{
-  projectId: string; sceneIndex: number; cues: VideoCue[]
+  projectId: string; chapterId?: string | null; sceneIndex: number; cues: VideoCue[]
   assets: Asset[]; providers: ModelProvider[]; disabled: boolean; imageDisabled: boolean
   revisionDisabled: boolean
   playing?: boolean; audioAvailable?: boolean
@@ -136,6 +136,7 @@ function setSceneImage(image: VideoSceneImage | undefined) {
     </div>
     <VideoImageEditor
       :project-id="projectId"
+      :chapter-id="chapterId"
       :scene-index="sceneIndex"
       :image="scene.image"
       :assets="assets"

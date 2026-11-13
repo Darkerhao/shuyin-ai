@@ -24,7 +24,13 @@ fn landscape_video() -> Vec<u8> {
 pub(super) fn project(db: &Database) -> Project {
     db.save_project(None,serde_json::from_value(serde_json::json!({"title":"中文书籍","author":"作者","publisher":"","isbn":"","description":"","sourceNotes":"原始资料","theme":"","targetAudience":"","contentStyle":"","targetDurationSeconds":600,"status":"draft"})).unwrap()).unwrap()
 }
-fn cover(db: &Database, id: &str, width: u32, height: u32) -> String {
+pub(super) fn scoped_cover(
+    db: &Database,
+    id: &str,
+    width: u32,
+    height: u32,
+    chapter: Option<&str>,
+) -> String {
     let config:CoverConfig = serde_json::from_value(serde_json::json!({"schemaVersion":1,"templateId":"classic","width":width,"height":height,"title":"中文标题","subtitle":"读书","brand":"甲子","fontFamily":"sans","titleSize":112,"subtitleSize":44,"align":"left","position":"center","backgroundColor":"#ffffff","textColor":"#24362f","accentColor":"#9a5938","backgroundAssetId":null,"overlayOpacity":0.45})).unwrap();
     let mut bytes = Vec::new();
     {
@@ -37,29 +43,42 @@ fn cover(db: &Database, id: &str, width: u32, height: u32) -> String {
             .write_image_data(&vec![180; (width * height * 3) as usize])
             .unwrap();
     }
-    db.save_cover_version(id, config, Some(&bytes)).unwrap().id
+    db.save_cover_version(id, config, Some(&bytes), chapter)
+        .unwrap()
+        .id
 }
 pub(super) fn input(db: &Database, project: &Project) -> PublishInput {
-    let path = Path::new(&project.workspace_path).join("中文 视频.mp4");
+    scoped_input(db, project, None)
+}
+pub(super) fn scoped_input(
+    db: &Database,
+    project: &Project,
+    chapter: Option<&str>,
+) -> PublishInput {
+    let path =
+        Path::new(&project.workspace_path).join(format!("{}中文 视频.mp4", chapter.unwrap_or("")));
     fs::write(&path, PORTRAIT_VIDEO).unwrap();
-    let audio = Path::new(&project.workspace_path).join("中文 音频.mp3");
+    let audio =
+        Path::new(&project.workspace_path).join(format!("{}中文 音频.mp3", chapter.unwrap_or("")));
     fs::write(&audio, b"original audio").unwrap();
     PublishInput {
+        chapter_id: chapter.map(str::to_owned),
+
         writing_version_id: None,
         project_id: project.id.clone(),
         title: "中文发布标题".into(),
         description: "第一行\n第二行：保留换行".into(),
         tags: "#读书 #中文".into(),
         video_asset_id: Some(
-            db.link_asset(&project.id, path.to_str().unwrap(), None)
+            db.link_asset(&project.id, path.to_str().unwrap(), None, chapter)
                 .unwrap(),
         ),
         audio_asset_id: Some(
-            db.link_asset(&project.id, audio.to_str().unwrap(), None)
+            db.link_asset(&project.id, audio.to_str().unwrap(), None, chapter)
                 .unwrap(),
         ),
-        landscape_cover_id: Some(cover(db, &project.id, 1440, 1080)),
-        portrait_cover_id: Some(cover(db, &project.id, 1080, 1440)),
+        landscape_cover_id: Some(scoped_cover(db, &project.id, 1440, 1080, chapter)),
+        portrait_cover_id: Some(scoped_cover(db, &project.id, 1080, 1440, chapter)),
         title_confirmed: true,
         covers_confirmed: true,
         allow_download: true,
@@ -112,7 +131,7 @@ fn publish_settings_persist_in_snapshots_packages_reopening_and_backup() {
         immediate
     );
     db.restore_backup(&backup).unwrap();
-    let restored = db.list_publish_tasks(&p.id).unwrap().remove(0);
+    let restored = db.list_publish_tasks(&p.id, None).unwrap().remove(0);
     assert_eq!(restored.input, i);
     assert_eq!(restored.status, "ready");
     assert!(restored.record.is_none());
@@ -137,7 +156,10 @@ fn publish_settings_reject_invalid_or_expired_times_without_overwriting_the_task
         i.title = "不应写入".into();
         i.scheduled_at = Some(value.into());
         assert!(db.save_publish_task(Some(&task.id), i).is_err(), "{value}");
-        assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].input, original);
+        assert_eq!(
+            db.list_publish_tasks(&p.id, None).unwrap()[0].input,
+            original
+        );
     }
     let mut scheduled = original;
     scheduled.scheduled_at = Some("2099-01-05T18:30:00+08:00".into());
@@ -166,7 +188,7 @@ fn publish_settings_reject_invalid_or_expired_times_without_overwriting_the_task
         .unwrap()
         .replace("2099-01-05 18:30", "2020-01-01 12:00");
     fs::write(package.join("publish-settings.txt"), settings).unwrap();
-    let expired = db.list_publish_tasks(&p.id).unwrap().remove(0);
+    let expired = db.list_publish_tasks(&p.id, None).unwrap().remove(0);
     assert_eq!(expired.status, "ready");
     assert!(db.publish_snapshot(&task.id).is_err());
     assert!(db.prepare_publish_task(&task.id).is_err());
@@ -203,7 +225,10 @@ fn publish_settings_defaults_keep_existing_packages_valid() {
     let snapshot = db.publish_snapshot(&task.id).unwrap();
     assert!(snapshot.input.allow_download);
     assert!(snapshot.input.scheduled_at.is_none());
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "ready");
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "ready"
+    );
 }
 
 #[test]
@@ -224,7 +249,7 @@ fn publish_settings_v18_migrates_old_backups_without_rewriting_history() {
         if restore {
             db.restore_backup(old.to_str().unwrap()).unwrap();
         }
-        let task = db.list_publish_tasks("old").unwrap().remove(0);
+        let task = db.list_publish_tasks("old", None).unwrap().remove(0);
         assert!(task.input.allow_download);
         assert!(task.input.scheduled_at.is_none());
         assert_eq!(task.input.description, "手工内容");
@@ -374,7 +399,10 @@ fn upload_snapshot_uses_selected_task_and_package_covers() {
 
     fs::write(pack.join("cover-landscape.png"), b"damaged").unwrap();
     assert!(db.publish_snapshot(&task.id).is_err());
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "draft"
+    );
     db.prepare_publish_task(&task.id).unwrap();
     db.record_publish_success(&task.id, record()).unwrap();
     assert!(db.publish_snapshot(&task.id).is_err());
@@ -391,7 +419,10 @@ fn incomplete_and_foreign_materials_cannot_be_ready() {
     i.covers_confirmed = false;
     let t = db.save_publish_task(None, i.clone()).unwrap();
     assert!(db.prepare_publish_task(&t.id).unwrap_err().contains("确认"));
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "draft"
+    );
     i.title_confirmed = true;
     i.covers_confirmed = true;
     let other = project(&db);
@@ -404,7 +435,7 @@ fn incomplete_and_foreign_materials_cannot_be_ready() {
     i.title = "长".repeat(31);
     assert!(db.save_publish_task(Some(&t.id), i).is_err());
     assert_eq!(
-        db.list_publish_tasks(&p.id).unwrap()[0].input.title,
+        db.list_publish_tasks(&p.id, None).unwrap()[0].input.title,
         t.input.title
     );
 }
@@ -425,7 +456,10 @@ fn audio_and_final_video_checks_are_required() {
     let bad = Path::new(&p.workspace_path).join("不是成片.mp4");
     fs::write(&bad, b"not a video").unwrap();
     let mut bad_video = original;
-    bad_video.video_asset_id = Some(db.link_asset(&p.id, bad.to_str().unwrap(), None).unwrap());
+    bad_video.video_asset_id = Some(
+        db.link_asset(&p.id, bad.to_str().unwrap(), None, None)
+            .unwrap(),
+    );
     let task = db.save_publish_task(None, bad_video).unwrap();
     assert!(db
         .prepare_publish_task(&task.id)
@@ -445,7 +479,7 @@ fn non_portrait_final_video_with_audio_can_be_ready() {
     assert_eq!((metadata.width, metadata.height), (1920, 1080));
     assert!(metadata.has_audio);
     publish.video_asset_id = Some(
-        db.link_asset(&p.id, landscape.to_str().unwrap(), None)
+        db.link_asset(&p.id, landscape.to_str().unwrap(), None, None)
             .unwrap(),
     );
     let task = db.save_publish_task(None, publish).unwrap();
@@ -501,7 +535,10 @@ fn package_is_complete_unique_and_preserves_sources_and_unicode() {
     assert!(pack.is_dir());
     drop(db);
     let db = Database::open(dbpath);
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "ready");
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "ready"
+    );
     db.delete_project(&p.id).unwrap();
     assert!(pack.is_dir());
     assert_eq!(fs::read(video).unwrap(), PORTRAIT_VIDEO);
@@ -519,11 +556,22 @@ fn missing_relocated_changed_or_unlinked_materials_invalidate_ready_packages() {
     let source = Path::new(&p.workspace_path).join("中文 视频.mp4");
     let moved = Path::new(&p.workspace_path).join("移动.mp4");
     fs::rename(&source, &moved).unwrap();
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "draft"
+    );
     assert!(db.prepare_publish_task(&task.id).is_err());
-    db.link_asset(&p.id, moved.to_str().unwrap(), i.video_asset_id.as_deref())
-        .unwrap();
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
+    db.link_asset(
+        &p.id,
+        moved.to_str().unwrap(),
+        i.video_asset_id.as_deref(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "draft"
+    );
     let ready = db.prepare_publish_task(&task.id).unwrap();
     assert_eq!(ready.status, "ready");
     assert!(fs::read_to_string(
@@ -536,10 +584,13 @@ fn missing_relocated_changed_or_unlinked_materials_invalidate_ready_packages() {
         "外部编辑",
     )
     .unwrap();
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "draft"
+    );
     db.prepare_publish_task(&task.id).unwrap();
     db.unlink_asset(i.video_asset_id.as_ref().unwrap()).unwrap();
-    let current = db.list_publish_tasks(&p.id).unwrap().remove(0);
+    let current = db.list_publish_tasks(&p.id, None).unwrap().remove(0);
     assert!(current.input.video_asset_id.is_none());
     assert_eq!(current.status, "draft");
     assert!(pack.is_dir());
@@ -567,11 +618,17 @@ fn package_io_and_commit_failure_keep_draft_sources_and_previous_package() {
         1
     );
     assert!(Path::new(&previous).exists());
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "ready");
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "ready"
+    );
     let mut edit = i;
     edit.title = "修改后".into();
     db.save_publish_task(Some(&task.id), edit).unwrap();
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "draft"
+    );
     let source = Path::new(&p.workspace_path).join("中文 视频.mp4");
     assert_eq!(fs::read(source).unwrap(), PORTRAIT_VIDEO);
     let p2 = project(&db);
@@ -596,12 +653,15 @@ fn corrupt_cover_is_rejected_without_ready_or_lost_draft() {
     let p = project(&db);
     let i = input(&db, &p);
     let t = db.save_publish_task(None, i).unwrap();
-    let covers = db.list_cover_versions(&p.id).unwrap();
+    let covers = db.list_cover_versions(&p.id, None).unwrap();
     fs::write(covers[0].exported_path.as_ref().unwrap(), b"invalid PNG").unwrap();
     assert!(db.prepare_publish_task(&t.id).is_err());
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
     assert_eq!(
-        db.list_publish_tasks(&p.id).unwrap()[0].input.title,
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "draft"
+    );
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].input.title,
         t.input.title
     );
 }
@@ -621,7 +681,7 @@ fn changed_package_cover_with_same_size_cannot_remain_ready() {
         corrupt[0] ^= 0xff;
         fs::write(&copy, &corrupt).unwrap();
         assert_eq!(fs::metadata(&copy).unwrap().len(), original.len() as u64);
-        let current = db.list_publish_tasks(&p.id).unwrap().remove(0);
+        let current = db.list_publish_tasks(&p.id, None).unwrap().remove(0);
         assert_eq!(current.status, "draft");
         assert!(
             !current
@@ -633,7 +693,7 @@ fn changed_package_cover_with_same_size_cannot_remain_ready() {
         );
         assert!(db.record_publish_success(&task.id, record()).is_err());
         assert_eq!(fs::read(&copy).unwrap(), corrupt);
-        assert_eq!(db.list_cover_versions(&p.id).unwrap().len(), 2);
+        assert_eq!(db.list_cover_versions(&p.id, None).unwrap().len(), 2);
     }
     assert_eq!(db.prepare_publish_task(&task.id).unwrap().status, "ready");
 }
@@ -658,7 +718,9 @@ fn success_requires_confirmation_and_record_task_project_commit_together() {
     assert!(db.record_publish_success(&t.id, invalid).is_err());
     db.with_connection(|c|{ c.execute_batch("CREATE TRIGGER fail_record BEFORE UPDATE ON publish_tasks WHEN NEW.status='published' BEGIN SELECT RAISE(ABORT,'transaction rejected'); END;").unwrap(); Ok(()) }).unwrap();
     assert!(db.record_publish_success(&t.id, record()).is_err());
-    assert!(db.list_publish_tasks(&p.id).unwrap()[0].record.is_none());
+    assert!(db.list_publish_tasks(&p.id, None).unwrap()[0]
+        .record
+        .is_none());
     assert_eq!(db.get_project(&p.id).unwrap().input.status, "draft");
     db.with_connection(|c| {
         c.execute_batch("DROP TRIGGER fail_record").unwrap();
@@ -674,7 +736,7 @@ fn success_requires_confirmation_and_record_task_project_commit_together() {
     let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
     db.delete_project(&p.id).unwrap();
     db.restore_backup(&backup).unwrap();
-    let restored = db.list_publish_tasks(&p.id).unwrap();
+    let restored = db.list_publish_tasks(&p.id, None).unwrap();
     assert_eq!(restored[0].status, "published");
     assert_eq!(
         restored[0].record.as_ref().unwrap().post_url,
@@ -770,6 +832,9 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
         p.input.title = title.into();
         let p = db.save_project(Some(&p.id), p.input).unwrap();
         let generation = GenerationInput {
+            chapter_id: None,
+            source_snapshot: None,
+
             project_id: p.id.clone(),
             provider_id: provider.id.clone(),
             revision: None,
@@ -794,6 +859,8 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
             .finish_generation(&task, &generation, content.clone(), "test")
             .unwrap();
         db.save_writing(SaveWritingInput {
+            chapter_id: None,
+
             project_id: p.id.clone(),
             kind: "publishing".into(),
             content,
@@ -805,7 +872,7 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
         db.prepare_generation(&failed).unwrap();
         db.end_generation(&failed, "failed", "timeout", "模型请求超时")
             .unwrap();
-        let writing = db.list_versions(&p.id, "publishing").unwrap();
+        let writing = db.list_versions(&p.id, "publishing", None).unwrap();
         assert_eq!(writing.len(), 2);
         let mut i = input(&db, &p);
         if let WritingContent::Publishing {
@@ -824,8 +891,8 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
         expected.push((
             p.id.clone(),
             serde_json::to_value(writing).unwrap(),
-            serde_json::to_value(db.list_cover_versions(&p.id).unwrap()).unwrap(),
-            serde_json::to_value(db.list_publish_tasks(&p.id).unwrap()).unwrap(),
+            serde_json::to_value(db.list_cover_versions(&p.id, None).unwrap()).unwrap(),
+            serde_json::to_value(db.list_publish_tasks(&p.id, None).unwrap()).unwrap(),
         ));
     }
     let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
@@ -846,20 +913,20 @@ fn three_book_workflows_keep_writing_covers_packages_and_credentials_after_resto
     );
     for (id, writing, covers, tasks) in expected {
         assert_eq!(
-            serde_json::to_value(db.list_versions(&id, "publishing").unwrap()).unwrap(),
+            serde_json::to_value(db.list_versions(&id, "publishing", None).unwrap()).unwrap(),
             writing
         );
         assert_eq!(
-            serde_json::to_value(db.list_cover_versions(&id).unwrap()).unwrap(),
+            serde_json::to_value(db.list_cover_versions(&id, None).unwrap()).unwrap(),
             covers
         );
         assert_eq!(
-            serde_json::to_value(db.list_publish_tasks(&id).unwrap()).unwrap(),
+            serde_json::to_value(db.list_publish_tasks(&id, None).unwrap()).unwrap(),
             tasks
         );
-        assert_eq!(db.list_ai_tasks(&id).unwrap().len(), 2);
+        assert_eq!(db.list_ai_tasks(&id, None).unwrap().len(), 2);
         let video = db
-            .list_assets(&id)
+            .list_assets(&id, None)
             .unwrap()
             .into_iter()
             .find(|asset| asset.asset_type == "video")

@@ -146,6 +146,8 @@ mod tests {
         let (dir, db, input) = super::super::tests::fixture();
         let second = db
             .create_video_job(StartVideoInput {
+                chapter_id: None,
+
                 project_id: input.project_id.clone(),
                 audio_asset_id: input.audio_asset_id.clone(),
                 provider_id: input.provider_id.clone(),
@@ -287,7 +289,7 @@ mod tests {
                 }]),
             )
             .unwrap();
-            db.link_asset(&project.id, path.to_str().unwrap(), None)
+            db.link_asset(&project.id, path.to_str().unwrap(), None, None)
                 .unwrap();
             if run == 2 {
                 original_path = path;

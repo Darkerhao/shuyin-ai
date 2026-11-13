@@ -19,8 +19,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const JOB_COLUMNS: &str = "j.id,p.title,j.project_id,j.writing_version_id,j.input_json,j.status,j.stage,j.run_id,j.error_code,j.error_message,j.notebook_url,j.remote_audio_ref,j.output_size,j.output_sha256,j.asset_id,j.submitted_at,j.last_checked_at,j.created_at,j.updated_at";
-const ACTIVE_JOB_QUERY: &str = "SELECT j.id,p.title,j.project_id,j.writing_version_id,j.input_json,j.status,j.stage,j.run_id,j.error_code,j.error_message,j.notebook_url,j.remote_audio_ref,j.output_size,j.output_sha256,j.asset_id,j.submitted_at,j.last_checked_at,j.created_at,j.updated_at\nFROM audio_jobs j JOIN book_projects p ON p.id=j.project_id\nWHERE j.status NOT IN ('succeeded','cancelled')\nORDER BY j.updated_at DESC,j.created_at DESC LIMIT 1";
+const JOB_COLUMNS: &str = "j.id,p.title,j.project_id,j.writing_version_id,j.input_json,j.status,j.stage,j.run_id,j.error_code,j.error_message,j.notebook_url,j.remote_audio_ref,j.output_size,j.output_sha256,j.asset_id,j.submitted_at,j.last_checked_at,j.created_at,j.updated_at,j.chapter_id";
+const ACTIVE_JOB_QUERY: &str = "SELECT j.id,p.title,j.project_id,j.writing_version_id,j.input_json,j.status,j.stage,j.run_id,j.error_code,j.error_message,j.notebook_url,j.remote_audio_ref,j.output_size,j.output_sha256,j.asset_id,j.submitted_at,j.last_checked_at,j.created_at,j.updated_at,j.chapter_id\nFROM audio_jobs j JOIN book_projects p ON p.id=j.project_id\nWHERE j.status NOT IN ('succeeded','cancelled')\nORDER BY j.updated_at DESC,j.created_at DESC LIMIT 1";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -40,12 +40,15 @@ pub struct StartAudioJobInput {
 pub enum AudioSourceInput {
     Asset { asset_id: String },
     Text,
+    Chapter { chapter_id: String },
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioJob {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     pub project_id: String,
     pub project_title: String,
     pub writing_version_id: Option<String>,
@@ -129,6 +132,8 @@ pub struct AudioExecutionJob {
 pub enum AudioSourceData {
     Text {
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     Asset {
         name: String,
@@ -145,10 +150,17 @@ struct FrozenAudioInput {
     target_duration_seconds: i64,
     format: String,
     source: FrozenSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_sha256: Option<String>,
 }
 
 impl FrozenAudioInput {
     fn source_label(&self) -> String {
+        if let Some(label) = &self.source_label {
+            return label.clone();
+        }
         match &self.source {
             FrozenSource::Asset { name, .. } => name.clone(),
             FrozenSource::Text { .. } => "书籍资料文本".into(),
@@ -176,7 +188,14 @@ struct PreparedSource {
 }
 
 fn parse_input(json: &str) -> Result<FrozenAudioInput, String> {
-    serde_json::from_str(json).map_err(|_| "音频任务快照损坏。".into())
+    let input: FrozenAudioInput = serde_json::from_str(json).map_err(|_| "音频任务快照损坏。")?;
+    if let Some(hash) = &input.source_sha256 {
+        match &input.source {
+            FrozenSource::Text { text } if super::chapters::text_hash(text) == *hash => {}
+            _ => return Err("音频来源快照摘要不一致。".into()),
+        }
+    }
+    Ok(input)
 }
 
 pub(super) fn prompt_for_asset(
@@ -204,6 +223,7 @@ fn row_job(row: &Row<'_>) -> rusqlite::Result<AudioJob> {
     })?;
     Ok(AudioJob {
         id: row.get(0)?,
+        chapter_id: row.get(19)?,
         project_title: row.get(1)?,
         project_id: row.get(2)?,
         writing_version_id: row.get(3)?,
@@ -234,10 +254,14 @@ pub(super) fn job(connection: &Connection, id: &str) -> Result<AudioJob, String>
     ).optional().map_err(|error| error.to_string())?.ok_or_else(|| "音频任务不存在。".into())
 }
 
-fn latest_job(connection: &Connection, project_id: &str) -> Result<Option<AudioJob>, String> {
+fn latest_job(
+    connection: &Connection,
+    project_id: &str,
+    chapter_id: Option<&str>,
+) -> Result<Option<AudioJob>, String> {
     connection.query_row(
-        &format!("SELECT {JOB_COLUMNS} FROM audio_jobs j JOIN book_projects p ON p.id=j.project_id WHERE j.project_id=?1 ORDER BY j.created_at DESC,j.updated_at DESC LIMIT 1"),
-        [project_id], row_job,
+        &format!("SELECT {JOB_COLUMNS} FROM audio_jobs j JOIN book_projects p ON p.id=j.project_id WHERE j.project_id=?1 AND j.chapter_id IS ?2 ORDER BY j.created_at DESC,j.updated_at DESC LIMIT 1"),
+        params![project_id,chapter_id], row_job,
     ).optional().map_err(|error| error.to_string())
 }
 
@@ -368,7 +392,7 @@ fn audio_format(path: &Path) -> Result<&'static str, String> {
     Err("下载内容不是可识别的音频文件。".into())
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
+pub(super) fn hex_digest(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
@@ -447,11 +471,15 @@ fn copy_verified(source: &Path, destination: &Path) -> Result<(i64, String), Str
 }
 
 impl Database {
-    pub fn audio_job_data(&self, project_id: &str) -> Result<AudioJobData, String> {
+    pub fn audio_job_data(
+        &self,
+        project_id: &str,
+        chapter_id: Option<&str>,
+    ) -> Result<AudioJobData, String> {
         self.with_connection(|connection| {
-            get(connection, project_id)?;
+            super::chapters::require_scope(connection, project_id, chapter_id)?;
             Ok(AudioJobData {
-                job: latest_job(connection, project_id)?,
+                job: latest_job(connection, project_id, chapter_id)?,
                 active_job: active_job(connection)?,
             })
         })
@@ -495,9 +523,7 @@ impl Database {
         self.create_audio_job(
             &run.project_id,
             &version.id,
-            &AudioSourceInput::Asset {
-                asset_id: run.input.selection.source_asset_id.clone(),
-            },
+            &run.input.selection.source,
             &run.input.selection.format,
             Some(run),
         )
@@ -514,77 +540,101 @@ impl Database {
         if !valid_format(format) {
             return Err("音频形式只能是深入探索或简报。".into());
         }
+        let chapter_id = match source_input {
+            AudioSourceInput::Chapter { chapter_id } => Some(chapter_id.clone()),
+            _ => None,
+        };
         if let Some(existing) = self.with_connection(|connection| active_job(connection))? {
-            if automation.is_none() && existing.project_id == project_id {
+            if automation.is_none()
+                && existing.project_id == project_id
+                && existing.chapter_id == chapter_id
+            {
                 return Ok(existing);
             }
             return Err(format!(
-                "当前已有《{}》的音频任务。请先完成或停止跟进。",
-                existing.project_title
+                "当前已有《{}》的音频任务（{}）。请先完成或停止跟进。",
+                existing.project_title, existing.source_label
             ));
         }
-        let (project, prompt_version, prompt, duration, source) = self.with_connection(|connection| {
-            let project = get(connection, project_id)?;
-            let (prompt_version, prompt, duration) = {
-                let version = ai::version(connection, writing_version_id)?;
-                if version.project_id != project.id || version.kind != "publishing" { return Err("音频任务必须绑定当前书籍的发布文案版本。".into()); }
-                let WritingContent::Publishing { audio_prompt, .. } = version.content else { return Err("所选版本不是发布文案。".into()); };
-                if audio_prompt.trim().is_empty() { return Err("所选版本的音频生成提示词为空。".into()); }
-                let duration = if let Some(run) = automation {
-                    let seconds = run.input.target_duration_seconds.ok_or("自动制作尚未确定目标时长。")?;
-                    crate::ai::audio::validate_duration(seconds)?;
-                    seconds
-                } else { project.input.target_duration_seconds };
-                (version.prompt_version, audio_prompt, duration)
-            };
+        let (project, prompt_version, prompt, duration, source, source_label) = self.with_connection(|connection| {
+            super::chapters::require_scope(connection,project_id,chapter_id.as_deref())?;
+            let project = get(connection,project_id)?;
+            let version = ai::version(connection,writing_version_id)?;
+            if version.project_id != project.id || version.chapter_id != chapter_id || version.kind != "publishing" {
+                return Err("音频任务必须绑定本次书籍与章节的发布文案版本。".into());
+            }
+            let chapter_source = if let Some(chapter) = &chapter_id {
+                let source = version.source_snapshot.ok_or("章节版本缺少来源快照，请重新保存或生成本章方案。")?;
+                source.validate(chapter)?;
+                Some(source)
+            } else { None };
+            let WritingContent::Publishing { audio_prompt, .. } = version.content else { return Err("所选版本不是发布文案。".into()); };
+            if audio_prompt.trim().is_empty() { return Err("所选版本的音频生成提示词为空。".into()); }
+            let duration = if let Some(source) = &chapter_source {
+                source.target_duration_seconds.ok_or("所选章节版本缺少目标时长，请重新保存本章方案。")?
+            } else if let Some(run) = automation {
+                run.input.target_duration_seconds.ok_or("自动制作尚未确定目标时长。")?
+            } else { project.input.target_duration_seconds };
+            crate::ai::audio::validate_duration(duration)?;
+            if automation.is_some_and(|run| run.input.target_duration_seconds != Some(duration)) {
+                return Err("音频目标时长与本次冻结方案不一致。".into());
+            }
             let source = match source_input {
                 AudioSourceInput::Text => {
                     if project.input.source_notes.trim().is_empty() { return Err("本书还没有可用的资料文本。".into()); }
                     if project.input.source_notes.chars().count() > 200_000 { return Err("书籍资料文本过长，请精简后再试。".into()); }
-                    PreparedSource { frozen: FrozenSource::Text { text: project.input.source_notes.clone() }, path: None }
+                    PreparedSource { frozen:FrozenSource::Text { text:project.input.source_notes.clone() },path:None }
                 }
-                AudioSourceInput::Asset { asset_id } => {
-                    let row: Option<(String, String, String)> = connection.query_row(
-                        "SELECT asset_type,file_path,original_name FROM assets WHERE id=?1 AND project_id=?2",
-                        params![asset_id, project.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                    ).optional().map_err(|error| error.to_string())?;
-                    let (kind, path, name) = row.ok_or("所选原书文件不属于当前书籍。")?;
+                AudioSourceInput::Chapter { .. } => PreparedSource {
+                    frozen:FrozenSource::Text { text:chapter_source.as_ref().ok_or("章节来源缺失。")?.content.clone() },path:None,
+                },
+                AudioSourceInput::Asset {
+ asset_id } => {
+                    let (kind,path,name): (String,String,String) = connection.query_row(
+                        "SELECT asset_type,file_path,original_name FROM assets WHERE id=?1 AND project_id=?2 AND chapter_id IS NULL",
+                        params![asset_id,project.id],|row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+                    ).map_err(|_| "所选原书文件不属于本次整书来源。")?;
                     if kind != "document" { return Err("原书来源必须是已登记的文档素材。".into()); }
-                    let path = fs::canonicalize(&path).map_err(|error| format!("原书文件不可用：{error}"))?;
+                    let path = fs::canonicalize(path).map_err(|error| format!("原书文件不可用：{error}"))?;
                     if !supported_source_name(&path) { return Err("原书来源只支持 PDF、EPUB、TXT 或 Markdown 文件。".into()); }
-                    PreparedSource { frozen: FrozenSource::Asset { asset_id: asset_id.clone(), name, size: 0, sha256: String::new() }, path: Some(path) }
+                    PreparedSource { frozen:FrozenSource::Asset {
+ asset_id:asset_id.clone(),name,size:0,sha256:String::new() },path:Some(path) }
                 }
             };
-            Ok((project, prompt_version, prompt, duration, source))
+            let label = chapter_source.as_ref().map(super::chapters::ChapterSource::label);
+            Ok((project,version.prompt_version,audio_prompt,duration,source,label))
         })?;
-        let (size, sha256) = match (source_input, &source.frozen, &source.path) {
-            (
-                AudioSourceInput::Asset { asset_id },
-                FrozenSource::Asset { name, .. },
-                Some(path),
-            ) => {
+        let (size, sha256) = match (&source.frozen, &source.path) {
+            (FrozenSource::Asset { asset_id, name, .. }, Some(path)) => {
                 let (size, sha256) = hash_file(path)?;
-                let (current_kind, current_size, current_name): (String, i64, String) = self.with_connection(|connection| connection.query_row(
-                    "SELECT asset_type,file_size,original_name FROM assets WHERE id=?1 AND project_id=?2",
-                    params![asset_id, project.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                let (kind,current_size,current_name): (String,i64,String) = self.with_connection(|connection| connection.query_row(
+                    "SELECT asset_type,file_size,original_name FROM assets WHERE id=?1 AND project_id=?2 AND chapter_id IS NULL",
+                    params![asset_id,project.id],|row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
                 ).map_err(|error| error.to_string()))?;
-                if current_kind != "document" || current_size != size || current_name != *name {
+                if kind != "document" || current_size != size || current_name != *name {
                     return Err("原书文件在创建任务时发生变化，请重新选择。".into());
                 }
                 (size, sha256)
             }
-            (AudioSourceInput::Text, FrozenSource::Text { .. }, None) => (0, String::new()),
+            (FrozenSource::Text { text }, None) => (
+                0,
+                if chapter_id.is_some() {
+                    super::chapters::text_hash(text)
+                } else {
+                    String::new()
+                },
+            ),
             _ => return Err("来源快照无效。".into()),
         };
         if automation.is_some_and(|run| run.input.source_sha256 != sha256) {
-            return Err("原书内容在启动后发生变化，自动流程已暂停。".into());
+            return Err("来源摘要与本次冻结方案不一致，自动流程已暂停。".into());
         }
         let frozen_source = match source.frozen {
             FrozenSource::Asset { asset_id, name, .. } => FrozenSource::Asset {
                 asset_id,
                 name,
                 size,
-                sha256,
+                sha256: sha256.clone(),
             },
             text @ FrozenSource::Text { .. } => text,
         };
@@ -594,26 +644,27 @@ impl Database {
             target_duration_seconds: duration,
             format: format.into(),
             source: frozen_source,
+            source_label,
+            source_sha256: chapter_id.as_ref().map(|_| sha256),
         })
         .map_err(|error| error.to_string())?;
         self.with_connection(|connection| {
-            let transaction = connection.transaction().map_err(|e|e.to_string())?;
-            if automation.is_none() && transaction.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE project_id=?1 AND json_extract(input_json,'$.workflowVersion')=2 AND status NOT IN ('completed','cancelled'))",[project_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("本书正在自动制作，请查看本次音频任务，或停止流程后手动制作。".into()); }
+            let transaction = connection.transaction().map_err(|error| error.to_string())?;
+            if automation.is_none() && transaction.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE project_id=?1 AND json_extract(input_json,'$.workflowVersion')=2 AND status NOT IN ('completed','cancelled'))",[project_id],|row| row.get::<_,bool>(0)).map_err(|error| error.to_string())? {
+                return Err("本书正在自动制作，请查看本次音频任务，或停止流程后手动制作。".into());
+            }
             if let Some(existing) = active_job(&transaction)? {
-                if automation.is_none() && existing.project_id == project_id { return Ok(existing); }
-                return Err(format!("当前已有《{}》的音频任务。请先完成或停止跟进。", existing.project_title));
+                if automation.is_none() && existing.project_id == project_id && existing.chapter_id == chapter_id { return Ok(existing); }
+                return Err(format!("当前已有《{}》的音频任务。请先完成或停止跟进。",existing.project_title));
             }
             let id = new_id(&transaction)?;
-            transaction.execute(
-                &format!("INSERT INTO audio_jobs(id,project_id,writing_version_id,input_json,status,stage,run_id,created_at,updated_at) VALUES(?1,?2,?3,?4,'created','opening_site',1,{NOW},{NOW})"),
-                params![id, project_id, writing_version_id, input_json],
-            ).map_err(|error| match error {
-                rusqlite::Error::SqliteFailure(ref code, _) if code.code == rusqlite::ErrorCode::ConstraintViolation => "当前已有未完成的音频任务。请先完成或停止跟进。".to_owned(),
+            transaction.execute(&format!("INSERT INTO audio_jobs(id,project_id,writing_version_id,input_json,status,stage,run_id,created_at,updated_at,chapter_id) VALUES(?1,?2,?3,?4,'created','opening_site',1,{NOW},{NOW},?5)"),params![id,project_id,writing_version_id,input_json,chapter_id]).map_err(|error| match error {
+                rusqlite::Error::SqliteFailure(ref code,_) if code.code==rusqlite::ErrorCode::ConstraintViolation => "当前已有未完成的音频任务。请先完成或停止跟进。".into(),
                 _ => error.to_string(),
             })?;
-            if let Some(run) = automation { super::automation::bind(&transaction, &run.binding(super::automation::Slot::Audio), project_id, &id)?; }
-            transaction.commit().map_err(|e|e.to_string())?;
-            job(connection, &id)
+            if let Some(run) = automation { super::automation::bind(&transaction,&run.binding(super::automation::Slot::Audio),project_id,&id)?; }
+            transaction.commit().map_err(|error| error.to_string())?;
+            job(connection,&id)
         })
     }
 
@@ -716,7 +767,10 @@ impl Database {
                 .map_err(|error| error.to_string())?;
             let input = parse_input(&input_json)?;
             let source = match input.source {
-                FrozenSource::Text { text } => AudioSourceData::Text { text },
+                FrozenSource::Text { text } => AudioSourceData::Text {
+                    text,
+                    name: input.source_label.clone(),
+                },
                 FrozenSource::Asset {
                     name, size, sha256, ..
                 } => AudioSourceData::Asset { name, size, sha256 },
@@ -773,7 +827,8 @@ impl Database {
                 return Err("当前任务不能上传来源。".into());
             }
             let input_json: String = connection.query_row("SELECT input_json FROM audio_jobs WHERE id=?1", [job_id], |row| row.get(0)).map_err(|e| e.to_string())?;
-            let FrozenSource::Asset { asset_id, name, size, sha256 } = parse_input(&input_json)?.source else {
+            let FrozenSource::Asset {
+ asset_id, name, size, sha256 } = parse_input(&input_json)?.source else {
                 return Err("资料文本不使用文件上传。".into());
             };
             let path: String = connection.query_row("SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='document'", params![asset_id, current.project_id], |row| row.get(0))
@@ -1155,7 +1210,7 @@ impl Database {
             require_run(&latest, run_id)?;
             if latest.status == "succeeded" && latest.asset_id.is_some() { return Ok(latest); }
             if !matches!(latest.status.as_str(), "downloading" | "importing") { return Err("音频任务状态在最终归档时发生变化。".into()); }
-            let asset_id = assets::register_existing(&transaction, &latest.project_id, &destination, Some("audio"), None)?;
+            let asset_id = assets::register_existing(&transaction, &latest.project_id, &destination, Some("audio"), None, latest.chapter_id.as_deref())?;
             transaction.execute(
                 &format!("UPDATE audio_jobs SET status='succeeded',stage='completed',asset_id=?2,output_size=?3,output_sha256=?4,error_code=NULL,error_message=NULL,last_checked_at={NOW},updated_at={NOW} WHERE id=?1"),
                 params![job_id, asset_id, size, sha256],

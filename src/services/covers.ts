@@ -3,11 +3,11 @@ import { open } from '@tauri-apps/plugin-dialog'
 import type { CoverConfig, CoverVersion, CoverPreset } from '../types/cover'
 import type { Asset } from '../types/project'
 
-export const startCoverGeneration = (projectId: string, providerId: string, description: string, width: number, height: number) => invoke<string>('start_cover_generation', { input: { projectId, providerId, description, width, height } })
+export const startCoverGeneration = (projectId: string, providerId: string, description: string, width: number, height: number, chapterId: string | null = null) => invoke<string>('start_cover_generation', { input: { projectId, providerId, description, width, height, ...(chapterId ? { chapterId } : {}) } })
 export const executeCoverGeneration = (id: string) => invoke<Asset>('execute_cover_generation', { id })
 
-export const listCovers = (projectId: string) => invoke<CoverVersion[]>('list_cover_versions', { projectId })
-export const saveCover = (projectId: string, config: CoverConfig, png: number[] | null = null) => invoke<CoverVersion>('save_cover_version', { projectId, config, png })
+export const listCovers = (projectId: string, chapterId: string | null = null) => invoke<CoverVersion[]>('list_cover_versions', { projectId, ...(chapterId ? { chapterId } : {}) })
+export const saveCover = (projectId: string, config: CoverConfig, png: number[] | null = null, chapterId: string | null = null) => invoke<CoverVersion>('save_cover_version', { projectId, config, png, ...(chapterId ? { chapterId } : {}) })
 export const readBackground = (projectId: string, assetId: string) => invoke<ArrayBuffer>('read_cover_background', { projectId, assetId })
 export const readCoverExport = (projectId: string, id: string) => invoke<ArrayBuffer>('read_cover_export', { projectId, id })
 export const listPresets = () => invoke<CoverPreset[]>('list_cover_presets')

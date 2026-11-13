@@ -17,7 +17,7 @@ pub const CONTENT_CHECK_PROMPT: &str = crate::ai::content_check::VERSION;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartAutomationInput {
     pub project_id: String,
-    pub source_asset_id: String,
+    pub source: super::audio::AudioSourceInput,
     pub text_provider_id: String,
     pub image_provider_id: String,
     pub format: String,
@@ -47,6 +47,8 @@ pub struct FrozenInput {
     #[serde(default)]
     pub model_retry: ModelRetry,
     pub account: crate::douyin::flow::Account,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_source: Option<super::chapters::ChapterSource>,
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -61,6 +63,8 @@ pub struct ModelRetry {
 #[serde(rename_all = "camelCase")]
 pub struct AutomationRun {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     pub project_id: String,
     pub input: FrozenInput,
     pub status: String,
@@ -242,6 +246,30 @@ pub(super) fn bind(
     child: &str,
 ) -> Result<(), String> {
     let column = binding.slot.column();
+    let table = match column {
+        "audio_job_id" => "audio_jobs",
+        "video_job_id" => "video_jobs",
+        "publish_task_id" => "publish_tasks",
+        "landscape_cover_id" | "portrait_cover_id" | "widescreen_cover_id" => "cover_versions",
+        _ => "ai_tasks",
+    };
+    let child_scope: Option<String> = connection
+        .query_row(
+            &format!("SELECT chapter_id FROM {table} WHERE id=?1 AND project_id=?2"),
+            params![child, project_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| "子任务不属于当前书籍。")?;
+    let run_scope: Option<String> = connection
+        .query_row(
+            "SELECT chapter_id FROM automation_runs WHERE id=?1 AND project_id=?2",
+            params![binding.id, project_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| "自动流程不属于当前书籍。")?;
+    if child_scope != run_scope {
+        return Err("子任务不属于本次创作章节。".into());
+    }
     let count = connection.execute(&format!("UPDATE automation_runs SET {column}=?1,updated_at={NOW} WHERE id=?2 AND project_id=?3 AND run_id=?4 AND status='running' AND {column} IS NULL"), params![child,binding.id,project_id,binding.run_id]).map_err(|e| e.to_string())?;
     if count != 1 {
         return Err("自动流程已暂停、结束或该阶段已有任务。".into());
@@ -250,10 +278,10 @@ pub(super) fn bind(
 }
 
 fn load(connection: &Connection, id: &str) -> Result<AutomationRun, String> {
-    connection.query_row("SELECT id,project_id,input_json,status,stage,run_id,error,audio_job_id,video_job_id,writing_task_id,landscape_task_id,portrait_task_id,landscape_cover_id,portrait_cover_id,publish_task_id,created_at,updated_at,publish_started,duration_task_id,content_check_task_id,(SELECT version_id FROM ai_tasks WHERE id=automation_runs.writing_task_id AND status='succeeded'),widescreen_task_id,widescreen_cover_id,render_plan_sha256,(SELECT version_id FROM ai_tasks WHERE id=automation_runs.content_check_task_id AND status='succeeded'),(SELECT NULLIF(json_extract(plan_json,'$.duration'),0) FROM video_jobs WHERE id=automation_runs.video_job_id) FROM automation_runs WHERE id=?1", [id], |row| {
+    connection.query_row("SELECT id,project_id,input_json,status,stage,run_id,error,audio_job_id,video_job_id,writing_task_id,landscape_task_id,portrait_task_id,landscape_cover_id,portrait_cover_id,publish_task_id,created_at,updated_at,publish_started,duration_task_id,content_check_task_id,(SELECT version_id FROM ai_tasks WHERE id=automation_runs.writing_task_id AND status='succeeded'),widescreen_task_id,widescreen_cover_id,render_plan_sha256,(SELECT version_id FROM ai_tasks WHERE id=automation_runs.content_check_task_id AND status='succeeded'),(SELECT NULLIF(json_extract(plan_json,'$.duration'),0) FROM video_jobs WHERE id=automation_runs.video_job_id),chapter_id FROM automation_runs WHERE id=?1", [id], |row| {
         let json: String = row.get(2)?;
         let input = serde_json::from_str(&json).map_err(|error| rusqlite::Error::FromSqlConversionFailure(2,rusqlite::types::Type::Text,Box::new(error)))?;
-        Ok(AutomationRun { id:row.get(0)?,project_id:row.get(1)?,input,status:row.get(3)?,stage:row.get(4)?,run_id:row.get(5)?,error:row.get(6)?,audio_job_id:row.get(7)?,video_job_id:row.get(8)?,writing_task_id:row.get(9)?,landscape_task_id:row.get(10)?,portrait_task_id:row.get(11)?,landscape_cover_id:row.get(12)?,portrait_cover_id:row.get(13)?,publish_task_id:row.get(14)?,created_at:row.get(15)?,updated_at:row.get(16)?,publish_started:row.get(17)?,duration_task_id:row.get(18)?,content_check_task_id:row.get(19)?,writing_version_id:row.get(20)?,widescreen_task_id:row.get(21)?,widescreen_cover_id:row.get(22)?,render_plan_sha256:row.get(23)?,final_writing_version_id:row.get(24)?,actual_duration_seconds:row.get(25)? })
+        Ok(AutomationRun { chapter_id:row.get(26)?,id:row.get(0)?,project_id:row.get(1)?,input,status:row.get(3)?,stage:row.get(4)?,run_id:row.get(5)?,error:row.get(6)?,audio_job_id:row.get(7)?,video_job_id:row.get(8)?,writing_task_id:row.get(9)?,landscape_task_id:row.get(10)?,portrait_task_id:row.get(11)?,landscape_cover_id:row.get(12)?,portrait_cover_id:row.get(13)?,publish_task_id:row.get(14)?,created_at:row.get(15)?,updated_at:row.get(16)?,publish_started:row.get(17)?,duration_task_id:row.get(18)?,content_check_task_id:row.get(19)?,writing_version_id:row.get(20)?,widescreen_task_id:row.get(21)?,widescreen_cover_id:row.get(22)?,render_plan_sha256:row.get(23)?,final_writing_version_id:row.get(24)?,actual_duration_seconds:row.get(25)? })
     }).map_err(|error| format!("自动流程不可读取：{error}"))
 }
 
@@ -480,28 +508,45 @@ impl Database {
             }
         }
         self.with_connection(|connection| {
-            if let Some(id) = connection.query_row("SELECT id FROM automation_runs WHERE request_key=?1",[&input.request_key],|row|row.get::<_,String>(0)).optional().map_err(|e|e.to_string())? {
-                let run = load(connection,&id)?;
-                if serde_json::to_value(&run.input.selection).map_err(|e|e.to_string())? != serde_json::to_value(&input).map_err(|e|e.to_string())? { return Err("重复启动标识对应其他输入。".into()); }
+            if let Some(id)=connection.query_row("SELECT id FROM automation_runs WHERE request_key=?1",[&input.request_key],|row| row.get::<_,String>(0)).optional().map_err(|error|error.to_string())? {
+                let run=load(connection,&id)?;
+                if serde_json::to_value(&run.input.selection).map_err(|error|error.to_string())? != serde_json::to_value(&input).map_err(|error|error.to_string())? { return Err("重复启动标识对应其他输入。".into()); }
                 return Ok(run);
             }
-            let transaction = connection.transaction().map_err(|e|e.to_string())?;
-            let book = get(&transaction,&input.project_id)?;
-            if book.input.author.trim().is_empty() { return Err("自动制作请先填写作者，避免同名书混淆。".into()); }
-            if transaction.query_row("SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE project_id=?1 AND status IN ('pending','running'))",[&input.project_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("本书还有正在生成的内容，请先等待完成或取消，再开始自动制作。".into()); }
-            if transaction.query_row("SELECT EXISTS(SELECT 1 FROM audio_jobs WHERE status NOT IN ('succeeded','cancelled')) OR EXISTS(SELECT 1 FROM video_jobs WHERE status='running') OR EXISTS(SELECT 1 FROM automation_runs WHERE status NOT IN ('completed','cancelled'))",[],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("已有未完成的自动、音频或视频任务，请先处理原任务。".into()); }
-            let source: String = transaction.query_row("SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='document'",params![input.source_asset_id,input.project_id],|row|row.get(0)).map_err(|_|"请选择本书已保存的原书文件。")?;
-            if !super::audio::supported_source_name(Path::new(&source)) { return Err("自动制作支持 PDF、EPUB、TXT、Markdown 原书。".into()); }
-            let (_, source_sha256) = super::audio::hash_file(Path::new(&source))?;
-            let text = ai::provider(&transaction,&input.text_provider_id)?;
-            let image = ai::provider(&transaction,&input.image_provider_id)?;
-            if !text.input.is_enabled || text.input.model_kind != "text" || !image.input.is_enabled || image.input.model_kind != "image" { return Err("请配置可用的文本模型和图片模型。".into()); }
-            let id = new_id(&transaction)?;
-            let target_duration_seconds = book.audio_duration_source.as_ref().map(|_| book.input.target_duration_seconds);
-            if let Some(seconds) = target_duration_seconds { crate::ai::audio::validate_duration(seconds)?; }
-            let frozen = FrozenInput { workflow_version:2,title:book.input.title,author:book.input.author,description:book.input.description,source_notes:book.input.source_notes,target_duration_seconds,duration_reason:if target_duration_seconds.is_some() {"使用本书已保存的目标时长".into()} else {String::new()},source_sha256,text_provider:text.input,image_provider:image.input,model_retry:ModelRetry { enabled:true,..Default::default() },selection:input.clone(),account };
-            transaction.execute(&format!("INSERT INTO automation_runs(id,request_key,project_id,input_json,status,stage,created_at,updated_at) VALUES(?1,?2,?3,?4,'running',?5,{NOW},{NOW})"),params![id,input.request_key,input.project_id,serde_json::to_string(&frozen).map_err(|e|e.to_string())?,if target_duration_seconds.is_some() {"writing"} else {"duration"}]).map_err(|e|e.to_string())?;
-            transaction.commit().map_err(|e|e.to_string())?;
+            let transaction=connection.transaction().map_err(|error|error.to_string())?;
+            let book=get(&transaction,&input.project_id)?;
+            if transaction.query_row("SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE project_id=?1 AND status IN ('pending','running'))",[&input.project_id],|row|row.get::<_,bool>(0)).map_err(|error|error.to_string())? { return Err("本书还有正在生成的内容，请先等待完成或取消，再开始自动制作。".into()); }
+            if transaction.query_row("SELECT EXISTS(SELECT 1 FROM audio_jobs WHERE status NOT IN ('succeeded','cancelled')) OR EXISTS(SELECT 1 FROM video_jobs WHERE status='running') OR EXISTS(SELECT 1 FROM automation_runs WHERE status NOT IN ('completed','cancelled'))",[],|row|row.get::<_,bool>(0)).map_err(|error|error.to_string())? { return Err("已有未完成的自动、音频或视频任务，请先处理原任务。".into()); }
+            let chapter_source=match &input.source {
+                super::audio::AudioSourceInput::Chapter { chapter_id } => Some(super::chapters::snapshot(&transaction,&input.project_id,chapter_id)?),
+                super::audio::AudioSourceInput::Asset { .. } => None,
+                super::audio::AudioSourceInput::Text => return Err("整书自动制作请选择原书文件；章节制作请使用已保存的章节正文。".into()),
+            };
+            let source_sha256=if let Some(source)=&chapter_source { source.sha256.clone() } else {
+                if book.input.author.trim().is_empty() { return Err("自动制作请先填写作者，避免同名书混淆。".into()); }
+                let super::audio::AudioSourceInput::Asset {
+ asset_id }=&input.source else { return Err("原书来源无效。".into()); };
+                let path:String=transaction.query_row("SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND chapter_id IS NULL AND asset_type='document'",params![asset_id,input.project_id],|row|row.get(0)).map_err(|_|"请选择本书已保存的原书文件。")?;
+                if !super::audio::supported_source_name(Path::new(&path)) { return Err("自动制作支持 PDF、EPUB、TXT、Markdown 原书。".into()); }
+                super::audio::hash_file(Path::new(&path))?.1
+            };
+            let text=ai::provider(&transaction,&input.text_provider_id)?;
+            if !text.input.is_enabled || text.input.model_kind!="text" { return Err("请选择可用的文本模型。".into()); }
+            let image=ai::provider(&transaction,&input.image_provider_id)?;
+            if !image.input.is_enabled || image.input.model_kind!="image" { return Err("请选择可用的图片模型。".into()); }
+            let target_duration_seconds=if let Some(source)=&chapter_source { source.target_duration_seconds } else { book.audio_duration_source.as_ref().map(|_|book.input.target_duration_seconds) };
+            if let Some(seconds)=target_duration_seconds { crate::ai::audio::validate_duration(seconds)?; }
+            let chapter_id=chapter_source.as_ref().map(|source|source.chapter_id.clone());
+            let id=new_id(&transaction)?;
+            let frozen=FrozenInput {
+                workflow_version:2,title:book.input.title,author:book.input.author,
+                description:if chapter_id.is_some() {String::new()} else {book.input.description},
+                source_notes:if chapter_id.is_some() {String::new()} else {book.input.source_notes},
+                target_duration_seconds,duration_reason:if target_duration_seconds.is_some() { if chapter_id.is_some() {"使用本章已保存的目标时长".into()} else {"使用本书已保存的目标时长".into()} } else {String::new()},
+                source_sha256,text_provider:text.input,image_provider:image.input,model_retry:ModelRetry {enabled:true,..Default::default()},selection:input.clone(),account,chapter_source,
+            };
+            transaction.execute(&format!("INSERT INTO automation_runs(id,request_key,project_id,input_json,status,stage,created_at,updated_at,chapter_id) VALUES(?1,?2,?3,?4,'running',?5,{NOW},{NOW},?6)"),params![id,input.request_key,input.project_id,serde_json::to_string(&frozen).map_err(|error|error.to_string())?,if target_duration_seconds.is_some() {"writing"} else {"duration"},chapter_id]).map_err(|error|error.to_string())?;
+            transaction.commit().map_err(|error|error.to_string())?;
             load(connection,&id)
         })
     }
@@ -618,6 +663,9 @@ impl Database {
         }
         self.start_bound_generation(
             ai::GenerationInput {
+                chapter_id: run.chapter_id.clone(),
+                source_snapshot: run.input.chapter_source.clone(),
+
                 project_id: run.project_id.clone(),
                 provider_id: run.input.selection.text_provider_id.clone(),
                 revision: None,
@@ -641,9 +689,9 @@ impl Database {
             let version = task_version(&tx,current.writing_task_id.as_deref())?;
             let transcript = crate::video::to_srt(&video.plan.cues);
             if transcript.chars().count() > 80_000 { return Err("完整字幕超过8万字，已保留原稿和音频，请处理后再继续。".into()); }
-            let user = serde_json::json!({"bookTitle":run.input.title,"author":run.input.author,"sourceVersionId":version.id,"currentContent":version.content,"audioJobId":current.audio_job_id,"audioAssetId":video.audio_asset_id,"videoJobId":video.id,"transcript":transcript,"transcriptSha256":content_digest(&video.plan)?});
+            let user = serde_json::json!({"bookTitle":run.input.title,"author":run.input.author,"chapterSource":run.input.chapter_source,"sourceVersionId":version.id,"currentContent":version.content,"audioJobId":current.audio_job_id,"audioAssetId":video.audio_asset_id,"videoJobId":video.id,"transcript":transcript,"transcriptSha256":content_digest(&video.plan)?});
             let id = new_id(&tx)?;
-            tx.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,'content_check',?3,?4,?5,'pending',?6,{NOW})"),params![id,run.project_id,run.input.selection.text_provider_id,run.input.text_provider.model_name,CONTENT_CHECK_PROMPT,user.to_string()]).map_err(|e|e.to_string())?;
+            tx.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at,chapter_id) VALUES(?1,?2,'content_check',?3,?4,?5,'pending',?6,{NOW},?7)"),params![id,run.project_id,run.input.selection.text_provider_id,run.input.text_provider.model_name,CONTENT_CHECK_PROMPT,user.to_string(),run.chapter_id]).map_err(|e|e.to_string())?;
             bind(&tx,&run.binding(Slot::ContentCheck),&run.project_id,&id)?;
             tx.commit().map_err(|e|e.to_string())?;
             Ok(id)
@@ -659,7 +707,7 @@ impl Database {
     }
     pub fn prepare_automation_render(&self, run: &AutomationRun) -> Result<(), String> {
         self.verify_automation_content(run)?;
-        for step in &COVER_STEPS {
+        for step in COVER_STEPS {
             self.read_cover_export(
                 &run.project_id,
                 run.child_id(step.cover_slot)
@@ -712,7 +760,9 @@ impl Database {
             let base=ai::version(&tx,input["sourceVersionId"].as_str().ok_or("缺少创作版本。")?)?;
             let content=crate::ai::content_check::apply(raw,&base.content,&run.input.title,run.input.target_duration_seconds.ok_or("缺少目标时长。")?)?;
             let version = if content == base.content { base.id } else {
-                ai::append(&tx,&ai::SaveWritingInput { project_id:run.project_id,kind:"publishing".into(),content,based_on:Some(base.id),is_confirmed:false },"ai",&model,CONTENT_CHECK_PROMPT)?.id
+                ai::append(&tx,&ai::SaveWritingInput {
+        chapter_id: run.chapter_id.clone(),
+ project_id:run.project_id,kind:"publishing".into(),content,based_on:Some(base.id),is_confirmed:false },"ai",&model,CONTENT_CHECK_PROMPT, None)?.id
             };
             tx.execute(&format!("UPDATE ai_tasks SET status='succeeded',version_id=?1,preview_json=?2,completed_at={NOW} WHERE id=?3"),params![version,raw,id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())

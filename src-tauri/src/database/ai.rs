@@ -106,6 +106,10 @@ pub struct SavedProvider {
 pub struct WritingVersion {
     pub id: String,
     pub project_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_snapshot: Option<super::chapters::ChapterSource>,
     pub kind: String,
     pub version_no: i64,
     pub content: WritingContent,
@@ -123,6 +127,18 @@ fn row_version(r: &Row<'_>) -> rusqlite::Result<WritingVersion> {
     Ok(WritingVersion {
         id: r.get(0)?,
         project_id: r.get(1)?,
+        chapter_id: r.get(10)?,
+        source_snapshot: r
+            .get::<_, Option<String>>(11)?
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    11,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
         kind: r.get(2)?,
         version_no: r.get(3)?,
         content,
@@ -133,7 +149,7 @@ fn row_version(r: &Row<'_>) -> rusqlite::Result<WritingVersion> {
         created_at: r.get(9)?,
     })
 }
-const VERSION_COLUMNS: &str = "id,project_id,kind,version_no,content_json,source_type,model_name,prompt_version,is_confirmed,created_at";
+const VERSION_COLUMNS: &str = "id,project_id,kind,version_no,content_json,source_type,model_name,prompt_version,is_confirmed,created_at,chapter_id,source_snapshot_json";
 pub(super) fn version(c: &Connection, id: &str) -> Result<WritingVersion, String> {
     c.query_row(
         &format!("SELECT {VERSION_COLUMNS} FROM writing_versions WHERE id=?1"),
@@ -146,6 +162,8 @@ pub(super) fn version(c: &Connection, id: &str) -> Result<WritingVersion, String
 #[serde(rename_all = "camelCase")]
 pub struct SaveWritingInput {
     pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     pub kind: String,
     pub content: WritingContent,
     pub based_on: Option<String>,
@@ -155,6 +173,10 @@ pub struct SaveWritingInput {
 #[serde(rename_all = "camelCase")]
 pub struct GenerationInput {
     pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_snapshot: Option<super::chapters::ChapterSource>,
     pub provider_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<RevisionInput>,
@@ -182,6 +204,8 @@ pub enum GenerationResult {
 #[serde(rename_all = "camelCase")]
 pub struct AiTask {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     pub kind: String,
     pub status: String,
     pub model_name: String,
@@ -191,10 +215,11 @@ pub struct AiTask {
     pub created_at: String,
 }
 const TASK_COLUMNS: &str =
-    "id,kind,status,model_name,error_code,error_message,version_id,created_at";
+    "id,kind,status,model_name,error_code,error_message,version_id,created_at,chapter_id";
 fn row_task(r: &Row<'_>) -> rusqlite::Result<AiTask> {
     Ok(AiTask {
         id: r.get(0)?,
+        chapter_id: r.get(8)?,
         kind: r.get(1)?,
         status: r.get(2)?,
         model_name: r.get(3)?,
@@ -209,6 +234,7 @@ pub struct PreparedGeneration {
     pub provider: ProviderConfig,
     pub user: String,
     pub book_title: String,
+    pub chapter_title: Option<String>,
     pub base: Option<WritingVersion>,
 }
 
@@ -222,7 +248,10 @@ fn revision_base(
         .map(|revision| {
             revision.validate()?;
             let base = version(c, &revision.based_on)?;
-            if base.project_id != input.project_id || base.kind != "publishing" {
+            if base.project_id != input.project_id
+                || base.chapter_id != input.chapter_id
+                || base.kind != "publishing"
+            {
                 return Err("调整来源不属于当前书籍的发布内容。".into());
             }
             Ok(base)
@@ -236,13 +265,39 @@ pub(super) fn append(
     source: &str,
     model: &str,
     prompt: &str,
+    source_snapshot: Option<&super::chapters::ChapterSource>,
 ) -> Result<WritingVersion, String> {
     input.content.validate(&input.kind, None)?;
-    get(c, &input.project_id)?;
+    super::chapters::require_scope(c, &input.project_id, input.chapter_id.as_deref())?;
+    let inherited = input
+        .based_on
+        .as_deref()
+        .map(|id| version(c, id))
+        .transpose()?;
+    if inherited.as_ref().is_some_and(|base| {
+        base.project_id != input.project_id || base.chapter_id != input.chapter_id
+    }) {
+        return Err("创作来源不属于本次书籍与章节。".into());
+    }
+    let snapshot = if let Some(source) = source_snapshot {
+        Some(source.clone())
+    } else if let Some(base) = inherited {
+        base.source_snapshot
+    } else if let Some(chapter) = &input.chapter_id {
+        Some(super::chapters::snapshot(c, &input.project_id, chapter)?)
+    } else {
+        None
+    };
+    if let Some(chapter) = input.chapter_id.as_deref() {
+        snapshot
+            .as_ref()
+            .ok_or("章节版本缺少来源快照。")?
+            .validate(chapter)?;
+    }
     let id = new_id(c)?;
-    c.execute(&format!("INSERT INTO writing_versions(id,project_id,kind,version_no,content_json,source_type,model_name,prompt_version,is_confirmed,created_at)
-        SELECT ?1,?2,?3,COALESCE(MAX(version_no),0)+1,?4,?5,?6,?7,?8,{NOW} FROM writing_versions WHERE project_id=?2 AND kind=?3"),
-        params![id,input.project_id,input.kind,serde_json::to_string(&input.content).map_err(|e|e.to_string())?,source,model,prompt,input.is_confirmed]).map_err(|e|e.to_string())?;
+    c.execute(&format!("INSERT INTO writing_versions(id,project_id,kind,version_no,content_json,source_type,model_name,prompt_version,is_confirmed,created_at,chapter_id,source_snapshot_json)
+        SELECT ?1,?2,?3,COALESCE(MAX(version_no),0)+1,?4,?5,?6,?7,?8,{NOW},?9,?10 FROM writing_versions WHERE project_id=?2 AND kind=?3"),
+        params![id,input.project_id,input.kind,serde_json::to_string(&input.content).map_err(|e|e.to_string())?,source,model,prompt,input.is_confirmed,input.chapter_id,snapshot.as_ref().map(serde_json::to_string).transpose().map_err(|error| error.to_string())?]).map_err(|e|e.to_string())?;
     c.execute(
         &format!("UPDATE book_projects SET updated_at={NOW} WHERE id=?1"),
         [&input.project_id],
@@ -381,10 +436,11 @@ impl Database {
         &self,
         project_id: &str,
         kind: &str,
+        chapter_id: Option<&str>,
     ) -> Result<Vec<WritingVersion>, String> {
         ai::validate_kind(kind)?;
-        self.with_connection(|c| {get(c,project_id)?;let mut q=c.prepare(&format!("SELECT {VERSION_COLUMNS} FROM writing_versions WHERE project_id=?1 AND kind=?2 ORDER BY version_no DESC")).map_err(|e|e.to_string())?;
-            let rows=q.query_map(params![project_id,kind],row_version).map_err(|e|e.to_string())?; rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())})
+        self.with_connection(|c| {super::chapters::require_scope(c,project_id,chapter_id)?;let mut q=c.prepare(&format!("SELECT {VERSION_COLUMNS} FROM writing_versions WHERE project_id=?1 AND kind=?2 AND chapter_id IS ?3 ORDER BY version_no DESC")).map_err(|e|e.to_string())?;
+            let rows=q.query_map(params![project_id,kind,chapter_id],row_version).map_err(|e|e.to_string())?; rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())})
     }
     pub fn save_writing(&self, input: SaveWritingInput) -> Result<WritingVersion, String> {
         self.with_connection(|c| {
@@ -393,10 +449,11 @@ impl Database {
                 .as_deref()
                 .map(|s| version(c, s))
                 .transpose()?;
-            if base
-                .as_ref()
-                .is_some_and(|b| b.project_id != input.project_id || b.kind != input.kind)
-            {
+            if base.as_ref().is_some_and(|b| {
+                b.project_id != input.project_id
+                    || b.chapter_id != input.chapter_id
+                    || b.kind != input.kind
+            }) {
                 return Err("来源版本不属于当前项目或内容类型。".into());
             }
             let source = if base.as_ref().is_some_and(|b| b.source_type != "manual") {
@@ -404,6 +461,28 @@ impl Database {
             } else {
                 "manual"
             };
+            let mut snapshot = base.as_ref().and_then(|base| base.source_snapshot.clone());
+            if let (Some(base), Some(snapshot)) = (&base, &mut snapshot) {
+                let (
+                    WritingContent::Publishing {
+                        audio_prompt: previous,
+                        ..
+                    },
+                    WritingContent::Publishing {
+                        audio_prompt: current,
+                        ..
+                    },
+                ) = (&base.content, &input.content)
+                else {
+                    return Err("章节创作版本类型无效。".into());
+                };
+                if previous != current {
+                    snapshot.target_duration_seconds =
+                        super::chapters::get_chapter(c, &input.project_id, &snapshot.chapter_id)?
+                            .input
+                            .target_duration_seconds;
+                }
+            }
             let tx = c.transaction().map_err(|e| e.to_string())?;
             let saved = append(
                 &tx,
@@ -411,14 +490,19 @@ impl Database {
                 source,
                 base.as_ref().map_or("", |b| &b.model_name),
                 base.as_ref().map_or("", |b| &b.prompt_version),
+                snapshot.as_ref(),
             )?;
             tx.commit().map_err(|e| e.to_string())?;
             Ok(saved)
         })
     }
-    pub fn list_ai_tasks(&self, project_id: &str) -> Result<Vec<AiTask>, String> {
-        self.with_connection(|c| {let mut q=c.prepare(&format!("SELECT {TASK_COLUMNS} FROM ai_tasks WHERE project_id=?1 ORDER BY created_at DESC,id DESC LIMIT 30")).map_err(|e|e.to_string())?;
-            let rows=q.query_map([project_id],row_task).map_err(|e|e.to_string())?; rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())})
+    pub fn list_ai_tasks(
+        &self,
+        project_id: &str,
+        chapter_id: Option<&str>,
+    ) -> Result<Vec<AiTask>, String> {
+        self.with_connection(|c| {super::chapters::require_scope(c,project_id,chapter_id)?;let mut q=c.prepare(&format!("SELECT {TASK_COLUMNS} FROM ai_tasks WHERE project_id=?1 AND chapter_id IS ?2 ORDER BY created_at DESC,id DESC LIMIT 30")).map_err(|e|e.to_string())?;
+            let rows=q.query_map(params![project_id,chapter_id],row_task).map_err(|e|e.to_string())?; rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())})
     }
     pub fn start_generation(&self, input: GenerationInput) -> Result<String, String> {
         self.start_bound_generation(input, None)
@@ -433,18 +517,37 @@ impl Database {
             let c = &transaction;
             if binding.is_none() && c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE project_id=?1 AND json_extract(input_json,'$.workflowVersion')=2 AND status NOT IN ('completed','cancelled'))",[&input.project_id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("本书正在自动制作，请查看本次创作方案，或停止流程后手动生成。".into()); }
             let project = get(c,&input.project_id)?;
+            super::chapters::require_scope(c,&input.project_id,input.chapter_id.as_deref())?;
             if input.recommend_duration && input.revision.is_some() { return Err("推荐时长不能同时调整内容。".into()); }
+            let base = revision_base(c, &input)?;
+            if input.revision.as_ref().is_some_and(|revision| !revision.fields.contains(&PublishingField::AudioPrompt)) {
+                if let Some(source) = base.as_ref().and_then(|base| base.source_snapshot.as_ref()) {
+                    input.target_duration_seconds = source.target_duration_seconds;
+                }
+            }
             if !input.recommend_duration {
-                let seconds = input.target_duration_seconds.unwrap_or(project.input.target_duration_seconds);
+                let seconds = if let Some(chapter) = &input.chapter_id {
+                    input.target_duration_seconds.or(super::chapters::get_chapter(c,&input.project_id,chapter)?.input.target_duration_seconds).ok_or("请先为本章推荐或设置目标时长。")?
+                } else { input.target_duration_seconds.unwrap_or(project.input.target_duration_seconds) };
                 audio::validate_duration(seconds)?;
                 input.target_duration_seconds = Some(seconds);
             }
-            revision_base(c, &input)?;
+            if let Some(base) = base {
+                input.source_snapshot = base.source_snapshot;
+            } else if binding.is_none() {
+                input.source_snapshot = input.chapter_id.as_deref().map(|chapter| super::chapters::snapshot(c,&input.project_id,chapter)).transpose()?;
+            }
+            if let Some(chapter) = &input.chapter_id {
+                input.source_snapshot.as_ref().ok_or("章节任务缺少来源快照。")?.validate(chapter)?;
+            }
+            if !input.recommend_duration {
+                if let Some(source) = &mut input.source_snapshot { source.target_duration_seconds = input.target_duration_seconds; }
+            }
             let p=provider(c,&input.provider_id)?;
             if !p.input.is_enabled || p.input.model_kind != "text" {return Err("请选择已启用的文本模型。".into());}
             let id=new_id(c)?;
             let prompt = if input.recommend_duration { audio::PROMPT_VERSION } else if input.revision.is_some() { revision::PROMPT_VERSION } else { PROMPT_VERSION };
-            c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW})"),params![id,input.project_id,"publishing",input.provider_id,p.input.model_name,prompt,serde_json::to_string(&input).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+            c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at,chapter_id) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,{NOW},?8)"),params![id,input.project_id,"publishing",input.provider_id,p.input.model_name,prompt,serde_json::to_string(&input).map_err(|e|e.to_string())?,input.chapter_id]).map_err(|e|e.to_string())?;
             if let Some(binding) = binding { super::automation::bind(c, binding, &input.project_id, &id)?; }
             transaction.commit().map_err(|e| e.to_string())?;
             Ok(id)
@@ -460,27 +563,42 @@ impl Database {
             let base = revision_base(c, &input)?;
             let mut user=serde_json::json!({"book":{"title":project.input.title,"author":project.input.author,"description":project.input.description,"sourceNotes":project.input.source_notes}});
             let mut book_title = project.input.title;
+            let chapter_title = input.source_snapshot.as_ref().map(|source| source.chapter_title.clone());
             if let Some(run) = super::automation::generation_run(c, id)? {
                 if run.status != "running" { return Err("自动流程已暂停，生成请求尚未发送。".into()); }
                 user["book"] = serde_json::json!({"title":run.input.title,"author":run.input.author,"description":run.input.description,"sourceNotes":run.input.source_notes});
                 book_title = run.input.title;
                 p.input = run.input.text_provider;
             }
+            if let Some(source) = &input.source_snapshot {
+                source.validate(input.chapter_id.as_deref().ok_or("章节范围缺失。")?)?;
+                user["book"] = source.model_book();
+                user["sourceScope"] = serde_json::json!({"kind":"chapter","chapterId":source.chapter_id,"chapterTitle":source.chapter_title});
+                book_title = source.book_title.clone();
+            } else { user["sourceScope"] = serde_json::json!({"kind":"book"}); }
             if !input.recommend_duration {
-                user["audio"] = audio::context(input.target_duration_seconds.ok_or("任务缺少目标时长，请重新生成。")?);
+                user["audio"] = audio::context(input.target_duration_seconds.ok_or("任务缺少目标时长，请重新生成。")?, chapter_title.as_deref());
             }
             if let Some(base) = &base {
                 user["currentContent"] = serde_json::to_value(&base.content).map_err(|e|e.to_string())?;
                 user["revision"] = serde_json::to_value(&input.revision).map_err(|e|e.to_string())?;
             }
             c.execute("UPDATE ai_tasks SET status='running',model_name=?2 WHERE id=?1 AND status='pending'",params![id,p.input.model_name]).map_err(|e|e.to_string())?;
-            Ok(PreparedGeneration{input,provider:p,user:user.to_string(),book_title,base})
+            Ok(PreparedGeneration{input,provider:p,user:user.to_string(),book_title,chapter_title,base})
         })
     }
-    pub fn set_audio_duration(&self, project_id: &str, seconds: i64) -> Result<(), String> {
+    pub fn set_audio_duration(
+        &self,
+        project_id: &str,
+        seconds: i64,
+        chapter_id: Option<&str>,
+    ) -> Result<(), String> {
         audio::validate_duration(seconds)?;
         self.with_connection(|c| {
-            let changed = c.execute(&format!("UPDATE book_projects SET target_duration_seconds=?2,audio_duration_source='manual',updated_at={NOW} WHERE id=?1"),params![project_id,seconds]).map_err(|e|e.to_string())?;
+            super::chapters::require_scope(c,project_id,chapter_id)?;
+            let changed = if let Some(chapter) = chapter_id {
+                c.execute(&format!("UPDATE book_chapters SET target_duration_seconds=?2,audio_duration_source='manual',updated_at={NOW} WHERE id=?1 AND project_id=?3"),params![chapter,seconds,project_id])
+            } else { c.execute(&format!("UPDATE book_projects SET target_duration_seconds=?2,audio_duration_source='manual',updated_at={NOW} WHERE id=?1"),params![project_id,seconds]) }.map_err(|e|e.to_string())?;
             if changed == 0 { return Err("书籍不存在或已删除。".into()); }
             Ok(())
         })
@@ -503,7 +621,12 @@ impl Database {
                 run.input.duration_reason = recommendation.reason.clone();
                 tx.execute(&format!("UPDATE automation_runs SET input_json=?1,updated_at={NOW} WHERE id=?2"),params![serde_json::to_string(&run.input).map_err(|e|e.to_string())?,run.id]).map_err(|e|e.to_string())?;
             }
-            tx.execute(&format!("UPDATE book_projects SET target_duration_seconds=?2,audio_duration_source='ai',updated_at={NOW} WHERE id=?1"),params![input.project_id,recommendation.minutes * 60]).map_err(|e|e.to_string())?;
+            if let Some(chapter) = input.chapter_id.as_deref() {
+                super::chapters::require_scope(&tx,&input.project_id,Some(chapter))?;
+                tx.execute(&format!("UPDATE book_chapters SET target_duration_seconds=?2,audio_duration_source='ai',updated_at={NOW} WHERE id=?1 AND project_id=?3"),params![chapter,recommendation.minutes * 60,input.project_id]).map_err(|e|e.to_string())?;
+            } else {
+                tx.execute(&format!("UPDATE book_projects SET target_duration_seconds=?2,audio_duration_source='ai',updated_at={NOW} WHERE id=?1"),params![input.project_id,recommendation.minutes * 60]).map_err(|e|e.to_string())?;
+            }
             tx.execute(&format!("UPDATE ai_tasks SET status='succeeded',completed_at={NOW} WHERE id=?1"),[id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;
             Ok(recommendation)
@@ -522,7 +645,7 @@ impl Database {
             let running:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE id=?1 AND status='running')",[id],|r|r.get(0)).map_err(|e|e.to_string())?;
             if !running{return Err("任务已取消或结束，结果未写入。".into());}
             super::automation::generation_run(&tx, id)?;
-            let saved=append(&tx,&SaveWritingInput{project_id:input.project_id.clone(),kind:"publishing".into(),content,based_on:None,is_confirmed:false},"ai",model,PROMPT_VERSION)?;
+            let saved=append(&tx,&SaveWritingInput{project_id:input.project_id.clone(),chapter_id:input.chapter_id.clone(),kind:"publishing".into(),content,based_on:None,is_confirmed:false},"ai",model,PROMPT_VERSION,input.source_snapshot.as_ref())?;
             tx.execute(&format!("UPDATE ai_tasks SET status='succeeded',version_id=?2,completed_at={NOW} WHERE id=?1"),params![id,saved.id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;Ok(saved)
         })
@@ -551,7 +674,9 @@ impl Database {
             let base=revision_base(&tx,&input)?.ok_or("此任务不是按项调整。")?;
             if let Some(saved)=saved { return version(&tx,&saved); }
             let content:WritingContent=serde_json::from_str(&preview.ok_or("候选结果已不可用。")?).map_err(|_|"候选结果无效。")?;
-            let saved=append(&tx,&SaveWritingInput { project_id:input.project_id, kind:"publishing".into(),content,based_on:Some(base.id),is_confirmed:false },"mixed",&model,&prompt)?;
+            let saved=append(&tx,&SaveWritingInput {
+        chapter_id: input.chapter_id,
+ project_id:input.project_id, kind:"publishing".into(),content,based_on:Some(base.id),is_confirmed:false },"mixed",&model,&prompt, input.source_snapshot.as_ref())?;
             tx.execute("UPDATE ai_tasks SET version_id=?2,preview_json=NULL WHERE id=?1",params![id,saved.id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;
             Ok(saved)

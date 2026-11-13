@@ -63,3 +63,20 @@ it('retains an image candidate and the requested size without applying it to an 
   expect(job.result).toEqual(asset)
   expect(job.status).toBe('succeeded')
 })
+
+it('keeps simultaneous chapters of the same book separate when results arrive out of order', async () => {
+  const finish = new Map<string, (result: GenerationResult) => void>()
+  vi.mocked(ai.startGeneration).mockImplementation(async input => `task-${input.chapterId ?? 'book'}`)
+  vi.mocked(ai.executeGeneration).mockImplementation(id => new Promise(resolve => finish.set(id, resolve)))
+  for (const chapterId of [null, 'chapter-one', 'chapter-two']) {
+    await startWritingGeneration({ projectId: 'book', providerId: 'model', chapterId }, chapterId ?? '整本书')
+  }
+  finish.get('task-chapter-two')!({ ...version, id: 'v2', chapterId: 'chapter-two' }); await flushPromises()
+  expect(generationJobs.get(generationKey('book', 'writing', 'chapter-two'))?.result).toMatchObject({ id: 'v2', chapterId: 'chapter-two' })
+  expect(isGenerating(generationJobs.get(generationKey('book', 'writing', 'chapter-one')))).toBe(true)
+  expect(isGenerating(generationJobs.get(generationKey('book', 'writing')))).toBe(true)
+  finish.get('task-chapter-one')!({ ...version, id: 'v1', chapterId: 'chapter-one' })
+  finish.get('task-book')!(version); await flushPromises()
+  expect(generationJobs.size).toBe(3)
+  expect(generationJobs.get(generationKey('book', 'writing', 'chapter-one'))?.result).toMatchObject({ chapterId: 'chapter-one' })
+})

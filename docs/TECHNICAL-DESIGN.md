@@ -1,5 +1,15 @@
 # 书引 AI 技术设计文档
 
+## 章节精讲与整书共用工作流（2026-11-13）
+
+以可空chapterId表示整书/章节范围，沿用现有Provider、页面、自动执行器、子任务及恢复。AudioSourceInput增加chapter，由Rust从SQLite读取章节正文并冻结书籍信息、章节名称、正文摘要和目标时长；前置文本生成、文案历史和NotebookLM文本来源贯穿同一快照。原整书文件来源保持不变，不增加制作目标分支或第二套执行器。
+
+路由使用?chapter=章节ID。侧栏、五步导航、快捷键、后台任务、发布队列及结果链接传递范围；文案、封面、新发布草稿分别使用章节owner，后台生成缓存加入章节ID。字幕和分镜仍取自实际原声，所有素材、版本、子任务和发布关联验证所属章节；书籍级静态图片可明确共享。精确成果入口不可悄悄回退到另一份任务。
+
+共用publishing-v8、publishing-revision-v7、audio-template-v4、audio-duration-v4和content-check-v2支持章节精讲，整书保持五段、章节按内容安排1—5段。只调整标题等字段保留原音频时长；明确调整音频指导时可使用新目标，正文快照仍继承所选版本。迁移、调用链和验证见[章节精讲设计](CHAPTER-VIDEO-DESIGN.md)与[验收记录](CHAPTER-WORKFLOW-VERIFICATION.md)。
+
+独立评审后补齐精确媒体预览、单镜AI任务章节归属和手工音频目标继承；章节新增按钮统一进入原范围路由，防止直接卸载丢稿。历史音频单项取用核对来源和目标，不一致时沿用完整版本切换，无额外持久状态。见[评审与补测](CHAPTER-WORKFLOW-REVIEW.md)。
+
 ## 模型诊断分页与保留策略（2026-11-11）
 
 `list_model_calls(page, page_size)`在同一数据库连接锁内读取总数、全局运行数、保留设置与当前页，返回`{rows,total,page,pageSize,runningCount,retentionDays}`。SQL使用`ORDER BY started_at DESC,id DESC LIMIT/OFFSET`；每页1—100条，页码须为正，记录减少时夹取最后有效页，空表返回第1页。v24将原时间索引替换为同名的时间/ID联合倒序索引，旧记录保持原值。

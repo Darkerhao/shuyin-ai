@@ -8,7 +8,7 @@ vi.mock('../src/services/projects', () => ({ isDesktop: () => false }))
 vi.mock('../src/composables/useWindowCloseGuard', () => ({ useWindowCloseGuard: vi.fn() }))
 
 const fixture = (overrides: Partial<AutomationRun> = {}): AutomationRun => ({
-  id: 'run1', projectId: 'book1', input: { workflowVersion: 2, title: '原书', author: '', targetDurationSeconds: 600, durationReason: '', selection: { projectId: 'book1', sourceAssetId: 'source1', textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'key1' } },
+  id: 'run1', projectId: 'book1', input: { workflowVersion: 2, title: '原书', author: '', targetDurationSeconds: 600, durationReason: '', selection: { projectId: 'book1', source: { kind: 'asset', assetId: 'source1' }, textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'key1' } },
   status: 'running', stage: 'audio', runId: 1, error: '', audioJobId: 'audio1', videoJobId: null, writingTaskId: 'writing1', writingVersionId: 'version1', finalWritingVersionId: null, actualDurationSeconds: null,
   durationTaskId: null, contentCheckTaskId: null, landscapeTaskId: null, portraitTaskId: null, widescreenTaskId: null, landscapeCoverId: null, portraitCoverId: null, widescreenCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '', ...overrides,
 })
@@ -26,7 +26,7 @@ async function render(run: AutomationRun) {
 it('shows completed preceding stages without treating a created audio task as a completed audio result', async () => {
   const wrapper = await render(fixture())
   expect(wrapper.findAll('[data-state="done"]')).toHaveLength(1)
-  expect(wrapper.get('[aria-current="step"]').text()).toBe('原书音频进行中')
+  expect(wrapper.get('[aria-current="step"]').text()).toBe('原声音频进行中')
   expect(wrapper.text()).not.toContain('实际音频')
   expect(wrapper.findAll('a').find(link => link.text() === '音频任务')?.attributes('href')).toBe('/projects/book1/writing?tab=audio&audioJob=audio1')
   expect(wrapper.findAll('a[href*="coverVersion="]')).toHaveLength(0)
@@ -83,4 +83,14 @@ it('does not project the new workflow sequence onto legacy or unknown stages', a
   await flushPromises()
   expect(wrapper.find('[aria-label="自动制作阶段"]').exists()).toBe(false)
   expect(wrapper.text()).toContain('unknown_stage')
+})
+
+it('opens every saved output in the chapter that produced it', async () => {
+  const run = fixture({ chapterId: 'chapter-one', videoJobId: 'video-one', landscapeCoverId: 'cover-one', portraitCoverId: 'cover-two', widescreenCoverId: 'cover-three', publishTaskId: 'publish-one' })
+  run.input.chapterSource = { chapterTitle: '第一章：精讲' }
+  const wrapper = await render(run)
+  expect(wrapper.get('.automation-title').text()).toContain('第一章：精讲')
+  for (const link of wrapper.findAll('a')) expect(link.attributes('href')).toContain('chapter=chapter-one')
+  expect(wrapper.findAll('a[href*="coverVersion="]')).toHaveLength(3)
+  expect(wrapper.get('a[href*="task=publish-one"]').text()).toContain('发布详情')
 })

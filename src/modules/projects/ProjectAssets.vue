@@ -10,7 +10,7 @@ import { computed, onMounted, ref } from 'vue'
 import * as api from '../../services/projects'
 import type { Asset } from '../../types/project'
 import { useOperation } from '../../composables/useOperation'
-const props = defineProps<{ projectId: string }>()
+const props = defineProps<{ projectId: string; chapterId?: string | null }>()
 const emit = defineEmits<{ changed: [] }>()
 const assets = ref<Asset[]>([])
 const loaded = ref(false)
@@ -27,11 +27,11 @@ const visible = computed(() => assets.value.filter(asset =>
   && (availability.value === 'all' || (availability.value === 'available' ? asset.existsStatus === 'available' : asset.existsStatus !== 'available')),
 ))
 function clearFilters() { search.value = ''; type.value = 'all'; availability.value = 'all' }
-async function refresh() { assets.value = await api.listAssets(props.projectId); loaded.value = true }
+async function refresh() { assets.value = await api.listAssets(props.projectId, props.chapterId ?? null); loaded.value = true }
 const select = (asset?: Asset) => run(async () => {
   const path = await api.chooseAsset()
   if (!path) return
-  await api.linkAsset(props.projectId, path, asset?.id ?? null)
+  await api.linkAsset(props.projectId, path, asset?.id ?? null, asset ? asset.chapterId ?? null : props.chapterId ?? null)
   await refresh()
   emit('changed')
   message.value = asset ? '已重新定位素材。' : '素材已关联，源文件保持原位。'

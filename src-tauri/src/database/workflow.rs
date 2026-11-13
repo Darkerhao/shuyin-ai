@@ -1,5 +1,5 @@
 use super::Database;
-use rusqlite::OptionalExtension;
+use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -28,6 +28,8 @@ fn stage(path: &'static str, status: impl Into<String>, tone: &'static str) -> P
 #[serde(rename_all = "camelCase")]
 pub struct ResumeTask {
     pub project_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     pub title: String,
     pub kind: String,
     pub task_id: String,
@@ -69,22 +71,30 @@ impl Database {
         })
     }
 
-    pub fn project_progress(&self, project_id: &str) -> Result<Vec<ProjectStage>, String> {
-        self.get_project(project_id)?;
-        let assets = self.list_assets(project_id)?;
-        let writing = self.read_editor_draft(project_id, "writing")?;
-        let versions = self.list_versions(project_id, "publishing")?;
-        let covers = self.list_cover_versions(project_id)?;
-        let cover_draft = self.read_editor_draft(project_id, "cover")?;
-        let tasks = self.list_publish_tasks(project_id)?;
+    pub fn project_progress(
+        &self,
+        project_id: &str,
+        chapter_id: Option<&str>,
+    ) -> Result<Vec<ProjectStage>, String> {
+        let owner = chapter_id.map_or_else(
+            || project_id.to_owned(),
+            |id| format!("{project_id}:chapter:{id}"),
+        );
+        let assets = self.list_assets(project_id, chapter_id)?;
+        let writing = self.read_editor_draft(&owner, "writing")?;
+        let versions = self.list_versions(project_id, "publishing", chapter_id)?;
+        let covers = self.list_cover_versions(project_id, chapter_id)?;
+        let cover_draft = self.read_editor_draft(&owner, "cover")?;
+        let tasks = self.list_publish_tasks(project_id, chapter_id)?;
         let (generating, cover_generating, audio_running, video) = self.with_connection(|c| {
-            let (generating, cover_generating, audio_running) = c.query_row("SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE project_id=?1 AND status IN ('pending','running') AND kind='publishing'), EXISTS(SELECT 1 FROM ai_tasks WHERE project_id=?1 AND status IN ('pending','running') AND kind='cover'), EXISTS(SELECT 1 FROM audio_jobs WHERE project_id=?1 AND status IN ('created','preparing','generating','downloading','importing'))", [project_id], |r| Ok((r.get::<_, bool>(0)?, r.get::<_, bool>(1)?, r.get::<_, bool>(2)?))).map_err(|e| e.to_string())?;
-            let video = c.query_row("SELECT status,stage FROM video_jobs WHERE project_id=?1 ORDER BY (status='running') DESC, MAX(updated_at,COALESCE(json_extract(editor_draft_json,'$.updatedAt'),updated_at)) DESC,id DESC LIMIT 1", [project_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).optional().map_err(|e| e.to_string())?;
+            let (generating, cover_generating, audio_running) = c.query_row("SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE project_id=?1 AND chapter_id IS ?2 AND status IN ('pending','running') AND kind='publishing'), EXISTS(SELECT 1 FROM ai_tasks WHERE project_id=?1 AND chapter_id IS ?2 AND status IN ('pending','running') AND kind='cover'), EXISTS(SELECT 1 FROM audio_jobs WHERE project_id=?1 AND chapter_id IS ?2 AND status IN ('created','preparing','generating','downloading','importing'))", params![project_id,chapter_id], |r| Ok((r.get::<_, bool>(0)?, r.get::<_, bool>(1)?, r.get::<_, bool>(2)?))).map_err(|e| e.to_string())?;
+            let video = c.query_row("SELECT status,stage FROM video_jobs WHERE project_id=?1 AND chapter_id IS ?2 ORDER BY (status='running') DESC, MAX(updated_at,COALESCE(json_extract(editor_draft_json,'$.updatedAt'),updated_at)) DESC,id DESC LIMIT 1", params![project_id,chapter_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).optional().map_err(|e| e.to_string())?;
             Ok((generating, cover_generating, audio_running, video))
         })?;
-        let mut result = vec![if assets
-            .iter()
-            .any(|a| a.asset_type == "document" && a.exists_status != "available")
+        let mut result = vec![if chapter_id.is_none()
+            && assets
+                .iter()
+                .any(|a| a.asset_type == "document" && a.exists_status != "available")
         {
             stage("", "来源待检查", "attention")
         } else {
@@ -198,26 +208,27 @@ impl Database {
     pub fn workflow_snapshot(&self) -> Result<WorkflowSnapshot, String> {
         self.with_connection(|c| {
             // Recent activity determines what the creator was doing; active work always wins.
-            let mut q = c.prepare("SELECT p.id,p.title,t.kind,t.id,t.status,t.stage,t.updated,t.running FROM book_projects p JOIN (
-                SELECT project_id,'video' kind,id,status,stage,MAX(updated_at,COALESCE(json_extract(editor_draft_json,'$.updatedAt'),updated_at)) updated,status='running' running FROM video_jobs
-                UNION ALL SELECT project_id,'audio',id,status,stage,updated_at,status IN ('created','preparing','generating','downloading','importing') FROM audio_jobs
-                UNION ALL SELECT project_id,'publishing',id,status,'',updated_at,0 FROM publish_tasks
-                UNION ALL SELECT project_id,CASE WHEN kind='video_scene_revision' OR kind='video_illustration' THEN 'video' WHEN kind='cover' THEN 'covers' ELSE 'writing' END,id,status,kind,created_at,1 FROM ai_tasks WHERE status IN ('pending','running')
-                UNION ALL SELECT project_id,CASE kind WHEN 'cover' THEN 'covers' WHEN 'project' THEN 'project' WHEN 'publishing' THEN 'publishing' ELSE 'writing' END,CASE WHEN kind='publishing' THEN substr(owner_id,instr(owner_id,':')+1) ELSE '' END,'draft','',updated_at,0 FROM editor_drafts
-                UNION ALL SELECT project_id,'writing',id,'saved','',created_at,0 FROM writing_versions
-                UNION ALL SELECT project_id,'covers',id,'saved','',created_at,0 FROM cover_versions
-            ) t ON t.project_id=p.id WHERE p.status!='archived' ORDER BY t.running DESC,t.updated DESC,t.id DESC").map_err(|e|e.to_string())?;
-            let rows = q.query_map([], |r| Ok(ResumeTask { project_id:r.get(0)?,title:r.get(1)?,kind:r.get(2)?,task_id:r.get(3)?,status:r.get(4)?,stage:r.get(5)?,updated_at:r.get(6)?,running:r.get(7)? })).map_err(|e|e.to_string())?;
+            let mut q = c.prepare("SELECT p.id,p.title || CASE WHEN ch.id IS NOT NULL THEN ' · ' || ch.title WHEN t.chapter_id='new' THEN ' · 新章节' ELSE '' END,t.kind,t.id,t.status,t.stage,t.updated,t.running,t.chapter_id FROM book_projects p JOIN (
+                SELECT project_id,'video' kind,id,status,stage,MAX(updated_at,COALESCE(json_extract(editor_draft_json,'$.updatedAt'),updated_at)) updated,status='running' running,chapter_id FROM video_jobs
+                UNION ALL SELECT project_id,'audio',id,status,stage,updated_at,status IN ('created','preparing','generating','downloading','importing'),chapter_id FROM audio_jobs
+                UNION ALL SELECT project_id,'publishing',id,status,'',updated_at,0,chapter_id FROM publish_tasks
+                UNION ALL SELECT project_id,CASE WHEN kind='video_scene_revision' OR kind='video_illustration' THEN 'video' WHEN kind='cover' THEN 'covers' ELSE 'writing' END,id,status,kind,created_at,1,chapter_id FROM ai_tasks WHERE status IN ('pending','running')
+                UNION ALL SELECT project_id,CASE kind WHEN 'cover' THEN 'covers' WHEN 'project' THEN 'project' WHEN 'publishing' THEN 'publishing' ELSE 'writing' END,CASE WHEN kind='publishing' THEN CASE WHEN instr(owner_id,':chapter:')>0 THEN 'new' ELSE substr(owner_id,instr(owner_id,':')+1) END ELSE '' END,'draft','',updated_at,0,
+                    CASE WHEN instr(owner_id,':chapter:')>0 THEN replace(substr(owner_id,instr(owner_id,':chapter:')+9),':new','') ELSE (SELECT chapter_id FROM publish_tasks WHERE id=substr(owner_id,instr(owner_id,':')+1)) END FROM editor_drafts
+                UNION ALL SELECT project_id,'writing',id,'saved','',created_at,0,chapter_id FROM writing_versions
+                UNION ALL SELECT project_id,'covers',id,'saved','',created_at,0,chapter_id FROM cover_versions
+            ) t ON t.project_id=p.id LEFT JOIN book_chapters ch ON ch.id=t.chapter_id AND ch.project_id=p.id WHERE p.status!='archived' ORDER BY t.running DESC,t.updated DESC,t.id DESC").map_err(|e|e.to_string())?;
+            let rows = q.query_map([], |r| Ok(ResumeTask { project_id:r.get(0)?,chapter_id:r.get(8)?,title:r.get(1)?,kind:r.get(2)?,task_id:r.get(3)?,status:r.get(4)?,stage:r.get(5)?,updated_at:r.get(6)?,running:r.get(7)? })).map_err(|e|e.to_string())?;
             let mut resume = BTreeMap::new();
             let mut running = Vec::new();
             for row in rows {
                 let row = row.map_err(|e|e.to_string())?;
-                if !resume.contains_key(&row.project_id) {
-                    resume.insert(row.project_id.clone(), row.clone());
-                }
+                resume.entry((row.project_id.clone(), row.chapter_id.clone())).or_insert_with(|| row.clone());
                 if row.running { running.push(row); }
             }
-            Ok(WorkflowSnapshot { resume:resume.into_values().collect(),running })
+            let mut resume: Vec<_> = resume.into_values().collect();
+            resume.sort_by(|a,b| b.running.cmp(&a.running).then_with(|| b.updated_at.cmp(&a.updated_at)).then_with(|| b.task_id.cmp(&a.task_id)));
+            Ok(WorkflowSnapshot { resume,running })
         })
     }
 }
@@ -238,7 +249,7 @@ mod tests {
             c.execute("INSERT INTO ai_tasks(id,project_id,kind,model_name,prompt_version,status,input_json,created_at) VALUES('cover-active',?1,'cover','local-test','cover-background-v2','running','{}','now')", [&project]).unwrap();
             Ok(())
         }).unwrap();
-        let progress = db.project_progress(&project).unwrap();
+        let progress = db.project_progress(&project, None).unwrap();
         assert_eq!(progress[1].status, "音频制作中");
         assert_eq!(progress[2].status, "生成背景中");
         assert_eq!(progress[3].status, "准备中");
@@ -276,7 +287,7 @@ mod tests {
         let mut input = project.input.clone();
         input.status = "published".into();
         db.save_project(Some(&project.id), input).unwrap();
-        let before = db.project_progress(&project.id).unwrap();
+        let before = db.project_progress(&project.id, None).unwrap();
         assert_eq!(
             before.iter().map(|v| v.path).collect::<Vec<_>>(),
             ["", "writing", "covers", "video", "publishing"]
@@ -286,11 +297,11 @@ mod tests {
         let input = crate::database::m4_tests::input(&db, &project);
         let task = db.save_publish_task(None, input).unwrap();
         db.prepare_publish_task(&task.id).unwrap();
-        let after = db.project_progress(&project.id).unwrap();
+        let after = db.project_progress(&project.id, None).unwrap();
         assert_eq!(after[2].status, "已导出 2/2");
         assert_eq!(after[3].status, "成片可用");
         assert_eq!(after[4].status, "已就绪");
-        assert!(db.project_progress("missing-book").is_err());
+        assert!(db.project_progress("missing-book", None).is_err());
     }
 
     #[test]
@@ -298,7 +309,7 @@ mod tests {
         let (_dir, db, _) = crate::database::video::tests::fixture();
         let project = crate::database::m4_tests::project(&db);
         let input = crate::database::m4_tests::input(&db, &project);
-        let versions = db.list_cover_versions(&project.id).unwrap();
+        let versions = db.list_cover_versions(&project.id, None).unwrap();
         let mut configs: Vec<_> = versions.iter().map(|v| v.config.clone()).collect();
         let mut wide = configs[0].clone();
         wide.width = 1920;
@@ -318,7 +329,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            db.project_progress(&project.id).unwrap()[2].status,
+            db.project_progress(&project.id, None).unwrap()[2].status,
             "已导出 2/2"
         );
         configs[0].title = "新的未保存标题".into();
@@ -342,23 +353,26 @@ mod tests {
             }),
         )
         .unwrap();
-        let progress = db.project_progress(&project.id).unwrap();
+        let progress = db.project_progress(&project.id, None).unwrap();
         assert_eq!(progress[1].status, "有草稿");
         assert_eq!(progress[2].status, "需保存或重新导出");
         db.save_editor_draft(&project.id, "cover", None).unwrap();
         std::fs::remove_file(versions[0].exported_path.as_ref().unwrap()).unwrap();
         assert_eq!(
-            db.project_progress(&project.id).unwrap()[2].status,
+            db.project_progress(&project.id, None).unwrap()[2].status,
             "已导出 1/2"
         );
         let video = db
-            .list_assets(&project.id)
+            .list_assets(&project.id, None)
             .unwrap()
             .into_iter()
             .find(|a| Some(&a.id) == input.video_asset_id.as_ref())
             .unwrap();
         std::fs::write(&video.file_path, b"not a video").unwrap();
-        assert_ne!(db.project_progress(&project.id).unwrap()[3].tone, "ready");
+        assert_ne!(
+            db.project_progress(&project.id, None).unwrap()[3].tone,
+            "ready"
+        );
     }
 
     #[test]
@@ -368,7 +382,7 @@ mod tests {
         let input = crate::database::m4_tests::input(&db, &project);
         let id = input.video_asset_id.unwrap();
         let asset = db
-            .list_assets(&project.id)
+            .list_assets(&project.id, None)
             .unwrap()
             .into_iter()
             .find(|a| a.id == id)

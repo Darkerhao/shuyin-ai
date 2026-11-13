@@ -1,13 +1,17 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import type { Asset, Project, ProjectInput, WorkspaceSettings } from '../types/project'
+import type { Chapter, ChapterInput, ChapterSummary } from '../types/chapter'
 export { isDesktop, errorMessage } from './verification'
 export const listProjects = (search = '', status = '') => invoke<Project[]>('list_projects', { search, status })
 export const getProject = (id: string) => invoke<Project>('get_project', { id })
+export const listChapters = (projectId: string) => invoke<ChapterSummary[]>('list_chapters', { projectId })
+export const getChapter = (projectId: string, id: string) => invoke<Chapter>('get_chapter', { projectId, id })
+export const saveChapter = (projectId: string, id: string | null, input: ChapterInput) => invoke<Chapter>('save_chapter', { projectId, id, input })
 export const saveProject = (id: string | null, input: ProjectInput, sourcePaths: string[] = []) => invoke<Project>('save_project', { id, input, sourcePaths })
 export const deleteProject = (id: string) => invoke<void>('delete_project', { id })
-export const listAssets = (projectId: string) => invoke<Asset[]>('list_assets', { projectId })
-export const linkAsset = (projectId: string, path: string, assetId: string | null = null) => invoke<string>('link_asset', { projectId, path, assetId })
+export const listAssets = (projectId: string, chapterId: string | null = null) => invoke<Asset[]>('list_assets', { projectId, ...(chapterId ? { chapterId } : {}) })
+export const linkAsset = (projectId: string, path: string, assetId: string | null = null, chapterId: string | null = null) => invoke<string>('link_asset', { projectId, path, assetId, ...(chapterId ? { chapterId } : {}) })
 export const unlinkAsset = (id: string) => invoke<void>('unlink_asset', { id })
 export const openAsset = (id: string, directory = false) => invoke<void>('open_asset', { id, directory })
 export const mediaSource = async (projectId: string, assetId: string) => convertFileSrc(await invoke<string>('media_asset_path', { projectId, assetId }))

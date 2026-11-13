@@ -13,6 +13,7 @@
     addSource: ['Add source', 'Add sources', '添加来源', '添加资料来源'],
     uploadFiles: ['Upload files', 'Upload file', 'Choose files', '上传文件', '选择文件'],
     copiedText: ['Copied text', 'Paste text', 'Text', '复制的文字', '粘贴的文字', '文字'],
+    pastedText: ['Paste copied text', 'Paste text', 'Copied text', 'Text', '粘贴复制的文字', '在此处粘贴文字', '粘贴的文字', '复制的文字', '文字'],
     insert: ['Insert', 'Add', 'Insert text', '插入', '添加'],
     audioOverview: ['Audio Overview', 'Audio overview', 'Audio overviews', '音频概览', '音频总览', '摘要音频'],
     customize: ['Customize', 'Customize audio', 'Customize Audio Overview', 'Customize audio overview', '自定义', '自定义音频'],
@@ -324,7 +325,7 @@
 
   function sourceName(job) {
     if (job.source?.kind === 'asset') return job.source.name
-    return '书籍资料文本'
+    return job.source?.name || '书籍资料文本'
   }
 
   function sourceAddControl() {
@@ -373,10 +374,14 @@
     const copiedText = await waitFor(() => findInteractive(UI.copiedText, scope), 3000)
     if (!copiedText) throw new UiError('text_source_missing', '来源弹窗未提供“复制的文字”入口。')
     click(copiedText, '复制的文字')
-    const input = await waitFor(() => findEditable(['Paste text', 'Copied text', 'Text', '粘贴的文字', '复制的文字', '文字'], scope), 3000)
+    const input = await waitFor(() => {
+      const current = dialogScope()
+      return current === document ? null : findEditable(UI.pastedText, current)
+    }, 3000)
     if (!input) throw new UiError('text_source_input_missing', '未找到资料文本输入框。')
     writeAndVerify(input, job.source.text)
-    const insert = findInteractive(UI.insert, scope) ?? findInteractive(UI.insert)
+    const current = dialogScope()
+    const insert = current === document ? null : findInteractive(UI.insert, current)
     if (!insert) throw new UiError('text_source_insert_missing', '未找到插入资料文本按钮。')
     click(insert, '插入资料')
   }

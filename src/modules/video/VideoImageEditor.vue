@@ -14,7 +14,7 @@ import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
 import type { VideoSceneImage } from '../../types/video'
 
-const props = defineProps<{ projectId: string; sceneIndex: number; image?: VideoSceneImage; assets: Asset[]; providers: ModelProvider[]; disabled: boolean }>()
+const props = defineProps<{ projectId: string; chapterId?: string | null; sceneIndex: number; image?: VideoSceneImage; assets: Asset[]; providers: ModelProvider[]; disabled: boolean }>()
 const emit = defineEmits<{ 'update:image': [image: VideoSceneImage | undefined]; 'refresh-assets': []; working: [value: boolean] }>()
 const { busy, error, message, run } = useOperation()
 const prefix = computed(() => `video-image-${props.sceneIndex}`)
@@ -41,7 +41,7 @@ function update<K extends keyof VideoSceneImage>(key: K, value: VideoSceneImage[
 const importImage = () => run(async () => {
   const path = await api.chooseImage()
   if (typeof path !== 'string') return
-  const id = await api.importImage(props.projectId, path)
+  const id = await api.importImage(props.projectId, path, props.chapterId ?? null)
   emit('refresh-assets'); selectImage(id)
   message.value = '图片已关联，原文件保留。请填写来源和授权，再检查裁切。'
 })
@@ -51,7 +51,7 @@ const generate = () => {
     if (!provider.value) throw new Error('请选择已启用的图片模型。')
     const model = `${provider.value.name} / ${provider.value.modelName}`
     try {
-      taskId.value = await api.startIllustration(props.projectId, providerId.value, description.value)
+      taskId.value = await api.startIllustration(props.projectId, providerId.value, description.value, props.chapterId ?? null)
       const asset = await api.executeIllustration(taskId.value)
       candidate.value = { asset, model }
       emit('refresh-assets')

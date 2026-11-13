@@ -6,8 +6,8 @@ use super::{
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-pub const VERSION: &str = "content-check-v1";
-pub const PROMPT: &str = include_str!("../../../prompts/content-check-v1.md");
+pub const VERSION: &str = "content-check-v2";
+pub const PROMPT: &str = include_str!("../../../prompts/content-check-v2.md");
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -55,6 +55,7 @@ pub fn apply(
             &fields,
             book,
             seconds,
+            None,
         )?
     };
     let mut value = serde_json::to_value(&content).map_err(|e| e.to_string())?;

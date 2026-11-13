@@ -1,4 +1,5 @@
 import type { CoverDesign } from './cover'
+import type { ChapterSource } from './chapter'
 
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export interface ProviderInput { modelKind: 'text' | 'image'; name: string; baseUrl: string; modelName: string; reasoningEffort: ReasoningEffort | null; isDefault: boolean; isEnabled: boolean }
@@ -20,12 +21,12 @@ export interface PublishingContent {
 }
 export const emptyPublishing = (): PublishingContent => ({ format: 'publishing', title: '', description: '', tags: '', audioPrompt: '', coverTitle: '', coverSubtitle: '', coverPromptLandscape: '', coverPromptPortrait: '', coverPromptWidescreen: '' })
 export type WritingContent = PublishingContent
-export interface WritingVersion { id: string; projectId: string; kind: WritingKind; versionNo: number; content: WritingContent; sourceType: 'ai' | 'manual' | 'mixed'; modelName: string; promptVersion: string; isConfirmed: boolean; createdAt: string }
-export interface SaveWritingInput { projectId: string; kind: WritingKind; content: WritingContent; basedOn: string | null; isConfirmed: boolean }
+export interface WritingVersion { id: string; projectId: string; chapterId?: string | null; sourceSnapshot?: ChapterSource | null; kind: WritingKind; versionNo: number; content: WritingContent; sourceType: 'ai' | 'manual' | 'mixed'; modelName: string; promptVersion: string; isConfirmed: boolean; createdAt: string }
+export interface SaveWritingInput { projectId: string; chapterId?: string | null; kind: WritingKind; content: WritingContent; basedOn: string | null; isConfirmed: boolean }
 export type PublishingTextField = keyof Omit<PublishingContent, 'format' | 'coverDesign'>
 export type PublishingField = PublishingTextField | 'coverDesign'
 export interface RevisionInput { basedOn: string; fields: PublishingField[]; instruction: string }
-export interface GenerationInput { projectId: string; providerId: string; targetDurationSeconds?: number; recommendDuration?: boolean; revision?: RevisionInput }
+export interface GenerationInput { projectId: string; chapterId?: string | null; providerId: string; targetDurationSeconds?: number; recommendDuration?: boolean; revision?: RevisionInput }
 export interface DurationRecommendation { minutes: number; reason: string }
 export interface GenerationPreview { taskId: string; fields: PublishingField[]; before: PublishingContent; content: PublishingContent }
 export type GenerationResult = WritingVersion | GenerationPreview | DurationRecommendation

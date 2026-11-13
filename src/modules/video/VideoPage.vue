@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { chapterIdFromQuery, chapterQuery } from '../../types/chapter'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
@@ -20,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useOperation } from '../../composables/useOperation'
 import { useEditorDraft } from '../../composables/useEditorDraft'
 import { readDraft, saveDraft } from '../../services/drafts'
-import { getProject, isDesktop, listAssets, mediaSource, openAsset, openProjectDirectory } from '../../services/projects'
+import { getChapter, getProject, isDesktop, listAssets, mediaSource, openAsset, openProjectDirectory } from '../../services/projects'
 import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
@@ -29,6 +30,7 @@ import { visualCatalog, videoStatuses, type VideoCue, type VideoJob, type VideoS
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
+const chapterId = computed(() => chapterIdFromQuery(route.query.chapter))
 const desktop = isDesktop()
 const { busy: operationBusy, error, message, run } = useOperation()
 const imageWorking = ref(false)
@@ -108,7 +110,7 @@ async function canLeave() {
   try { await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
-onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.job === from.query.job) || canLeave())
+onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.job === from.query.job && to.query.chapter === from.query.chapter) || canLeave())
 
 async function adopt(job: VideoJob | undefined, restoreDraft = true) {
   draftReady.value = false
@@ -150,9 +152,11 @@ function put(job: VideoJob) { jobs.value = [job, ...jobs.value.filter(j => j.id 
 const load = () => run(async () => {
   loaded.value = false; draftReady.value = false
   const projectId = props.id
-  const [book, files, models, settings, history] = await Promise.all([getProject(props.id), listAssets(props.id), listProviders(), api.settings(), api.listJobs(props.id)])
+  const [book, files, models, settings, history, chapter] = await Promise.all([getProject(props.id), listAssets(props.id, chapterId.value), listProviders(), api.settings(), api.listJobs(props.id, chapterId.value), chapterId.value ? getChapter(props.id, chapterId.value) : null])
   if (disposed || projectId !== props.id) return
-  title.value = book.title; assets.value = files; providers.value = models.filter(p => p.modelKind === 'text' && p.isEnabled)
+  if (route.query.job && !history.some(job => job.id === route.query.job)) throw new Error('视频任务不属于当前书籍或章节，请从对应成果入口打开。')
+  if (route.query.audio && !files.some(asset => asset.id === route.query.audio && asset.assetType === 'audio')) throw new Error('音频不属于当前书籍或章节，请选择本章音频。')
+  title.value = chapter ? `${book.title} · ${chapter.title}` : book.title; assets.value = files; providers.value = models.filter(p => p.modelKind === 'text' && p.isEnabled)
   imageProviders.value = models.filter(p => p.modelKind === 'image' && p.isEnabled)
   config.value = settings; savedConfig.value = JSON.stringify(settings)
   jobs.value = history
@@ -174,7 +178,7 @@ async function poll() {
   polling = true
   try {
     const previous = selected.value
-    const history = await api.listJobs(projectId)
+    const history = await api.listJobs(projectId, chapterId.value)
     if (disposed || projectId !== props.id) return
     progressError.value = ''
     jobs.value = history
@@ -186,7 +190,7 @@ async function poll() {
         return
       }
       await adopt(selected.value)
-      const files = await listAssets(projectId)
+      const files = await listAssets(projectId, chapterId.value)
       if (disposed || projectId !== props.id) return
       assets.value = files
       if (selected.value?.status === 'succeeded') message.value = '原声 MG 视频已保存，可直接播放或用于发布。'
@@ -202,7 +206,7 @@ const choosePath = (key: keyof VideoSettings, directory: boolean) => run(async (
 const saveConfig = () => run(async () => { await api.saveSettings(config.value); savedConfig.value = JSON.stringify(config.value); message.value = '视频运行环境已保存，可点击“一键检查环境”验证。' })
 const begin = (sourceAudio: string, sourceSubtitle: string | null) => run(async () => {
   if (dirty.value || configDirty.value) throw new Error('请先保存或还原字幕、分镜和运行环境修改。')
-  const job = await api.startJob(props.id, sourceAudio, providerId.value, sourceSubtitle)
+  const job = await api.startJob(props.id, sourceAudio, providerId.value, sourceSubtitle, chapterId.value)
   put(job); await adopt(job)
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
@@ -228,7 +232,7 @@ const preview = () => run(async () => {
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
-async function refreshImages() { assets.value = await listAssets(props.id) }
+async function refreshImages() { assets.value = await listAssets(props.id, chapterId.value) }
 const reviseScene = (sceneIndex: number) => run(async () => {
   if (!selected.value || !editable.value || !completePlan.value || running.value || !providerId.value) return
   await autosave.flush()
@@ -298,15 +302,15 @@ const saveEditor = () => run(async () => {
   if (!selected.value) return
   await persistPlan(scenes.value)
   selected.value.preview = null
-  jobs.value = await api.listJobs(props.id)
+  jobs.value = await api.listJobs(props.id, chapterId.value)
   await autosave.flush()
   message.value = '字幕和分镜校对已保存，尚未启动渲染。'
 })
 const exportSrt = () => run(async () => {
   if (!selected.value || dirty.value) throw new Error('请先保存字幕校对。')
   const id = await api.exportSubtitles(selected.value.id)
-  jobs.value = await api.listJobs(props.id)
-  assets.value = await listAssets(props.id)
+  jobs.value = await api.listJobs(props.id, chapterId.value)
+  assets.value = await listAssets(props.id, chapterId.value)
   await openAsset(id, true)
   message.value = '已将当前保存的字幕导出为独立 SRT。'
 })
@@ -344,7 +348,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
     <div class="video-backbar">
       <RouterLink
         class="back-link"
-        :to="`/projects/${id}/covers`"
+        :to="{ path: `/projects/${id}/covers`, query: chapterQuery(chapterId) }"
       >
         <AppIcon name="back" />返回封面工坊<span v-if="title"> · {{ title }}</span>
       </RouterLink>
@@ -685,7 +689,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   class="video-publish-action"
                   as-child
                 >
-                  <RouterLink :to="{ path: `/projects/${id}/publishing`, query: { task: 'new', videoJob: selected.id } }">
+                  <RouterLink :to="{ path: `/projects/${id}/publishing`, query: { ...chapterQuery(chapterId), task: 'new', videoJob: selected.id } }">
                     用于发布<AppIcon name="arrow" />
                   </RouterLink>
                 </Button>
@@ -859,6 +863,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   v-for="(scene, index) in scenes"
                   :key="index"
                   :project-id="id"
+                  :chapter-id="chapterId"
                   :scene-index="index"
                   :scene="scene"
                   :cues="selected.plan.cues"

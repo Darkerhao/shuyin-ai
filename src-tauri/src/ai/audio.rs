@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "audio-duration-v3";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/audio-duration-v3.md");
+pub const PROMPT_VERSION: &str = "audio-duration-v4";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/audio-duration-v4.md");
 
 pub fn validate_duration(seconds: i64) -> Result<(), String> {
     if !(60..=86400).contains(&seconds) || seconds % 60 != 0 {
@@ -18,11 +18,11 @@ pub fn duration_label(seconds: i64) -> String {
     }
 }
 
-pub fn context(seconds: i64) -> serde_json::Value {
+pub fn context(seconds: i64, chapter: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "targetDurationSeconds": seconds,
         "duration": duration_label(seconds),
-        "seriesName": "读懂一本书",
+        "seriesName": if chapter.is_some() { "读懂一章" } else { "读懂一本书" },
         "spokenCharacters": seconds * 220 / 60
     })
 }
@@ -54,7 +54,7 @@ mod tests {
     #[test]
     fn duration_context_keeps_series_name_independent_of_target_minutes() {
         for minutes in [1, 18, 30, 1440] {
-            let value = context(minutes * 60);
+            let value = context(minutes * 60, None);
             assert_eq!(value["seriesName"], "读懂一本书");
             assert_eq!(value["targetDurationSeconds"], minutes * 60);
             assert_eq!(value["duration"], format!("{minutes}分钟"));

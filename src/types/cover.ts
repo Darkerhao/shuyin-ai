@@ -27,6 +27,7 @@ export type CoverStyle = Pick<CoverConfig, 'templateId' | 'brand' | 'fontFamily'
 export interface CoverPreset { id: string; name: string; style: CoverStyle }
 export interface CoverVersion {
   id: string
+  chapterId?: string | null
   projectId: string
   versionNo: number
   config: CoverConfig

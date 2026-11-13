@@ -15,6 +15,7 @@ export type AudioFormat = 'deep_dive' | 'brief'
 
 export interface AudioJob {
   id: string
+  chapterId?: string | null
   projectId: string
   projectTitle: string
   writingVersionId: string | null
@@ -50,7 +51,7 @@ export interface AudioJobView {
   browser: AudioBrowserStatus
 }
 
-export type AudioSourceInput = { kind: 'asset', assetId: string } | { kind: 'text' }
+export type AudioSourceInput = { kind: 'asset', assetId: string } | { kind: 'text' } | { kind: 'chapter', chapterId: string }
 
 export interface StartAudioJobInput {
   projectId: string

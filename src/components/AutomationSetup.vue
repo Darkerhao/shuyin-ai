@@ -4,12 +4,13 @@ import { isDesktop } from '../services/projects'
 import { listProviders } from '../services/ai'
 import { automationRuns, automationConsent, automationAccount, startAutomation, refreshAutomation, prepareAccount, confirmAccount, type AutomationAccount } from '../services/automation'
 import type { ModelProvider } from '../types/ai'
+import type { AudioSourceInput } from '../types/audio'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
-const props = defineProps<{ saveSource: () => Promise<{ projectId: string; sourceAssetId: string }>; disabled?: boolean }>()
+const props = defineProps<{ saveSource: () => Promise<{ projectId: string; source: AudioSourceInput }>; disabled?: boolean }>()
 const emit = defineEmits<{ busy: [value: boolean] }>()
 const providers = ref<ModelProvider[]>([])
 const textProvider = ref('')
@@ -62,7 +63,7 @@ async function acceptAccount() {
   finally { busy.value = false }
 }
 async function start() {
-  if (busy.value || props.disabled || active.value || !consent.value || !accountReady.value || !collectionValid.value || !textProvider.value || !imageProvider.value || !isDesktop()) return
+  if (busy.value || props.disabled || active.value || !consent.value || !textProvider.value || !accountReady.value || !collectionValid.value || !imageProvider.value || !isDesktop()) return
   busy.value = true; error.value = ''
   try {
     const source = await props.saveSource()
@@ -87,7 +88,7 @@ async function start() {
         自动制作并准备发布
       </h2>
       <p class="mt-1 text-sm text-muted-foreground">
-        选择一本原书，先确定时长并保存文案、音频和封面提示词，再制作音频、三尺寸AI封面和视频，上传抖音。最后由你检查并点击发布。
+        按当前选择的整本书或章节内容，确定时长并生成创作方案、音频、三尺寸封面和视频，再准备抖音网页，最后由你检查并发布。
       </p>
     </div>
     <div class="grid gap-4 sm:grid-cols-2">
@@ -131,7 +132,7 @@ async function start() {
       </div>
     </div>
     <p class="text-sm text-muted-foreground">
-      使用本书已保存的目标时长，未设置时由AI按书籍内容推荐；目标仅作创作指导，制作按实际音频完整时长继续。4:3、3:4与16:9各一张AI背景，北京时间最近未来01:11定时，不允许保存视频。
+      使用当前整书或章节已保存的目标时长，未设置时按对应内容推荐；目标仅作创作指导，制作按实际音频完整时长继续。4:3、3:4与16:9各一张AI背景，北京时间最近未来01:11定时，不允许保存视频。
     </p>
     <div class="grid min-w-0 gap-4 rounded-lg border border-border bg-background/40 p-4">
       <div>
@@ -223,7 +224,7 @@ async function start() {
         :disabled="busy || active"
         aria-label="允许自动制作和上传"
       />
-      <span>允许将书名、作者及已提供资料发送至文本模型，推荐时长并生成创作方案；将原书和完整音频指导发送至NotebookLM，再根据实际字幕校核发布文案，调用图片模型为三种比例生成背景，自动采用并渲染，按上方账号与合集设置上传。模型失败后最多自动重试3次，再自动切换其他已启用的同类模型继续，可能产生额外费用；已完成成果保留，最终发布由我完成。</span>
+      <span>允许将本次书名、作者及整书资料或章节正文发送至文本模型，推荐时长并生成方案；将原书文件或章节文字及完整音频指导发送至 Notebook，再根据实际字幕校核并渲染视频。允许三种比例背景生成、封面导出和按上方账号与合集准备上传，最终发布由我完成。模型失败后最多自动重试3次，再切换其他已启用的同类模型，可能产生额外费用；已完成成果保留。</span>
     </label>
     <p
       v-if="error"
@@ -234,7 +235,7 @@ async function start() {
     </p>
     <Button
       class="justify-self-start"
-      :disabled="busy || disabled || active || !consent || !accountReady || !collectionValid || !textProvider || !imageProvider || !isDesktop()"
+      :disabled="busy || disabled || active || !consent || !textProvider || !accountReady || !collectionValid || !imageProvider || !isDesktop()"
       @click="start"
     >
       {{ busy ? '正在准备…' : '自动制作并准备发布' }}

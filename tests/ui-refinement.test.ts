@@ -21,7 +21,7 @@ const native = vi.hoisted(() => ({ onDragDropEvent: vi.fn(), onCloseRequested: v
 vi.mock('@tauri-apps/api/core', async original => ({ ...await original<typeof import('@tauri-apps/api/core')>(), isTauri: () => true }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => native }))
 vi.mock('../src/services/interface', () => ({ interfacePreferences: vi.fn(), setSidebarPrompt: vi.fn() }))
-vi.mock('../src/services/projects', async original => ({ ...await original<typeof projects>(), isDesktop: () => true, listProjects: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), listAssets: vi.fn(), workspaceSettings: vi.fn(), openProjectDirectory: vi.fn(), exportVideoAsset: vi.fn(), deleteProject: vi.fn() }))
+vi.mock('../src/services/projects', async original => ({ ...await original<typeof projects>(), isDesktop: () => true, listChapters: vi.fn(), listProjects: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), listAssets: vi.fn(), workspaceSettings: vi.fn(), openProjectDirectory: vi.fn(), exportVideoAsset: vi.fn(), deleteProject: vi.fn() }))
 vi.mock('../src/services/workflow', async original => ({ ...await original<typeof workflow>(), workflowSnapshot: vi.fn(), projectProgress: vi.fn() }))
 vi.mock('../src/composables/useAppUpdates', async () => {
   const { ref } = await import('vue')
@@ -40,6 +40,7 @@ beforeEach(() => {
   native.onCloseRequested.mockResolvedValue(vi.fn())
   vi.mocked(preferences.interfacePreferences).mockResolvedValue({ sidebarPrompt: true })
   vi.mocked(preferences.setSidebarPrompt).mockResolvedValue(undefined)
+  vi.mocked(projects.listChapters).mockResolvedValue([])
   vi.mocked(projects.listProjects).mockResolvedValue([saved])
   vi.mocked(projects.getProject).mockResolvedValue(saved)
   vi.mocked(projects.listAssets).mockResolvedValue([])
@@ -83,6 +84,20 @@ it('navigates to each of the five real routes using Ctrl/Cmd while keeping exact
     await flushPromises()
     expect(router.currentRoute.value.path).toBe(`/projects/p1${suffix}`)
     expect(wrapper.findAll('.project-navigation a[aria-current="step"]')).toHaveLength(1)
+  }
+})
+it('preserves chapter scope in the sidebar as well as keyboard step navigation', async () => {
+  vi.mocked(projects.listChapters).mockResolvedValue([{ id: 'chapter-one', projectId: 'p1', title: '第一章精讲', targetDurationSeconds: 600, audioDurationSource: 'manual', createdAt: '', updatedAt: '' }])
+  const { wrapper, router } = await render('/projects/p1/covers?chapter=chapter-one')
+  for (const link of wrapper.findAll('a').filter(link => link.attributes('href')?.includes('/projects/p1'))) {
+    expect(link.attributes('href')).toContain('chapter=chapter-one')
+  }
+  await wrapper.get('.sidebar-navigation a[aria-label="内容创作"]').trigger('click'); await flushPromises()
+  expect(router.currentRoute.value.fullPath).toBe('/projects/p1/writing?chapter=chapter-one')
+  for (const key of ['3', '4', '5']) {
+    globalThis.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: true })); await flushPromises()
+    expect(router.currentRoute.value.query.chapter).toBe('chapter-one')
+    expect(wrapper.get('#creation-scope').text()).toContain('第一章精讲')
   }
 })
 it('does not navigate during composition, key repeat or a pending unsaved-content confirmation', async () => {
