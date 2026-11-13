@@ -8,10 +8,11 @@ import { requestConfirmation } from '../composables/useConfirmation'
 import { openDouyinWindow } from '../services/douyin'
 import { Button } from '@/components/ui/button'
 import AppIcon from './AppIcon.vue'
+import { chapterQuery } from '../types/chapter'
 
 const phases = [
   { label: '创作方案', icon: 'pen', stages: ['duration', 'writing'] },
-  { label: '原书音频', icon: 'headphones', stages: ['audio'] },
+  { label: '原声音频', icon: 'headphones', stages: ['audio'] },
   { label: '字幕与校核', icon: 'shield', stages: ['transcript', 'content_check'] },
   { label: '三尺寸封面', icon: 'image', stages: ['landscape_image', 'landscape_cover', 'portrait_image', 'portrait_cover', 'widescreen_image', 'widescreen_cover'] },
   { label: '分镜与成片', icon: 'video', stages: ['storyboard', 'render'] },
@@ -28,7 +29,7 @@ function outputs(run: AutomationRun) {
     ...[{ id: run.landscapeCoverId, label: '4:3' }, { id: run.portraitCoverId, label: '3:4' }, { id: run.widescreenCoverId, label: '16:9' }].map(cover => ({ key: `cover-${cover.label}`, id: cover.id, label: `${cover.label} 成品封面`, icon: 'image' as const, to: `${project}/covers?coverVersion=${cover.id}` })),
     { key: 'publishing', id: run.publishTaskId, label: '发布详情与结果记录', icon: 'upload', to: `${project}/publishing?task=${run.publishTaskId}` },
   ] as const
-  return entries.filter(output => output.id)
+  return entries.filter(output => output.id).map(output => ({ ...output, to: output.to + (run.chapterId ? `&chapter=${encodeURIComponent(run.chapterId)}` : '') }))
 }
 
 const active = computed(() => automationRuns.value.filter(run => !['completed', 'cancelled'].includes(run.status)))
@@ -87,10 +88,10 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
       <div class="automation-heading">
         <span class="automation-emblem"><AppIcon name="sparkle" /></span>
         <RouterLink
-          :to="`/projects/${run.projectId}`"
+          :to="{ path: `/projects/${run.projectId}`, query: chapterQuery(run.chapterId ?? null) }"
           class="automation-title"
         >
-          {{ run.input.title }} · 自动制作
+          {{ run.input.title }}{{ run.input.chapterSource ? ` · ${run.input.chapterSource.chapterTitle}` : '' }} · 自动制作
         </RouterLink>
         <span
           role="status"

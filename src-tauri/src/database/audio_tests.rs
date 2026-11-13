@@ -242,7 +242,7 @@ fn stopped_task_survives_restart_and_resumes_download_without_regenerating() {
 
     let database = Database::open(path);
     database.recover_audio_jobs().unwrap();
-    let snapshot = database.audio_job_data(&project.id).unwrap();
+    let snapshot = database.audio_job_data(&project.id, None).unwrap();
     assert!(snapshot.active_job.is_none());
     assert_eq!(snapshot.job.unwrap().status, "cancelled");
     let resumed = database.control_audio_job(&original.id, "resume").unwrap();
@@ -255,7 +255,9 @@ fn stopped_task_survives_restart_and_resumes_download_without_regenerating() {
     assert!(resumed.run_id > stopped.run_id);
     let execution = database.audio_execution_job().unwrap().unwrap();
     assert_eq!(execution.prompt, "完整指导");
-    assert!(matches!(execution.source, AudioSourceData::Text { ref text } if text == "原书资料"));
+    assert!(
+        matches!(execution.source, AudioSourceData::Text { ref text, .. } if text == "原书资料")
+    );
     assert!(database
         .observe_audio_job(
             &resumed.id,
@@ -282,7 +284,7 @@ fn stopped_task_survives_restart_and_resumes_download_without_regenerating() {
     assert_eq!(completed.status, "succeeded");
     assert_eq!(
         database
-            .list_assets(&project.id)
+            .list_assets(&project.id, None)
             .unwrap()
             .iter()
             .filter(|asset| asset.asset_type == "audio")
@@ -319,7 +321,11 @@ fn official_notebook_domains_can_be_saved_and_reopened() {
             )
             .unwrap();
         let reopened = Database::open(path.clone());
-        let saved = reopened.audio_job_data(&project.id).unwrap().job.unwrap();
+        let saved = reopened
+            .audio_job_data(&project.id, None)
+            .unwrap()
+            .job
+            .unwrap();
         assert_eq!(saved.notebook_url.as_deref(), Some(url.as_str()));
         database.control_audio_job(&job.id, "cancel").unwrap();
     }
@@ -351,7 +357,7 @@ fn bound_book_document_is_available_to_audio_without_linking_again() {
     let writing = sample_writing(&database, &project, "完整指导");
     drop(database);
     let database = Database::open(path);
-    let assets = database.list_assets(&project.id).unwrap();
+    let assets = database.list_assets(&project.id, None).unwrap();
     let job = database
         .start_audio_job(StartAudioJobInput {
             project_id: project.id,
@@ -511,7 +517,7 @@ fn advance_to_download(database: &Database, job: &AudioJob) {
         .unwrap();
     assert_eq!(
         database
-            .audio_job_data(&job.project_id)
+            .audio_job_data(&job.project_id, None)
             .unwrap()
             .job
             .unwrap()
@@ -618,7 +624,9 @@ fn freezes_prompt_source_and_duration_and_rejects_a_second_book() {
     let bridge = database.audio_execution_job().unwrap().unwrap();
     assert_eq!(bridge.prompt, "第一版完整指导");
     assert_eq!(bridge.target_duration_seconds, 1_500);
-    assert!(matches!(bridge.source, AudioSourceData::Text { ref text } if text == "第一版资料"));
+    assert!(
+        matches!(bridge.source, AudioSourceData::Text { ref text, .. } if text == "第一版资料")
+    );
 
     let project_file = project.workspace_path.clone();
     let input: ProjectInput = serde_json::from_value(serde_json::json!({
@@ -650,7 +658,7 @@ fn freezes_prompt_source_and_duration_and_rejects_a_second_book() {
     assert!(error.contains("书一"));
     database.control_audio_job(&job.id, "cancel").unwrap();
     assert!(database
-        .audio_job_data(&project.id)
+        .audio_job_data(&project.id, None)
         .unwrap()
         .active_job
         .is_none());
@@ -667,12 +675,12 @@ fn source_snapshot_verifies_size_and_hash_and_rejects_cross_book_assets() {
     let bytes = vec![b'a'; 600_000];
     fs::write(&source, &bytes).unwrap();
     let asset_id = database
-        .link_asset(&project.id, source.to_str().unwrap(), None)
+        .link_asset(&project.id, source.to_str().unwrap(), None, None)
         .unwrap();
     let other_source = Path::new(&other.workspace_path).join("另一本.pdf");
     fs::write(&other_source, b"other").unwrap();
     let foreign = database
-        .link_asset(&other.id, other_source.to_str().unwrap(), None)
+        .link_asset(&other.id, other_source.to_str().unwrap(), None, None)
         .unwrap();
     assert!(database
         .start_audio_job(StartAudioJobInput {
@@ -738,7 +746,7 @@ fn archives_verified_audio_once_and_keeps_project_asset_in_sync() {
     assert!(completed.asset_id.is_some());
     assert_eq!(completed.output_size, Some(wav_bytes().len() as i64));
     let audio = database
-        .list_assets(&project.id)
+        .list_assets(&project.id, None)
         .unwrap()
         .into_iter()
         .find(|asset| asset.asset_type == "audio")
@@ -751,7 +759,7 @@ fn archives_verified_audio_once_and_keeps_project_asset_in_sync() {
     assert_eq!(repeated.asset_id, completed.asset_id);
     assert_eq!(
         database
-            .list_assets(&project.id)
+            .list_assets(&project.id, None)
             .unwrap()
             .iter()
             .filter(|asset| asset.asset_type == "audio")
@@ -792,7 +800,7 @@ fn generating_again_after_archive_uses_new_prompt_and_preserves_both_audio_files
     }
     assert_ne!(completed_jobs[0].id, completed_jobs[1].id);
     assert_ne!(completed_jobs[0].asset_id, completed_jobs[1].asset_id);
-    let assets = database.list_assets(&project.id).unwrap();
+    let assets = database.list_assets(&project.id, None).unwrap();
     assert_eq!(
         assets
             .iter()
@@ -835,7 +843,7 @@ fn rejects_html_and_outside_task_paths_without_archiving() {
         .complete_audio_download(&job.id, job.run_id, html.to_str().unwrap())
         .is_err());
     assert!(database
-        .list_assets(&project.id)
+        .list_assets(&project.id, None)
         .unwrap()
         .iter()
         .all(|asset| asset.asset_type != "audio"));
@@ -856,7 +864,11 @@ fn restart_and_backup_recovery_pause_remote_task_for_manual_verification() {
         .unwrap();
     database.control_audio_job(&job.id, "cancel").unwrap();
     database.restore_backup(&backup).unwrap();
-    let recovered = database.audio_job_data(&project.id).unwrap().job.unwrap();
+    let recovered = database
+        .audio_job_data(&project.id, None)
+        .unwrap()
+        .job
+        .unwrap();
     assert_eq!(recovered.status, "waiting_user");
     assert_eq!(recovered.stage, "verify_remote");
     assert!(recovered.run_id > 1);
@@ -864,7 +876,7 @@ fn restart_and_backup_recovery_pause_remote_task_for_manual_verification() {
     database.recover_audio_jobs().unwrap();
     assert_eq!(
         database
-            .audio_job_data(&project.id)
+            .audio_job_data(&project.id, None)
             .unwrap()
             .job
             .unwrap()
@@ -884,7 +896,11 @@ fn verify_remote_allows_only_read_only_generation_observations() {
         .observe_audio_job(&job.id, job.run_id, &AudioObservation::LoginReady)
         .unwrap();
     database.recover_audio_jobs().unwrap();
-    let recovered = database.audio_job_data(&project.id).unwrap().job.unwrap();
+    let recovered = database
+        .audio_job_data(&project.id, None)
+        .unwrap()
+        .job
+        .unwrap();
     assert_eq!(
         (recovered.status.as_str(), recovered.stage.as_str()),
         ("waiting_user", "verify_remote")
@@ -940,7 +956,11 @@ fn verify_remote_allows_only_read_only_generation_observations() {
         )
         .unwrap();
     database.recover_audio_jobs().unwrap();
-    let waiting = database.audio_job_data(&project.id).unwrap().job.unwrap();
+    let waiting = database
+        .audio_job_data(&project.id, None)
+        .unwrap()
+        .job
+        .unwrap();
     assert_eq!(
         (waiting.id.as_str(), waiting.stage.as_str()),
         (second.id.as_str(), "verify_remote")
@@ -988,7 +1008,11 @@ fn asset_transaction_failure_keeps_audio_for_retry_without_duplicate_registratio
             file.is_file(),
             "the verified project audio must survive the failed transaction"
         );
-        let waiting = database.audio_job_data(&project.id).unwrap().job.unwrap();
+        let waiting = database
+            .audio_job_data(&project.id, None)
+            .unwrap()
+            .job
+            .unwrap();
         assert_eq!(waiting.status, "waiting_user");
         assert_eq!(waiting.stage, "importing");
         database
@@ -1009,7 +1033,7 @@ fn asset_transaction_failure_keeps_audio_for_retry_without_duplicate_registratio
         assert_eq!(completed.status, "succeeded");
         assert_eq!(
             database
-                .list_assets(&project.id)
+                .list_assets(&project.id, None)
                 .unwrap()
                 .iter()
                 .filter(|asset| asset.asset_type == "audio")

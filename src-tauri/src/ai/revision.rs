@@ -4,8 +4,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "publishing-revision-v6";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v6.md");
+pub const PROMPT_VERSION: &str = "publishing-revision-v7";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v7.md");
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +68,7 @@ pub fn revise(
     fields: &[PublishingField],
     book: &str,
     duration_seconds: i64,
+    chapter: Option<&str>,
 ) -> Result<WritingContent, String> {
     let patch: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(raw).map_err(|_| "模型输出不符合调整内容结构，原有内容保留。")?;
@@ -87,7 +88,7 @@ pub fn revise(
         let text = if *field == PublishingField::AudioPrompt {
             serde_json::from_value::<AudioDraft>(value.clone())
                 .map_err(|_| "音频调整需要书籍引入及五个完整部分。")?
-                .into_prompt(book, duration_seconds)?
+                .into_prompt(book, duration_seconds, chapter)?
         } else if *field == PublishingField::Tags {
             parse_tags(value.as_str().ok_or("标签调整结果必须是文字。")?)?
         } else {
@@ -137,6 +138,7 @@ mod tests {
             &[PublishingField::Tags],
             "测试书",
             600,
+            None,
         )
         .unwrap();
         let mut expected = serde_json::to_value(&base).unwrap();
@@ -156,6 +158,7 @@ mod tests {
                 &[PublishingField::Tags],
                 "测试书",
                 600,
+                None
             )
             .is_err());
         }
@@ -171,6 +174,7 @@ mod tests {
             &[PublishingField::CoverPromptWidescreen],
             "测试书",
             600,
+            None,
         )
         .unwrap();
         let mut expected = serde_json::to_value(&base).unwrap();
@@ -185,7 +189,8 @@ mod tests {
                 &base,
                 &[PublishingField::CoverPromptWidescreen],
                 "测试书",
-                600
+                600,
+                None
             )
             .is_err());
         }
@@ -206,6 +211,7 @@ mod tests {
             &[PublishingField::CoverDesign],
             "书",
             600,
+            None,
         )
         .unwrap();
         let mut expected = serde_json::to_value(&base).unwrap();
@@ -217,6 +223,7 @@ mod tests {
             &[PublishingField::Title],
             "书",
             600,
+            None,
         )
         .unwrap();
         expected["title"] = serde_json::json!("新标题");
@@ -231,7 +238,8 @@ mod tests {
                 &base,
                 &[PublishingField::CoverDesign],
                 "书",
-                600
+                600,
+                None
             )
             .is_err());
         }
@@ -245,6 +253,7 @@ mod tests {
             &[PublishingField::Title],
             "测试书",
             600,
+            None,
         )
         .unwrap();
         let mut expected = serde_json::to_value(&base).unwrap();
@@ -255,14 +264,23 @@ mod tests {
             "{}",
             r#"{"title":" "}"#,
         ] {
-            assert!(revise(invalid, &base, &[PublishingField::Title], "测试书", 600).is_err());
+            assert!(revise(
+                invalid,
+                &base,
+                &[PublishingField::Title],
+                "测试书",
+                600,
+                None
+            )
+            .is_err());
         }
         assert!(revise(
             &json!({"title":"字".repeat(31)}).to_string(),
             &base,
             &[PublishingField::Title],
             "测试书",
-            600
+            600,
+            None
         )
         .is_err());
         assert!(revise(
@@ -270,7 +288,8 @@ mod tests {
             &base,
             &[PublishingField::CoverPromptPortrait],
             "测试书",
-            600
+            600,
+            None
         )
         .is_err());
     }
@@ -283,6 +302,7 @@ mod tests {
             &[PublishingField::AudioPrompt],
             "测试书",
             1800,
+            None,
         )
         .unwrap();
         let value = serde_json::to_value(&content).unwrap();
@@ -311,7 +331,8 @@ mod tests {
             &original(),
             &[PublishingField::AudioPrompt],
             "测试书",
-            600
+            600,
+            None
         )
         .is_err());
     }

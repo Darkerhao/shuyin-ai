@@ -18,7 +18,7 @@ import { emptyProject } from '../src/types/project'
 
 vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), saveCover: vi.fn(), readBackground: vi.fn(), readCoverExport: vi.fn(), chooseBackground: vi.fn(), startCoverGeneration: vi.fn(), executeCoverGeneration: vi.fn(), listPresets: vi.fn(), savePreset: vi.fn(), deletePreset: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), listVersions: vi.fn(), cancelGeneration: vi.fn() }))
-vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), linkAsset: vi.fn(), openProjectDirectory: vi.fn() }))
+vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getChapter: vi.fn(), listChapters: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), linkAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ coverFonts: { sans: 'sans-serif', serif: 'serif' }, backgroundRect: vi.fn(), renderCover: vi.fn(), coverPng: vi.fn(), decodeBackground: vi.fn() }))
 const initial: CoverVersion = { id: 'v1', projectId: 'p1', versionNo: 1, config: newCover('最初的封面'), exportedPath: null, createdAt: '2026-10-23T00:00:00Z' }
 const aiAsset: Asset = { id: 'a1', projectId: 'p1', assetType: 'image', filePath: 'D:/ai.png', originalName: 'ai.png', fileSize: 100, modifiedAt: 0, existsStatus: 'available', createdAt: '' }
@@ -64,6 +64,21 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
 describe('M3 cover workflow', () => {
+  it('loads and saves all three chapter cover configurations through the shared workshop', async () => {
+    vi.mocked(projects.getChapter).mockResolvedValue({ id: 'chapter-one', projectId: 'p1', title: '第一章精讲', content: '本章正文', targetDurationSeconds: 600, audioDurationSource: 'manual', createdAt: '', updatedAt: '' })
+    vi.mocked(api.listCovers).mockResolvedValue([{ ...initial, chapterId: 'chapter-one' }])
+    const { wrapper } = await render('/projects/p1/covers?tab=text&chapter=chapter-one')
+    expect(wrapper.text()).toContain('测试书 · 第一章精讲')
+    expect(api.listCovers).toHaveBeenCalledWith('p1', 'chapter-one')
+    expect(ai.listVersions).toHaveBeenCalledWith('p1', 'publishing', 'chapter-one')
+    expect(drafts.readDraft).toHaveBeenCalledWith('p1:chapter:chapter-one', 'cover')
+    await button(wrapper, '保存全部配置').trigger('click'); await flushPromises()
+    expect(api.saveCover).toHaveBeenCalledTimes(3)
+    for (const [width, height] of [[1440, 1080], [1080, 1440], [1920, 1080]]) {
+      expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ width, height }), null, 'chapter-one')
+    }
+  })
+
   it('keeps save shortcuts inside the history preview from saving the editor and restores saving after close', async () => {
     const exported = { ...initial, exportedPath: 'D:/export.png' }
     vi.mocked(api.listCovers).mockResolvedValue([exported])
@@ -84,7 +99,7 @@ describe('M3 cover workflow', () => {
     globalThis.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true }))
     await flushPromises()
     expect(api.saveCover).toHaveBeenCalledTimes(3)
-    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '预览期间保留编辑', width: 1440 }), null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '预览期间保留编辑', width: 1440 }), null, null)
   })
   it('opens the exact automatic export while retaining the editable recovery draft', async () => {
     const exact = { ...initial, id: 'automatic-cover', versionNo: 3, exportedPath: 'D:/automatic.png', config: { ...initial.config, title: '本次流程封面' } }
@@ -168,7 +183,7 @@ describe('M3 cover workflow', () => {
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe(initial.config.title)
     await wrapper.get('#cover-title').setValue('独立宽屏')
     await button(wrapper, '导出当前封面').trigger('click'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledExactlyOnceWith('p1', expect.objectContaining({ title: '独立宽屏', width: 1920, height: 1080 }), expect.any(Array))
+    expect(api.saveCover).toHaveBeenCalledExactlyOnceWith('p1', expect.objectContaining({ title: '独立宽屏', width: 1920, height: 1080 }), expect.any(Array), null)
     await chooseSelect(wrapper, '#cover-size', '横版 4:3 · 1440 × 1080')
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('独立横版')
     await router.push('/projects')
@@ -201,7 +216,7 @@ describe('M3 cover workflow', () => {
     vi.mocked(api.saveCover).mockClear()
     await button(wrapper, '保存全部配置').trigger('click'); await flushPromises()
     expect(api.saveCover).toHaveBeenCalledTimes(3)
-    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ width: 1080, height: 1440, title: '保留未导出的竖版编辑' }), null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ width: 1080, height: 1440, title: '保留未导出的竖版编辑' }), null, null)
   })
   it('disables batch export when no sizes are checked', async () => {
     const { wrapper } = await render()
@@ -233,7 +248,7 @@ describe('M3 cover workflow', () => {
     await button(wrapper, '应用 AI 推荐排版').trigger('click')
     await wrapper.get('#cover-subtitle-color').setValue('#aabbcc')
     await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...config, ...design, subtitleColor: '#aabbcc' }, null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...config, ...design, subtitleColor: '#aabbcc' }, null, null)
   })
   it.each(Object.entries(coverTemplates))('applies the complete %s preset while keeping this book content', async (key, template) => {
     const { wrapper } = await render()
@@ -242,7 +257,7 @@ describe('M3 cover workflow', () => {
     await card.trigger('click')
     expect(card.attributes('aria-pressed')).toBe('true')
     await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...initial.config, ...template.style, templateId: key }, null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...initial.config, ...template.style, templateId: key }, null, null)
   })
   it.each(['version', 'draft', 'preset'])('keeps the original text color for legacy %s data', async source => {
     const config = { ...initial.config, textColor: '#abcdef' }
@@ -255,7 +270,7 @@ describe('M3 cover workflow', () => {
     if (source === 'preset') await chooseSelect(wrapper, '#cover-preset', '旧个人样式')
     expect((wrapper.get('#cover-subtitle-color').element as HTMLInputElement).value).toBe('#abcdef')
     await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ textColor: '#abcdef', subtitleColor: '#abcdef' }), null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ textColor: '#abcdef', subtitleColor: '#abcdef' }), null, null)
   })
   it('applies template, typography and numeric controls without changing the cover copy', async () => {
     const { wrapper } = await render()
@@ -271,7 +286,7 @@ describe('M3 cover workflow', () => {
     expect(api.saveCover).toHaveBeenCalledTimes(3)
     expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({
       templateId: 'night', fontFamily: 'sans', align: 'left', position: 'bottom', titleSize: 96, subtitleSize: 36, backgroundColor: '#112233', title: initial.config.title,
-    }), null)
+    }), null, null)
   })
 
   it('keeps the selected history label and draft when a different version is declined', async () => {
@@ -304,7 +319,7 @@ describe('M3 cover workflow', () => {
     let finish!: (value: CoverVersion) => void
     vi.mocked(api.saveCover).mockReturnValue(new Promise(resolve => { finish = resolve }))
     await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ overlayOpacity: 0.8 }), null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ overlayOpacity: 0.8 }), null, null)
     expect(wrapper.get('#cover-background').element.matches(':disabled')).toBe(true)
     expect(wrapper.get('button[aria-label="深林"]').element.matches(':disabled')).toBe(true)
     expect(slider.attributes('data-disabled')).toBeDefined()
@@ -327,7 +342,7 @@ describe('M3 cover workflow', () => {
     await button(wrapper, '使用这组主副标题').trigger('click'); await flushPromises()
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe(writing.content.coverTitle)
     await button(wrapper, '导出 3 张封面').trigger('click'); await flushPromises()
-    expect(api.saveCover).toHaveBeenNthCalledWith(1, 'p1', { ...initial.config, title: writing.content.coverTitle, subtitle: writing.content.coverSubtitle }, expect.any(Array))
+    expect(api.saveCover).toHaveBeenNthCalledWith(1, 'p1', { ...initial.config, title: writing.content.coverTitle, subtitle: writing.content.coverSubtitle }, expect.any(Array), null)
   })
   it('copies either ratio without an image model and applies a prompt only on request', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
@@ -383,7 +398,7 @@ describe('M3 cover workflow', () => {
     await wrapper.get('#cover-description').setValue('16:9 宽屏留白')
     await wrapper.get('section[aria-label="可选 AI 背景"] form').trigger('submit'); await flushPromises()
     if (wrapper.find('[aria-label="生成的封面背景"]').exists()) { await button(wrapper, '采用到该尺寸').trigger('click'); await flushPromises() }
-    expect(api.startCoverGeneration).toHaveBeenCalledWith('p1', 'image', '16:9 宽屏留白', 1920, 1080)
+    expect(api.startCoverGeneration).toHaveBeenCalledWith('p1', 'image', '16:9 宽屏留白', 1920, 1080, null)
     await chooseSelect(wrapper, '#cover-size', '横版 4:3 · 1440 × 1080')
     expect(wrapper.get('#cover-background').text()).toBe('纯色背景')
     expect((wrapper.get('#cover-description').element as HTMLTextAreaElement).value).toBe('横版独立描述')
@@ -394,7 +409,7 @@ describe('M3 cover workflow', () => {
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('横版独立标题')
     await chooseSelect(wrapper, '#cover-size', '横版 16:9 · 1920 × 1080')
     await button(wrapper, '导出当前封面').trigger('click'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledExactlyOnceWith('p1', expect.objectContaining({ backgroundAssetId: 'a1', backgroundPrompt: '16:9 宽屏留白', width: 1920 }), expect.any(Array))
+    expect(api.saveCover).toHaveBeenCalledExactlyOnceWith('p1', expect.objectContaining({ backgroundAssetId: 'a1', backgroundPrompt: '16:9 宽屏留白', width: 1920 }), expect.any(Array), null)
   })
   it('saves all independent settings and restores the latest config for each size', async () => {
     const { wrapper, router } = await render()
@@ -424,7 +439,7 @@ describe('M3 cover workflow', () => {
     expect(button(wrapper, '导出 3 张封面').element.disabled).toBe(true)
     expect(button(wrapper, '导出当前封面').element.disabled).toBe(false)
     await button(wrapper, '导出当前封面').trigger('click'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledExactlyOnceWith('p1', initial.config, expect.any(Array))
+    expect(api.saveCover).toHaveBeenCalledExactlyOnceWith('p1', initial.config, expect.any(Array), null)
     await chooseSelect(wrapper, '#cover-size', '竖版 3:4 · 1080 × 1440')
     expect(wrapper.get('.cover-page-title').text()).toContain('排版待核对')
   })
@@ -446,7 +461,7 @@ describe('M3 cover workflow', () => {
     await answerConfirmation(true)
     await chooseSelect(wrapper, '#cover-size', '竖版 3:4 · 1080 × 1440')
     await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '竖版标题', backgroundPrompt: '竖版提示词', backgroundAssetId: 'landscape', backgroundX: 0.5, backgroundZoom: 1 }), null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '竖版标题', backgroundPrompt: '竖版提示词', backgroundAssetId: 'landscape', backgroundX: 0.5, backgroundZoom: 1 }), null, null)
   })
   it('uses only enabled image models, preserves text and exports the generated background in all three ratios', async () => {
     const { wrapper } = await aiCover()
@@ -457,16 +472,16 @@ describe('M3 cover workflow', () => {
     await wrapper.get('#cover-description').setValue('水墨山林，安静留白')
     await wrapper.get('section[aria-label="可选 AI 背景"] form').trigger('submit'); await flushPromises()
     if (wrapper.find('[aria-label="生成的封面背景"]').exists()) { await button(wrapper, '采用到该尺寸').trigger('click'); await flushPromises() }
-    expect(api.startCoverGeneration).toHaveBeenCalledExactlyOnceWith('p1', 'image', '水墨山林，安静留白', 1440, 1080)
+    expect(api.startCoverGeneration).toHaveBeenCalledExactlyOnceWith('p1', 'image', '水墨山林，安静留白', 1440, 1080, null)
     expect((wrapper.get('#cover-title').element as HTMLTextAreaElement).value).toBe('手动修改标题')
     expect(wrapper.get('#cover-background').text()).toBe('ai.png')
     expect(api.saveCover).not.toHaveBeenCalled()
     await button(wrapper, '仅共用当前背景').trigger('click')
     await answerConfirmation(true)
     await button(wrapper, '导出 3 张封面').trigger('click'); await flushPromises()
-    expect(api.saveCover).toHaveBeenNthCalledWith(1, 'p1', expect.objectContaining({ backgroundAssetId: 'a1', width: 1440, height: 1080 }), expect.any(Array))
-    expect(api.saveCover).toHaveBeenNthCalledWith(2, 'p1', expect.objectContaining({ backgroundAssetId: 'a1', width: 1080, height: 1440 }), expect.any(Array))
-    expect(api.saveCover).toHaveBeenNthCalledWith(3, 'p1', expect.objectContaining({ backgroundAssetId: 'a1', width: 1920, height: 1080 }), expect.any(Array))
+    expect(api.saveCover).toHaveBeenNthCalledWith(1, 'p1', expect.objectContaining({ backgroundAssetId: 'a1', width: 1440, height: 1080 }), expect.any(Array), null)
+    expect(api.saveCover).toHaveBeenNthCalledWith(2, 'p1', expect.objectContaining({ backgroundAssetId: 'a1', width: 1080, height: 1440 }), expect.any(Array), null)
+    expect(api.saveCover).toHaveBeenNthCalledWith(3, 'p1', expect.objectContaining({ backgroundAssetId: 'a1', width: 1920, height: 1080 }), expect.any(Array), null)
   })
   it.each(['network', 'decode'])('keeps current background and edits when AI fails at %s', async failure => {
     vi.mocked(api.listCovers).mockResolvedValue([{ ...initial, config: { ...initial.config, backgroundAssetId: 'old' } }])
@@ -530,9 +545,9 @@ describe('M3 cover workflow', () => {
     await chooseSelect(wrapper, '#cover-size', '竖版 3:4 · 1080 × 1440')
     await button(wrapper, '导出 3 张封面').trigger('click'); await flushPromises()
     expect(api.saveCover).toHaveBeenCalledTimes(3)
-    expect(api.saveCover).toHaveBeenNthCalledWith(1, 'p1', expect.objectContaining({ title: '新的中文封面', width: 1440, height: 1080 }), [137, 80, 78, 71])
-    expect(api.saveCover).toHaveBeenNthCalledWith(2, 'p1', expect.objectContaining({ title: initial.config.title, width: 1080, height: 1440 }), [137, 80, 78, 71])
-    expect(api.saveCover).toHaveBeenNthCalledWith(3, 'p1', expect.objectContaining({ title: initial.config.title, width: 1920, height: 1080 }), [137, 80, 78, 71])
+    expect(api.saveCover).toHaveBeenNthCalledWith(1, 'p1', expect.objectContaining({ title: '新的中文封面', width: 1440, height: 1080 }), [137, 80, 78, 71], null)
+    expect(api.saveCover).toHaveBeenNthCalledWith(2, 'p1', expect.objectContaining({ title: initial.config.title, width: 1080, height: 1440 }), [137, 80, 78, 71], null)
+    expect(api.saveCover).toHaveBeenNthCalledWith(3, 'p1', expect.objectContaining({ title: initial.config.title, width: 1920, height: 1080 }), [137, 80, 78, 71], null)
     expect(wrapper.get('#cover-size').text()).toBe('竖版 3:4 · 1080 × 1440')
     expect(wrapper.get('[data-sonner-toast][data-type="success"]:not([data-removed="true"])').text()).toContain('已导出 3 张封面')
     expect(wrapper.get('[data-sonner-toast][data-type="success"]:not([data-removed="true"])').text()).toContain('可在本书目录查看')
@@ -566,7 +581,7 @@ describe('M3 cover workflow', () => {
     expect(api.saveCover).not.toHaveBeenCalled()
     vi.mocked(api.saveCover).mockImplementation(async (projectId, config) => ({ ...initial, projectId, config, id: 'v2', versionNo: 2 }))
     await wrapper.get('form').trigger('submit'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '配置草稿' }), null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '配置草稿' }), null, null)
   })
   it('saves and restores a 16:9 draft without converting its size or changing its content', async () => {
     const { wrapper } = await render()
@@ -575,7 +590,7 @@ describe('M3 cover workflow', () => {
     expect(wrapper.get('canvas').attributes('style')).toContain('1920 / 1080')
     await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
     expect(api.saveCover).toHaveBeenCalledTimes(3)
-    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...initial.config, width: 1920, height: 1080 }, null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...initial.config, width: 1920, height: 1080 }, null, null)
     const saved = await vi.mocked(api.saveCover).mock.results[2]!.value as CoverVersion
     wrapper.unmount(); wrappers.splice(wrappers.indexOf(wrapper), 1)
     vi.mocked(api.listCovers).mockResolvedValue([saved, initial])
@@ -644,7 +659,7 @@ describe('M3 cover workflow', () => {
     await button(wrapper, '排版样式').trigger('click')
     await chooseSelect(wrapper, '#cover-preset', '我的品牌')
     await wrapper.get('#cover-edit-form').trigger('submit'); await flushPromises()
-    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...initial.config, ...style }, null)
+    expect(api.saveCover).toHaveBeenCalledWith('p1', { ...initial.config, ...style }, null, null)
     await wrapper.get('[aria-label="新样式名称"]').setValue('新风格')
     await button(wrapper, '保存为我的样式').trigger('click'); await flushPromises()
     expect(api.savePreset).toHaveBeenCalledWith('新风格', { ...initial.config, ...style })

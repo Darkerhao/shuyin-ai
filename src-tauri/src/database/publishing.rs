@@ -20,6 +20,8 @@ const MAX_IMAGE_BYTES: u64 = 15 * 1024 * 1024;
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublishInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     #[serde(default)]
     pub writing_version_id: Option<String>,
     pub project_id: String,
@@ -177,8 +179,8 @@ fn reference(path: &str) -> Result<FileReference, String> {
 
 fn video_path(c: &Connection, input: &PublishInput) -> Result<String, String> {
     c.query_row(
-        "SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='video'",
-        params![input.video_asset_id, input.project_id],
+        "SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='video' AND chapter_id IS ?3",
+        params![input.video_asset_id, input.project_id,input.chapter_id],
         |r| r.get(0),
     )
     .optional()
@@ -188,8 +190,8 @@ fn video_path(c: &Connection, input: &PublishInput) -> Result<String, String> {
 
 fn audio_path(c: &Connection, input: &PublishInput) -> Result<String, String> {
     c.query_row(
-        "SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='audio'",
-        params![input.audio_asset_id, input.project_id],
+        "SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND asset_type='audio' AND chapter_id IS ?3",
+        params![input.audio_asset_id, input.project_id,input.chapter_id],
         |r| r.get(0),
     )
     .optional()
@@ -229,9 +231,18 @@ fn cover_path(
     path.ok_or_else(|| "封面尚未导出，请先在封面工坊导出两张图片。".into())
 }
 
+fn cover_in_scope(
+    c: &Connection,
+    project: &str,
+    id: &Option<String>,
+    chapter: Option<&str>,
+) -> bool {
+    id.as_ref().is_some_and(|id| c.query_row("SELECT EXISTS(SELECT 1 FROM cover_versions WHERE id=?1 AND project_id=?2 AND chapter_id IS ?3)",params![id,project,chapter],|row| row.get::<_,bool>(0)).unwrap_or(false))
+}
+
 fn load(c: &Connection, id: &str) -> Result<PublishTask, String> {
-    let mut task = c.query_row("SELECT id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,task_directory,created_at,updated_at,writing_version_id,allow_download,scheduled_at FROM publish_tasks WHERE id=?1", [id], |r| Ok(PublishTask {
-        id: r.get(0)?, input: PublishInput { project_id:r.get(1)?, title:r.get(2)?, description:r.get(3)?, tags:r.get(4)?, video_asset_id:r.get(5)?, audio_asset_id:r.get(6)?, landscape_cover_id:r.get(7)?, portrait_cover_id:r.get(8)?, title_confirmed:r.get(9)?, covers_confirmed:r.get(10)?, writing_version_id:r.get(15)?, allow_download:r.get(16)?, scheduled_at:r.get(17)? }, status:r.get(11)?, task_directory:r.get(12)?, created_at:r.get(13)?, updated_at:r.get(14)?, checklist:Vec::new(), record:None, douyin_collection:None
+    let mut task = c.query_row("SELECT id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,task_directory,created_at,updated_at,writing_version_id,allow_download,scheduled_at,chapter_id FROM publish_tasks WHERE id=?1", [id], |r| Ok(PublishTask {
+        id: r.get(0)?, input: PublishInput { chapter_id:r.get(18)?, project_id:r.get(1)?, title:r.get(2)?, description:r.get(3)?, tags:r.get(4)?, video_asset_id:r.get(5)?, audio_asset_id:r.get(6)?, landscape_cover_id:r.get(7)?, portrait_cover_id:r.get(8)?, title_confirmed:r.get(9)?, covers_confirmed:r.get(10)?, writing_version_id:r.get(15)?, allow_download:r.get(16)?, scheduled_at:r.get(17)? }, status:r.get(11)?, task_directory:r.get(12)?, created_at:r.get(13)?, updated_at:r.get(14)?, checklist:Vec::new(), record:None, douyin_collection:None
     })).optional().map_err(|e| e.to_string())?.ok_or("发布任务不存在。")?;
     task.douyin_collection = c
         .query_row(
@@ -443,14 +454,26 @@ fn checked(c: &Connection, id: &str) -> Result<PublishTask, String> {
             "横版 4:3 封面已导出且可用",
             cover_path(c, &i.project_id, &i.landscape_cover_id, 1440, 1080)
                 .and_then(|p| reference(&p))
-                .is_ok(),
+                .is_ok()
+                && cover_in_scope(
+                    c,
+                    &i.project_id,
+                    &i.landscape_cover_id,
+                    i.chapter_id.as_deref(),
+                ),
         ),
         (
             "portrait",
             "竖版 3:4 封面已导出且可用",
             cover_path(c, &i.project_id, &i.portrait_cover_id, 1080, 1440)
                 .and_then(|p| reference(&p))
-                .is_ok(),
+                .is_ok()
+                && cover_in_scope(
+                    c,
+                    &i.project_id,
+                    &i.portrait_cover_id,
+                    i.chapter_id.as_deref(),
+                ),
         ),
         (
             "covers",
@@ -656,10 +679,14 @@ impl Database {
         })
     }
 
-    pub fn list_publish_tasks(&self, project_id: &str) -> Result<Vec<PublishTask>, String> {
+    pub fn list_publish_tasks(
+        &self,
+        project_id: &str,
+        chapter_id: Option<&str>,
+    ) -> Result<Vec<PublishTask>, String> {
         self.with_connection(|c| {
-            get(c,project_id)?;
-            let ids = c.prepare("SELECT id FROM publish_tasks WHERE project_id=?1 ORDER BY created_at DESC,id DESC").map_err(|e|e.to_string())?.query_map([project_id],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())?;
+            super::chapters::require_scope(c,project_id,chapter_id)?;
+            let ids = c.prepare("SELECT id FROM publish_tasks WHERE project_id=?1 AND chapter_id IS ?2 ORDER BY created_at DESC,id DESC").map_err(|e|e.to_string())?.query_map(params![project_id,chapter_id],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())?;
             ids.iter().map(|id|checked(c,id)).collect()
         })
     }
@@ -690,22 +717,24 @@ impl Database {
         self.with_connection(|c| {
             let tx = c.transaction().map_err(|e|e.to_string())?;
             validate_schedule(&tx, input.scheduled_at.as_deref(), true)?;
-            let draft_owner = format!("{}:{}", input.project_id, id.unwrap_or("new"));
-            get(&tx,&input.project_id)?;
+            let draft_owner = if id.is_none() {
+                input.chapter_id.as_ref().map_or_else(||format!("{}:new",input.project_id),|chapter|format!("{}:chapter:{chapter}:new",input.project_id))
+            } else { format!("{}:{}",input.project_id,id.unwrap_or("new")) };
+            super::chapters::require_scope(&tx,&input.project_id,input.chapter_id.as_deref())?;
             if let Some(version)=&input.writing_version_id {
-                if !tx.query_row("SELECT EXISTS(SELECT 1 FROM writing_versions WHERE id=?1 AND project_id=?2 AND kind='publishing')",params![version,input.project_id],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("文案版本不属于当前书籍。".into()); }
+                if !tx.query_row("SELECT EXISTS(SELECT 1 FROM writing_versions WHERE id=?1 AND project_id=?2 AND chapter_id IS ?3 AND kind='publishing')",params![version,input.project_id,input.chapter_id],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("文案版本不属于当前书籍。".into()); }
             }
             if input.video_asset_id.is_some() { video_path(&tx,&input)?; }
             if input.audio_asset_id.is_some() { audio_path(&tx,&input)?; }
-            for (id,w,h) in [(&input.landscape_cover_id,1440,1080),(&input.portrait_cover_id,1080,1440)] { if id.is_some() { cover_path(&tx,&input.project_id,id,w,h)?; } }
+            for (id,w,h) in [(&input.landscape_cover_id,1440,1080),(&input.portrait_cover_id,1080,1440)] { if id.is_some() { if !cover_in_scope(&tx,&input.project_id,id,input.chapter_id.as_deref()) { return Err("封面不属于本次创作章节。".into()); } cover_path(&tx,&input.project_id,id,w,h)?; } }
             let id = if let Some(id)=id {
                 let old = load(&tx,id)?;
-                if old.input.project_id != input.project_id || old.status=="published" { return Err("已发布任务不能修改，或任务不属于这本书；请新建任务。".into()); }
+                if old.input.project_id != input.project_id || old.input.chapter_id != input.chapter_id || old.status=="published" { return Err("已发布任务不能修改，或任务不属于这本书；请新建任务。".into()); }
                 id.to_owned()
             } else { new_id(&tx)? };
             tx.execute(&format!("INSERT INTO publish_tasks(id,project_id,title,description,tags,video_asset_id,audio_asset_id,landscape_cover_id,portrait_cover_id,title_confirmed,covers_confirmed,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'draft',{NOW},{NOW}) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,tags=excluded.tags,video_asset_id=excluded.video_asset_id,audio_asset_id=excluded.audio_asset_id,landscape_cover_id=excluded.landscape_cover_id,portrait_cover_id=excluded.portrait_cover_id,title_confirmed=excluded.title_confirmed,covers_confirmed=excluded.covers_confirmed,status='draft',task_directory=NULL,updated_at=excluded.updated_at"),params![id,input.project_id,input.title,input.description,input.tags,input.video_asset_id,input.audio_asset_id,input.landscape_cover_id,input.portrait_cover_id,input.title_confirmed,input.covers_confirmed]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE book_projects SET updated_at={NOW} WHERE id=?1"),[&input.project_id]).map_err(|e|e.to_string())?;
-            tx.execute("UPDATE publish_tasks SET writing_version_id=?1,allow_download=?2,scheduled_at=?3 WHERE id=?4",params![input.writing_version_id,input.allow_download,input.scheduled_at,id]).map_err(|e|e.to_string())?;
+            tx.execute("UPDATE publish_tasks SET writing_version_id=?1,allow_download=?2,scheduled_at=?3,chapter_id=?5 WHERE id=?4",params![input.writing_version_id,input.allow_download,input.scheduled_at,id,input.chapter_id]).map_err(|e|e.to_string())?;
             if let Some(binding) = binding {
                 super::automation::bind(&tx,binding,&input.project_id,&id)?;
                 tx.execute("UPDATE automation_runs SET publish_input_json=?1 WHERE id=?2",params![serde_json::to_string(&input).map_err(|e|e.to_string())?,binding.id]).map_err(|e|e.to_string())?;
@@ -786,7 +815,7 @@ impl Database {
             let tx = c.transaction().map_err(|e|e.to_string())?;
             tx.execute(&format!("INSERT INTO publish_records(publish_task_id,published_at,post_url,notes,created_at) VALUES(?1,?2,?3,?4,{NOW})"),params![id,published_at,input.post_url.trim(),input.notes.trim()]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE publish_tasks SET status='published',updated_at={NOW} WHERE id=?1"),[id]).map_err(|e|e.to_string())?;
-            tx.execute(&format!("UPDATE book_projects SET status=CASE WHEN status='archived' THEN status ELSE 'published' END,updated_at={NOW} WHERE id=?1"),[&task.input.project_id]).map_err(|e|e.to_string())?;
+            tx.execute(&format!("UPDATE book_projects SET status=CASE WHEN status='archived' OR ?2 IS NOT NULL THEN status ELSE 'published' END,updated_at={NOW} WHERE id=?1"),params![task.input.project_id,task.input.chapter_id]).map_err(|e|e.to_string())?;
             tx.execute(&format!("UPDATE automation_runs SET status='completed',error='',updated_at={NOW} WHERE publish_task_id=?1 AND status!='cancelled'"),[id]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e|e.to_string())?;
             checked(c,id)

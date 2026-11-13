@@ -47,12 +47,14 @@ fn read_image_file(path: &Path) -> Result<VideoImageSnapshot, String> {
     })
 }
 
-const COLUMNS: &str = "id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,run_id,plan_json,error,subtitle_asset_id,video_asset_id,created_at,updated_at,json_extract(editor_draft_json,'$.updatedAt')";
+const COLUMNS: &str = "id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,run_id,plan_json,error,subtitle_asset_id,video_asset_id,created_at,updated_at,json_extract(editor_draft_json,'$.updatedAt'),chapter_id";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoJob {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     pub project_id: String,
     pub audio_asset_id: Option<String>,
     pub source_subtitle_id: Option<String>,
@@ -73,6 +75,8 @@ pub struct VideoJob {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartVideoInput {
     pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     pub audio_asset_id: String,
     pub subtitle_asset_id: Option<String>,
     pub provider_id: String,
@@ -85,6 +89,7 @@ fn row(r: &Row<'_>) -> rusqlite::Result<VideoJob> {
     })?;
     Ok(VideoJob {
         id: r.get(0)?,
+        chapter_id: r.get(15)?,
         project_id: r.get(1)?,
         audio_asset_id: r.get(2)?,
         source_subtitle_id: r.get(3)?,
@@ -132,13 +137,20 @@ fn asset_path(c: &Connection, project: &str, id: &str, kind: &str) -> Result<Pat
 }
 
 impl Database {
-    pub fn import_video_image(&self, project: &str, path: &str) -> Result<String, String> {
+    pub fn import_video_image(
+        &self,
+        project: &str,
+        path: &str,
+        chapter_id: Option<&str>,
+    ) -> Result<String, String> {
         let path = Path::new(path);
         if assets::asset_type(path)? != "image" {
             return Err("请选择静态PNG、JPEG或WebP图片。".into());
         }
         read_image_file(path)?;
-        self.with_connection(|c| assets::register_existing(c, project, path, Some("image"), None))
+        self.with_connection(|c| {
+            assets::register_existing(c, project, path, Some("image"), None, chapter_id)
+        })
     }
     pub fn read_video_image(&self, project: &str, id: &str) -> Result<Vec<u8>, String> {
         self.with_connection(|c| Ok(read_image(c, project, id)?.bytes))
@@ -147,11 +159,13 @@ impl Database {
         &self,
         project: &str,
         scenes: &[Scene],
+        chapter_id: Option<&str>,
     ) -> Result<BTreeMap<String, VideoImageSnapshot>, String> {
         self.with_connection(|c| {
             let mut snapshots = BTreeMap::new();
             for image in scenes.iter().filter_map(|s| s.image.as_ref()) {
                 image.validate()?;
+                super::chapters::asset_scope(c, project, &image.asset_id, chapter_id, true)?;
                 if !snapshots.contains_key(&image.asset_id) {
                     snapshots.insert(
                         image.asset_id.clone(),
@@ -199,11 +213,15 @@ impl Database {
         })
     }
 
-    pub fn video_jobs(&self, project_id: &str) -> Result<Vec<VideoJob>, String> {
+    pub fn video_jobs(
+        &self,
+        project_id: &str,
+        chapter_id: Option<&str>,
+    ) -> Result<Vec<VideoJob>, String> {
         self.with_connection(|c| {
-            projects::get(c, project_id)?;
-            let mut q = c.prepare(&format!("SELECT {COLUMNS} FROM video_jobs WHERE project_id=?1 ORDER BY created_at DESC,id DESC")).map_err(|e| e.to_string())?;
-            let rows = q.query_map([project_id], row).map_err(|e| e.to_string())?;
+            super::chapters::require_scope(c, project_id, chapter_id)?;
+            let mut q = c.prepare(&format!("SELECT {COLUMNS} FROM video_jobs WHERE project_id=?1 AND chapter_id IS ?2 ORDER BY created_at DESC,id DESC")).map_err(|e| e.to_string())?;
+            let rows = q.query_map(params![project_id,chapter_id], row).map_err(|e| e.to_string())?;
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
         })
     }
@@ -225,8 +243,8 @@ impl Database {
             let prompt = match frozen {
                 Some(prompt) => prompt,
                 None => c.query_row(
-                    "SELECT json_extract(content_json,'$.audioPrompt') FROM writing_versions WHERE project_id=?1 AND kind='publishing' ORDER BY version_no DESC LIMIT 1",
-                    [&job.project_id], |row| row.get::<_, String>(0),
+                    "SELECT json_extract(content_json,'$.audioPrompt') FROM writing_versions WHERE project_id=?1 AND chapter_id IS ?2 AND kind='publishing' ORDER BY version_no DESC LIMIT 1",
+                    params![job.project_id,job.chapter_id], |row| row.get::<_, String>(0),
                 ).optional().map_err(|e| e.to_string())?.unwrap_or_default(),
             };
             Ok(crate::video::subtitles::SubtitleReference::from_prompt(book.input.title, book.input.author, &prompt))
@@ -248,8 +266,14 @@ impl Database {
                 &path,
                 crate::video::to_srt(&job.plan.cues).as_bytes(),
             )?;
-            let asset =
-                assets::register_existing(&tx, &job.project_id, &path, Some("subtitle"), None)?;
+            let asset = assets::register_existing(
+                &tx,
+                &job.project_id,
+                &path,
+                Some("subtitle"),
+                None,
+                job.chapter_id.as_deref(),
+            )?;
             tx.execute(
                 "UPDATE video_jobs SET subtitle_asset_id=?1 WHERE id=?2",
                 params![asset, id],
@@ -274,9 +298,12 @@ impl Database {
     ) -> Result<VideoJob, String> {
         self.with_connection(|c| {
             let tx = c.transaction().map_err(|e| e.to_string())?;
+            super::chapters::require_scope(&tx,&input.project_id,input.chapter_id.as_deref())?;
             let book = projects::get(&tx, &input.project_id)?;
+            super::chapters::asset_scope(&tx,&book.id,&input.audio_asset_id,input.chapter_id.as_deref(),false)?;
             asset_path(&tx, &book.id, &input.audio_asset_id, "audio")?;
             if let Some(id) = &input.subtitle_asset_id {
+                super::chapters::asset_scope(&tx,&book.id,id,input.chapter_id.as_deref(),false)?;
                 let path = asset_path(&tx, &book.id, id, "subtitle")?;
                 if !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("srt")) { return Err("原声字幕请使用 SRT 格式。".into()); }
             }
@@ -288,7 +315,7 @@ impl Database {
                 plan.audio_sha256 = tx.query_row("SELECT a.output_sha256 FROM automation_runs r JOIN audio_jobs a ON a.id=r.audio_job_id WHERE r.id=?1 AND a.asset_id=?2 AND a.status='succeeded'",params![binding.id,input.audio_asset_id],|row|row.get::<_,String>(0)).map_err(|_|"自动视频缺少对应音频的归档摘要。")?;
                 if plan.audio_sha256.is_empty() { return Err("自动视频缺少音频摘要。".into()); }
             }
-            tx.execute(&format!("INSERT INTO video_jobs(id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,plan_json,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'draft','preparing',?6,{NOW},{NOW})"), params![id, book.id, input.audio_asset_id, input.subtitle_asset_id, input.provider_id, serde_json::to_string(&plan).map_err(|e| e.to_string())?]).map_err(|e| e.to_string())?;
+            tx.execute(&format!("INSERT INTO video_jobs(id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,plan_json,created_at,updated_at,chapter_id) VALUES(?1,?2,?3,?4,?5,'draft','preparing',?6,{NOW},{NOW},?7)"), params![id, book.id, input.audio_asset_id, input.subtitle_asset_id, input.provider_id, serde_json::to_string(&plan).map_err(|e| e.to_string())?,input.chapter_id]).map_err(|e| e.to_string())?;
             let job = get(&tx, &id)?;
             if let Some(binding) = binding { super::automation::bind(&tx,binding,&input.project_id,&id)?; }
             tx.commit().map_err(|e| e.to_string())?;
@@ -406,6 +433,7 @@ impl Database {
             if !scenes.is_empty() { validate_scenes(&scenes, 0, cues.len())?; }
             let mut snapshots = BTreeMap::new();
             for image in scenes.iter_mut().filter_map(|s| s.image.as_mut()) {
+                super::chapters::asset_scope(c, &job.project_id, &image.asset_id, job.chapter_id.as_deref(), true)?;
                 if !snapshots.contains_key(&image.asset_id) {
                     snapshots.insert(image.asset_id.clone(), read_image(c, &job.project_id, &image.asset_id)?);
                 }
@@ -430,8 +458,14 @@ impl Database {
             if job.run_id != run_id || job.status != "running" {
                 return Err("视频任务已过期。".into());
             }
-            let asset =
-                assets::register_existing(&tx, &job.project_id, path, Some("subtitle"), None)?;
+            let asset = assets::register_existing(
+                &tx,
+                &job.project_id,
+                path,
+                Some("subtitle"),
+                None,
+                job.chapter_id.as_deref(),
+            )?;
             let stage = if crate::video::subtitles::pending(&job.plan) {
                 "proofreading"
             } else {
@@ -462,8 +496,8 @@ impl Database {
             if job.status != "running" || job.run_id != run_id { return Err("视频任务已停止或过期。".into()); }
             if job.stage != "validating" { return Err("只有完整成片校验阶段可以登记视频，试片不能用于发布。".into()); }
             if !metadata.has_audio || metadata.width != 1920 || metadata.height != 1080 || (metadata.duration_seconds - job.plan.duration).abs() > 0.2 { return Err("成片画面、音轨或时长未通过校验。".into()); }
-            let video_id = assets::register_existing(&tx, &job.project_id, video, Some("video"), None)?;
-            let subtitle_id = assets::register_existing(&tx, &job.project_id, subtitle, Some("subtitle"), None)?;
+            let video_id = assets::register_existing(&tx, &job.project_id, video, Some("video"), None, job.chapter_id.as_deref())?;
+            let subtitle_id = assets::register_existing(&tx, &job.project_id, subtitle, Some("subtitle"), None, job.chapter_id.as_deref())?;
             tx.execute(&format!("UPDATE video_jobs SET status='succeeded',stage='complete',video_asset_id=?1,subtitle_asset_id=?2,error='',updated_at={NOW} WHERE id=?3"), params![video_id, subtitle_id, id]).map_err(|e| e.to_string())?;
             let result = get(&tx, id)?;
             tx.commit().map_err(|e| e.to_string())?;
@@ -482,7 +516,7 @@ pub(crate) mod tests {
         let path = dir.path().join("audio.m4a");
         std::fs::write(&path, b"source").unwrap();
         let audio = db
-            .link_asset(&book.id, path.to_str().unwrap(), None)
+            .link_asset(&book.id, path.to_str().unwrap(), None, None)
             .unwrap();
         db.with_connection(|c| {
             c.execute("INSERT INTO model_providers(id,name,provider_type,base_url,model_name,is_default,is_enabled,model_kind,created_at,updated_at) VALUES('model','test','openai-compatible','http://localhost:1234/v1','test',1,1,'text','now','now')", []).unwrap();
@@ -492,6 +526,8 @@ pub(crate) mod tests {
             dir,
             db,
             StartVideoInput {
+                chapter_id: None,
+
                 project_id: book.id,
                 audio_asset_id: audio,
                 subtitle_asset_id: None,
@@ -602,6 +638,8 @@ pub(crate) mod tests {
         let (_dir, db, input) = fixture();
         alternative_models(&db);
         let second = StartVideoInput {
+            chapter_id: None,
+
             project_id: input.project_id.clone(),
             audio_asset_id: input.audio_asset_id.clone(),
             subtitle_asset_id: None,
@@ -629,7 +667,7 @@ pub(crate) mod tests {
         let path = dir.path().join("中文 原图.png");
         std::fs::write(&path, crate::ai::images::test_png()).unwrap();
         let asset = db
-            .import_video_image(&input.project_id, path.to_str().unwrap())
+            .import_video_image(&input.project_id, path.to_str().unwrap(), None)
             .unwrap();
         let job = db.create_video_job(input).unwrap();
         let raw = serde_json::json!({"title":"原声", "audioSha256":"keep-audio", "duration":5, "cues":[{"start":0.5,"end":4,"text":"原声不变"}], "scenes":[]});
@@ -658,8 +696,12 @@ pub(crate) mod tests {
         assert_eq!(image.sha256.len(), 64);
         assert!(image.creator.is_empty());
         assert_eq!(
-            db.video_image_snapshots(&saved.project_id, &saved.plan.scenes)
-                .unwrap()[&asset]
+            db.video_image_snapshots(
+                &saved.project_id,
+                &saved.plan.scenes,
+                saved.chapter_id.as_deref()
+            )
+            .unwrap()[&asset]
                 .bytes,
             crate::ai::images::test_png()
         );
@@ -687,18 +729,26 @@ pub(crate) mod tests {
             .unwrap();
         assert!(db.unlink_asset(&asset).is_err());
         assert!(db
-            .link_asset(&job.project_id, path.to_str().unwrap(), Some(&asset))
+            .link_asset(&job.project_id, path.to_str().unwrap(), Some(&asset), None)
             .is_err());
         db.end_video_job(&job.id, claimed.run_id, "cancelled", "stop")
             .unwrap();
         std::fs::write(&path, crate::ai::images::test_jpeg()).unwrap();
         assert!(db
-            .video_image_snapshots(&saved.project_id, &saved.plan.scenes)
+            .video_image_snapshots(
+                &saved.project_id,
+                &saved.plan.scenes,
+                saved.chapter_id.as_deref()
+            )
             .unwrap_err()
             .contains("变化"));
         std::fs::rename(&path, path.with_extension("moved.png")).unwrap();
         assert!(db
-            .video_image_snapshots(&saved.project_id, &saved.plan.scenes)
+            .video_image_snapshots(
+                &saved.project_id,
+                &saved.plan.scenes,
+                saved.chapter_id.as_deref()
+            )
             .is_err());
         assert_eq!(
             serde_json::to_string(&db.video_job(&job.id).unwrap().plan).unwrap(),
@@ -729,8 +779,12 @@ pub(crate) mod tests {
         let recovered = db.video_job(&job.id).unwrap();
         assert_eq!(serde_json::to_string(&recovered.plan).unwrap(), expected);
         assert_eq!(
-            db.video_image_snapshots(&job.project_id, &recovered.plan.scenes)
-                .unwrap()[&asset]
+            db.video_image_snapshots(
+                &job.project_id,
+                &recovered.plan.scenes,
+                job.chapter_id.as_deref()
+            )
+            .unwrap()[&asset]
                 .bytes,
             crate::ai::images::test_png()
         );
@@ -740,17 +794,22 @@ pub(crate) mod tests {
         let (dir, db, input) = fixture();
         let path = dir.path().join("bad.png");
         std::fs::write(&path, b"\x89PNG\r\n\x1a\ntruncated").unwrap();
-        let before = db.list_assets(&input.project_id).unwrap().len();
+        let before = db.list_assets(&input.project_id, None).unwrap().len();
         assert!(db
-            .import_video_image(&input.project_id, path.to_str().unwrap())
+            .import_video_image(&input.project_id, path.to_str().unwrap(), None)
             .is_err());
-        assert_eq!(db.list_assets(&input.project_id).unwrap().len(), before);
+        assert_eq!(
+            db.list_assets(&input.project_id, None).unwrap().len(),
+            before
+        );
     }
 
     #[test]
     fn video_job_rejects_foreign_assets_and_runs_only_once() {
         let (_dir, db, input) = fixture();
         let mut bad = StartVideoInput {
+            chapter_id: None,
+
             project_id: input.project_id.clone(),
             audio_asset_id: "foreign".into(),
             subtitle_asset_id: None,
@@ -758,6 +817,8 @@ pub(crate) mod tests {
         };
         assert!(db.create_video_job(bad).is_err());
         bad = StartVideoInput {
+            chapter_id: None,
+
             project_id: input.project_id.clone(),
             audio_asset_id: input.audio_asset_id.clone(),
             subtitle_asset_id: None,
@@ -1013,7 +1074,7 @@ pub(crate) mod tests {
         assert_eq!(done.status, "awaiting_confirmation");
         assert_eq!(serde_json::to_string(&done.plan).unwrap(), original);
         assert!(done.video_asset_id.is_none());
-        assert_eq!(db.list_assets(&job.project_id).unwrap().len(), 1);
+        assert_eq!(db.list_assets(&job.project_id, None).unwrap().len(), 1);
         db.edit_video_plan(&job.id, done.plan.cues, done.plan.scenes)
             .unwrap();
         assert_eq!(db.video_job(&job.id).unwrap().stage, "storyboard");
@@ -1046,20 +1107,20 @@ pub(crate) mod tests {
         assert!(db
             .finish_video_job(&job.id, job.run_id, &video, &subtitle)
             .is_err());
-        assert_eq!(db.list_assets(&job.project_id).unwrap().len(), 1);
+        assert_eq!(db.list_assets(&job.project_id, None).unwrap().len(), 1);
         std::fs::write(&subtitle, "1\n00:00:00,000 --> 00:00:00,500\n原声字幕\n").unwrap();
         let completed = db
             .finish_video_job(&job.id, job.run_id, &video, &subtitle)
             .unwrap();
         assert_eq!(completed.status, "succeeded");
-        assert_eq!(db.list_assets(&job.project_id).unwrap().len(), 3);
+        assert_eq!(db.list_assets(&job.project_id, None).unwrap().len(), 3);
         assert_eq!(
             db.finish_video_job(&job.id, job.run_id, &video, &subtitle)
                 .unwrap()
                 .video_asset_id,
             completed.video_asset_id
         );
-        assert_eq!(db.list_assets(&job.project_id).unwrap().len(), 3);
+        assert_eq!(db.list_assets(&job.project_id, None).unwrap().len(), 3);
         let restore = dir.path().join("restored");
         std::fs::create_dir(&restore).unwrap();
         let backup = db
@@ -1068,7 +1129,7 @@ pub(crate) mod tests {
         db.restore_full_backup(&backup.manifest_path, restore.to_str().unwrap())
             .unwrap();
         assert!(db
-            .list_assets(&job.project_id)
+            .list_assets(&job.project_id, None)
             .unwrap()
             .iter()
             .all(|a| a.exists_status == "available"));

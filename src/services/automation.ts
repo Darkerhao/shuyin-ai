@@ -1,12 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
 import { ref } from 'vue'
 import type { CoverConfig } from '../types/cover'
+import type { AudioSourceInput } from '../types/audio'
 import { coverPng, decodeBackground } from './coverRenderer'
 import { readBackground } from './covers'
 
 export interface AutomationInput {
   projectId: string
-  sourceAssetId: string
+  source: AudioSourceInput
   textProviderId: string
   imageProviderId: string
   format: 'deep_dive' | 'brief'
@@ -15,8 +16,9 @@ export interface AutomationInput {
 }
 export interface AutomationRun {
   id: string
+  chapterId?: string | null
   projectId: string
-  input: { workflowVersion: number; title: string; author: string; targetDurationSeconds: number | null; durationReason: string; selection: AutomationInput; account?: AutomationAccount; textProvider?: { name: string; modelName: string }; imageProvider?: { name: string; modelName: string } }
+  input: { workflowVersion: number; title: string; author: string; chapterSource?: { chapterTitle: string }; targetDurationSeconds: number | null; durationReason: string; selection: AutomationInput; account?: AutomationAccount; textProvider?: { name: string; modelName: string }; imageProvider?: { name: string; modelName: string } }
   status: 'running' | 'paused' | 'waiting_user' | 'awaiting_publish' | 'completed' | 'cancelled'
   stage: string
   runId: number

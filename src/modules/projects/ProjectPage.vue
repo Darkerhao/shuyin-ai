@@ -5,7 +5,7 @@ import ConfirmAction from '../../components/ConfirmAction.vue'
 import { useEditorDraft } from '../../composables/useEditorDraft'
 import { readDraft } from '../../services/drafts'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter, useRoute } from 'vue-router'
 import * as api from '../../services/projects'
@@ -15,6 +15,8 @@ import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import AutomationSetup from '../../components/AutomationSetup.vue'
+import ProjectChapters from './ProjectChapters.vue'
+import { chapterIdFromQuery, chapterQuery, type Chapter } from '../../types/chapter'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -39,6 +41,18 @@ const documents = ref<Asset[]>([])
 const dirty = computed(() => JSON.stringify(form.value) !== original.value || sourcePaths.value.length > 0)
 const ready = ref(false)
 const automationBusy = ref(false)
+const chapterEditor = ref<InstanceType<typeof ProjectChapters>>()
+const pendingChapter = ref('')
+const chapterId = computed(() => chapterIdFromQuery(route.query.chapter))
+function chapterSaved(chapter: Chapter) {
+  if (automationBusy.value) { pendingChapter.value = chapter.id; return }
+  void router.replace({ path: `/projects/${chapter.projectId}`, query: chapterQuery(chapter.id) })
+}
+watch(automationBusy, value => {
+  if (value || !pendingChapter.value || !project.value) return
+  const id = pendingChapter.value; pendingChapter.value = ''
+  void router.replace({ path: `/projects/${project.value.id}`, query: chapterQuery(id) })
+})
 const deleting = ref(false)
 const imported = ref<ImportedNote | null>(null)
 let leaving = false
@@ -101,6 +115,11 @@ const save = () => run(async () => {
   leaving = true; await router.replace(`/projects/${saved.id}/writing`)
 }, '正在保存书籍资料…')
 async function saveAutomaticSource() {
+  if (project.value && route.query.chapter) {
+    if (!chapterEditor.value) throw new Error('请先输入章节内容。')
+    const chapter = await chapterEditor.value.save()
+    return { projectId: project.value.id, source: { kind: 'chapter' as const, chapterId: chapter.id } }
+  }
   if (!form.value.title.trim() || !form.value.author.trim()) throw new Error('自动制作请填写书名和作者。')
   if (documents.value.length + sourcePaths.value.length !== 1) throw new Error('自动制作每次需要且仅使用一个原书文件。请保留一份PDF、EPUB、TXT或Markdown。')
   await autosave.flush()
@@ -109,7 +128,7 @@ async function saveAutomaticSource() {
   documents.value = (await api.listAssets(saved.id)).filter(asset => asset.assetType === 'document')
   const source = documents.value[0]
   if (!source || source.existsStatus !== 'available') throw new Error('原书文件不可读取。')
-  return { projectId: saved.id, sourceAssetId: source.id }
+  return { projectId: saved.id, source: { kind: 'asset' as const, assetId: source.id } }
 }
 const remove = () => run(async () => {
   if (!project.value) return
@@ -163,7 +182,7 @@ onBeforeUnmount(() => { disposed = true; unlistenSourceDrop?.() })
   </div>
   <header class="page-heading">
     <div>
-      <h1>{{ project ? '书籍资料' : '添加一本书' }}</h1>
+      <h1>{{ project ? route.query.chapter ? '章节资料' : '书籍资料' : '添加一本书' }}</h1>
       <p class="muted">
         {{ project ? '补充你的阅读理解，让 AI 创作成片更有专属的思考味道。' : '从一个书名开始，把读过的好故事分享出去。' }}
       </p>
@@ -174,6 +193,23 @@ onBeforeUnmount(() => { disposed = true; unlistenSourceDrop?.() })
     :id="project.id"
     :editing="dirty"
     :busy="busy || automationBusy"
+  />
+  <Button
+    v-if="project && !route.query.chapter"
+    variant="outline"
+    class="mb-3"
+    :disabled="busy || automationBusy"
+    @click="router.push({ path: `/projects/${project!.id}`, query: { chapter: 'new' } })"
+  >
+    输入一个章节的内容
+  </Button>
+  <ProjectChapters
+    v-if="project && route.query.chapter"
+    ref="chapterEditor"
+    :project-id="project.id"
+    :chapter-id="chapterId"
+    :disabled="automationBusy"
+    @saved="chapterSaved"
   />
   <p
     v-if="!desktop"
@@ -201,7 +237,7 @@ onBeforeUnmount(() => { disposed = true; unlistenSourceDrop?.() })
     正在读取书籍…
   </p>
   <div
-    v-if="ready"
+    v-if="ready && !route.query.chapter"
     class="book-form-layout"
   >
     <form

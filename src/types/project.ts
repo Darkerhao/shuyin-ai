@@ -14,6 +14,7 @@ export interface Project extends ProjectInput {
 }
 export interface Asset {
   id: string; projectId: string; assetType: 'video' | 'audio' | 'image' | 'cover' | 'subtitle' | 'document'
+  chapterId?: string | null
   filePath: string; originalName: string; fileSize: number; modifiedAt: number
   existsStatus: 'available' | 'missing' | 'unknown'; createdAt: string
 }

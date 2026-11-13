@@ -3,6 +3,9 @@ mod assets;
 pub mod audio;
 pub mod automation;
 mod backup;
+#[cfg(test)]
+mod chapter_tests;
+pub mod chapters;
 pub mod covers;
 pub mod diagnostics;
 pub mod drafts;
@@ -47,6 +50,17 @@ fn initialize(path: &PathBuf) -> Result<Connection, String> {
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(|error| error.to_string())?;
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if (2..25).contains(&version) {
+        let directory = path
+            .parent()
+            .ok_or("数据库目录不存在。")?
+            .join("chapter-upgrade-backups");
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        backup::backup_to(&connection, &directory)?;
+    }
     migrate(&mut connection)?;
     Ok(connection)
 }
@@ -119,6 +133,7 @@ pub(super) const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0022_automation_creation.sql"),
     include_str!("../migrations/0023_automation_media.sql"),
     include_str!("../migrations/0024_model_call_pagination.sql"),
+    include_str!("../migrations/0025_chapter_creation.sql"),
 ];
 
 impl Database {

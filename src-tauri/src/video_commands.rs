@@ -80,7 +80,7 @@ fn cached_preview(database: &Database, job: &VideoJob) -> Option<VideoPreview> {
             .ok()?;
     let preview: VideoPreview = serde_json::from_value(output.get("preview")?.clone()).ok()?;
     if database
-        .video_image_snapshots(&job.project_id, &job.plan.scenes)
+        .video_image_snapshots(&job.project_id, &job.plan.scenes, job.chapter_id.as_deref())
         .is_err()
         || preview.signature != preview_signature(&job.plan).ok()?
         || !preview.start.is_finite()
@@ -191,8 +191,9 @@ pub fn import_video_image(
     database: State<'_, Database>,
     project_id: String,
     path: String,
+    chapter_id: Option<String>,
 ) -> Result<String, String> {
-    database.import_video_image(&project_id, &path)
+    database.import_video_image(&project_id, &path, chapter_id.as_deref())
 }
 
 #[tauri::command]
@@ -238,8 +239,9 @@ pub fn list_video_jobs(
     database: State<'_, Database>,
     runtime: State<'_, VideoRuntime>,
     project_id: String,
+    chapter_id: Option<String>,
 ) -> Result<Vec<VideoJobView>, String> {
-    let jobs = database.video_jobs(&project_id)?;
+    let jobs = database.video_jobs(&project_id, chapter_id.as_deref())?;
     let active = runtime.0.lock().map_err(|e| e.to_string())?;
     Ok(jobs
         .into_iter()
@@ -411,12 +413,7 @@ pub fn media_asset_path(
     asset_id: String,
 ) -> Result<String, String> {
     let db = app.state::<Database>();
-    let asset = db
-        .list_assets(&project_id)?
-        .into_iter()
-        .find(|a| a.id == asset_id && matches!(a.asset_type.as_str(), "audio" | "video"))
-        .ok_or("只能预览本书已登记的音频或视频。")?;
-    let path = db.video_asset_path(&project_id, &asset_id, &asset.asset_type)?;
+    let path = db.media_asset_path(&project_id, &asset_id)?;
     app.asset_protocol_scope()
         .allow_file(&path)
         .map_err(|e| e.to_string())?;
@@ -664,7 +661,8 @@ async fn execute(
     }
     if !matches!(work, VideoWork::Prepare | VideoWork::Transcript) {
         let window = work.window(&job.plan)?;
-        let snapshots = db.video_image_snapshots(&job.project_id, &job.plan.scenes)?;
+        let snapshots =
+            db.video_image_snapshots(&job.project_id, &job.plan.scenes, job.chapter_id.as_deref())?;
         let mut images = serde_json::Map::new();
         for (id, snapshot) in snapshots {
             let path = directory.join(format!("image-{}.{}", snapshot.sha256, snapshot.extension));
@@ -691,7 +689,7 @@ async fn execute(
         if digest(audio).await? != job.plan.audio_sha256 {
             return Err("渲染期间源音频发生变化，未登记成片。".into());
         }
-        db.video_image_snapshots(&job.project_id, &job.plan.scenes)?;
+        db.video_image_snapshots(&job.project_id, &job.plan.scenes, job.chapter_id.as_deref())?;
         if let Some(window) = window {
             let metadata = crate::media::inspect(&directory.join("video.mp4"))?;
             if !metadata.has_audio
@@ -1015,6 +1013,8 @@ mod tests {
                 directory: Some(directory.to_path_buf()),
             },
             VideoJob {
+                chapter_id: None,
+
                 draft_updated_at: None,
                 id: "job".into(),
                 project_id: "book".into(),

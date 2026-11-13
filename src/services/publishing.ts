@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { PublishInput, PublishQueueItem, PublishRecord, PublishTask } from '../types/publishing'
 
-export const listPublishTasks = (projectId: string) => invoke<PublishTask[]>('list_publish_tasks', { projectId })
+export const listPublishTasks = (projectId: string, chapterId: string | null = null) => invoke<PublishTask[]>('list_publish_tasks', { projectId, ...(chapterId ? { chapterId } : {}) })
 export const listPublishQueue = () => invoke<PublishQueueItem[]>('list_publish_queue')
 export const savePublishTask = (id: string | null, input: PublishInput) => invoke<PublishTask>('save_publish_task', { id, input })
 export const preparePublishTask = (id: string) => invoke<PublishTask>('prepare_publish_task', { id })

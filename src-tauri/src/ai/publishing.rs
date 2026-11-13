@@ -64,9 +64,15 @@ pub(super) struct AudioDraft {
     sections: Vec<Section>,
 }
 impl AudioDraft {
-    pub fn into_prompt(self, book: &str, duration_seconds: i64) -> Result<String, String> {
+    pub fn into_prompt(
+        self,
+        book: &str,
+        duration_seconds: i64,
+        chapter: Option<&str>,
+    ) -> Result<String, String> {
         super::audio::validate_duration(duration_seconds)?;
-        if self.sections.len() != 5
+        if (chapter.is_none() && self.sections.len() != 5)
+            || !(1..=5).contains(&self.sections.len())
             || self.introduction.trim().is_empty()
             || self.introduction.chars().count() > 1500
             || self.sections.iter().any(|s| {
@@ -76,18 +82,22 @@ impl AudioDraft {
                     || s.guidance.chars().count() > 2000
             })
         {
-            return Err("音频提示词需要书籍引入及五个完整部分，原有内容保留。".into());
+            return Err(
+                "音频提示词需要完整引入；整书为五部分，章节为1—5部分，原有内容保留。".into(),
+            );
         }
         let opening = (duration_seconds / 3).min(60);
         let closing = (duration_seconds / 3).min(45);
         let body = duration_seconds - opening - closing;
+        let section_count = self.sections.len() as i64;
         let sections = self
             .sections
             .iter()
             .zip(["一", "二", "三", "四", "五"])
             .enumerate()
             .map(|(index, (s, number))| {
-                let seconds = body / 5 + i64::from((index as i64) < body % 5);
+                let seconds =
+                    body / section_count + i64::from((index as i64) < body % section_count);
                 format!(
                     "## 第{number}部分：{}（约{}）\n\n{}",
                     s.heading.trim(),
@@ -97,7 +107,21 @@ impl AudioDraft {
             })
             .collect::<Vec<_>>()
             .join("\n\n---\n\n");
-        Ok(include_str!("../../../prompts/audio-template-v3.md")
+        let fixed_opening = chapter.map_or_else(
+            || "欢迎大家收听今天的节目，我是甲子。接下来，我们一起读懂这本书。".to_string(),
+            |chapter| {
+                format!(
+                    "欢迎大家收听今天的节目，我是甲子。今天，我们来读《{}》中的“{}”这一章。",
+                    book.trim().trim_start_matches('《').trim_end_matches('》'),
+                    chapter
+                )
+            },
+        );
+        let scope = chapter.map_or_else(String::new, |chapter| format!("本期精讲《{book}》的“{chapter}”。仅以本次上传的章节正文为来源，细致解释重要内容、关键概念、人物动机或论证过程，不只概括要点，不推测其他章节、后续情节或全书结论。"));
+        Ok(include_str!("../../../prompts/audio-template-v4.md")
+            .replace("{{opening}}", &fixed_opening)
+            .replace("{{scope_instruction}}", &scope)
+            .replace("{{section_count}}", &section_count.to_string())
             .replace(
                 "{{duration}}",
                 &super::audio::duration_label(duration_seconds),
@@ -203,7 +227,12 @@ fn validate_cover_prompts(
     Ok(())
 }
 impl PublishingDraft {
-    pub fn into_content(self, book: &str, duration_seconds: i64) -> Result<WritingContent, String> {
+    pub fn into_content(
+        self,
+        book: &str,
+        duration_seconds: i64,
+        chapter: Option<&str>,
+    ) -> Result<WritingContent, String> {
         let tags = parse_tags(&self.tags)?;
         self.cover_design.validate()?;
         validate_cover_prompts(
@@ -217,7 +246,7 @@ impl PublishingDraft {
             introduction: self.introduction,
             sections: self.sections,
         }
-        .into_prompt(book, duration_seconds)?;
+        .into_prompt(book, duration_seconds, chapter)?;
         let content = WritingContent::Publishing {
             title: self.title.trim().into(),
             description: self.description.trim().into(),
@@ -277,7 +306,7 @@ mod tests {
         value["tags"] = serde_json::json!("  #读书  #明朝那些事儿\n#历史_人物 #Book2026  ");
         let content = serde_json::from_value::<PublishingDraft>(value.clone())
             .unwrap()
-            .into_content("明朝那些事儿", 600)
+            .into_content("明朝那些事儿", 600, None)
             .unwrap();
         let content = serde_json::to_value(content).unwrap();
         assert_eq!(content["tags"], "#读书 #明朝那些事儿 #历史_人物 #Book2026");
@@ -300,7 +329,7 @@ mod tests {
             let mut invalid = draft();
             invalid["tags"] = serde_json::json!(tags);
             if let Ok(value) = serde_json::from_value::<PublishingDraft>(invalid) {
-                assert!(value.into_content("书", 600).is_err());
+                assert!(value.into_content("书", 600, None).is_err());
             }
         }
     }
@@ -310,7 +339,7 @@ mod tests {
             let seconds = minutes * 60;
             let content = serde_json::from_value::<PublishingDraft>(draft())
                 .unwrap()
-                .into_content("测试书", seconds)
+                .into_content("测试书", seconds, None)
                 .unwrap();
             let WritingContent::Publishing { audio_prompt, .. } = content else {
                 panic!()
@@ -358,6 +387,33 @@ mod tests {
         serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "tags":"#读书 #明朝那些事儿 #历史", "introduction":"今天我们要聊的这本书，是《明朝那些事儿》。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。", "coverPromptWidescreen":"横版 16:9，城墙横向绵延，远景开阔，中央留白，无文字。", "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}})
     }
     #[test]
+    fn chapter_audio_accepts_one_to_five_detailed_sections_without_book_wide_opening() {
+        for count in 0..=6 {
+            let mut value = draft();
+            value["sections"] = serde_json::json!((0..count).map(|i| serde_json::json!({"heading":format!("本章论点{i}"),"guidance":"细致解释本章的论证、关键概念及重要细节。"})).collect::<Vec<_>>());
+            let parsed: PublishingDraft = serde_json::from_value(value.clone()).unwrap();
+            let result = parsed.into_content("测试书", 300, Some("第一章"));
+            if !(1..=5).contains(&count) {
+                assert!(result.is_err());
+                continue;
+            }
+            let WritingContent::Publishing { audio_prompt, .. } = result.unwrap() else {
+                panic!()
+            };
+            assert!(audio_prompt.contains("《测试书》中的“第一章”这一章"));
+            assert!(audio_prompt.contains("本期精讲"));
+            assert!(!audio_prompt.contains("接下来，我们一起读懂这本书"));
+            assert!(!audio_prompt.contains("{{"));
+            assert_eq!(audio_prompt.matches("## 第").count(), count);
+            if count != 5 {
+                assert!(serde_json::from_value::<PublishingDraft>(value)
+                    .unwrap()
+                    .into_content("测试书", 300, None)
+                    .is_err());
+            }
+        }
+    }
+    #[test]
     fn validates_design_before_accepting_ai_output() {
         let mut missing = draft();
         missing.as_object_mut().unwrap().remove("coverDesign");
@@ -375,12 +431,12 @@ mod tests {
             let mut value = draft();
             value["coverDesign"][field] = invalid;
             if let Ok(value) = serde_json::from_value::<PublishingDraft>(value) {
-                assert!(value.into_content("书", 600).is_err());
+                assert!(value.into_content("书", 600, None).is_err());
             }
         }
         let content = serde_json::from_value::<PublishingDraft>(draft())
             .unwrap()
-            .into_content("书", 600)
+            .into_content("书", 600, None)
             .unwrap();
         assert_eq!(
             serde_json::to_value(content).unwrap()["coverDesign"],
@@ -390,7 +446,7 @@ mod tests {
     #[test]
     fn template_keeps_fixed_host_duration_and_book_specific_five_parts() {
         let value: PublishingDraft = serde_json::from_value(draft()).unwrap();
-        let content = value.into_content("明朝那些事儿", 600).unwrap();
+        let content = value.into_content("明朝那些事儿", 600, None).unwrap();
         let WritingContent::Publishing {
             audio_prompt,
             cover_title,
@@ -419,21 +475,21 @@ mod tests {
         value["sections"].as_array_mut().unwrap().pop();
         assert!(serde_json::from_value::<PublishingDraft>(value)
             .unwrap()
-            .into_content("书", 600)
+            .into_content("书", 600, None)
             .is_err());
         for (field, count) in [("title", 31), ("description", 1001), ("introduction", 1501)] {
             let mut value = draft();
             value[field] = serde_json::json!("字".repeat(count));
             assert!(serde_json::from_value::<PublishingDraft>(value)
                 .unwrap()
-                .into_content("书", 600)
+                .into_content("书", 600, None)
                 .is_err());
         }
         let mut value = draft();
         value["sections"][0]["guidance"] = serde_json::json!("");
         assert!(serde_json::from_value::<PublishingDraft>(value)
             .unwrap()
-            .into_content("书", 600)
+            .into_content("书", 600, None)
             .is_err());
     }
     #[test]
@@ -453,7 +509,7 @@ mod tests {
                 invalid[field] = serde_json::json!(text);
                 assert!(serde_json::from_value::<PublishingDraft>(invalid)
                     .unwrap()
-                    .into_content("书", 600)
+                    .into_content("书", 600, None)
                     .is_err());
             }
         }
@@ -461,14 +517,14 @@ mod tests {
         swapped["coverPromptPortrait"] = swapped["coverPromptLandscape"].clone();
         assert!(serde_json::from_value::<PublishingDraft>(swapped)
             .unwrap()
-            .into_content("书", 600)
+            .into_content("书", 600, None)
             .is_err());
         let mut same = draft();
         same["coverPromptLandscape"] = serde_json::json!("4:3 和 3:4 相同画面");
         same["coverPromptPortrait"] = same["coverPromptLandscape"].clone();
         assert!(serde_json::from_value::<PublishingDraft>(same)
             .unwrap()
-            .into_content("书", 600)
+            .into_content("书", 600, None)
             .is_err());
     }
 }

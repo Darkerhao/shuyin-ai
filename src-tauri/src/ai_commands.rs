@@ -21,8 +21,9 @@ pub fn set_audio_duration(
     database: State<'_, Database>,
     project_id: String,
     seconds: i64,
+    chapter_id: Option<String>,
 ) -> Result<(), String> {
-    database.set_audio_duration(&project_id, seconds)
+    database.set_audio_duration(&project_id, seconds, chapter_id.as_deref())
 }
 
 #[tauri::command]
@@ -142,8 +143,9 @@ pub fn list_writing_versions(
     database: State<'_, Database>,
     project_id: String,
     kind: String,
+    chapter_id: Option<String>,
 ) -> Result<Vec<WritingVersion>, String> {
-    database.list_versions(&project_id, &kind)
+    database.list_versions(&project_id, &kind, chapter_id.as_deref())
 }
 #[tauri::command]
 pub fn save_writing_version(
@@ -156,8 +158,9 @@ pub fn save_writing_version(
 pub fn list_ai_tasks(
     database: State<'_, Database>,
     project_id: String,
+    chapter_id: Option<String>,
 ) -> Result<Vec<AiTask>, String> {
-    database.list_ai_tasks(&project_id)
+    database.list_ai_tasks(&project_id, chapter_id.as_deref())
 }
 #[tauri::command]
 pub fn start_generation(
@@ -244,11 +247,11 @@ pub(crate) async fn execute_writing_task(
         }
         let duration=prepared.input.target_duration_seconds.ok_or_else(||AiError::new("invalid_content","任务缺少目标时长。"))?;
         if let (Some(revision),Some(base))=(&prepared.input.revision,&prepared.base) {
-            let content=revision::revise(&raw,&base.content,&revision.fields,&prepared.book_title,duration).map_err(|s|AiError::new("invalid_content",&s))?;
+            let content=revision::revise(&raw,&base.content,&revision.fields,&prepared.book_title,duration,prepared.chapter_title.as_deref()).map_err(|s|AiError::new("invalid_content",&s))?;
             database.finish_revision(id,&prepared.input,content).map(GenerationResult::Preview).map_err(AiError::database)
         } else {
             let draft:PublishingDraft=serde_json::from_str(&raw).map_err(|_|AiError::new("invalid_content","模型输出不符合发布内容结构，原有内容保留。"))?;
-            let content=draft.into_content(&prepared.book_title,duration).map_err(|s|AiError::new("invalid_content",&s))?;
+            let content=draft.into_content(&prepared.book_title,duration,prepared.chapter_title.as_deref()).map_err(|s|AiError::new("invalid_content",&s))?;
             database.finish_generation(id,&prepared.input,content,&model).map(GenerationResult::Version).map_err(AiError::database)
         }
     }).await?;

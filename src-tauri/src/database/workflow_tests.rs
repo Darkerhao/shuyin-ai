@@ -53,8 +53,11 @@ fn draft_restarts_and_overwrites_only_the_same_editor_without_adding_history() {
         )
         .is_err());
     assert!(db.save_editor_draft(&p.id, "unknown", None).is_err());
-    assert_eq!(db.list_versions(&p.id, "publishing").unwrap().len(), 1);
-    assert!(db.list_cover_versions(&p.id).unwrap().is_empty());
+    assert_eq!(
+        db.list_versions(&p.id, "publishing", None).unwrap().len(),
+        1
+    );
+    assert!(db.list_cover_versions(&p.id, None).unwrap().is_empty());
     drop(db);
     let db = Database::open(path);
     assert_eq!(
@@ -99,7 +102,11 @@ fn style_presets_contain_only_reusable_style_and_old_covers_default_to_center() 
     let db = Database::open(dir.path().join("data.sqlite3"));
     let p = project(&db);
     let i = input(&db, &p);
-    let mut config = db.list_cover_versions(&p.id).unwrap().remove(0).config;
+    let mut config = db
+        .list_cover_versions(&p.id, None)
+        .unwrap()
+        .remove(0)
+        .config;
     assert_eq!(
         (
             config.background_x,
@@ -132,15 +139,19 @@ fn style_presets_contain_only_reusable_style_and_old_covers_default_to_center() 
     ] {
         assert!(style.get(key).is_none());
     }
-    let saved = db.save_cover_version(&p.id, config.clone(), None).unwrap();
+    let saved = db
+        .save_cover_version(&p.id, config.clone(), None, None)
+        .unwrap();
     assert_eq!(saved.config.background_zoom, 2.0);
     assert_eq!(saved.config.subtitle_color.as_deref(), Some("#ffeeaa"));
     let mut invalid_color = config.clone();
     invalid_color.subtitle_color = Some("#fff".into());
-    assert!(db.save_cover_version(&p.id, invalid_color, None).is_err());
+    assert!(db
+        .save_cover_version(&p.id, invalid_color, None, None)
+        .is_err());
     config.background_x = 1.01;
-    assert!(db.save_cover_version(&p.id, config, None).is_err());
-    assert_eq!(db.list_cover_versions(&p.id).unwrap().len(), 3);
+    assert!(db.save_cover_version(&p.id, config, None, None).is_err());
+    assert_eq!(db.list_cover_versions(&p.id, None).unwrap().len(), 3);
     assert!(db
         .read_cover_export(&p.id, i.landscape_cover_id.as_deref().unwrap())
         .is_ok());
@@ -177,7 +188,7 @@ fn publish_tasks_preserve_historical_writing_source_and_reject_other_books() {
     i.writing_version_id = Some(writing(&db, &other.id, "其他书").id);
     assert!(db.save_publish_task(Some(&task.id), i).is_err());
     assert_eq!(
-        db.list_publish_tasks(&p.id).unwrap()[0]
+        db.list_publish_tasks(&p.id, None).unwrap()[0]
             .input
             .writing_version_id,
         Some(old.id)
@@ -269,8 +280,8 @@ fn v9_upgrade_preserves_assets_and_publish_records_for_audio_workflow() {
             );
         } else {
             assert_eq!(db.get_project("old").unwrap().input.title, "旧书");
-            assert_eq!(db.list_assets("old").unwrap()[0].asset_type, "video");
-            let task = db.list_publish_tasks("old").unwrap().remove(0);
+            assert_eq!(db.list_assets("old", None).unwrap()[0].asset_type, "video");
+            let task = db.list_publish_tasks("old", None).unwrap().remove(0);
             assert!(task.input.audio_asset_id.is_none());
             assert_eq!(task.record.unwrap().notes, "保留");
             db.with_connection(|c| {
@@ -379,7 +390,7 @@ fn v10_collection_migration_preserves_history_and_rolls_back_on_conflict() {
                 "手工内容"
             );
         } else {
-            let task = db.list_publish_tasks("old").unwrap().remove(0);
+            let task = db.list_publish_tasks("old", None).unwrap().remove(0);
             assert_eq!(task.status, "published");
             assert!(task.douyin_collection.is_none());
             assert_eq!(task.updated_at, "original");
@@ -409,8 +420,12 @@ fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_ne
         .unwrap();
     let image = Path::new(&p.workspace_path).join("原始背景.png");
     fs::write(&image, crate::ai::images::test_png()).unwrap();
-    let asset = db.link_asset(&p.id, image.to_str().unwrap(), None).unwrap();
-    let mut config = db.list_cover_versions(&p.id).unwrap()[0].config.clone();
+    let asset = db
+        .link_asset(&p.id, image.to_str().unwrap(), None, None)
+        .unwrap();
+    let mut config = db.list_cover_versions(&p.id, None).unwrap()[0]
+        .config
+        .clone();
     config.background_asset_id = Some(asset.clone());
     config.background_zoom = 1.75;
     config.background_x = 0.2;
@@ -463,7 +478,7 @@ fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_ne
     assert_ne!(restored.workspace_path, p.workspace_path);
     assert!(Path::new(&restored.workspace_path).is_dir());
     assert!(Path::new(&result.previous_database).is_file());
-    let files = db.list_assets(&p.id).unwrap();
+    let files = db.list_assets(&p.id, None).unwrap();
     assert!(files.iter().all(|a| a.exists_status == "available"));
     assert_eq!(
         fs::read(
@@ -488,7 +503,7 @@ fn full_backup_moves_and_restores_media_packages_drafts_styles_and_video_into_ne
         serde_json::to_value(config).unwrap()
     );
     assert_eq!(db.list_cover_presets().unwrap()[0].name, "备份样式");
-    let restored = db.list_publish_tasks(&p.id).unwrap().remove(0);
+    let restored = db.list_publish_tasks(&p.id, None).unwrap().remove(0);
     assert_eq!(
         Path::new(restored.task_directory.as_ref().unwrap())
             .file_name()
@@ -516,7 +531,7 @@ fn excluded_video_keeps_original_reference_and_missing_video_downgrades_ready_ta
     let task = db.save_publish_task(None, i.clone()).unwrap();
     db.prepare_publish_task(&task.id).unwrap();
     let video = db
-        .list_assets(&p.id)
+        .list_assets(&p.id, None)
         .unwrap()
         .into_iter()
         .find(|asset| asset.asset_type == "video")
@@ -530,7 +545,7 @@ fn excluded_video_keeps_original_reference_and_missing_video_downgrades_ready_ta
     db.restore_full_backup(&backup.manifest_path, dir.path().to_str().unwrap())
         .unwrap();
     assert_eq!(
-        db.list_assets(&p.id)
+        db.list_assets(&p.id, None)
             .unwrap()
             .into_iter()
             .find(|asset| asset.asset_type == "video")
@@ -539,7 +554,7 @@ fn excluded_video_keeps_original_reference_and_missing_video_downgrades_ready_ta
         video
     );
     assert_eq!(
-        db.list_assets(&p.id)
+        db.list_assets(&p.id, None)
             .unwrap()
             .into_iter()
             .find(|asset| asset.asset_type == "video")
@@ -547,7 +562,10 @@ fn excluded_video_keeps_original_reference_and_missing_video_downgrades_ready_ta
             .exists_status,
         "missing"
     );
-    assert_eq!(db.list_publish_tasks(&p.id).unwrap()[0].status, "draft");
+    assert_eq!(
+        db.list_publish_tasks(&p.id, None).unwrap()[0].status,
+        "draft"
+    );
 }
 
 #[test]
@@ -584,7 +602,7 @@ fn full_backup_rejects_missing_files_same_size_corruption_and_traversal_before_r
         .contains("路径无效"));
     fs::write(path, original).unwrap();
     let cover = db
-        .list_cover_versions(&p.id)
+        .list_cover_versions(&p.id, None)
         .unwrap()
         .into_iter()
         .find(|c| Some(c.id.clone()) == i.landscape_cover_id)

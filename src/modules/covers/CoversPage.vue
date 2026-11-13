@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { chapterIdFromQuery, chapterOwner, chapterQuery } from '../../types/chapter'
 import { displayPath } from '@/lib/displayPath'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -14,7 +15,7 @@ import * as api from '../../services/covers'
 import { listProviders, listVersions } from '../../services/ai'
 import { generationJobs, generationKey, isGenerating, startBackgroundGeneration, cancelGenerationJob, dismissGeneration } from '../../services/generation'
 import { emptyPublishing, type ModelProvider, type PublishingContent } from '../../types/ai'
-import { getProject, isDesktop, linkAsset, listAssets, openProjectDirectory } from '../../services/projects'
+import { getChapter, getProject, isDesktop, linkAsset, listAssets, openProjectDirectory } from '../../services/projects'
 import { backgroundRect, coverPng, decodeBackground, renderCover, type CoverTextBounds } from '../../services/coverRenderer'
 import { coverSizes, coverTemplates, newCover, coverWorkspace, recoverCoverWorkspace, normalizeCover, coverSizeIndex, type CoverWorkspace, type CoverConfig, type CoverVersion, type CoverPreset } from '../../types/cover'
 import type { Asset } from '../../types/project'
@@ -33,6 +34,7 @@ import CoverThumbnail from '../../components/CoverThumbnail.vue'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
+const chapterId = computed(() => chapterIdFromQuery(route.query.chapter))
 const desktop = isDesktop()
 const ready = ref(false)
 const bookTitle = ref('')
@@ -124,7 +126,7 @@ watch(canvas, element => {
 }, { flush: 'post' })
 onBeforeUnmount(() => { resizeObserver?.disconnect(); previewAnimation?.cancel() })
 const { busy: operationBusy, error, message, operation, run } = useOperation()
-const generation = computed(() => generationJobs.get(generationKey(props.id, 'cover')))
+const generation = computed(() => generationJobs.get(generationKey(props.id, 'cover', chapterId.value)))
 const generating = computed(() => isGenerating(generation.value))
 const busy = computed(() => operationBusy.value || generating.value)
 const generatedImage = computed(() => {
@@ -155,13 +157,13 @@ let disposed = false
 let fontsReady = false
 const canDiscard = () => !dirty.value || requestConfirmation('封面尚未保存，确定放弃修改？', 'cover-history')
 // A saved version contains one size; retain the workspace to recover all sizes and the active selection.
-const autosave = useEditorDraft(() => props.id, 'cover', editor, () => selected.value?.id ?? null, dirty, ready, () => !operationBusy.value, true)
+const autosave = useEditorDraft(() => chapterOwner(props.id, chapterId.value), 'cover', editor, () => selected.value?.id ?? null, dirty, ready, () => !operationBusy.value, true)
 const canLeave = async () => {
   if (operationBusy.value) return false
   try { if (ready.value) await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
-onBeforeRouteUpdate((to, from) => to.params.id === from.params.id || canLeave())
+onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.chapter === from.query.chapter) || canLeave())
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { disposed = true; globalThis.removeEventListener('beforeunload', beforeUnload) })
@@ -178,16 +180,18 @@ function accept(version: CoverVersion | null) {
 async function loadWriting() {
   writingError.value = ''
   try {
-    const textVersions = await listVersions(props.id, 'publishing')
+    const textVersions = await listVersions(props.id, 'publishing', chapterId.value)
     const textVersion = route.query.writingVersion ? textVersions.find(v => v.id === route.query.writingVersion) : textVersions[0]
+    if (route.query.writingVersion && !textVersion) throw new Error('文案版本不属于当前章节。')
     writing.value = textVersion ? { ...emptyPublishing(), ...textVersion.content } : null
   } catch {
     writingError.value = '封面文案读取失败，可重新读取；仍可使用本地模板。'
   }
 }
 const load = () => run(async () => {
-  const [project, saved, assets, recovery, styles] = await Promise.all([getProject(props.id), api.listCovers(props.id), listAssets(props.id), readDraft<CoverWorkspace | CoverConfig>(props.id, 'cover'), api.listPresets(), loadWriting()])
-  bookTitle.value = project.title; workspace.value = project.workspacePath
+  const [project, saved, assets, recovery, styles, , chapter] = await Promise.all([getProject(props.id), api.listCovers(props.id, chapterId.value), listAssets(props.id, chapterId.value), readDraft<CoverWorkspace | CoverConfig>(chapterOwner(props.id, chapterId.value), 'cover'), api.listPresets(), loadWriting(), chapterId.value ? getChapter(props.id, chapterId.value) : null])
+  if (route.query.coverVersion && !saved.some(version => version.id === route.query.coverVersion)) throw new Error('封面版本不属于当前书籍或章节，请从对应成果入口打开。')
+  bookTitle.value = chapter ? `${project.title} · ${chapter.title}` : project.title; workspace.value = project.workspacePath
   versions.value = saved; images.value = assets.filter(a => a.assetType === 'image')
   presets.value = styles
   editor.value = coverWorkspace(saved, newCover(bookTitle.value))
@@ -330,8 +334,8 @@ async function switchVersion(id: string | null) {
 const chooseImage = () => run(async () => {
   const path = await api.chooseBackground()
   if (!path) return
-  const id = await linkAsset(props.id, path)
-  images.value = (await listAssets(props.id)).filter(a => a.assetType === 'image')
+  const id = await linkAsset(props.id, path, null, chapterId.value)
+  images.value = (await listAssets(props.id, chapterId.value)).filter(a => a.assetType === 'image')
   draft.value.backgroundAssetId = id
 })
 const loadImageModels = () => run(async () => {
@@ -347,7 +351,7 @@ function toggleAi() {
 }
 const generateBackground = () => run(async () => {
   await autosave.flush()
-  await startBackgroundGeneration(props.id, bookTitle.value, providerId.value, description.value, draft.value.width, draft.value.height)
+  await startBackgroundGeneration(props.id, bookTitle.value, providerId.value, description.value, draft.value.width, draft.value.height, chapterId.value)
 })
 watch([ready, () => generation.value?.status], () => {
   const job = generation.value
@@ -393,7 +397,7 @@ const save = (exportPng = false, currentOnly = false) => run(async () => {
   const saved: CoverVersion[] = []
   for (const { config, png } of outputs) {
     operation.value = exportPng ? `正在导出 ${saved.length + 1}/${outputs.length} 张封面…` : '正在保存编辑配置…'
-    const version = await api.saveCover(props.id, config, png)
+    const version = await api.saveCover(props.id, config, png, chapterId.value)
     versions.value = [version, ...versions.value]; saved.push(version)
     if (exportPng) message.value = `已导出 ${saved.length}/${outputs.length} 张封面：${saved.map(v => v.exportedPath).join('；')}`
   }
@@ -438,7 +442,7 @@ onMounted(async () => {
     <div class="page-return-row">
       <RouterLink
         class="back-link"
-        :to="`/projects/${id}/writing`"
+        :to="{ path: `/projects/${id}/writing`, query: chapterQuery(chapterId) }"
       >
         <AppIcon name="back" />返回内容创作 · {{ bookTitle || '书籍内容' }}
       </RouterLink>
@@ -446,7 +450,7 @@ onMounted(async () => {
         variant="outline"
         as-child
       >
-        <RouterLink :to="`/projects/${id}/publishing`">
+        <RouterLink :to="{ path: `/projects/${id}/publishing`, query: chapterQuery(chapterId) }">
           发布准备<AppIcon name="arrow" />
         </RouterLink>
       </Button>
@@ -722,7 +726,7 @@ onMounted(async () => {
                           v-else
                           class="muted"
                         >
-                          还没有封面文案，可前往 <RouterLink :to="`/projects/${id}/writing`">
+                          还没有封面文案，可前往 <RouterLink :to="{ path: `/projects/${id}/writing`, query: chapterQuery(chapterId) }">
                             书籍内容
                           </RouterLink> 一键生成，也可以直接填写。
                         </p>
@@ -1205,7 +1209,7 @@ onMounted(async () => {
                   v-if="!suggestedPrompt"
                   class="muted"
                 >
-                  该尺寸暂无提示词，可在 <RouterLink :to="`/projects/${id}/writing?tab=cover`">
+                  该尺寸暂无提示词，可在 <RouterLink :to="{ path: `/projects/${id}/writing`, query: { ...chapterQuery(chapterId), tab: 'cover' } }">
                     内容创作的按项调整
                   </RouterLink> 中单独生成，或自行填写画面描述。
                 </p>

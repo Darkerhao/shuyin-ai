@@ -32,11 +32,12 @@ pub fn set_sidebar_prompt(
 pub async fn project_progress(
     app: tauri::AppHandle,
     project_id: String,
+    chapter_id: Option<String>,
 ) -> Result<Vec<crate::database::workflow::ProjectStage>, String> {
     use tauri::Manager;
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<crate::database::Database>()
-            .project_progress(&project_id)
+            .project_progress(&project_id, chapter_id.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -65,6 +66,31 @@ pub fn workflow_snapshot(
 }
 use crate::database::{Asset, Database, Project, ProjectInput, WorkspaceSettings};
 use tauri::State;
+
+#[tauri::command]
+pub fn list_chapters(
+    database: State<'_, Database>,
+    project_id: String,
+) -> Result<Vec<crate::database::chapters::ChapterSummary>, String> {
+    database.list_chapters(&project_id)
+}
+#[tauri::command]
+pub fn get_chapter(
+    database: State<'_, Database>,
+    project_id: String,
+    id: String,
+) -> Result<crate::database::chapters::Chapter, String> {
+    database.get_chapter(&project_id, &id)
+}
+#[tauri::command]
+pub fn save_chapter(
+    database: State<'_, Database>,
+    project_id: String,
+    id: Option<String>,
+    input: crate::database::chapters::ChapterInput,
+) -> Result<crate::database::chapters::Chapter, String> {
+    database.save_chapter(&project_id, id.as_deref(), input)
+}
 
 #[tauri::command]
 pub fn last_backup(
@@ -222,8 +248,9 @@ pub fn delete_project(database: State<'_, Database>, id: String) -> Result<(), S
 pub fn list_assets(
     database: State<'_, Database>,
     project_id: String,
+    chapter_id: Option<String>,
 ) -> Result<Vec<Asset>, String> {
-    database.list_assets(&project_id)
+    database.list_assets(&project_id, chapter_id.as_deref())
 }
 #[tauri::command]
 pub fn link_asset(
@@ -231,8 +258,14 @@ pub fn link_asset(
     project_id: String,
     path: String,
     asset_id: Option<String>,
+    chapter_id: Option<String>,
 ) -> Result<String, String> {
-    database.link_asset(&project_id, &path, asset_id.as_deref())
+    database.link_asset(
+        &project_id,
+        &path,
+        asset_id.as_deref(),
+        chapter_id.as_deref(),
+    )
 }
 #[tauri::command]
 pub fn unlink_asset(database: State<'_, Database>, id: String) -> Result<(), String> {

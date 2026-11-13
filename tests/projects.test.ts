@@ -23,7 +23,7 @@ vi.mock('../src/services/backup', () => ({ createFullBackup: vi.fn(), inspectFul
 import { emptyProject, type Asset, type Project } from '../src/types/project'
 vi.mock('../src/services/projects', async (original) => ({
   ...await original<typeof api>(),
-  isDesktop: vi.fn(), listProjects: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), deleteProject: vi.fn(),
+  isDesktop: vi.fn(), listProjects: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), deleteProject: vi.fn(), getChapter: vi.fn(), saveChapter: vi.fn(), listChapters: vi.fn(),
   listAssets: vi.fn(), linkAsset: vi.fn(), unlinkAsset: vi.fn(), chooseAsset: vi.fn(), chooseSourceDocument: vi.fn(),
   workspaceSettings: vi.fn(), chooseDirectory: vi.fn(), setWorkspaceRoot: vi.fn(), chooseBackup: vi.fn(), createBackup: vi.fn(), restoreBackup: vi.fn(),
 }))
@@ -60,6 +60,42 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 describe('M1 projects and materials', () => {
+  it('retains the last keystrokes when closing the chapter editor before its debounce runs', async () => {
+    const { wrapper, router } = await render('/projects/p1')
+    await button(wrapper, '输入一个章节的内容').trigger('click'); await flushPromises()
+    await wrapper.get('#chapter-content').setValue('关闭前最后输入的一句话')
+    const collapse = wrapper.findAll('button').find(control => control.text() === '收起章节输入')
+    if (collapse) await collapse.trigger('click')
+    else await router.push('/projects/p1')
+    await flushPromises()
+    expect(drafts.saveDraft).toHaveBeenCalledWith('p1:chapter:new', 'project', expect.objectContaining({ content: expect.objectContaining({ content: '关闭前最后输入的一句话' }) }))
+  })
+
+  it('opens chapter input in the shared scope route and saves incomplete edits before leaving', async () => {
+    const { wrapper, router } = await render('/projects/p1')
+    await button(wrapper, '输入一个章节的内容').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.query.chapter).toBe('new')
+    await wrapper.get('#chapter-content').setValue('刚输入而未到400ms的章节正文')
+    await router.push('/projects/p1'); await flushPromises()
+    expect(drafts.saveDraft).toHaveBeenCalledWith('p1:chapter:new', 'project', expect.objectContaining({ content: expect.objectContaining({ content: '刚输入而未到400ms的章节正文' }) }))
+    expect(wrapper.find('#chapter-content').exists()).toBe(false)
+    expect(api.saveChapter).not.toHaveBeenCalled()
+  })
+
+  it('keeps chapter input open if draft persistence fails instead of discarding it', async () => {
+    const { wrapper, router } = await render('/projects/p1')
+    await button(wrapper, '输入一个章节的内容').trigger('click'); await flushPromises()
+    await wrapper.get('#chapter-content').setValue('不能丢失的章节正文')
+    vi.mocked(drafts.saveDraft).mockImplementation(async owner => { if (owner === 'p1:chapter:new') throw new Error('磁盘写入失败') })
+    await router.push('/projects/p1'); await flushPromises()
+    expect(router.currentRoute.value.query.chapter).toBe('new')
+    expect(wrapper.get('#chapter-content').element).toHaveProperty('value', '不能丢失的章节正文')
+    expect(wrapper.text()).toContain('自动暂存失败')
+    vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
+    await router.push('/projects/p1'); await flushPromises()
+    expect(router.currentRoute.value.query.chapter).toBeUndefined()
+  })
+
   it('restores editable book fields without overwriting a duration changed by background generation', async () => {
     vi.mocked(api.getProject).mockResolvedValue({ ...saved, targetDurationSeconds: 1200 })
     vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: saved.updatedAt, content: { form: { ...saved, title: '暂存书名', targetDurationSeconds: 600 }, sourcePaths: [] } })
@@ -472,7 +508,7 @@ describe('M1 projects and materials', () => {
     const { wrapper } = await render('/assets')
     vi.mocked(api.chooseAsset).mockResolvedValueOnce('D:/新视频.mp4')
     await button(wrapper, '重新定位').trigger('click'); await flushPromises()
-    expect(api.linkAsset).toHaveBeenCalledWith('p1', 'D:/新视频.mp4', 'a1')
+    expect(api.linkAsset).toHaveBeenCalledWith('p1', 'D:/新视频.mp4', 'a1', null)
     expect(wrapper.text()).toContain('文件可用'); expect(button(wrapper, '打开文件').element.disabled).toBe(false)
   })
   it('does not restore before confirmation, preserves selection on failure, shows previous backup on success', async () => {

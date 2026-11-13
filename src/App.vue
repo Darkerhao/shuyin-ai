@@ -16,6 +16,7 @@ import { useInterfacePreferences } from './composables/useInterfacePreferences'
 import { useTheme } from './composables/useTheme'
 import { workspaceSettings, openProjectDirectory } from './services/projects'
 import { displayPath } from './lib/displayPath'
+import { chapterQuery } from './types/chapter'
 import { Button } from '@/components/ui/button'
 
 const { initialize, version: appVersion, status: updateStatus, update, error: updateError, settingsError } = useAppUpdates()
@@ -25,6 +26,7 @@ onMounted(() => { void initialize() })
 
 const route = useRoute()
 const router = useRouter()
+const chapterParams = computed(() => chapterQuery(typeof route.query.chapter === 'string' ? route.query.chapter : null))
 const preferences = useInterfacePreferences()
 const { theme, toggleTheme, error: themeError } = useTheme()
 const workspaceRoot = ref('')
@@ -66,9 +68,10 @@ async function openDirectory() {
 function switchStep(event: globalThis.KeyboardEvent) {
   if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.repeat || event.isComposing || event.keyCode === 229 || !/^[1-5]$/.test(event.key) || typeof route.params.id !== 'string') return
   if (globalThis.document.querySelector('[role="alertdialog"], [role="dialog"], [role="menu"]')) return
+  if (route.query.chapter === 'new') return
   event.preventDefault()
   const suffix = ['', '/writing', '/covers', '/video', '/publishing'][Number(event.key) - 1]
-  void router.push(`/projects/${route.params.id}${suffix}`)
+  void router.push({ path: `/projects/${route.params.id}${suffix}`, query: chapterParams.value })
 }
 onMounted(() => globalThis.addEventListener('keydown', switchStep))
 onBeforeUnmount(() => globalThis.removeEventListener('keydown', switchStep))
@@ -153,8 +156,8 @@ watch(router.currentRoute, async (to, from) => {
             :key="item.label"
           >
             <RouterLink
-              v-if="!item.disabled"
-              :to="item.to"
+              v-if="!item.disabled && !(item.step > 1 && route.query.chapter === 'new')"
+              :to="item.step ? { path: item.to, query: chapterParams } : item.to"
               :title="item.label"
               :aria-label="item.label"
               :aria-current="item.active ? 'page' : undefined"
@@ -176,7 +179,7 @@ watch(router.currentRoute, async (to, from) => {
               class="sidebar-nav-row"
               role="link"
               aria-disabled="true"
-              :aria-label="`${item.label}，请先选择一本书`"
+              :aria-label="`${item.label}，${route.query.chapter === 'new' ? '请先保存章节' : '请先选择一本书'}`"
             ><AppIcon :name="item.icon" /><span class="hidden md:inline">{{ item.label }}</span><span class="sidebar-step hidden md:inline">Step {{ item.step }}</span></span>
           </template>
         </nav>
@@ -283,33 +286,33 @@ watch(router.currentRoute, async (to, from) => {
             </RouterLink>
             <RouterLink
               v-if="route.params.id"
-              :to="`/projects/${route.params.id}`"
+              :to="{ path: `/projects/${route.params.id}`, query: chapterParams }"
             >
               2. 书籍资料
             </RouterLink>
             <RouterLink
-              v-if="route.params.id"
-              :to="`/projects/${route.params.id}/writing`"
+              v-if="route.params.id && route.query.chapter !== 'new'"
+              :to="{ path: `/projects/${route.params.id}/writing`, query: chapterParams }"
             >
               3. 内容创作
             </RouterLink>
             <RouterLink
-              v-if="route.params.id"
-              :to="`/projects/${route.params.id}/covers`"
+              v-if="route.params.id && route.query.chapter !== 'new'"
+              :to="{ path: `/projects/${route.params.id}/covers`, query: chapterParams }"
               class="cover-shortcut"
             >
               4. 封面工坊
             </RouterLink>
             <RouterLink
-              v-if="route.params.id"
-              :to="`/projects/${route.params.id}/video`"
+              v-if="route.params.id && route.query.chapter !== 'new'"
+              :to="{ path: `/projects/${route.params.id}/video`, query: chapterParams }"
               class="video-shortcut"
             >
               5. 视频制作
             </RouterLink>
             <RouterLink
-              v-if="route.params.id"
-              :to="`/projects/${route.params.id}/publishing`"
+              v-if="route.params.id && route.query.chapter !== 'new'"
+              :to="{ path: `/projects/${route.params.id}/publishing`, query: chapterParams }"
             >
               6. 发布准备
             </RouterLink>
@@ -353,7 +356,7 @@ watch(router.currentRoute, async (to, from) => {
         <RunningTasks />
         <RouterView v-slot="{ Component, route: currentRoute }">
           <div
-            :key="currentRoute.path"
+            :key="`${currentRoute.path}:${currentRoute.query.chapter ?? 'book'}`"
             class="min-w-0"
           >
             <component :is="Component" />

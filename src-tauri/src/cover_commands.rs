@@ -83,8 +83,9 @@ pub(crate) async fn execute_image_task(
 pub fn list_cover_versions(
     database: State<'_, Database>,
     project_id: String,
+    chapter_id: Option<String>,
 ) -> Result<Vec<CoverVersion>, String> {
-    database.list_cover_versions(&project_id)
+    database.list_cover_versions(&project_id, chapter_id.as_deref())
 }
 
 #[tauri::command]
@@ -94,8 +95,10 @@ pub fn save_cover_version(
     project_id: String,
     config: CoverConfig,
     png: Option<Vec<u8>>,
+    chapter_id: Option<String>,
 ) -> Result<CoverVersion, String> {
-    let version = database.save_cover_version(&project_id, config, png.as_deref())?;
+    let version =
+        database.save_cover_version(&project_id, config, png.as_deref(), chapter_id.as_deref())?;
     if png.is_some() {
         crate::completion::cover(&app, &version);
     }

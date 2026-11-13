@@ -59,6 +59,8 @@ fn markdown(s: &str) -> WritingContent {
 }
 fn manual(project_id: &str, s: &str) -> SaveWritingInput {
     SaveWritingInput {
+        chapter_id: None,
+
         project_id: project_id.into(),
         kind: "outline".into(),
         content: markdown(s),
@@ -68,6 +70,9 @@ fn manual(project_id: &str, s: &str) -> SaveWritingInput {
 }
 fn generation(project_id: &str, provider_id: &str) -> GenerationInput {
     GenerationInput {
+        chapter_id: None,
+        source_snapshot: None,
+
         project_id: project_id.into(),
         provider_id: provider_id.into(),
         revision: None,
@@ -87,6 +92,8 @@ fn duration_is_saved_independently_and_generation_snapshots_the_selected_value()
         .provider;
     let base = db
         .save_writing(SaveWritingInput {
+            chapter_id: None,
+
             project_id: p.id.clone(),
             kind: "publishing".into(),
             content: publishing(),
@@ -94,26 +101,26 @@ fn duration_is_saved_independently_and_generation_snapshots_the_selected_value()
             is_confirmed: false,
         })
         .unwrap();
-    db.set_audio_duration(&p.id, 1500).unwrap();
+    db.set_audio_duration(&p.id, 1500, None).unwrap();
     let task = db
         .start_generation(generation(&p.id, &provider.id))
         .unwrap();
-    db.set_audio_duration(&p.id, 1800).unwrap();
+    db.set_audio_duration(&p.id, 1800, None).unwrap();
     let prepared = db.prepare_generation(&task).unwrap();
     assert_eq!(prepared.input.target_duration_seconds, Some(1500));
     let user: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
     assert_eq!(user["audio"]["duration"], "25分钟");
     assert_eq!(user["audio"]["spokenCharacters"], 5500);
     assert_eq!(user["book"]["sourceNotes"], p.input.source_notes);
-    assert!(db.set_audio_duration(&p.id, 61).is_err());
-    assert!(db.set_audio_duration("missing", 600).is_err());
+    assert!(db.set_audio_duration(&p.id, 61, None).is_err());
+    assert!(db.set_audio_duration("missing", 600, None).is_err());
     let mut invalid = generation(&p.id, &provider.id);
     invalid.target_duration_seconds = Some(0);
     assert!(db.start_generation(invalid).is_err());
     db.end_generation(&task, "cancelled", "cancelled", "cancelled")
         .unwrap();
     let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
-    db.set_audio_duration(&p.id, 600).unwrap();
+    db.set_audio_duration(&p.id, 600, None).unwrap();
     db.restore_backup(&backup).unwrap();
     drop(db);
     let db = Database::open(path);
@@ -122,7 +129,7 @@ fn duration_is_saved_independently_and_generation_snapshots_the_selected_value()
     assert_eq!(restored.audio_duration_source.as_deref(), Some("manual"));
     assert_eq!(restored.input.source_notes, p.input.source_notes);
     assert_eq!(
-        db.list_versions(&p.id, "publishing").unwrap()[0].id,
+        db.list_versions(&p.id, "publishing", None).unwrap()[0].id,
         base.id
     );
 }
@@ -261,7 +268,7 @@ fn saving_project_details_preserves_duration_completed_after_the_form_was_loaded
     assert_eq!(saved.input.target_duration_seconds, 1200);
     assert_eq!(saved.audio_duration_source.as_deref(), Some("ai"));
 
-    db.set_audio_duration(&book.id, 1800).unwrap();
+    db.set_audio_duration(&book.id, 1800, None).unwrap();
     let saved = db.save_project(Some(&book.id), stale_form).unwrap();
     assert_eq!(saved.input.target_duration_seconds, 1800);
     assert_eq!(saved.audio_duration_source.as_deref(), Some("manual"));
@@ -333,7 +340,10 @@ fn recommended_duration_is_atomic_and_cancelled_or_invalid_results_do_not_change
             .as_deref(),
         Some("ai")
     );
-    assert!(db.list_versions(&p.id, "publishing").unwrap().is_empty());
+    assert!(db
+        .list_versions(&p.id, "publishing", None)
+        .unwrap()
+        .is_empty());
     assert!(db.finish_duration_recommendation(&task, result()).is_err());
     input.revision = Some(crate::ai::revision::RevisionInput {
         based_on: "missing".into(),
@@ -366,7 +376,10 @@ fn v12_duration_migration_preserves_old_data_and_rolls_back_conflicts() {
             assert_eq!(p.input.target_duration_seconds, 900);
             assert!(p.audio_duration_source.is_none());
             assert_eq!(p.updated_at, "original");
-            assert_eq!(db.list_versions("p", "publishing").unwrap()[0].id, "v");
+            assert_eq!(
+                db.list_versions("p", "publishing", None).unwrap()[0].id,
+                "v"
+            );
         }
         drop(db);
         let c = Connection::open(&path).unwrap();
@@ -697,8 +710,14 @@ fn default_model_is_unique_and_deletion_preserves_history() {
         .unwrap();
     db.delete_provider(&first.id, &vault).unwrap();
     assert!(vault.entries.lock().unwrap().is_empty());
-    assert_eq!(db.list_versions(&p.id, "publishing").unwrap().len(), 1);
-    assert_eq!(db.list_ai_tasks(&p.id).unwrap()[0].status, "succeeded");
+    assert_eq!(
+        db.list_versions(&p.id, "publishing", None).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        db.list_ai_tasks(&p.id, None).unwrap()[0].status,
+        "succeeded"
+    );
 }
 #[test]
 fn versions_are_append_only_validated_and_persist_after_restart() {
@@ -721,7 +740,7 @@ fn versions_are_append_only_validated_and_persist_after_restart() {
     db.restore_backup(&backup).unwrap();
     drop(db);
     let reopened = Database::open(path);
-    let all = reopened.list_versions(&p.id, "outline").unwrap();
+    let all = reopened.list_versions(&p.id, "outline", None).unwrap();
     assert_eq!(all.len(), 2);
     assert_eq!(all[1].content, markdown("已确认初稿"));
     assert!(all[1].is_confirmed);
@@ -754,17 +773,23 @@ fn task_success_is_atomic_and_cancelled_or_invalid_results_never_create_versions
     assert!(db
         .finish_generation(&task, &input, publishing(), "test")
         .is_err());
-    assert!(db.list_versions(&p.id, "publishing").unwrap().is_empty());
+    assert!(db
+        .list_versions(&p.id, "publishing", None)
+        .unwrap()
+        .is_empty());
     let task = db.start_generation(input.clone()).unwrap();
     db.prepare_generation(&task).unwrap();
     db.with_connection(|c|c.execute_batch("CREATE TRIGGER fail_task BEFORE UPDATE ON ai_tasks WHEN NEW.status='succeeded' BEGIN SELECT RAISE(ABORT,'test commit failure'); END;").map_err(|e|e.to_string())).unwrap();
     assert!(db
         .finish_generation(&task, &input, publishing(), "test")
         .is_err());
-    assert!(db.list_versions(&p.id, "publishing").unwrap().is_empty());
+    assert!(db
+        .list_versions(&p.id, "publishing", None)
+        .unwrap()
+        .is_empty());
     db.recover_ai_tasks().unwrap();
     assert!(db
-        .list_ai_tasks(&p.id)
+        .list_ai_tasks(&p.id, None)
         .unwrap()
         .iter()
         .any(|t| t.error_code.as_deref() == Some("interrupted")));
@@ -834,7 +859,10 @@ fn cover_materials_and_legacy_publishing_survive_save_backup_and_restart() {
         c.execute("INSERT INTO writing_versions(id,project_id,kind,version_no,content_json,source_type,model_name,prompt_version,is_confirmed,created_at) VALUES('old',?1,'publishing',1,?2,'ai','test','publishing-v1',1,'old')", params![p.id, legacy_json]).unwrap();
         Ok(())
     }).unwrap();
-    let old = db.list_versions(&p.id, "publishing").unwrap().remove(0);
+    let old = db
+        .list_versions(&p.id, "publishing", None)
+        .unwrap()
+        .remove(0);
     let WritingContent::Publishing {
         tags,
         cover_title,
@@ -856,6 +884,8 @@ fn cover_materials_and_legacy_publishing_survive_save_backup_and_restart() {
     .iter()
     .all(|value| value.is_empty()));
     let input = SaveWritingInput {
+        chapter_id: None,
+
         project_id: p.id.clone(),
         kind: "publishing".into(),
         content: old.content.clone(),
@@ -864,6 +894,8 @@ fn cover_materials_and_legacy_publishing_survive_save_backup_and_restart() {
     };
     db.save_writing(input).unwrap();
     let mut input = SaveWritingInput {
+        chapter_id: None,
+
         project_id: p.id.clone(),
         kind: "publishing".into(),
         content: publishing(),
@@ -871,6 +903,8 @@ fn cover_materials_and_legacy_publishing_survive_save_backup_and_restart() {
         is_confirmed: false,
     };
     db.save_writing(SaveWritingInput {
+        chapter_id: None,
+
         project_id: input.project_id.clone(),
         kind: input.kind.clone(),
         content: input.content.clone(),
@@ -886,13 +920,16 @@ fn cover_materials_and_legacy_publishing_survive_save_backup_and_restart() {
         *cover_prompt_portrait = "字".repeat(2001);
     }
     assert!(db.save_writing(input).is_err());
-    assert_eq!(db.list_versions(&p.id, "publishing").unwrap().len(), 3);
+    assert_eq!(
+        db.list_versions(&p.id, "publishing", None).unwrap().len(),
+        3
+    );
     let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
     db.delete_project(&p.id).unwrap();
     db.restore_backup(&backup).unwrap();
     drop(db);
     let reopened = Database::open(path);
-    let versions = reopened.list_versions(&p.id, "publishing").unwrap();
+    let versions = reopened.list_versions(&p.id, "publishing", None).unwrap();
     assert_eq!(versions.len(), 3);
     assert_eq!(versions[0].content, publishing());
     assert_eq!(versions[2].content, old.content);
@@ -935,15 +972,20 @@ fn v3_upgrade_preserves_old_versions_task_links_and_backup_and_allows_title_only
     std::fs::copy(&old, &current).unwrap();
     let db = Database::open(current.clone());
     assert_eq!(
-        db.list_ai_tasks("p").unwrap()[0].version_id.as_deref(),
+        db.list_ai_tasks("p", None).unwrap()[0]
+            .version_id
+            .as_deref(),
         Some("v")
     );
     assert_eq!(
-        db.list_versions("p", "outline").unwrap()[0].content,
+        db.list_versions("p", "outline", None).unwrap()[0].content,
         markdown("旧稿")
     );
     let new = db
         .start_generation(GenerationInput {
+            chapter_id: None,
+            source_snapshot: None,
+
             project_id: "p".into(),
             provider_id: "m".into(),
             revision: None,
@@ -955,6 +997,9 @@ fn v3_upgrade_preserves_old_versions_task_links_and_backup_and_allows_title_only
     db.finish_generation(
         &new,
         &GenerationInput {
+            chapter_id: None,
+            source_snapshot: None,
+
             project_id: "p".into(),
             provider_id: "m".into(),
             revision: None,
@@ -965,15 +1010,17 @@ fn v3_upgrade_preserves_old_versions_task_links_and_backup_and_allows_title_only
         "model",
     )
     .unwrap();
-    assert_eq!(db.list_versions("p", "publishing").unwrap().len(), 1);
+    assert_eq!(db.list_versions("p", "publishing", None).unwrap().len(), 1);
     let v4 = db.create_backup(dir.path().to_str().unwrap()).unwrap();
     db.restore_backup(old.to_str().unwrap()).unwrap();
     assert_eq!(
-        db.list_ai_tasks("p").unwrap()[0].version_id.as_deref(),
+        db.list_ai_tasks("p", None).unwrap()[0]
+            .version_id
+            .as_deref(),
         Some("v")
     );
     db.restore_backup(&v4).unwrap();
-    assert_eq!(db.list_versions("p", "publishing").unwrap().len(), 1);
+    assert_eq!(db.list_versions("p", "publishing", None).unwrap().len(), 1);
     let c = Connection::open(current).unwrap();
     assert!(!c
         .prepare("PRAGMA foreign_key_check")
@@ -1032,6 +1079,8 @@ fn revision_preview_requires_adoption_and_adoption_is_atomic_and_idempotent() {
         .provider;
     let base = db
         .save_writing(SaveWritingInput {
+            chapter_id: None,
+
             project_id: project.id.clone(),
             kind: "publishing".into(),
             content: publishing(),
@@ -1054,12 +1103,15 @@ fn revision_preview_requires_adoption_and_adoption_is_atomic_and_idempotent() {
         &input.revision.as_ref().unwrap().fields,
         "书名",
         600,
+        None,
     )
     .unwrap();
     let preview = db.finish_revision(&id, &input, content.clone()).unwrap();
     assert_eq!(preview.before, base.content);
     assert_eq!(
-        db.list_versions(&project.id, "publishing").unwrap().len(),
+        db.list_versions(&project.id, "publishing", None)
+            .unwrap()
+            .len(),
         1
     );
     // A failed database write must retain the candidate so adoption can be retried.
@@ -1082,17 +1134,19 @@ fn revision_preview_requires_adoption_and_adoption_is_atomic_and_idempotent() {
     assert_eq!(adopted.prompt_version, revision::PROMPT_VERSION);
     assert_eq!(db.apply_generation(&id).unwrap().id, adopted.id);
     assert_eq!(
-        db.list_versions(&project.id, "publishing").unwrap().len(),
+        db.list_versions(&project.id, "publishing", None)
+            .unwrap()
+            .len(),
         2
     );
     assert_eq!(
-        db.list_ai_tasks(&project.id).unwrap()[0]
+        db.list_ai_tasks(&project.id, None).unwrap()[0]
             .version_id
             .as_deref(),
         Some(adopted.id.as_str())
     );
     assert_eq!(
-        db.list_versions(&project.id, "publishing").unwrap()[1].content,
+        db.list_versions(&project.id, "publishing", None).unwrap()[1].content,
         base.content
     );
 }
@@ -1110,6 +1164,8 @@ fn revision_rejects_foreign_sources_duplicate_fields_and_late_cancelled_response
         .provider;
     let base = db
         .save_writing(SaveWritingInput {
+            chapter_id: None,
+
             project_id: p.id.clone(),
             kind: "publishing".into(),
             content: publishing(),
@@ -1139,7 +1195,10 @@ fn revision_rejects_foreign_sources_duplicate_fields_and_late_cancelled_response
         .unwrap();
     assert!(db.finish_revision(&id, &input, publishing()).is_err());
     assert!(db.apply_generation(&id).is_err());
-    assert_eq!(db.list_versions(&p.id, "publishing").unwrap().len(), 1);
+    assert_eq!(
+        db.list_versions(&p.id, "publishing", None).unwrap().len(),
+        1
+    );
 }
 
 #[test]

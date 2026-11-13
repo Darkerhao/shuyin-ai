@@ -305,7 +305,7 @@ mod tests {
         put(&preview, b"preview");
         let source = base.join("cache/key/registered.srt");
         put(&source, b"registered");
-        db.link_asset(&project, source.to_str().unwrap(), None)
+        db.link_asset(&project, source.to_str().unwrap(), None, None)
             .unwrap();
         let run = base.join("run-1-123/video.mp4");
         put(&run, b"finished video");

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import { chapterQuery } from '../../types/chapter'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -223,7 +224,7 @@ onMounted(() => { if (desktop) void load() })
         </template>
         <div class="actions queue-task-actions">
           <RouterLink
-            :to="{ path: '/projects/' + task.projectId + '/publishing', query: { task: task.id } }"
+            :to="{ path: '/projects/' + task.projectId + '/publishing', query: { ...chapterQuery(task.chapterId ?? null), task: task.id } }"
             :class="buttonVariants({ variant: 'outline' })"
           >
             {{ task.status === 'published' ? '查看发布记录' : task.status === 'ready' ? '处理这篇' : '完善发布准备' }}

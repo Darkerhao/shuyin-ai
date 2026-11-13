@@ -483,6 +483,8 @@ mod tests {
             landscape: "landscape.png".into(),
             portrait: "portrait.png".into(),
             input: crate::database::publishing::PublishInput {
+                chapter_id: None,
+
                 writing_version_id: None,
                 project_id: "book".into(),
                 title: "发布标题".into(),

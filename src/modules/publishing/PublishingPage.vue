@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { chapterIdFromQuery, chapterOwner, chapterQuery } from '../../types/chapter'
 import { displayPath } from '@/lib/displayPath'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import * as api from '../../services/publishing'
-import { getProject, isDesktop, listAssets, openAsset, videoAssetMetadata, type VideoMetadata } from '../../services/projects'
+import { getChapter, getProject, isDesktop, listAssets, openAsset, videoAssetMetadata, type VideoMetadata } from '../../services/projects'
 import { listVersions } from '../../services/ai'
 import { listCovers, readCoverExport } from '../../services/covers'
 import { listJobs as listVideoJobs } from '../../services/video'
@@ -38,6 +39,8 @@ const copiedField = clipboard.copied
 const props = defineProps<{ id: string; taskId?: string }>()
 const router = useRouter()
 const route = useRoute()
+const chapterId = computed(() => chapterIdFromQuery(route.query.chapter))
+const scopeInput = computed(() => chapterId.value ? { chapterId: chapterId.value } : {})
 const assistant = ref<InstanceType<typeof DouyinVerification> | null>(null)
 const nextTasks = ref<PublishQueueItem[]>([])
 const nextTaskId = ref<string | null>(null)
@@ -49,7 +52,7 @@ const selected = ref<PublishTask | null>(null)
 const assets = ref<Asset[]>([])
 const covers = ref<CoverVersion[]>([])
 const writing = ref<WritingVersion[]>([])
-const draft = ref<PublishInput>({ projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: null, audioAssetId: null, landscapeCoverId: null, portraitCoverId: null, titleConfirmed: false, coversConfirmed: false, allowDownload: true, scheduledAt: null })
+const draft = ref<PublishInput>({ projectId: props.id, ...scopeInput.value, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: null, audioAssetId: null, landscapeCoverId: null, portraitCoverId: null, titleConfirmed: false, coversConfirmed: false, allowDownload: true, scheduledAt: null })
 const original = ref(JSON.stringify(draft.value))
 const dirty = computed(() => JSON.stringify(draft.value) !== original.value)
 const published = computed(() => selected.value?.status === 'published')
@@ -96,7 +99,7 @@ const { busy: operationBusy, error, message, run } = useOperation()
 const douyinBusy = ref(false)
 const busy = computed(() => operationBusy.value || douyinBusy.value)
 const restoringDraft = ref(false)
-const draftOwner = computed(() => `${props.id}:${selected.value?.id ?? 'new'}`)
+const draftOwner = computed(() => selected.value ? `${props.id}:${selected.value.id}` : `${chapterOwner(props.id, chapterId.value)}:new`)
 const draftReady = computed(() => loaded.value && !published.value && !restoringDraft.value)
 const autosave = useEditorDraft(() => draftOwner.value, 'publishing', draft, () => selected.value?.updatedAt ?? null, dirty, draftReady, prepareLeave)
 
@@ -104,7 +107,7 @@ const taskLabel = (task: PublishTask) => `${task.title || '未填写标题'} · 
 const assetLabel = (asset: Asset) => `${asset.originalName}${asset.existsStatus !== 'available' ? '（文件不可用）' : ''}`
 
 function defaults(): PublishInput {
-  return { projectId: props.id, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: videos.value.find(v => v.existsStatus === 'available')?.id ?? null, audioAssetId: audios.value.find(v => v.existsStatus === 'available')?.id ?? null, landscapeCoverId: landscape.value[0]?.id ?? null, portraitCoverId: portrait.value[0]?.id ?? null, titleConfirmed: false, coversConfirmed: false, allowDownload: true, scheduledAt: null }
+  return { projectId: props.id, ...scopeInput.value, writingVersionId: null, title: '', description: '', tags: '', videoAssetId: videos.value.find(v => v.existsStatus === 'available')?.id ?? null, audioAssetId: audios.value.find(v => v.existsStatus === 'available')?.id ?? null, landscapeCoverId: landscape.value[0]?.id ?? null, portraitCoverId: portrait.value[0]?.id ?? null, titleConfirmed: false, coversConfirmed: false, allowDownload: true, scheduledAt: null }
 }
 async function selectWriting(id: string | null) {
   if (id === draft.value.writingVersionId) return
@@ -135,7 +138,7 @@ async function restoreDraft(task: PublishTask | null) {
     if (!published.value) {
       const recovery = await readDraft<PublishInput>(draftOwner.value, 'publishing')
       if (recovery) {
-        draft.value = { ...draft.value, ...recovery.content, projectId: props.id }
+        draft.value = { ...draft.value, ...recovery.content, projectId: props.id, chapterId: chapterId.value }
         message.value = '已恢复本任务的编辑暂存；保存或确认后才更新发布准备。'
       }
     }
@@ -147,20 +150,20 @@ async function restoreDraft(task: PublishTask | null) {
 }
 onBeforeRouteLeave(canLeave)
 let syncingTask = false
-onBeforeRouteUpdate((to, from) => syncingTask || (to.params.id === from.params.id && to.query.task === from.query.task) || canLeave())
+onBeforeRouteUpdate((to, from) => syncingTask || (to.params.id === from.params.id && to.query.task === from.query.task && to.query.chapter === from.query.chapter) || canLeave())
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value || recordOpen.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => globalThis.removeEventListener('beforeunload', beforeUnload))
 
 const load = () => run(async () => {
   loaded.value = false
-  const [project, saved, files, exported, versions] = await Promise.all([getProject(props.id), api.listPublishTasks(props.id), listAssets(props.id), listCovers(props.id), listVersions(props.id, 'publishing')])
+  const [project, saved, files, exported, versions, chapter] = await Promise.all([getProject(props.id), api.listPublishTasks(props.id, chapterId.value), listAssets(props.id, chapterId.value), listCovers(props.id, chapterId.value), listVersions(props.id, 'publishing', chapterId.value), chapterId.value ? getChapter(props.id, chapterId.value) : null])
   const target = props.taskId === 'new' ? null : props.taskId ? saved.find(task => task.id === props.taskId) : saved[0] ?? null
   if (props.taskId && props.taskId !== 'new' && !target) throw new Error('此任务不属于当前书籍或已不存在，请返回发布任务列表。')
-  title.value = project.title; tasks.value = saved; assets.value = files; covers.value = exported; writing.value = versions
+  title.value = chapter ? `${project.title} · ${chapter.title}` : project.title; tasks.value = saved; assets.value = files; covers.value = exported; writing.value = versions
   await restoreDraft(target ?? null)
   if (props.taskId === 'new' && typeof route.query.videoJob === 'string') {
-    const job = (await listVideoJobs(props.id)).find(job => job.id === route.query.videoJob && job.status === 'succeeded')
+    const job = (await listVideoJobs(props.id, chapterId.value)).find(job => job.id === route.query.videoJob && job.status === 'succeeded')
     if (!job || !files.some(asset => asset.id === job.videoAssetId && asset.assetType === 'video' && asset.existsStatus === 'available') || !files.some(asset => asset.id === job.audioAssetId && asset.assetType === 'audio' && asset.existsStatus === 'available')) throw new Error('所选视频任务或原音频不可用，请回到视频制作检查素材。')
     draft.value.videoAssetId = job.videoAssetId
     draft.value.audioAssetId = job.audioAssetId
@@ -184,7 +187,7 @@ watch(() => props.taskId, () => {
   void loadTask()
 })
 const refresh = () => run(async () => {
-  const [files, exported, saved] = await Promise.all([listAssets(props.id), listCovers(props.id), api.listPublishTasks(props.id)])
+  const [files, exported, saved] = await Promise.all([listAssets(props.id, chapterId.value), listCovers(props.id, chapterId.value), api.listPublishTasks(props.id, chapterId.value)])
   assets.value = files; covers.value = exported; tasks.value = saved
   if (selected.value) {
     const current = saved.find(t => t.id === selected.value?.id)
@@ -288,7 +291,7 @@ async function recordSuccess(startNext = false) {
     const saved = await api.recordPublishSuccess(selected.value.id, { ...record.value, publishedAt: new Date(record.value.publishedAt).toISOString(), confirmed: true })
     update(saved); recordOpen.value = false; message.value = '已记录发布成功。'; recorded = true
   })
-  if (recorded && target) await router.push({ path: `/projects/${target.projectId}/publishing`, query: { task: target.id, assist: '1' } })
+  if (recorded && target) await router.push({ path: `/projects/${target.projectId}/publishing`, query: { ...chapterQuery(target.chapterId ?? null), task: target.id, assist: '1' } })
 }
 onMounted(() => { if (desktop) void loadTask() })
 </script>
@@ -426,6 +429,7 @@ onMounted(() => { if (desktop) void loadTask() })
           <fieldset :disabled="busy || recordOpen">
             <ProjectAssets
               :project-id="id"
+              :chapter-id="chapterId"
               @changed="refresh"
             />
           </fieldset>
@@ -604,7 +608,7 @@ onMounted(() => { if (desktop) void loadTask() })
               v-if="!audios.length"
               class="muted"
             >
-              先在 <RouterLink :to="{ path: `/projects/${id}/writing`, query: { tab: 'audio' } }">
+              先在 <RouterLink :to="{ path: `/projects/${id}/writing`, query: { ...chapterQuery(chapterId), tab: 'audio' } }">
                 音频制作
               </RouterLink> 导入音频成品；音频仅用于制作记录，不会上传抖音。
             </p>
@@ -771,7 +775,7 @@ onMounted(() => { if (desktop) void loadTask() })
               v-if="!landscape.length || !portrait.length"
               class="muted"
             >
-              请先在 <RouterLink :to="`/projects/${id}/covers`">
+              请先在 <RouterLink :to="{ path: `/projects/${id}/covers`, query: chapterQuery(chapterId) }">
                 封面工坊
               </RouterLink> 一次导出横版和竖版两张封面。
             </p>

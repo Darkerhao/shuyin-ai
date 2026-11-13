@@ -258,10 +258,10 @@ mod tests {
         let source = directory.path().join("原书.txt");
         std::fs::write(&source, "保留原始书籍资料").unwrap();
         database
-            .link_asset(&project.id, source.to_str().unwrap(), None)
+            .link_asset(&project.id, source.to_str().unwrap(), None, None)
             .unwrap();
         let assets_before =
-            serde_json::to_value(database.list_assets(&project.id).unwrap()).unwrap();
+            serde_json::to_value(database.list_assets(&project.id, None).unwrap()).unwrap();
         let writing = database.save_writing(serde_json::from_value(serde_json::json!({
             "projectId": project.id, "kind": "publishing", "basedOn": null, "isConfirmed": false,
             "content": {"format":"publishing", "title":"保留文案", "description":"保留内容", "audioPrompt":"原声指导"}
@@ -300,12 +300,16 @@ mod tests {
             project_before
         );
         assert_eq!(
-            serde_json::to_value(database.list_assets(&project.id).unwrap()).unwrap(),
+            serde_json::to_value(database.list_assets(&project.id, None).unwrap()).unwrap(),
             assets_before
         );
         assert_eq!(
-            serde_json::to_value(&database.list_versions(&project.id, "publishing").unwrap()[0])
-                .unwrap(),
+            serde_json::to_value(
+                &database
+                    .list_versions(&project.id, "publishing", None)
+                    .unwrap()[0]
+            )
+            .unwrap(),
             writing_before
         );
         assert_eq!(std::fs::read_to_string(source).unwrap(), "保留原始书籍资料");

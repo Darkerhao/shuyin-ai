@@ -13,7 +13,7 @@ fn setup() -> (tempfile::TempDir, Database, StartAutomationInput) {
     let source = directory.path().join("原书.txt");
     fs::write(&source, "这是真实原书测试资料。").unwrap();
     let source_asset_id = database
-        .link_asset(&project.id, source.to_str().unwrap(), None)
+        .link_asset(&project.id, source.to_str().unwrap(), None, None)
         .unwrap();
     let text = database
         .save_provider(None, model(), None, &Vault::default())
@@ -31,7 +31,9 @@ fn setup() -> (tempfile::TempDir, Database, StartAutomationInput) {
         database,
         StartAutomationInput {
             project_id: project.id,
-            source_asset_id,
+            source: audio::AudioSourceInput::Asset {
+                asset_id: source_asset_id,
+            },
             text_provider_id: text.id,
             image_provider_id: image.id,
             format: "deep_dive".into(),
@@ -46,6 +48,94 @@ fn account() -> Account {
         name: "测试账号".into(),
         key: "window-account-identity".into(),
     }
+}
+
+#[test]
+fn chapter_automation_uses_the_full_workflow_and_freezes_only_its_own_source() {
+    let (_directory, database, mut input) = setup();
+    let chapter = database
+        .save_chapter(
+            &input.project_id,
+            None,
+            chapters::ChapterInput {
+                title: "第一章精讲".into(),
+                content: "本章的概念、论证和具体细节。".into(),
+                target_duration_seconds: Some(900),
+            },
+        )
+        .unwrap();
+    input.source = audio::AudioSourceInput::Chapter {
+        chapter_id: chapter.id.clone(),
+    };
+    database
+        .with_connection(|c| {
+            c.execute(
+                "UPDATE book_projects SET author='' WHERE id=?1",
+                [&input.project_id],
+            )
+            .unwrap();
+            c.execute(
+                "UPDATE assets SET file_path='missing-book-file.pdf' WHERE project_id=?1",
+                [&input.project_id],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let mut missing_image = input.clone();
+    missing_image.image_provider_id.clear();
+    assert!(database
+        .create_automation(missing_image, account())
+        .is_err());
+    let run = database.create_automation(input, account()).unwrap();
+    assert_eq!(run.stage, "writing");
+    assert_eq!(run.input.target_duration_seconds, Some(900));
+    assert_eq!(run.input.image_provider.model_kind, "image");
+    assert!(run.input.source_notes.is_empty());
+    assert_eq!(run.chapter_id, Some(chapter.id.clone()));
+    database
+        .save_chapter(
+            &run.project_id,
+            Some(&chapter.id),
+            chapters::ChapterInput {
+                title: "已修改的第一章".into(),
+                content: "编辑后的内容不属于正在执行的任务。".into(),
+                target_duration_seconds: Some(1200),
+            },
+        )
+        .unwrap();
+    let task = database.start_automation_generation(&run).unwrap();
+    let prepared = database.prepare_generation(&task).unwrap();
+    let sent: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
+    assert_eq!(sent["book"]["sourceNotes"], chapter.input.content);
+    assert_eq!(sent["audio"]["targetDurationSeconds"], 900);
+    assert!(!prepared.user.contains("原始资料") && !prepared.user.contains("编辑后的内容"));
+    database.finish_generation(&task,&prepared.input,serde_json::from_value(serde_json::json!({"format":"publishing","title":"第一章精讲","description":"细读本章的论证。","audioPrompt":"本章保存的完整指导。"})).unwrap(),"text").unwrap();
+    database.set_automation_stage(&run, "audio").unwrap();
+    let run = database.automation_run(&run.id).unwrap();
+    let job = database.start_automatic_audio(&run).unwrap();
+    assert_eq!(job.chapter_id, run.chapter_id);
+    assert_eq!(job.target_duration_seconds, 900);
+    assert_eq!(
+        database
+            .project_progress(&run.project_id, Some(&chapter.id))
+            .unwrap()[0]
+            .status,
+        "资料已保存"
+    );
+    database
+        .with_connection(|c| {
+            let text: String = c
+                .query_row(
+                    "SELECT json_extract(input_json,'$.source.text') FROM audio_jobs WHERE id=?1",
+                    [&job.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(text, chapter.input.content);
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]
@@ -85,7 +175,10 @@ fn automation_collection_is_frozen_and_bound_to_the_publish_task_transaction() {
         .save_bound_publish_task(None, publish, Some(&run.binding(Slot::Publish)))
         .is_err());
     assert_eq!(
-        database.list_publish_tasks(&run.project_id).unwrap().len(),
+        database
+            .list_publish_tasks(&run.project_id, None)
+            .unwrap()
+            .len(),
         1
     );
     let ready = database.prepare_publish_task(&task.id).unwrap();
@@ -154,7 +247,7 @@ fn automation_collection_write_failure_rolls_back_publish_task_and_binding() {
         .unwrap_err()
         .contains("fixture collection write failed"));
     assert!(database
-        .list_publish_tasks(&run.project_id)
+        .list_publish_tasks(&run.project_id, None)
         .unwrap()
         .is_empty());
     assert!(database
@@ -254,9 +347,12 @@ fn automation_model_retry_preserves_selection_then_switches_and_stops() {
         }
     }
     assert_eq!(database.automation_runs().unwrap().len(), 1);
-    assert_eq!(database.list_ai_tasks(&run.project_id).unwrap().len(), 1);
+    assert_eq!(
+        database.list_ai_tasks(&run.project_id, None).unwrap().len(),
+        1
+    );
     assert!(database
-        .list_versions(&run.project_id, "publishing")
+        .list_versions(&run.project_id, "publishing", None)
         .unwrap()
         .is_empty());
 }
@@ -310,6 +406,8 @@ fn automation_model_retry_switches_only_enabled_images_and_skips_local_export() 
     let task = database
         .start_bound_cover_generation(
             image_generation::ImageGenerationInput {
+                chapter_id: None,
+
                 project_id: run.project_id.clone(),
                 provider_id: run.input.selection.image_provider_id.clone(),
                 description: "原书背景".into(),
@@ -714,7 +812,9 @@ fn automation_frontloaded_duration_starts_before_audio() {
 #[test]
 fn automation_frontloaded_respects_saved_fifteen_minutes() {
     let (_directory, database, input) = setup();
-    database.set_audio_duration(&input.project_id, 900).unwrap();
+    database
+        .set_audio_duration(&input.project_id, 900, None)
+        .unwrap();
     let run = database.create_automation(input, account()).unwrap();
     assert_eq!(
         serde_json::to_value(&run.input).unwrap()["targetDurationSeconds"],
@@ -728,7 +828,7 @@ fn automation_frontloaded_respects_saved_fifteen_minutes() {
 fn automation_frontloaded_accepts_saved_target_beyond_fifteen_minutes() {
     let (_directory, database, input) = setup();
     database
-        .set_audio_duration(&input.project_id, 1200)
+        .set_audio_duration(&input.project_id, 1200, None)
         .unwrap();
     let run = database.create_automation(input, account()).unwrap();
     assert_eq!(run.input.target_duration_seconds, Some(1200));
@@ -825,7 +925,7 @@ fn automation_frontloaded_cancel_rejects_late_result_and_stale_binding() {
         .is_none());
     assert!(database.start_automation_generation(&run).is_err());
     assert!(database
-        .list_versions(&run.project_id, "publishing")
+        .list_versions(&run.project_id, "publishing", None)
         .unwrap()
         .is_empty());
 }
@@ -876,6 +976,9 @@ fn automation_frontloaded_blocks_manual_duplicate_generation() {
     let (_directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
     let request = ai::GenerationInput {
+        chapter_id: None,
+        source_snapshot: None,
+
         project_id: run.project_id.clone(),
         provider_id: run.input.selection.text_provider_id.clone(),
         recommend_duration: true,
@@ -900,6 +1003,7 @@ fn automation_v21_upgrade_preserves_post_audio_writing_and_publish_markers() {
         super::migrate(connection)?;
         connection.execute_batch("ALTER TABLE automation_runs DROP COLUMN duration_task_id; ALTER TABLE automation_runs DROP COLUMN content_check_task_id; ALTER TABLE automation_runs DROP COLUMN widescreen_task_id; ALTER TABLE automation_runs DROP COLUMN widescreen_cover_id; ALTER TABLE automation_runs DROP COLUMN render_plan_sha256;").map_err(|e|e.to_string())?;
         freeze_model_call_index(connection);
+        freeze_chapter_schema(connection);
         connection.execute("UPDATE automation_runs SET writing_task_id=?1,input_json=json_remove(input_json,'$.workflowVersion'),status='awaiting_publish',publish_started=1,publish_handed_off=1",[run.writing_task_id.as_deref().unwrap()]).map_err(|e|e.to_string())?;
         connection.pragma_update(None,"user_version",21).map_err(|e|e.to_string())
     }).unwrap();
@@ -992,17 +1096,19 @@ fn automation_start_is_idempotent_and_exclusive() {
 #[test]
 fn automatic_audio_uses_saved_creation_and_frozen_duration() {
     let (_directory, database, input) = setup();
-    database.set_audio_duration(&input.project_id, 900).unwrap();
+    database
+        .set_audio_duration(&input.project_id, 900, None)
+        .unwrap();
     let run = database.create_automation(input, account()).unwrap();
     let run = finish_creation(&database, &run);
-    database.set_audio_duration(&run.project_id, 300).unwrap();
+    database
+        .set_audio_duration(&run.project_id, 300, None)
+        .unwrap();
     assert!(database
         .start_audio_job(audio::StartAudioJobInput {
             project_id: run.project_id.clone(),
             writing_version_id: run.writing_version_id.clone().unwrap(),
-            source: audio::AudioSourceInput::Asset {
-                asset_id: run.input.selection.source_asset_id.clone()
-            },
+            source: run.input.selection.source.clone(),
             format: "deep_dive".into(),
         })
         .is_err());
@@ -1019,7 +1125,7 @@ fn automatic_audio_uses_saved_creation_and_frozen_duration() {
     );
     assert_eq!(
         database
-            .list_versions(&run.project_id, "publishing")
+            .list_versions(&run.project_id, "publishing", None)
             .unwrap()
             .len(),
         1
@@ -1071,6 +1177,8 @@ fn automatic_image_binding_rolls_back_after_pause_and_preserves_single_task() {
     let (_directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
     let image = || image_generation::ImageGenerationInput {
+        chapter_id: None,
+
         project_id: run.project_id.clone(),
         provider_id: run.input.selection.image_provider_id.clone(),
         description: "4:3原书背景".into(),
@@ -1081,7 +1189,10 @@ fn automatic_image_binding_rolls_back_after_pause_and_preserves_single_task() {
     assert!(database
         .start_bound_cover_generation(image(), &run.binding(Slot::LandscapeImage))
         .is_err());
-    assert!(database.list_ai_tasks(&run.project_id).unwrap().is_empty());
+    assert!(database
+        .list_ai_tasks(&run.project_id, None)
+        .unwrap()
+        .is_empty());
     let resumed = database.control_automation(&run.id, "resume").unwrap();
     let id = database
         .start_bound_cover_generation(image(), &resumed.binding(Slot::LandscapeImage))
@@ -1089,7 +1200,10 @@ fn automatic_image_binding_rolls_back_after_pause_and_preserves_single_task() {
     assert!(database
         .start_bound_cover_generation(image(), &resumed.binding(Slot::LandscapeImage))
         .is_err());
-    assert_eq!(database.list_ai_tasks(&run.project_id).unwrap().len(), 1);
+    assert_eq!(
+        database.list_ai_tasks(&run.project_id, None).unwrap().len(),
+        1
+    );
     assert_eq!(
         database
             .automation_run(&run.id)
@@ -1277,10 +1391,25 @@ fn freeze_model_call_index(connection: &Connection) {
     connection.execute_batch("DROP INDEX model_calls_recent; CREATE INDEX model_calls_recent ON model_calls(started_at DESC);").unwrap();
 }
 
+fn freeze_chapter_schema(connection: &Connection) {
+    connection.execute_batch("UPDATE automation_runs SET input_json=json_remove(json_set(input_json,'$.selection.sourceAssetId',json_extract(input_json,'$.selection.source.assetId')),'$.selection.source');
+        ALTER TABLE writing_versions DROP COLUMN source_snapshot_json;
+        ALTER TABLE writing_versions DROP COLUMN chapter_id;
+        ALTER TABLE ai_tasks DROP COLUMN chapter_id;
+        ALTER TABLE audio_jobs DROP COLUMN chapter_id;
+        ALTER TABLE video_jobs DROP COLUMN chapter_id;
+        ALTER TABLE automation_runs DROP COLUMN chapter_id;
+        ALTER TABLE cover_versions DROP COLUMN chapter_id;
+        ALTER TABLE publish_tasks DROP COLUMN chapter_id;
+        ALTER TABLE assets DROP COLUMN chapter_id;
+        DROP TABLE book_chapters;").unwrap();
+}
+
 fn freeze_v20_schema(database: &Database, missing_markers: bool) {
     database
         .with_connection(|connection| {
             let tx = connection.transaction().unwrap();
+            freeze_chapter_schema(&tx);
             tx.execute_batch("DROP INDEX automation_single_active; DROP INDEX automation_project; ALTER TABLE automation_runs RENAME TO automation_previous;").unwrap();
             let sql = MIGRATIONS[19]
                 .lines()
@@ -1483,14 +1612,39 @@ fn automation_late_cover_failure_does_not_pause_the_next_size_or_generation() {
 }
 
 fn transcript_fixture() -> (tempfile::TempDir, Database, AutomationRun) {
-    let (directory, database, input) = setup();
+    transcript_fixture_for(false)
+}
+
+fn transcript_fixture_for(chapter: bool) -> (tempfile::TempDir, Database, AutomationRun) {
+    let (directory, database, mut input) = setup();
+    if chapter {
+        let chapter = database
+            .save_chapter(
+                &input.project_id,
+                None,
+                chapters::ChapterInput {
+                    title: "第一章：细读与理解".into(),
+                    content: "实际声音里的句子".into(),
+                    target_duration_seconds: Some(300),
+                },
+            )
+            .unwrap();
+        input.source = audio::AudioSourceInput::Chapter {
+            chapter_id: chapter.id,
+        };
+    }
     let run = database.create_automation(input, account()).unwrap();
     let run = finish_creation(&database, &run);
     let audio = database.start_automatic_audio(&run).unwrap();
     let path = directory.path().join("original.wav");
     fs::write(&path, b"audio fixture").unwrap();
     let asset = database
-        .link_asset(&run.project_id, path.to_str().unwrap(), None)
+        .link_asset(
+            &run.project_id,
+            path.to_str().unwrap(),
+            None,
+            run.chapter_id.as_deref(),
+        )
         .unwrap();
     let hash = super::audio::hash_file(&path).unwrap().1;
     database
@@ -1507,6 +1661,8 @@ fn transcript_fixture() -> (tempfile::TempDir, Database, AutomationRun) {
     let video = database
         .create_bound_video_job(
             video::StartVideoInput {
+                chapter_id: run.chapter_id.clone(),
+
                 project_id: run.project_id.clone(),
                 audio_asset_id: asset,
                 subtitle_asset_id: None,
@@ -1577,7 +1733,7 @@ fn automatic_content_check_preserves_audio_and_does_not_duplicate_consistent_ver
     let run = db.automation_run(&run.id).unwrap();
     assert_eq!(run.final_writing_version_id, run.writing_version_id);
     assert_eq!(
-        db.list_versions(&run.project_id, "publishing")
+        db.list_versions(&run.project_id, "publishing", None)
             .unwrap()
             .len(),
         1
@@ -1666,7 +1822,7 @@ fn automatic_content_check_revises_only_needed_fields_and_rejects_late_changes()
         )
         .is_err());
     assert_eq!(
-        db.list_versions(&run.project_id, "publishing")
+        db.list_versions(&run.project_id, "publishing", None)
             .unwrap()
             .len(),
         1
@@ -1692,7 +1848,7 @@ fn automatic_content_check_revises_only_needed_fields_and_rejects_late_changes()
         expected["audioPrompt"].as_str().unwrap()
     );
     assert_eq!(
-        db.list_versions(&run.project_id, "publishing")
+        db.list_versions(&run.project_id, "publishing", None)
             .unwrap()
             .len(),
         2
@@ -1709,7 +1865,7 @@ fn automatic_content_check_rejects_subtitle_changes_while_request_is_running() {
         .finish_content_check_task(&id, r#"{"verified":true,"reason":"之前一致","changes":{}}"#)
         .is_err());
     assert_eq!(
-        db.list_versions(&run.project_id, "publishing")
+        db.list_versions(&run.project_id, "publishing", None)
             .unwrap()
             .len(),
         1
@@ -1757,132 +1913,155 @@ fn automatic_schedule_renews_only_before_hand_off_and_preserves_same_task() {
 #[test]
 fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
     use super::automation::COVER_STEPS;
-    let (_dir, db, run) = transcript_fixture();
-    let check = db.create_content_check_task(&run).unwrap();
-    db.prepare_content_check_task(&check).unwrap();
-    db.finish_content_check_task(&check, r#"{"verified":true,"reason":"一致","changes":{}}"#)
-        .unwrap();
-    for step in &COVER_STEPS {
-        let run = db.automation_run(&run.id).unwrap();
-        db.set_automation_stage(&run, step.image_stage).unwrap();
-        let image = db
-            .start_bound_cover_generation(
-                image_generation::ImageGenerationInput {
-                    project_id: run.project_id.clone(),
-                    provider_id: run.input.selection.image_provider_id.clone(),
-                    description: step
-                        .prompt(&db.automation_publish_writing(&run).unwrap().content)
+    for chapter in [false, true] {
+        let (_dir, db, run) = transcript_fixture_for(chapter);
+        let check = db.create_content_check_task(&run).unwrap();
+        db.prepare_content_check_task(&check).unwrap();
+        db.finish_content_check_task(&check, r#"{"verified":true,"reason":"一致","changes":{}}"#)
+            .unwrap();
+        for step in &COVER_STEPS {
+            let run = db.automation_run(&run.id).unwrap();
+            db.set_automation_stage(&run, step.image_stage).unwrap();
+            let image = db
+                .start_bound_cover_generation(
+                    image_generation::ImageGenerationInput {
+                        chapter_id: run.chapter_id.clone(),
+
+                        project_id: run.project_id.clone(),
+                        provider_id: run.input.selection.image_provider_id.clone(),
+                        description: step
+                            .prompt(&db.automation_publish_writing(&run).unwrap().content)
+                            .unwrap()
+                            .into(),
+                        width: step.width,
+                        height: step.height,
+                    },
+                    &run.binding(step.image_slot),
+                )
+                .unwrap();
+            if step.width == 1920 {
+                db.end_generation(&image, "failed", "timeout", "第三张背景失败")
+                    .unwrap();
+                db.set_automation_status(&run, "waiting_user", "重试当前背景")
+                    .unwrap();
+                let waiting = db.automation_run(&run.id).unwrap();
+                assert!(
+                    waiting.landscape_cover_id.is_some() && waiting.portrait_cover_id.is_some()
+                );
+                assert_eq!(
+                    db.list_cover_versions(&run.project_id, run.chapter_id.as_deref())
                         .unwrap()
-                        .into(),
-                    width: step.width,
-                    height: step.height,
-                },
-                &run.binding(step.image_slot),
-            )
-            .unwrap();
-        if step.width == 1920 {
-            db.end_generation(&image, "failed", "timeout", "第三张背景失败")
+                        .len(),
+                    2
+                );
+                db.retry_automation_generation(&waiting, true).unwrap();
+                db.control_automation(&run.id, "resume").unwrap();
+            }
+            db.prepare_cover_generation(&image).unwrap();
+            let mut background = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::new_rgb8(512, 512)
+                .write_to(&mut background, image::ImageFormat::Png)
                 .unwrap();
-            db.set_automation_status(&run, "waiting_user", "重试当前背景")
+            db.finish_cover_generation(&image, background.get_ref())
                 .unwrap();
-            let waiting = db.automation_run(&run.id).unwrap();
-            assert!(waiting.landscape_cover_id.is_some() && waiting.portrait_cover_id.is_some());
-            assert_eq!(db.list_cover_versions(&run.project_id).unwrap().len(), 2);
-            db.retry_automation_generation(&waiting, true).unwrap();
-            db.control_automation(&run.id, "resume").unwrap();
-        }
-        db.prepare_cover_generation(&image).unwrap();
-        let mut background = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::new_rgb8(512, 512)
-            .write_to(&mut background, image::ImageFormat::Png)
-            .unwrap();
-        db.finish_cover_generation(&image, background.get_ref())
-            .unwrap();
-        let run = db.automation_run(&run.id).unwrap();
-        db.set_automation_stage(&run, step.cover_stage).unwrap();
-        let run = db.automation_run(&run.id).unwrap();
-        let config = db.automation_cover_config(&run).unwrap();
-        assert_eq!((config.width, config.height), (step.width, step.height));
-        assert!(db
-            .save_bound_cover_version(
+            let run = db.automation_run(&run.id).unwrap();
+            db.set_automation_stage(&run, step.cover_stage).unwrap();
+            let run = db.automation_run(&run.id).unwrap();
+            let config = db.automation_cover_config(&run).unwrap();
+            assert_eq!((config.width, config.height), (step.width, step.height));
+            assert!(db
+                .save_bound_cover_version(
+                    &run.project_id,
+                    config.clone(),
+                    Some(b"invalid"),
+                    Some(&run.binding(step.cover_slot)),
+                    run.chapter_id.as_deref()
+                )
+                .is_err());
+            db.fail_automation_cover(&run.id, run.run_id, step.cover_stage)
+                .unwrap();
+            let resumed = db.control_automation(&run.id, "resume").unwrap();
+            assert_eq!(db.automation_cover_config(&resumed).unwrap(), config);
+            assert_eq!(db.automation_ai_result(&image).unwrap().0, "succeeded");
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::new_rgb8(step.width, step.height)
+                .write_to(&mut png, image::ImageFormat::Png)
+                .unwrap();
+            db.save_bound_cover_version(
                 &run.project_id,
-                config.clone(),
-                Some(b"invalid"),
-                Some(&run.binding(step.cover_slot))
+                config,
+                Some(png.get_ref()),
+                Some(&resumed.binding(step.cover_slot)),
+                run.chapter_id.as_deref(),
             )
-            .is_err());
-        db.fail_automation_cover(&run.id, run.run_id, step.cover_stage)
             .unwrap();
-        let resumed = db.control_automation(&run.id, "resume").unwrap();
-        assert_eq!(db.automation_cover_config(&resumed).unwrap(), config);
-        assert_eq!(db.automation_ai_result(&image).unwrap().0, "succeeded");
-        let mut png = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::new_rgb8(step.width, step.height)
-            .write_to(&mut png, image::ImageFormat::Png)
-            .unwrap();
-        db.save_bound_cover_version(
-            &run.project_id,
-            config,
-            Some(png.get_ref()),
-            Some(&resumed.binding(step.cover_slot)),
-        )
-        .unwrap();
-        db.set_automation_stage(&resumed, step.next).unwrap();
-    }
-    let run = db.automation_run(&run.id).unwrap();
-    assert_eq!(run.stage, "storyboard");
-    assert_eq!(db.list_cover_versions(&run.project_id).unwrap().len(), 3);
-    let images: i64 = db
-        .with_connection(|c| {
-            c.query_row(
-                "SELECT count(*) FROM ai_tasks WHERE kind='cover'",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())
-        })
-        .unwrap();
-    assert_eq!(images, 3);
-    let job = db
-        .claim_bound_video_job(
-            run.video_job_id.as_ref().unwrap(),
-            crate::video::VideoWork::Prepare,
-            None,
-            Some(&run),
-        )
-        .unwrap();
-    let mut plan = job.plan;
-    plan.scenes = vec![serde_json::from_value(serde_json::json!({"first":0,"last":0,"kind":"opening","title":"阅读","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]})).unwrap()];
-    db.save_video_progress(&job.id, job.run_id, &plan, "storyboard")
-        .unwrap();
-    db.end_video_job(&job.id, job.run_id, "failed", "分镜请求中断")
-        .unwrap();
-    db.set_automation_status(&run, "waiting_user", "分镜失败")
-        .unwrap();
-    let recovered = db
-        .claim_video_job(
-            &job.id,
-            crate::video::VideoWork::Prepare,
-            Some(&run.input.selection.text_provider_id),
-        )
-        .unwrap();
-    db.end_video_job(&recovered.id, recovered.run_id, "awaiting_confirmation", "")
-        .unwrap();
-    let run = db.control_automation(&run.id, "resume").unwrap();
-    assert_eq!(db.list_cover_versions(&run.project_id).unwrap().len(), 3);
-    db.verify_automation_content(&run).unwrap();
-    db.prepare_automation_render(&run).unwrap();
-    db.verify_automation_video(&run).unwrap();
-    let ids: i64 = db
-        .with_connection(|c| {
-            c.query_row("SELECT count(*) FROM video_jobs", [], |r| r.get(0))
+            db.set_automation_stage(&resumed, step.next).unwrap();
+        }
+        let run = db.automation_run(&run.id).unwrap();
+        assert_eq!(run.stage, "storyboard");
+        assert_eq!(
+            db.list_cover_versions(&run.project_id, run.chapter_id.as_deref())
+                .unwrap()
+                .len(),
+            3
+        );
+        let images: i64 = db
+            .with_connection(|c| {
+                c.query_row(
+                    "SELECT count(*) FROM ai_tasks WHERE kind='cover'",
+                    [],
+                    |r| r.get(0),
+                )
                 .map_err(|e| e.to_string())
-        })
-        .unwrap();
-    assert_eq!(ids, 1);
-    db.with_connection(|c| { c.execute("UPDATE video_jobs SET plan_json=json_set(plan_json,'$.scenes[0].title','变更后的分镜') WHERE id=?1", [&job.id]).map_err(|e|e.to_string())?; Ok(()) }).unwrap();
-    db.verify_automation_content(&run).unwrap();
-    assert!(db.verify_automation_video(&run).is_err());
+            })
+            .unwrap();
+        assert_eq!(images, 3);
+        let job = db
+            .claim_bound_video_job(
+                run.video_job_id.as_ref().unwrap(),
+                crate::video::VideoWork::Prepare,
+                None,
+                Some(&run),
+            )
+            .unwrap();
+        let mut plan = job.plan;
+        plan.scenes = vec![serde_json::from_value(serde_json::json!({"first":0,"last":0,"kind":"opening","title":"阅读","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]})).unwrap()];
+        db.save_video_progress(&job.id, job.run_id, &plan, "storyboard")
+            .unwrap();
+        db.end_video_job(&job.id, job.run_id, "failed", "分镜请求中断")
+            .unwrap();
+        db.set_automation_status(&run, "waiting_user", "分镜失败")
+            .unwrap();
+        let recovered = db
+            .claim_video_job(
+                &job.id,
+                crate::video::VideoWork::Prepare,
+                Some(&run.input.selection.text_provider_id),
+            )
+            .unwrap();
+        db.end_video_job(&recovered.id, recovered.run_id, "awaiting_confirmation", "")
+            .unwrap();
+        let run = db.control_automation(&run.id, "resume").unwrap();
+        assert_eq!(
+            db.list_cover_versions(&run.project_id, run.chapter_id.as_deref())
+                .unwrap()
+                .len(),
+            3
+        );
+        db.verify_automation_content(&run).unwrap();
+        db.prepare_automation_render(&run).unwrap();
+        db.verify_automation_video(&run).unwrap();
+        let ids: i64 = db
+            .with_connection(|c| {
+                c.query_row("SELECT count(*) FROM video_jobs", [], |r| r.get(0))
+                    .map_err(|e| e.to_string())
+            })
+            .unwrap();
+        assert_eq!(ids, 1);
+        db.with_connection(|c| { c.execute("UPDATE video_jobs SET plan_json=json_set(plan_json,'$.scenes[0].title','变更后的分镜') WHERE id=?1", [&job.id]).map_err(|e|e.to_string())?; Ok(()) }).unwrap();
+        db.verify_automation_content(&run).unwrap();
+        assert!(db.verify_automation_video(&run).is_err());
+    }
 }
 
 #[test]
@@ -1894,6 +2073,7 @@ fn automation_v23_upgrades_old_authorization_and_restores_exact_new_artifacts() 
     db.with_connection(|c| {
         c.execute_batch("ALTER TABLE automation_runs DROP COLUMN widescreen_task_id; ALTER TABLE automation_runs DROP COLUMN widescreen_cover_id; ALTER TABLE automation_runs DROP COLUMN render_plan_sha256; PRAGMA user_version=22;").map_err(|e|e.to_string())?;
         freeze_model_call_index(c);
+        freeze_chapter_schema(c);
         c.execute("UPDATE automation_runs SET input_json=json_set(input_json,'$.workflowVersion',1),publish_started=1,publish_handed_off=1 WHERE id=?1",[&run.id]).map_err(|e|e.to_string())?;
         Ok(())
     }).unwrap();

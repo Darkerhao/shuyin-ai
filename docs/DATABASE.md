@@ -1,5 +1,13 @@
 # 书引 AI 数据库设计文档
 
+## 章节精讲数据与兼容迁移（2026-11-13，v25）
+
+[0025_chapter_creation.sql](../src-tauri/migrations/0025_chapter_creation.sql)新增book_chapters，保存章节名称、完整正文和独立可空目标时长；writing_versions、ai_tasks、audio_jobs、video_jobs、automation_runs、cover_versions、publish_tasks与assets增加可空chapter_id。旧记录均为NULL整书范围，原路径及书籍内版本号不重编。writing_versions增加只读source_snapshot_json。
+
+editor_drafts沿用原表：章节资料/文案/封面owner为书籍ID:chapter:章节ID，新章节用new，新发布草稿追加:new；已保存发布草稿仍绑定任务ID。自动输入统一把旧selection.sourceAssetId迁移为selection.source={kind:asset,assetId:原ID}，其他输入、状态、提交标记和成果引用保留。所有章节继续完整发布准备流程。
+
+已有v2—v24数据库启动升级前，先通过原SQLite备份接口保存到数据库同级chapter-upgrade-backups目录；备份失败不进入迁移，迁移事务失败回滚。备份源不修改，完整恢复保留章节、快照、草稿与所有成果并重映射本地路径，继续严格结构、完整性及外键校验。有引用的章节不能删除成整书成果，单章发布不改变整书发布状态。本轮只在隔离测试库执行迁移，未操作正式书库。见[设计](CHAPTER-VIDEO-DESIGN.md)与[验收](CHAPTER-WORKFLOW-VERIFICATION.md)。
+
 ## 模型地址与 Model ID 复用选项（2026-11-12，仍为v24）
 
 无表、列或迁移变更。复用`app_settings`保存两组普通设置：`model_options_base_url`与`model_options_model_name`，值为JSON字符串数组，分别对应服务地址和模型名称候选。候选增删改只更新上述设置，不修改`model_providers`、已有模型凭据或历史创作。

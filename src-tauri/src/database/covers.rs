@@ -133,6 +133,8 @@ impl CoverConfig {
 #[serde(rename_all = "camelCase")]
 pub struct CoverVersion {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     pub project_id: String,
     pub version_no: u32,
     pub config: CoverConfig,
@@ -242,15 +244,19 @@ impl Database {
         validate_png(&bytes, &config)?;
         Ok(bytes)
     }
-    pub fn list_cover_versions(&self, project_id: &str) -> Result<Vec<CoverVersion>, String> {
+    pub fn list_cover_versions(
+        &self,
+        project_id: &str,
+        chapter_id: Option<&str>,
+    ) -> Result<Vec<CoverVersion>, String> {
         self.with_connection(|c| {
-            get(c, project_id)?;
-            let mut query = c.prepare("SELECT id,version_no,config_json,exported_path,created_at FROM cover_versions WHERE project_id=?1 ORDER BY version_no DESC").map_err(|e| e.to_string())?;
-            let rows = query.query_map([project_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, String>(4)?))).map_err(|e| e.to_string())?;
+            super::chapters::require_scope(c, project_id, chapter_id)?;
+            let mut query = c.prepare("SELECT id,version_no,config_json,exported_path,created_at,chapter_id FROM cover_versions WHERE project_id=?1 AND chapter_id IS ?2 ORDER BY version_no DESC").map_err(|e| e.to_string())?;
+            let rows = query.query_map(params![project_id,chapter_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, String>(4)?,r.get::<_,Option<String>>(5)?))).map_err(|e| e.to_string())?;
             rows.map(|row| {
-                let (id, version_no, json, exported_path, created_at) = row.map_err(|e| e.to_string())?;
+                let (id, version_no, json, exported_path, created_at, chapter_id) = row.map_err(|e| e.to_string())?;
                 let config = serde_json::from_str(&json).map_err(|_| "封面配置无法读取。")?;
-                Ok(CoverVersion { id, project_id: project_id.into(), version_no, config, exported_path, created_at })
+                Ok(CoverVersion { id, chapter_id, project_id: project_id.into(), version_no, config, exported_path, created_at })
             }).collect()
         })
     }
@@ -292,8 +298,9 @@ impl Database {
         project_id: &str,
         config: CoverConfig,
         png: Option<&[u8]>,
+        chapter_id: Option<&str>,
     ) -> Result<CoverVersion, String> {
-        self.save_bound_cover_version(project_id, config, png, None)
+        self.save_bound_cover_version(project_id, config, png, None, chapter_id)
     }
 
     pub(crate) fn save_bound_cover_version(
@@ -302,6 +309,7 @@ impl Database {
         config: CoverConfig,
         png: Option<&[u8]>,
         binding: Option<&super::automation::Binding<'_>>,
+        chapter_id: Option<&str>,
     ) -> Result<CoverVersion, String> {
         config.validate()?;
         if let Some(bytes) = png {
@@ -309,9 +317,10 @@ impl Database {
         }
         self.with_connection(|c| {
             let tx = c.transaction().map_err(|e| e.to_string())?;
+            super::chapters::require_scope(&tx,project_id,chapter_id)?;
             let project = get(&tx, project_id)?;
             // Saving a draft is allowed even when its background file is missing.
-            if let Some(id) = &config.background_asset_id { background_path(&tx, project_id, id)?; }
+            if let Some(id) = &config.background_asset_id { super::chapters::asset_scope(&tx,project_id,id,chapter_id,true)?; background_path(&tx, project_id, id)?; }
             let id = new_id(&tx)?;
             let mut version_no: u32 = tx.query_row("SELECT coalesce(max(version_no),0)+1 FROM cover_versions WHERE project_id=?1", [project_id], |r| r.get(0)).map_err(|e| e.to_string())?;
             let mut created_file = None;
@@ -333,11 +342,11 @@ impl Database {
             let result = (|| {
                 let created_at: String = tx.query_row(&format!("SELECT {NOW}"), [], |r| r.get(0)).map_err(|e| e.to_string())?;
                 let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
-                tx.execute("INSERT INTO cover_versions(id,project_id,version_no,config_json,exported_path,created_at) VALUES(?1,?2,?3,?4,?5,?6)", params![id,project_id,version_no,json,exported_path,created_at]).map_err(|e| e.to_string())?;
+                tx.execute("INSERT INTO cover_versions(id,project_id,version_no,config_json,exported_path,created_at,chapter_id) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![id,project_id,version_no,json,exported_path,created_at,chapter_id]).map_err(|e| e.to_string())?;
                 tx.execute("UPDATE book_projects SET updated_at=?1 WHERE id=?2", params![created_at,project_id]).map_err(|e| e.to_string())?;
                 if let Some(binding) = binding { super::automation::bind(&tx,binding,project_id,&id)?; }
                 tx.commit().map_err(|e| e.to_string())?;
-                Ok(CoverVersion { id, project_id: project_id.into(), version_no, config, exported_path, created_at })
+                Ok(CoverVersion { id, chapter_id: chapter_id.map(str::to_owned), project_id: project_id.into(), version_no, config, exported_path, created_at })
             })();
             if result.is_err() {
                 if let Some(path) = created_file { let _ = std::fs::remove_file(path); }

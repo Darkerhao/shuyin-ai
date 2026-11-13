@@ -30,7 +30,7 @@ fn bound_documents_persist_with_book_and_keep_source_files() {
     let saved = db
         .save_project_with_documents(None, input("带文件的新书"), &sources)
         .unwrap();
-    let assets = db.list_assets(&saved.id).unwrap();
+    let assets = db.list_assets(&saved.id, None).unwrap();
     assert_eq!(assets.len(), 5);
     assert!(assets
         .iter()
@@ -38,10 +38,10 @@ fn bound_documents_persist_with_book_and_keep_source_files() {
     assert_eq!(fs::read_dir(&saved.workspace_path).unwrap().count(), 0);
     drop(db);
     let db = Database::open(path);
-    assert_eq!(db.list_assets(&saved.id).unwrap().len(), 5);
+    assert_eq!(db.list_assets(&saved.id, None).unwrap().len(), 5);
     fs::remove_file(&sources[0]).unwrap();
     assert!(db
-        .list_assets(&saved.id)
+        .list_assets(&saved.id, None)
         .unwrap()
         .iter()
         .any(|asset| asset.exists_status == "missing"));
@@ -52,10 +52,15 @@ fn bound_documents_persist_with_book_and_keep_source_files() {
         .find(|asset| asset.original_name.ends_with(".pdf"))
         .unwrap()
         .id;
-    db.link_asset(&saved.id, replacement.to_str().unwrap(), Some(missing_id))
-        .unwrap();
+    db.link_asset(
+        &saved.id,
+        replacement.to_str().unwrap(),
+        Some(missing_id),
+        None,
+    )
+    .unwrap();
     assert!(db
-        .list_assets(&saved.id)
+        .list_assets(&saved.id, None)
         .unwrap()
         .iter()
         .all(|asset| asset.exists_status == "available"));
@@ -100,7 +105,7 @@ fn bound_documents_roll_back_new_and_existing_books_on_invalid_or_duplicate_sour
         )
         .is_err());
     assert_eq!(db.get_project(&book.id).unwrap().input.title, "原书名");
-    assert_eq!(db.list_assets(&book.id).unwrap().len(), 1);
+    assert_eq!(db.list_assets(&book.id, None).unwrap().len(), 1);
     let updated = db
         .save_project_with_documents(
             Some(&book.id),
@@ -110,7 +115,7 @@ fn bound_documents_roll_back_new_and_existing_books_on_invalid_or_duplicate_sour
         .unwrap();
     assert_eq!(updated.input.title, "更新成功");
     assert_eq!(updated.workspace_path, book.workspace_path);
-    assert_eq!(db.list_assets(&book.id).unwrap().len(), 2);
+    assert_eq!(db.list_assets(&book.id, None).unwrap().len(), 2);
     assert_eq!(fs::read(source).unwrap(), b"original");
 }
 
@@ -215,10 +220,14 @@ fn editing_legacy_projects_preserves_their_directory_and_asset_references() {
         .unwrap();
     let video = legacy.join("视频.mp4");
     fs::write(&video, b"original video").unwrap();
-    db.link_asset(&p.id, video.to_str().unwrap(), None).unwrap();
+    db.link_asset(&p.id, video.to_str().unwrap(), None, None)
+        .unwrap();
     let edited = db.save_project(Some(&p.id), input("新书名")).unwrap();
     assert_eq!(edited.workspace_path, p.workspace_path);
-    assert_eq!(db.list_assets(&p.id).unwrap()[0].exists_status, "available");
+    assert_eq!(
+        db.list_assets(&p.id, None).unwrap()[0].exists_status,
+        "available"
+    );
     assert_eq!(fs::read(video).unwrap(), b"original video");
 }
 #[test]
@@ -258,7 +267,7 @@ fn v2_failure_rolls_back_every_business_table_and_keeps_v1() {
     let c = Connection::open(&path).unwrap();
     c.execute_batch(include_str!("../../migrations/0001_m0_probe.sql"))
         .unwrap();
-    c.execute_batch("CREATE TABLE assets(original TEXT); INSERT INTO assets VALUES('keep'); PRAGMA user_version=1;").unwrap();
+    c.execute_batch("CREATE TABLE assets(original TEXT); INSERT INTO assets(original) VALUES('keep'); PRAGMA user_version=1;").unwrap();
     drop(c);
     assert!(Database::open(path.clone()).read().is_err());
     let c = Connection::open(path).unwrap();
@@ -317,35 +326,40 @@ fn missing_relocate_duplicate_and_delete_never_touch_source() {
     let project = db.save_project(None, input("素材项目")).unwrap();
     let original = dir.path().join("中文 视频.mp4");
     fs::write(&original, b"source-content").unwrap();
-    db.link_asset(&project.id, original.to_str().unwrap(), None)
+    db.link_asset(&project.id, original.to_str().unwrap(), None, None)
         .unwrap();
     assert!(db
-        .link_asset(&project.id, original.to_str().unwrap(), None)
+        .link_asset(&project.id, original.to_str().unwrap(), None, None)
         .is_err());
-    let linked = db.list_assets(&project.id).unwrap().remove(0);
+    let linked = db.list_assets(&project.id, None).unwrap().remove(0);
     assert_eq!(linked.exists_status, "available");
     let moved = dir.path().join("移动后.mp4");
     fs::rename(&original, &moved).unwrap();
     assert_eq!(
-        db.list_assets(&project.id).unwrap()[0].exists_status,
+        db.list_assets(&project.id, None).unwrap()[0].exists_status,
         "missing"
     );
     assert!(db
-        .link_asset(&project.id, original.to_str().unwrap(), Some(&linked.id))
+        .link_asset(
+            &project.id,
+            original.to_str().unwrap(),
+            Some(&linked.id),
+            None
+        )
         .is_err());
     let wrong = dir.path().join("错误.png");
     fs::write(&wrong, b"image").unwrap();
     assert!(db
-        .link_asset(&project.id, wrong.to_str().unwrap(), Some(&linked.id))
+        .link_asset(&project.id, wrong.to_str().unwrap(), Some(&linked.id), None)
         .is_err());
-    db.link_asset(&project.id, moved.to_str().unwrap(), Some(&linked.id))
+    db.link_asset(&project.id, moved.to_str().unwrap(), Some(&linked.id), None)
         .unwrap();
-    let relocated = db.list_assets(&project.id).unwrap().remove(0);
+    let relocated = db.list_assets(&project.id, None).unwrap().remove(0);
     assert_eq!(relocated.id, linked.id);
     assert_eq!(relocated.exists_status, "available");
     db.unlink_asset(&linked.id).unwrap();
     assert_eq!(fs::read(&moved).unwrap(), b"source-content");
-    db.link_asset(&project.id, moved.to_str().unwrap(), None)
+    db.link_asset(&project.id, moved.to_str().unwrap(), None, None)
         .unwrap();
     db.delete_project(&project.id).unwrap();
     assert!(db.get_project(&project.id).is_err());
@@ -392,7 +406,7 @@ fn backup_restore_roundtrip_preserves_previous_database_and_missing_references()
     let project = db.save_project(None, input("备份项目")).unwrap();
     let video = dir.path().join("video.mp4");
     fs::write(&video, "video").unwrap();
-    db.link_asset(&project.id, video.to_str().unwrap(), None)
+    db.link_asset(&project.id, video.to_str().unwrap(), None, None)
         .unwrap();
     let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
     let second = db.create_backup(dir.path().to_str().unwrap()).unwrap();
@@ -403,7 +417,7 @@ fn backup_restore_roundtrip_preserves_previous_database_and_missing_references()
     let previous = db.restore_backup(&backup).unwrap();
     assert_eq!(db.get_project(&project.id).unwrap().input.title, "备份项目");
     assert_eq!(
-        db.list_assets(&project.id).unwrap()[0].exists_status,
+        db.list_assets(&project.id, None).unwrap()[0].exists_status,
         "missing"
     );
     assert_eq!(
@@ -462,7 +476,7 @@ fn every_supported_backup_restores_without_changing_source_and_can_be_undone() {
         }
         c.pragma_update(None, "user_version", version as u32)
             .unwrap();
-        c.execute_batch("INSERT INTO book_projects(id,title,source_notes,target_duration_seconds,status,workspace_path,created_at,updated_at) VALUES('old','旧书','中文资料',600,'draft','missing','original','original'); INSERT INTO assets VALUES('video','old','video','missing.mp4','missing.mp4',10,0,'original');").unwrap();
+        c.execute_batch("INSERT INTO book_projects(id,title,source_notes,target_duration_seconds,status,workspace_path,created_at,updated_at) VALUES('old','旧书','中文资料',600,'draft','missing','original','original'); INSERT INTO assets(id,project_id,asset_type,file_path,original_name,file_size,modified_at,created_at) VALUES('video','old','video','missing.mp4','missing.mp4',10,0,'original');").unwrap();
         drop(c);
         let source = fs::read(&path).unwrap();
         let current = db.save_project(None, input("恢复前项目")).unwrap();
@@ -473,7 +487,10 @@ fn every_supported_backup_restores_without_changing_source_and_can_be_undone() {
             "中文资料"
         );
         assert_eq!(db.get_project("old").unwrap().updated_at, "original");
-        assert_eq!(db.list_assets("old").unwrap()[0].exists_status, "missing");
+        assert_eq!(
+            db.list_assets("old", None).unwrap()[0].exists_status,
+            "missing"
+        );
         assert!(db.get_project(&current.id).is_err());
         db.with_connection(|c| {
             assert_eq!(

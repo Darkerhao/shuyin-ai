@@ -248,6 +248,7 @@ pub fn complete_automation_cover(
         config,
         Some(&png),
         Some(&run.binding(step.cover_slot)),
+        run.chapter_id.as_deref(),
     )?;
     crate::completion::cover(&app, &version);
     Ok(())
@@ -390,6 +391,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                         database.audio_job(run.audio_job_id.as_deref().ok_or("缺少音频任务。")?)?;
                     database.create_bound_video_job(
                         StartVideoInput {
+                            chapter_id: run.chapter_id.clone(),
                             project_id: run.project_id.clone(),
                             audio_asset_id: audio.asset_id.ok_or("音频尚未归档。")?,
                             subtitle_asset_id: None,
@@ -453,6 +455,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                     let content = database.automation_publish_writing(run)?.content;
                     database.start_bound_cover_generation(
                         ImageGenerationInput {
+                            chapter_id: run.chapter_id.clone(),
                             project_id: run.project_id.clone(),
                             provider_id: run.input.selection.image_provider_id.clone(),
                             description: step.prompt(&content)?.into(),
@@ -578,6 +581,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                     let task = database.save_bound_publish_task(
                         None,
                         PublishInput {
+                            chapter_id: run.chapter_id.clone(),
                             project_id: run.project_id.clone(),
                             writing_version_id: Some(version.id),
                             title,

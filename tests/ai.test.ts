@@ -22,12 +22,12 @@ import type { AudioJob, AudioJobStatus, AudioJobView } from '../src/types/audio'
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), modelFieldOptions: vi.fn(), saveModelFieldOptions: vi.fn(), setAudioDuration: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/audio', () => ({ getAudioJobView: vi.fn(), startAudioJob: vi.fn(), controlAudioJob: vi.fn() }))
 vi.mock('../src/services/audioWaveform', () => ({ loadWaveform: vi.fn().mockResolvedValue([.2, .6, .8, .1]) }))
-vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn(), mediaSource: vi.fn() }))
+vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getChapter: vi.fn(), listChapters: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn(), mediaSource: vi.fn() }))
 const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模型', modelName: 'model', isDefault: true, credentialStatus: 'available' }
 const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'publishing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
 const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', tags: '#读书 #生死疲劳 #文学', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
 function automaticRun(): AutomationRun {
-  return { id: 'automatic1', projectId: 'p1', input: { workflowVersion: 2, title: '测试书', author: '作者', targetDurationSeconds: null, durationReason: '', selection: { projectId: 'p1', sourceAssetId: 'doc1', textProviderId: 'm1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'one' } }, status: 'running', stage: 'duration', runId: 1, error: '', audioJobId: null, videoJobId: null, writingTaskId: null, durationTaskId: null, contentCheckTaskId: null, writingVersionId: null, finalWritingVersionId: null, actualDurationSeconds: null, widescreenTaskId: null, widescreenCoverId: null, landscapeTaskId: null, portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '' }
+  return { id: 'automatic1', projectId: 'p1', input: { workflowVersion: 2, title: '测试书', author: '作者', targetDurationSeconds: null, durationReason: '', selection: { projectId: 'p1', source: { kind: 'asset', assetId: 'doc1' }, textProviderId: 'm1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'one' } }, status: 'running', stage: 'duration', runId: 1, error: '', audioJobId: null, videoJobId: null, writingTaskId: null, durationTaskId: null, contentCheckTaskId: null, writingVersionId: null, finalWritingVersionId: null, actualDurationSeconds: null, widescreenTaskId: null, widescreenCoverId: null, landscapeTaskId: null, portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '' }
 }
 const browser = { supported: true, open: false, url: null, message: null }
 function makeAudioJob(status: AudioJobStatus, overrides: Partial<AudioJob> = {}): AudioJob {
@@ -86,6 +86,52 @@ beforeEach(() => {
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe('publishing workflow', () => {
+  it('does not mix a historical chapter audio prompt into a different source snapshot', async () => {
+    const source = { chapterId: 'one', bookTitle: '测试书', author: '', chapterTitle: '第一章', content: '第一章修改后的正文', sha256: 'new-source', targetDurationSeconds: 900 }
+    vi.mocked(projects.getChapter).mockResolvedValue({ id: 'one', projectId: 'p1', title: '第一章', content: source.content, targetDurationSeconds: 900, audioDurationSource: 'manual', createdAt: '', updatedAt: '' })
+    const current = { ...generated, chapterId: 'one', sourceSnapshot: source }
+    const previous = { ...initial, chapterId: 'one', sourceSnapshot: { ...source, content: '第一章旧正文', sha256: 'old-source', targetDurationSeconds: 300 } }
+    vi.mocked(api.listVersions).mockResolvedValue([current, previous])
+    const { wrapper } = await render('/projects/p1/writing?chapter=one&tab=audio')
+    await chooseSelect(wrapper, '#writing-version', /^v1 ·/)
+    const take = button(wrapper, '取用音频生成提示词')
+    await take.trigger('click'); await flushPromises()
+    expect(wrapper.get('#result-audioPrompt').element).toHaveProperty('value', current.content.audioPrompt)
+    expect(take.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('切换完整版本')
+    await button(wrapper, '用于当前编辑').trigger('click'); await flushPromises()
+    await wrapper.get('#start-audio-job').trigger('click'); await flushPromises()
+    expect(audio.startAudioJob).toHaveBeenCalledWith(expect.objectContaining({ writingVersionId: previous.id, source: { kind: 'chapter', chapterId: 'one' } }))
+  })
+
+  it('allows taking only the historical audio prompt when chapter source and target are identical', async () => {
+    const source = { chapterId: 'one', bookTitle: '测试书', author: '', chapterTitle: '第一章', content: '同一份正文', sha256: 'same-source', targetDurationSeconds: 600 }
+    vi.mocked(projects.getChapter).mockResolvedValue({ id: 'one', projectId: 'p1', title: '第一章', content: source.content, targetDurationSeconds: 600, audioDurationSource: 'manual', createdAt: '', updatedAt: '' })
+    vi.mocked(api.listVersions).mockResolvedValue([{ ...generated, chapterId: 'one', sourceSnapshot: source }, { ...initial, chapterId: 'one', sourceSnapshot: source }])
+    const { wrapper } = await render('/projects/p1/writing?chapter=one&tab=audio')
+    await chooseSelect(wrapper, '#writing-version', /^v1 ·/)
+    const take = button(wrapper, '取用音频生成提示词')
+    expect(take.attributes('disabled')).toBeUndefined()
+    await take.trigger('click'); await flushPromises()
+    expect(wrapper.get('#result-audioPrompt').element).toHaveProperty('value', initial.content.audioPrompt)
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', generated.content.title)
+    expect(wrapper.text()).not.toContain('切换完整版本')
+  })
+
+  it('uses the chapter source and chapter writing version when making audio', async () => {
+    vi.mocked(projects.getChapter).mockResolvedValue({ id: 'one', projectId: 'p1', title: '第一章精讲', content: '仅第一章的完整正文', targetDurationSeconds: 900, audioDurationSource: 'manual', createdAt: '', updatedAt: '' })
+    const version = { ...initial, chapterId: 'one', sourceSnapshot: { chapterId: 'one', bookTitle: '测试书', author: '', chapterTitle: '第一章精讲', content: '仅第一章的完整正文', sha256: 'frozen-hash', targetDurationSeconds: 900 } }
+    vi.mocked(api.listVersions).mockResolvedValue([version])
+    vi.mocked(audio.startAudioJob).mockResolvedValue(audioView(makeAudioJob('created', { chapterId: 'one' })))
+    const { wrapper } = await render('/projects/p1/writing?chapter=one&tab=audio')
+    expect(wrapper.text()).toContain('测试书 · 第一章精讲')
+    expect(api.listVersions).toHaveBeenCalledWith('p1', 'publishing', 'one')
+    expect(drafts.readDraft).toHaveBeenCalledWith('p1:chapter:one', 'writing')
+    expect(audio.getAudioJobView).toHaveBeenCalledWith('p1', undefined, 'one')
+    await wrapper.get('#start-audio-job').trigger('click'); await flushPromises()
+    expect(audio.startAudioJob).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'p1', writingVersionId: 'v1', source: { kind: 'chapter', chapterId: 'one' } }))
+  })
+
   it('does not recommend again while automatic creation is determining the duration', async () => {
     automationRuns.value = [automaticRun()]
     vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), audioDurationSource: null, id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
@@ -298,7 +344,7 @@ describe('publishing workflow', () => {
   })
   it('loads the exact audio task from a continuation link', async () => {
     await render('/projects/p1/writing?tab=audio&audioJob=audio-exact')
-    expect(audio.getAudioJobView).toHaveBeenCalledWith('p1', 'audio-exact')
+    expect(audio.getAudioJobView).toHaveBeenCalledWith('p1', 'audio-exact', null)
   })
   it('opens audio directly, keeps its tab on return and validates unsupported tab values', async () => {
     const { wrapper, router } = await render('/projects/p1/writing?tab=audio')
@@ -346,7 +392,7 @@ describe('publishing workflow', () => {
     expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '25')
     await wrapper.get('#audio-duration').setValue('35')
     await button(wrapper, '生成备选').trigger('click'); await flushPromises()
-    expect(api.setAudioDuration).toHaveBeenCalledExactlyOnceWith('p1', 2100)
+    expect(api.setAudioDuration).toHaveBeenCalledExactlyOnceWith('p1', 2100, null)
     expect(api.startGeneration).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', providerId: 'm1', targetDurationSeconds: 2100 })
     expect(wrapper.text()).toContain('读懂一本书 · 目标 35 分钟')
     expect(wrapper.text()).not.toContain('35分钟读懂一本书')
@@ -381,7 +427,7 @@ describe('publishing workflow', () => {
     expect(wrapper.get('#result-title').element).toHaveProperty('value', '我的标题')
     await wrapper.get('#audio-duration').setValue('18')
     await button(wrapper, '保存时长').trigger('click'); await flushPromises()
-    expect(api.setAudioDuration).toHaveBeenCalledWith('p1', 1080)
+    expect(api.setAudioDuration).toHaveBeenCalledWith('p1', 1080, null)
     expect(api.saveWriting).not.toHaveBeenCalled()
   })
   it('cancels recommendation without changing the duration or saved content', async () => {
@@ -680,7 +726,7 @@ describe('publishing workflow', () => {
     const { wrapper } = await render()
     await tab(wrapper, '音频制作').trigger('keydown', { key: 'Enter' }); await flushPromises()
     await button(wrapper, '导入音频成品').trigger('click'); await flushPromises()
-    expect(projects.linkAsset).toHaveBeenCalledWith('p1', 'D:/本期音频.m4a')
+    expect(projects.linkAsset).toHaveBeenCalledWith('p1', 'D:/本期音频.m4a', null, null)
     expect(wrapper.text()).toContain('本期音频.m4a')
     expect((wrapper.get('#result-audioPrompt').element as HTMLTextAreaElement).value).toBe('原有提示词')
     const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()

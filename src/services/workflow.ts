@@ -1,16 +1,18 @@
 import { invoke } from '@tauri-apps/api/core'
-export interface ResumeTask { projectId: string; title: string; kind: string; taskId: string; status: string; stage: string; updatedAt: string; running: boolean }
+import { chapterQuery } from '../types/chapter'
+export interface ResumeTask { projectId: string; chapterId?: string | null; title: string; kind: string; taskId: string; status: string; stage: string; updatedAt: string; running: boolean }
 export interface WorkflowSnapshot { resume: ResumeTask[]; running: ResumeTask[] }
 export const workflowSnapshot = () => invoke<WorkflowSnapshot>('workflow_snapshot')
 export interface ProjectStage { path: string; status: string; tone: 'neutral' | 'ready' | 'working' | 'attention' }
-export const projectProgress = (projectId: string) => invoke<ProjectStage[]>('project_progress', { projectId })
+export const projectProgress = (projectId: string, chapterId: string | null = null) => invoke<ProjectStage[]>('project_progress', { projectId, ...(chapterId ? { chapterId } : {}) })
 export function resumeRoute(task: ResumeTask) {
   const path = `/projects/${task.projectId}`
-  if (task.kind === 'project') return { path }
-  if (task.kind === 'audio') return { path: `${path}/writing`, query: { tab: 'audio', audioJob: task.taskId } }
-  if (task.kind === 'video') return { path: `${path}/video`, query: task.stage.startsWith('video_') ? {} : { job: task.taskId } }
-  if (task.kind === 'publishing') return { path: `${path}/publishing`, query: { task: task.taskId } }
-  return { path: `${path}/${task.kind === 'covers' ? 'covers' : 'writing'}` }
+  const query = chapterQuery(task.chapterId ?? null)
+  if (task.kind === 'project') return task.chapterId ? { path, query } : { path }
+  if (task.kind === 'audio') return { path: `${path}/writing`, query: { ...query, tab: 'audio', audioJob: task.taskId } }
+  if (task.kind === 'video') return { path: `${path}/video`, query: { ...query, ...(task.stage.startsWith('video_') ? {} : { job: task.taskId }) } }
+  if (task.kind === 'publishing') return { path: `${path}/publishing`, query: { ...query, task: task.taskId } }
+  return { path: `${path}/${task.kind === 'covers' ? 'covers' : 'writing'}`, ...(task.chapterId ? { query } : {}) }
 }
 export function resumeLabel(task: ResumeTask) {
   if (task.kind === 'project') return '继续整理书籍资料'

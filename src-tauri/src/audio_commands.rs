@@ -18,8 +18,9 @@ fn view(
     database: &Database,
     automation: &AudioAutomation,
     project_id: &str,
+    chapter_id: Option<&str>,
 ) -> Result<AudioJobView, String> {
-    let data = database.audio_job_data(project_id)?;
+    let data = database.audio_job_data(project_id, chapter_id)?;
     Ok(AudioJobView {
         job: data.job,
         active_job: data.active_job,
@@ -32,7 +33,15 @@ fn view_for_job(
     automation: &AudioAutomation,
     job: &AudioJob,
 ) -> Result<AudioJobView, String> {
-    view(app, database, automation, &job.project_id)
+    let mut result = view(
+        app,
+        database,
+        automation,
+        &job.project_id,
+        job.chapter_id.as_deref(),
+    )?;
+    result.job = Some(job.clone());
+    Ok(result)
 }
 #[tauri::command]
 pub fn audio_job_snapshot(
@@ -41,11 +50,18 @@ pub fn audio_job_snapshot(
     automation: State<'_, AudioAutomation>,
     project_id: String,
     id: Option<String>,
+    chapter_id: Option<String>,
 ) -> Result<AudioJobView, String> {
-    let mut result = view(&app, &database, &automation, &project_id)?;
+    let mut result = view(
+        &app,
+        &database,
+        &automation,
+        &project_id,
+        chapter_id.as_deref(),
+    )?;
     if let Some(id) = id {
         let job = database.audio_job(&id)?;
-        if job.project_id != project_id {
+        if job.project_id != project_id || job.chapter_id != chapter_id {
             return Err("音频任务不属于当前书籍。".into());
         }
         result.job = Some(job);

@@ -15,7 +15,7 @@ vi.mock('../src/services/covers', () => ({ readBackground: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ coverPng: vi.fn(), decodeBackground: vi.fn() }))
 
 const run = (overrides: Partial<AutomationRun> = {}): AutomationRun => ({
-  id: 'run1', projectId: 'book1', input: { workflowVersion: 2, durationReason: '已保存目标', title: '原书', author: '作者', targetDurationSeconds: 600, selection: { projectId: 'book1', sourceAssetId: 'source1', textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'request1' } },
+  id: 'run1', projectId: 'book1', input: { workflowVersion: 2, durationReason: '已保存目标', title: '原书', author: '作者', targetDurationSeconds: 600, selection: { projectId: 'book1', source: { kind: 'asset', assetId: 'source1' }, textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'request1' } },
   status: 'running', stage: 'landscape_cover', runId: 2, error: '', audioJobId: 'audio1', videoJobId: 'video1', writingTaskId: 'writing1', writingVersionId: 'version1', finalWritingVersionId: null, actualDurationSeconds: null, widescreenTaskId: null, widescreenCoverId: null, durationTaskId: null, contentCheckTaskId: null, landscapeTaskId: 'background1', portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '', ...overrides,
 })
 beforeEach(() => {
@@ -65,6 +65,23 @@ describe('automatic cover execution outside the cover page', () => {
 })
 
 describe('automatic workflow setup', () => {
+  it('starts a chapter with the same image, account and complete publishing setup as a whole book', async () => {
+    automationConsent.value = true
+    automationAccount.value = { id: null, name: '精讲账号', key: 'chapter-account' }
+    vi.mocked(invoke).mockImplementation(async command => command === 'automation_snapshot' ? [] : run())
+    const source = { projectId: 'book1', source: { kind: 'chapter' as const, chapterId: 'chapter-one' } }
+    const wrapper = mount(AutomationSetup, { props: { saveSource: vi.fn().mockResolvedValue(source) } })
+    await flushPromises()
+    expect(wrapper.get('#automation-image').text()).toContain('图片')
+    expect(wrapper.text()).toContain('三尺寸封面和视频')
+    expect(wrapper.text()).toContain('本次发布账号与合集')
+    const start = wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!
+    expect(start.attributes('disabled')).toBeUndefined()
+    await start.trigger('click'); await flushPromises()
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, imageProviderId: 'image1', textProviderId: 'text1', collectionName: null }) })
+    wrapper.unmount()
+  })
+
   it('shows the active task models after reopening and after an automatic switch', async () => {
     const providers = await listProviders()
     vi.mocked(listProviders).mockResolvedValue([...providers,
@@ -90,7 +107,7 @@ describe('automatic workflow setup', () => {
   it('requires explicit consent and the confirmed visible account before starting', async () => {
     const account = { id: null, name: '本次账号', key: 'identity' }
     vi.mocked(invoke).mockImplementation(async command => ['prepare_automation_account', 'confirm_automation_account'].includes(command) ? account : command === 'automation_snapshot' ? [run()] : run())
-    const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', sourceAssetId: 'source1' })
+    const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', source: { kind: 'asset', assetId: 'source1' } })
     const wrapper = mount(AutomationSetup, { props: { saveSource } })
     await flushPromises()
     const button = (label: string) => wrapper.findAll('button').find(button => button.text() === label)!
@@ -103,7 +120,7 @@ describe('automatic workflow setup', () => {
     expect(button('自动制作并准备发布').attributes('disabled')).toBeUndefined()
     await button('自动制作并准备发布').trigger('click'); await flushPromises()
     expect(saveSource).toHaveBeenCalledTimes(1)
-    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ projectId: 'book1', sourceAssetId: 'source1', textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', collectionName: null }) })
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ projectId: 'book1', source: { kind: 'asset', assetId: 'source1' }, textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', collectionName: null }) })
     expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
     wrapper.unmount()
   })
@@ -111,7 +128,7 @@ describe('automatic workflow setup', () => {
     const account = { id: null, name: '本次账号', key: 'identity' }
     automationConsent.value = true
     vi.mocked(invoke).mockImplementation(async command => ['prepare_automation_account', 'confirm_automation_account'].includes(command) ? account : command === 'automation_snapshot' ? [] : run())
-    const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', sourceAssetId: 'source1' })
+    const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', source: { kind: 'asset', assetId: 'source1' } })
     const wrapper = mount(AutomationSetup, { props: { saveSource } })
     await flushPromises()
     const button = (label: string) => wrapper.findAll('button').find(button => button.text() === label)!
@@ -172,7 +189,7 @@ describe('automatic workflow setup', () => {
       if (command === 'automation_snapshot') return []
       return run()
     })
-    const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', sourceAssetId: 'source1' })
+    const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', source: { kind: 'asset', assetId: 'source1' } })
     const wrapper = mount(AutomationSetup, { props: { saveSource } }); await flushPromises()
     const button = (label: string) => wrapper.findAll('button').find(button => button.text() === label)!
     wrapper.findAllComponents({ name: 'UiSelect' }).at(-1)!.vm.$emit('update:modelValue', 'named'); await flushPromises()
@@ -210,7 +227,7 @@ describe('automatic workflow setup', () => {
   it('keeps the request identity on failed start and exposes the error without starting from partial input', async () => {
     automationConsent.value = true; automationAccount.value = { id: null, name: '账号', key: 'one' }
     vi.mocked(invoke).mockRejectedValue('运行环境缺失')
-    const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', sourceAssetId: 'source1' })
+    const saveSource = vi.fn().mockResolvedValue({ projectId: 'book1', source: { kind: 'asset', assetId: 'source1' } })
     const wrapper = mount(AutomationSetup, { props: { saveSource } }); await flushPromises()
     const start = () => wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!
     await start().trigger('click'); await flushPromises()

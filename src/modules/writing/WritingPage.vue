@@ -11,7 +11,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter, useRoute } from 'vue-router'
 import * as api from '../../services/ai'
 import * as audioApi from '../../services/audio'
-import { chooseAudio, chooseSourceDocument, getProject, isDesktop, linkAsset, listAssets } from '../../services/projects'
+import { chooseAudio, chooseSourceDocument, getProject, getChapter, isDesktop, linkAsset, listAssets } from '../../services/projects'
 import { errorMessage } from '../../services/verification'
 import { emptyPublishing, type ModelProvider, type PublishingContent, type PublishingField, type PublishingTextField, type WritingVersion } from '../../types/ai'
 import { generationJobs, generationKey, isGenerating, startWritingGeneration, cancelGenerationJob, dismissGeneration } from '../../services/generation'
@@ -32,9 +32,13 @@ import ConfirmAction from '../../components/ConfirmAction.vue'
 import { requestConfirmation } from '../../composables/useConfirmation'
 import { useCopyFeedback } from '../../composables/useCopyFeedback'
 import CopyButton from '../../components/CopyButton.vue'
+import { chapterIdFromQuery, chapterOwner, chapterQuery, belongsToChapter, type Chapter } from '../../types/chapter'
 const props = defineProps<{ id: string }>()
 const route = useRoute()
-const readAudioView = () => audioApi.getAudioJobView(props.id, typeof route.query.audioJob === 'string' ? route.query.audioJob : undefined)
+const chapterId = computed(() => chapterIdFromQuery(route.query.chapter))
+const chapter = ref<Chapter | null>(null)
+const scopeInput = computed(() => chapterId.value ? { chapterId: chapterId.value } : {})
+const readAudioView = () => audioApi.getAudioJobView(props.id, typeof route.query.audioJob === 'string' ? route.query.audioJob : undefined, chapterId.value)
 const router = useRouter()
 const desktop = isDesktop()
 const title = ref('')
@@ -42,8 +46,8 @@ const durationMinutes = ref<string | number>(10)
 const savedDurationSeconds = ref(600)
 const durationConfigured = ref(false)
 const durationReason = ref('')
-const generation = computed(() => generationJobs.get(generationKey(props.id, 'writing')))
-const automaticRun = computed(() => automationRuns.value.find(item => item.projectId === props.id && item.input.workflowVersion === 2 && !['completed', 'cancelled'].includes(item.status)))
+const generation = computed(() => generationJobs.get(generationKey(props.id, 'writing', chapterId.value)))
+const automaticRun = computed(() => automationRuns.value.find(item => item.projectId === props.id && belongsToChapter(item, chapterId.value) && item.input.workflowVersion === 2 && !['completed', 'cancelled'].includes(item.status)))
 const generating = computed(() => isGenerating(generation.value))
 const recommending = computed(() => generating.value && generation.value?.mode === 'duration')
 const durationValid = computed(() => Number.isInteger(Number(durationMinutes.value)) && Number(durationMinutes.value) >= 1 && Number(durationMinutes.value) <= 1440)
@@ -93,6 +97,8 @@ const copyLabel = ref('')
 const historyOpen = ref(false)
 const historyVersionId = ref<string | null>(null)
 const historyVersion = computed(() => versions.value.find(version => version.id === historyVersionId.value))
+const historyAudioCompatible = computed(() => !chapterId.value || (!!historyVersion.value?.sourceSnapshot && !!selected.value?.sourceSnapshot
+  && JSON.stringify(historyVersion.value.sourceSnapshot) === JSON.stringify(selected.value.sourceSnapshot)))
 const candidateVersion = computed(() => versions.value[0]?.sourceType === 'ai' && versions.value[0]?.id !== selected.value?.id ? versions.value[0] : null)
 const candidateVisible = computed(() => !preview.value && (generating.value ? !recommending.value : !!candidateVersion.value))
 const candidateContent = computed(() => generating.value ? liveContent.value : candidateVersion.value?.content ?? {})
@@ -127,19 +133,19 @@ const { busy: operationBusy, error, message, operation, run } = useOperation()
 const busy = computed(() => operationBusy.value || generating.value)
 // Preserve the current source when a newer history entry has not been adopted.
 const draftRequired = computed(() => dirty.value || selected.value?.id !== versions.value[0]?.id || (!!generation.value && generation.value.mode !== 'duration'))
-const autosave = useEditorDraft(() => props.id, 'writing', draft, () => selected.value?.id ?? null, draftRequired, ready, prepareLeave)
+const autosave = useEditorDraft(() => chapterOwner(props.id, chapterId.value), 'writing', draft, () => selected.value?.id ?? null, draftRequired, ready, prepareLeave)
 const audioBrowser = computed(() => audioView.value?.browser ?? null)
 const audioJob = computed(() => audioView.value?.job ?? null)
 const activeAudioJob = computed(() => {
   const job = audioView.value?.activeJob
   return job && !['succeeded', 'cancelled'].includes(job.status) ? job : null
 })
-const otherActiveAudioJob = computed(() => activeAudioJob.value && activeAudioJob.value.projectId !== props.id ? activeAudioJob.value : null)
+const otherActiveAudioJob = computed(() => activeAudioJob.value && (activeAudioJob.value.projectId !== props.id || !belongsToChapter(activeAudioJob.value, chapterId.value)) ? activeAudioJob.value : null)
 const shownAudioJob = computed(() => route.query.audioJob && audioJob.value ? audioJob.value : otherActiveAudioJob.value ?? audioJob.value)
 const completedAudioId = computed(() => shownAudioJob.value?.projectId === props.id && shownAudioJob.value.status === 'succeeded' ? shownAudioJob.value.assetId : null)
 const completedPlayer = ref<InstanceType<typeof AudioPlayer>>()
 const selectedDocument = computed(() => documents.value.find(item => `asset:${item.id}` === audioSourceKey.value) ?? null)
-const audioSourceReady = computed(() => audioSourceKey.value === 'text'
+const audioSourceReady = computed(() => audioSourceKey.value === 'text' || audioSourceKey.value === 'chapter'
   ? !!sourceNotes.value.trim()
   : !!selectedDocument.value && selectedDocument.value.existsStatus === 'available')
 const audioFieldsReady = computed(() => [draft.value.title, draft.value.description, draft.value.audioPrompt].every(value => value.trim()))
@@ -174,13 +180,14 @@ const canLeave = async () => {
   try { if (ready.value) await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
-onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.audioJob === from.query.audioJob && to.query.writingVersion === from.query.writingVersion) || canLeave())
+onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.chapter === from.query.chapter && to.query.audioJob === from.query.audioJob && to.query.writingVersion === from.query.writingVersion) || canLeave())
 function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || durationDirty.value || busy.value || preview.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(savedTimer); globalThis.clearInterval(waitingTimer) })
 function setAssets(files: Asset[]) {
   documents.value = files.filter(asset => asset.assetType === 'document')
   audioAssets.value = files.filter(asset => asset.assetType === 'audio')
+  if (chapterId.value) { audioSourceKey.value = 'chapter'; return }
   if (audioSourceKey.value.startsWith('asset:') && documents.value.some(item => `asset:${item.id}` === audioSourceKey.value)) return
   if (audioSourceKey.value === 'text') {
     if (sourceNotes.value.trim()) return
@@ -190,7 +197,7 @@ function setAssets(files: Asset[]) {
   audioSourceKey.value = available ? `asset:${available.id}` : sourceNotes.value.trim() ? 'text' : ''
 }
 async function refreshAudioAssets() {
-  setAssets(await listAssets(props.id))
+  setAssets(await listAssets(props.id, chapterId.value))
 }
 function applyAudioView(next: AudioJobView, refreshOnSuccess = true) {
   const previous = audioView.value
@@ -227,12 +234,15 @@ function refreshAudioOnFocus() { if (desktop) void refreshAudio() }
 function refreshAudioOnVisibility() { if (desktop && !globalThis.document.hidden) void refreshAudio() }
 const load = () => run(async () => {
   ready.value = false
-  const [project, models, saved, recovery, files, savedAudio] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing'), readDraft<PublishingContent>(props.id, 'writing'), listAssets(props.id), readAudioView()])
-  title.value = project.title
-  sourceNotes.value = project.sourceNotes
-  durationMinutes.value = project.targetDurationSeconds / 60
-  savedDurationSeconds.value = project.targetDurationSeconds
-  durationConfigured.value = !!project.audioDurationSource
+  const [project, models, saved, recovery, files, savedAudio, sourceChapter] = await Promise.all([getProject(props.id), api.listProviders(), api.listVersions(props.id, 'publishing', chapterId.value), readDraft<PublishingContent>(chapterOwner(props.id, chapterId.value), 'writing'), listAssets(props.id, chapterId.value), readAudioView(), chapterId.value ? getChapter(props.id, chapterId.value) : null])
+  if (chapterId.value && !sourceChapter) throw new Error('章节内容无法读取，请返回章节资料检查。')
+  chapter.value = sourceChapter
+  title.value = sourceChapter ? `${project.title} · ${sourceChapter.title}` : project.title
+  sourceNotes.value = sourceChapter ? sourceChapter.content : project.sourceNotes
+  const duration = sourceChapter ? sourceChapter.targetDurationSeconds ?? 600 : project.targetDurationSeconds
+  durationMinutes.value = duration / 60
+  savedDurationSeconds.value = duration
+  durationConfigured.value = !!(sourceChapter ? sourceChapter.audioDurationSource : project.audioDurationSource)
   if (automaticRun.value?.input.targetDurationSeconds) {
     durationMinutes.value = automaticRun.value.input.targetDurationSeconds / 60
     savedDurationSeconds.value = automaticRun.value.input.targetDurationSeconds
@@ -304,8 +314,9 @@ async function switchVersion(id: string | null) {
   if (await canDiscard('writing-version')) accept(versions.value.find(v => v.id === id) ?? null)
 }
 async function persistWriting() {
+  if (chapterId.value) await persistDuration()
   await autosave.flush()
-  const saved = await api.saveWriting({ projectId: props.id, kind: 'publishing', content: { ...draft.value }, basedOn: selected.value?.id ?? null, isConfirmed: false })
+  const saved = await api.saveWriting({ projectId: props.id, ...scopeInput.value, kind: 'publishing', content: { ...draft.value }, basedOn: selected.value?.id ?? null, isConfirmed: false })
   accept(saved); versions.value = [saved, ...versions.value]
   await autosave.flush()
 }
@@ -345,7 +356,7 @@ const startAudio = () => run(async () => {
   await persistDuration()
   if (dirty.value || !selected.value) await persistWriting()
   if (!selected.value) throw new Error('请先保存一套音频提示词。')
-  const source = audioSourceKey.value === 'text'
+  const source = chapterId.value ? { kind: 'chapter' as const, chapterId: chapterId.value } : audioSourceKey.value === 'text'
     ? { kind: 'text' as const }
     : { kind: 'asset' as const, assetId: selectedDocument.value!.id }
   applyAudioView(await audioApi.startAudioJob({ projectId: props.id, writingVersionId: selected.value.id, source, format: audioFormat.value }))
@@ -382,7 +393,7 @@ const confirmAudio = () => run(async () => {
 const importAudio = () => run(async () => {
   const path = await chooseAudio()
   if (!path) return
-  await linkAsset(props.id, path)
+  await linkAsset(props.id, path, null, chapterId.value)
   await refreshAudioAssets()
   message.value = '音频已导入。可在视频制作中识别字幕并生成原声 MG 视频，也可使用外部剪辑工具。'
 })
@@ -394,7 +405,7 @@ async function persistDuration() {
   if (!durationValid.value) throw new Error('音频目标时长须为 1—1440 分钟的整数。')
   const seconds = Number(durationMinutes.value) * 60
   if (durationDirty.value || !durationConfigured.value) {
-    await api.setAudioDuration(props.id, seconds)
+    await api.setAudioDuration(props.id, seconds, chapterId.value)
     savedDurationSeconds.value = seconds
     durationConfigured.value = true
   }
@@ -402,11 +413,11 @@ async function persistDuration() {
 const saveDuration = () => run(async () => { await persistDuration(); message.value = '目标时长已保存，下次生成时生效。已有内容保持原样。' })
 const recommendDuration = () => run(async () => {
   if (automaticRun.value) throw new Error('本书正在自动制作，目标时长由本次流程确定。')
-  await startWritingGeneration({ projectId: props.id, providerId: providerId.value, recommendDuration: true }, title.value)
+  await startWritingGeneration({ projectId: props.id, ...scopeInput.value, providerId: providerId.value, recommendDuration: true }, title.value)
 })
 const generate = () => run(async () => {
   await persistDuration()
-  await startWritingGeneration({ projectId: props.id, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60 }, title.value)
+  await startWritingGeneration({ projectId: props.id, ...scopeInput.value, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60 }, title.value)
 })
 function openRevision() { revisionOpen.value = true }
 function selectRevision(field: PublishingField, checked: boolean | 'indeterminate') {
@@ -416,7 +427,7 @@ const generateRevision = () => run(async () => {
   await persistDuration()
   if (dirty.value) await persistWriting()
   if (!selected.value) throw new Error('请先生成或保存一套内容。')
-  await startWritingGeneration({ projectId: props.id, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60, revision: { basedOn: selected.value.id, fields: [...revisionFields.value], instruction: revisionInstruction.value.trim() } }, title.value)
+  await startWritingGeneration({ projectId: props.id, ...scopeInput.value, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60, revision: { basedOn: selected.value.id, fields: [...revisionFields.value], instruction: revisionInstruction.value.trim() } }, title.value)
 })
 const applyRevision = () => run(async () => {
   if (!preview.value) return
@@ -434,7 +445,7 @@ async function cancel() {
 }
 async function makeCover() {
   if (dirty.value) await save()
-  if (!dirty.value && selected.value) await router.push({ path: `/projects/${props.id}/covers`, query: { writingVersion: selected.value.id } })
+  if (!dirty.value && selected.value) await router.push({ path: `/projects/${props.id}/covers`, query: { ...chapterQuery(chapterId.value), writingVersion: selected.value.id } })
 }
 async function copy(field: PublishingTextField, label: string) {
   copyLabel.value = label
@@ -457,6 +468,7 @@ const revisionOptions: { key: PublishingField; label: string }[] = [...fields, {
 const canSave = computed(() => [draft.value.title, draft.value.description, draft.value.audioPrompt].every(value => value.trim()))
 const historyFields = computed(() => fields.filter(field => fieldTab(field.key) === activeTab.value))
 function takeHistoryField(field: PublishingTextField) {
+  if (field === 'audioPrompt' && !historyAudioCompatible.value) return
   if (historyVersion.value && !busy.value && !revisionLocked.value) draft.value[field] = historyVersion.value.content[field]
 }
 function fieldTab(key: string) { return key.startsWith('cover') ? 'cover' : key === 'audioPrompt' ? 'audio' : 'publishing' }
@@ -473,7 +485,7 @@ watch([() => route.query.audioJob, () => route.query.writingVersion], () => { if
 watch([ready, () => automaticRun.value?.writingVersionId], async ([loaded, id]) => {
   if (!loaded || !id || versions.value.some(version => version.id === id)) return
   try {
-    const saved = await api.listVersions(props.id, 'publishing')
+    const saved = await api.listVersions(props.id, 'publishing', chapterId.value)
     if (automaticRun.value?.writingVersionId !== id) return
     const generated = saved.find(version => version.id === id)
     if (!generated) return
@@ -522,8 +534,8 @@ onMounted(async () => {
       class="h-[30px] px-3 font-mono"
       as-child
     >
-      <RouterLink :to="`/projects/${id}`">
-        <AppIcon name="pen" />修改书籍资料
+      <RouterLink :to="{ path: `/projects/${id}`, query: chapterQuery(chapterId) }">
+        <AppIcon name="pen" />{{ chapterId ? '修改章节资料' : '修改书籍资料' }}
       </RouterLink>
     </Button>
   </div>
@@ -578,7 +590,7 @@ onMounted(async () => {
           name="bolt"
           :class="{ spin: !!taskId }"
         /></span>
-        <div><h2>让灵感，成为这一期内容</h2><p>甲子 · 读懂一本书 · {{ automaticRun && !automaticRun.input.targetDurationSeconds ? '目标时长待推荐' : durationValid ? `目标 ${durationMinutes} 分钟` : '请设置目标时长' }}</p></div>
+        <div><h2>让灵感，成为这一期内容</h2><p>甲子 · {{ chapterId ? '读懂一章' : '读懂一本书' }} · {{ automaticRun && !automaticRun.input.targetDurationSeconds ? '目标时长待推荐' : durationValid ? `目标 ${durationMinutes} 分钟` : '请设置目标时长' }}</p></div>
       </div>
       <div class="generation-actions">
         <template v-if="providers.length">
@@ -1044,7 +1056,7 @@ onMounted(async () => {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem
-                          v-for="document in documents"
+                          v-for="document in chapterId ? [] : documents"
                           :key="document.id"
                           :value="`asset:${document.id}`"
                           :disabled="document.existsStatus !== 'available'"
@@ -1052,15 +1064,29 @@ onMounted(async () => {
                           {{ document.originalName }} · {{ document.existsStatus === 'available' ? '文件可用' : '文件已丢失' }}
                         </SelectItem>
                         <SelectItem
+                          v-if="!chapterId"
                           value="text"
                           :disabled="!sourceNotes.trim()"
                         >
                           书籍资料文本（用户提供，不标为完整原著）
                         </SelectItem>
+                        <SelectItem
+                          v-if="chapterId"
+                          value="chapter"
+                        >
+                          {{ chapter?.title }} · 完整章节正文
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                     <p
-                      v-if="selectedDocument"
+                      v-if="chapterId"
+                      id="audio-source-hint"
+                      class="muted"
+                    >
+                      将通过“复制的文字”上传本章。{{ selected?.sourceSnapshot?.content !== chapter?.content ? '所选版本使用此前保存的章节内容与时长。' : '音频提示词与正文来自同一次章节创作。' }}
+                    </p>
+                    <p
+                      v-else-if="selectedDocument"
                       id="audio-source-hint"
                       class="muted file-path"
                     >
@@ -1081,6 +1107,7 @@ onMounted(async () => {
                       还没有可选来源。请添加原书文件，或先在书籍资料中填写资料文本。
                     </p>
                     <Button
+                      v-if="!chapterId"
                       type="button"
                       variant="outline"
                       :disabled="busy || !!activeAudioJob"
@@ -1373,7 +1400,7 @@ onMounted(async () => {
                       type="button"
                       variant="outline"
                       :disabled="busy || asset.existsStatus !== 'available'"
-                      @click="router.push({ path: `/projects/${id}/video`, query: { audio: asset.id } })"
+                      @click="router.push({ path: `/projects/${id}/video`, query: { ...chapterQuery(chapterId), audio: asset.id } })"
                     >
                       <AppIcon name="video" />制作 MG 视频
                     </Button>
@@ -1411,7 +1438,7 @@ onMounted(async () => {
               size="sm"
               class="px-5"
               :disabled="busy || revisionLocked"
-              @click="router.push(`/projects/${id}/video`)"
+              @click="router.push({ path: `/projects/${id}/video`, query: chapterQuery(chapterId) })"
             >
               下一步：制作视频<AppIcon name="arrow" />
             </Button>
@@ -1543,6 +1570,12 @@ onMounted(async () => {
               </Button>
               <span class="muted text-sm">预览不会改变当前稿；取用单项后保存为新版本。</span>
             </div>
+            <p
+              v-if="activeTab === 'audio' && !historyAudioCompatible"
+              class="text-sm text-muted-foreground"
+            >
+              此版本的章节来源或目标时长与当前稿不同，请使用“用于当前编辑”切换完整版本，保留对应正文和音频指导。
+            </p>
             <div
               v-for="field in historyFields"
               :key="field.key"
@@ -1565,7 +1598,7 @@ onMounted(async () => {
                 /><Button
                   variant="ghost"
                   size="sm"
-                  :disabled="busy || revisionLocked || draft[field.key] === historyVersion.content[field.key]"
+                  :disabled="busy || revisionLocked || draft[field.key] === historyVersion.content[field.key] || (field.key === 'audioPrompt' && !historyAudioCompatible)"
                   @click="takeHistoryField(field.key)"
                 >
                   取用{{ field.label }}

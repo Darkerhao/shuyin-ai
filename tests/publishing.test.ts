@@ -19,7 +19,7 @@ import { emptyProject, type Asset } from '../src/types/project'
 import { newCover } from '../src/types/cover'
 import { publishScheduleError, type PublishTask } from '../src/types/publishing'
 vi.mock('../src/services/publishing', () => ({ listPublishTasks: vi.fn(), listPublishQueue: vi.fn(), savePublishTask: vi.fn(), preparePublishTask: vi.fn(), recordPublishSuccess: vi.fn(), openPublishItem: vi.fn() }))
-vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), videoAssetMetadata: vi.fn(), linkAsset: vi.fn(), chooseAsset: vi.fn(), unlinkAsset: vi.fn(), openAsset: vi.fn() }))
+vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getChapter: vi.fn(), listChapters: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), videoAssetMetadata: vi.fn(), linkAsset: vi.fn(), chooseAsset: vi.fn(), unlinkAsset: vi.fn(), openAsset: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listVersions: vi.fn() }))
 vi.mock('../src/services/covers', () => ({ listCovers: vi.fn(), readCoverExport: vi.fn() }))
 vi.mock('../src/services/douyin', () => ({ openDouyinWindow: vi.fn(), getDouyinSession: vi.fn(), startDouyinTask: vi.fn(), continueDouyinTask: vi.fn(), stopDouyinTask: vi.fn(), onDouyinProgress: vi.fn() }))
@@ -74,6 +74,22 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
 
 describe('M4 publish preparation', () => {
+  it('keeps new publishing drafts and saved tasks within the selected chapter', async () => {
+    vi.mocked(projects.getChapter).mockImplementation(async (_project, id) => ({ id, projectId: 'p1', title: `${id}章精讲`, content: `${id}章正文`, targetDurationSeconds: 600, audioDurationSource: 'manual', createdAt: '', updatedAt: '' }))
+    vi.mocked(api.listPublishTasks).mockResolvedValue([])
+    const { wrapper, router } = await render('/projects/p1/publishing?chapter=one&task=new')
+    expect(wrapper.text()).toContain('测试书 · one章精讲')
+    expect(api.listPublishTasks).toHaveBeenCalledWith('p1', 'one')
+    expect(drafts.readDraft).toHaveBeenCalledWith('p1:chapter:one:new', 'publishing')
+    await wrapper.get('#publish-title').setValue('第一章独立标题')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.savePublishTask).toHaveBeenCalledWith(null, expect.objectContaining({ chapterId: 'one', title: '第一章独立标题' }))
+    await router.push('/projects/p1/publishing?chapter=two&task=new'); await flushPromises()
+    expect(drafts.readDraft).toHaveBeenCalledWith('p1:chapter:two:new', 'publishing')
+    expect(wrapper.get('#publish-title').element).toHaveProperty('value', '')
+    expect(wrapper.text()).toContain('测试书 · two章精讲')
+  })
+
   it('saves save permission and Beijing schedule with the selected task, restores them, and clears schedule for immediate publication', async () => {
     const { wrapper } = await render()
     expect(wrapper.get('#publish-allow-download').attributes('data-state')).toBe('checked')

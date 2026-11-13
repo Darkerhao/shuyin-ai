@@ -13,8 +13,9 @@ pub fn list_publish_queue(database: State<'_, Database>) -> Result<Vec<PublishQu
 pub fn list_publish_tasks(
     database: State<'_, Database>,
     project_id: String,
+    chapter_id: Option<String>,
 ) -> Result<Vec<PublishTask>, String> {
-    database.list_publish_tasks(&project_id)
+    database.list_publish_tasks(&project_id, chapter_id.as_deref())
 }
 #[tauri::command]
 pub fn save_publish_task(

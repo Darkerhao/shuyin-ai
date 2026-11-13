@@ -17,6 +17,8 @@ fn image_model(db: &Database) -> ai::ProviderConfig {
 }
 fn image_task(db: &Database, project_id: &str, provider_id: &str) -> String {
     db.start_cover_generation(ImageGenerationInput {
+        chapter_id: None,
+
         project_id: project_id.into(),
         provider_id: provider_id.into(),
         description: "安静的水墨树林".into(),
@@ -39,6 +41,8 @@ fn cover_generation_freezes_and_validates_each_target_size() {
     ] {
         let id = db
             .start_cover_generation(ImageGenerationInput {
+                chapter_id: None,
+
                 project_id: p.id.clone(),
                 provider_id: model.id.clone(),
                 description: "独立构图".into(),
@@ -55,6 +59,8 @@ fn cover_generation_freezes_and_validates_each_target_size() {
     }
     assert!(db
         .start_cover_generation(ImageGenerationInput {
+            chapter_id: None,
+
             project_id: p.id,
             provider_id: model.id,
             description: "无效尺寸".into(),
@@ -81,7 +87,8 @@ fn independent_cover_configs_and_recovery_survive_restart_and_backup() {
         cover.title = format!("独立封面{index}");
         cover.background_prompt = format!("独立构图{index}");
         cover.background_x = index as f64 / 2.0;
-        db.save_cover_version(&p.id, cover.clone(), None).unwrap();
+        db.save_cover_version(&p.id, cover.clone(), None, None)
+            .unwrap();
         configs.push(cover);
     }
     let workspace = serde_json::json!({"schemaVersion":2,"activeSize":1,"covers":configs});
@@ -106,7 +113,7 @@ fn independent_cover_configs_and_recovery_survive_restart_and_backup() {
         workspace
     );
     assert_eq!(
-        db.list_cover_versions(&p.id)
+        db.list_cover_versions(&p.id, None)
             .unwrap()
             .iter()
             .rev()
@@ -140,6 +147,9 @@ fn image_and_text_defaults_are_independent_and_wrong_task_types_are_rejected() {
     assert!(db.get_provider(&image.id).unwrap().input.is_default);
     assert!(db
         .start_generation(ai::GenerationInput {
+            chapter_id: None,
+            source_snapshot: None,
+
             project_id: p.id.clone(),
             provider_id: image.id.clone(),
             revision: None,
@@ -149,6 +159,8 @@ fn image_and_text_defaults_are_independent_and_wrong_task_types_are_rejected() {
         .is_err());
     assert!(db
         .start_cover_generation(ImageGenerationInput {
+            chapter_id: None,
+
             project_id: p.id.clone(),
             provider_id: text.id,
             description: "树林".into(),
@@ -170,7 +182,7 @@ fn image_and_text_defaults_are_independent_and_wrong_task_types_are_rejected() {
     db.end_generation(&task, "cancelled", "cancelled", "取消")
         .unwrap();
     assert!(db.finish_cover_generation(&task, &test_png()).is_err());
-    assert!(db.list_assets(&p.id).unwrap().is_empty());
+    assert!(db.list_assets(&p.id, None).unwrap().is_empty());
 }
 
 #[test]
@@ -193,7 +205,7 @@ fn generated_background_persists_with_history_and_backup_without_overwriting_fil
     assert!(db.finish_cover_generation(&task, &bytes).is_err());
     let mut draft = config();
     draft.background_asset_id = Some(asset.id.clone());
-    db.save_cover_version(&p.id, draft.clone(), Some(&png()))
+    db.save_cover_version(&p.id, draft.clone(), Some(&png()), None)
         .unwrap();
     let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
     let next = image_task(&db, &p.id, &image.id);
@@ -204,10 +216,16 @@ fn generated_background_persists_with_history_and_backup_without_overwriting_fil
     db.restore_backup(&backup).unwrap();
     drop(db);
     let db = Database::open(path);
-    assert_eq!(db.list_cover_versions(&p.id).unwrap()[0].config, draft);
-    assert_eq!(db.list_assets(&p.id).unwrap().len(), 1);
+    assert_eq!(
+        db.list_cover_versions(&p.id, None).unwrap()[0].config,
+        draft
+    );
+    assert_eq!(db.list_assets(&p.id, None).unwrap().len(), 1);
     assert_eq!(fs::read(asset.file_path).unwrap(), bytes);
-    assert_eq!(db.list_ai_tasks(&p.id).unwrap()[0].status, "succeeded");
+    assert_eq!(
+        db.list_ai_tasks(&p.id, None).unwrap()[0].status,
+        "succeeded"
+    );
     db.with_connection(|c| {
         assert!(!c
             .prepare("PRAGMA foreign_key_check")
@@ -258,7 +276,7 @@ fn image_write_failure_invalid_response_and_database_failure_preserve_old_cover(
     let db = Database::open(dir.path().join("db.sqlite3"));
     let p = project(&db);
     let image = image_model(&db);
-    db.save_cover_version(&p.id, config(), None).unwrap();
+    db.save_cover_version(&p.id, config(), None, None).unwrap();
     let task = image_task(&db, &p.id, &image.id);
     db.prepare_cover_generation(&task).unwrap();
     assert!(db.finish_cover_generation(&task, b"invalid").is_err());
@@ -271,10 +289,10 @@ fn image_write_failure_invalid_response_and_database_failure_preserve_old_cover(
     db.with_connection(|c| { c.execute_batch("CREATE TRIGGER fail_image BEFORE INSERT ON assets BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap(); Ok(()) }).unwrap();
     assert!(db.finish_cover_generation(&task, &test_png()).is_err());
     assert_eq!(fs::read_dir(covers).unwrap().count(), 0);
-    assert!(db.list_assets(&p.id).unwrap().is_empty());
-    assert_eq!(db.list_cover_versions(&p.id).unwrap().len(), 1);
+    assert!(db.list_assets(&p.id, None).unwrap().is_empty());
+    assert_eq!(db.list_cover_versions(&p.id, None).unwrap().len(), 1);
     db.recover_ai_tasks().unwrap();
-    assert_eq!(db.list_ai_tasks(&p.id).unwrap()[0].status, "failed");
+    assert_eq!(db.list_ai_tasks(&p.id, None).unwrap()[0].status, "failed");
 }
 
 #[test]
@@ -302,7 +320,7 @@ fn v6_upgrade_and_v5_backup_keep_existing_models_credentials_and_covers() {
     assert_eq!(model.input.model_kind, "text");
     assert_eq!(model.credential_ref.as_deref(), Some("keep-credential"));
     assert!(model.input.is_default);
-    assert_eq!(db.list_cover_versions("p").unwrap()[0].id, "cover");
+    assert_eq!(db.list_cover_versions("p", None).unwrap()[0].id, "cover");
     image_model(&db);
     db.restore_backup(old.to_str().unwrap()).unwrap();
     assert_eq!(fs::read(&old).unwrap(), original);
@@ -310,7 +328,10 @@ fn v6_upgrade_and_v5_backup_keep_existing_models_credentials_and_covers() {
         db.get_provider("old").unwrap().credential_ref.as_deref(),
         Some("keep-credential")
     );
-    assert_eq!(db.list_cover_versions("p").unwrap()[0].config, config());
+    assert_eq!(
+        db.list_cover_versions("p", None).unwrap()[0].config,
+        config()
+    );
 }
 
 #[test]
@@ -381,7 +402,9 @@ fn covers_export_and_restore_all_three_supported_sizes() {
         let mut bytes = png();
         bytes[16..20].copy_from_slice(&width.to_be_bytes());
         bytes[20..24].copy_from_slice(&height.to_be_bytes());
-        let saved = db.save_cover_version(&p.id, draft, Some(&bytes)).unwrap();
+        let saved = db
+            .save_cover_version(&p.id, draft, Some(&bytes), None)
+            .unwrap();
         let path = saved.exported_path.unwrap();
         let ratio = match (width, height) {
             (1440, 1080) => "4比3",
@@ -402,11 +425,11 @@ fn covers_export_and_restore_all_three_supported_sizes() {
         let mut draft = config();
         draft.width = width;
         draft.height = height;
-        assert!(db.save_cover_version(&p.id, draft, None).is_err());
+        assert!(db.save_cover_version(&p.id, draft, None, None).is_err());
     }
     drop(db);
     let db = Database::open(dir.path().join("db.sqlite3"));
-    let versions = db.list_cover_versions(&p.id).unwrap();
+    let versions = db.list_cover_versions(&p.id, None).unwrap();
     assert_eq!(versions.len(), 3);
     assert_eq!(
         (versions[0].config.width, versions[0].config.height),
@@ -425,7 +448,7 @@ fn cover_filenames_use_current_book_title_and_skip_existing_versions() {
     fs::write(&occupied, b"existing cover").unwrap();
     fs::create_dir(covers.join("M3测试书-3比4-1080x1440-v2.png")).unwrap();
     let saved = db
-        .save_cover_version(&p.id, config(), Some(&png()))
+        .save_cover_version(&p.id, config(), Some(&png()), None)
         .unwrap();
     assert_eq!(saved.version_no, 3);
     assert_eq!(
@@ -450,7 +473,7 @@ fn cover_filenames_use_current_book_title_and_skip_existing_versions() {
         input.title = title.into();
         db.save_project(Some(&p.id), input).unwrap();
         let saved = db
-            .save_cover_version(&p.id, config(), Some(&png()))
+            .save_cover_version(&p.id, config(), Some(&png()), None)
             .unwrap();
         let path = PathBuf::from(saved.exported_path.unwrap());
         assert_eq!(
@@ -469,7 +492,7 @@ fn legacy_random_cover_paths_remain_readable_after_reopen() {
     let db = Database::open(db_path.clone());
     let p = project(&db);
     let saved = db
-        .save_cover_version(&p.id, config(), Some(&png()))
+        .save_cover_version(&p.id, config(), Some(&png()), None)
         .unwrap();
     let original = PathBuf::from(saved.exported_path.unwrap());
     let legacy = original.with_file_name("cover-1080x1440-v1-78c71cba81e04bbaa09c1345c18f39e0.png");
@@ -487,7 +510,7 @@ fn legacy_random_cover_paths_remain_readable_after_reopen() {
     let db = Database::open(db_path);
     assert_eq!(db.read_cover_export(&p.id, &saved.id).unwrap(), png());
     let next = db
-        .save_cover_version(&p.id, config(), Some(&png()))
+        .save_cover_version(&p.id, config(), Some(&png()), None)
         .unwrap();
     assert_eq!(
         PathBuf::from(next.exported_path.unwrap())
@@ -515,17 +538,20 @@ fn v5_migration_preserves_v4_and_restores_old_backup_without_rewriting_it() {
     let db = Database::open(current.clone());
     assert_eq!(db.read().unwrap().record.unwrap().updated_at, "原时间");
     let p = project(&db);
-    db.save_cover_version(&p.id, config(), None).unwrap();
+    db.save_cover_version(&p.id, config(), None, None).unwrap();
     let v5 = db.create_backup(dir.path().to_str().unwrap()).unwrap();
     let before = db.restore_backup(old.to_str().unwrap()).unwrap();
     assert!(PathBuf::from(before).exists());
     assert_eq!(fs::read(old).unwrap(), original);
     assert!(db.list_projects("", "").unwrap().is_empty());
     db.restore_backup(&v5).unwrap();
-    assert_eq!(db.list_cover_versions(&p.id).unwrap()[0].config, config());
+    assert_eq!(
+        db.list_cover_versions(&p.id, None).unwrap()[0].config,
+        config()
+    );
     drop(db);
     let db = Database::open(current);
-    assert_eq!(db.list_cover_versions(&p.id).unwrap().len(), 1);
+    assert_eq!(db.list_cover_versions(&p.id, None).unwrap().len(), 1);
     db.with_connection(|c| {
         assert_eq!(
             c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
@@ -574,23 +600,23 @@ fn cover_versions_exports_and_sources_survive_reopen_and_project_delete() {
     let source = dir.path().join("背景.png");
     fs::write(&source, png()).unwrap();
     let asset_id = db
-        .link_asset(&p.id, source.to_str().unwrap(), None)
+        .link_asset(&p.id, source.to_str().unwrap(), None, None)
         .unwrap();
     let mut first = config();
     first.background_asset_id = Some(asset_id);
     let v1 = db
-        .save_cover_version(&p.id, first.clone(), Some(&png()))
+        .save_cover_version(&p.id, first.clone(), Some(&png()), None)
         .unwrap();
     let mut second = config();
     second.title = "修订后".into();
     let v2 = db
-        .save_cover_version(&p.id, second.clone(), Some(&png()))
+        .save_cover_version(&p.id, second.clone(), Some(&png()), None)
         .unwrap();
     assert_ne!(v1.exported_path, v2.exported_path);
     assert_eq!(v2.version_no, 2);
     drop(db);
     let db = Database::open(path);
-    let all = db.list_cover_versions(&p.id).unwrap();
+    let all = db.list_cover_versions(&p.id, None).unwrap();
     assert_eq!(all[0].config, second);
     assert_eq!(all[1].config, first);
     db.delete_project(&p.id).unwrap();
@@ -618,21 +644,23 @@ fn failed_exports_keep_saved_versions_and_remove_only_new_uncommitted_file() {
     let db = Database::open(dir.path().join("db.sqlite3"));
     let p = project(&db);
     let saved = db
-        .save_cover_version(&p.id, config(), Some(&png()))
+        .save_cover_version(&p.id, config(), Some(&png()), None)
         .unwrap();
     let mut invalid = config();
     invalid.width = 1920;
-    assert!(db.save_cover_version(&p.id, invalid, Some(&png())).is_err());
+    assert!(db
+        .save_cover_version(&p.id, invalid, Some(&png()), None)
+        .is_err());
     let mut wrong_size = png();
     wrong_size[19] = 0;
     assert!(db
-        .save_cover_version(&p.id, config(), Some(&wrong_size))
+        .save_cover_version(&p.id, config(), Some(&wrong_size), None)
         .is_err());
     db.with_connection(|c| { c.execute_batch("CREATE TRIGGER fail_cover BEFORE INSERT ON cover_versions BEGIN SELECT RAISE(ABORT,'test rollback'); END;").unwrap(); Ok(()) }).unwrap();
     assert!(db
-        .save_cover_version(&p.id, config(), Some(&png()))
+        .save_cover_version(&p.id, config(), Some(&png()), None)
         .is_err());
-    assert_eq!(db.list_cover_versions(&p.id).unwrap().len(), 1);
+    assert_eq!(db.list_cover_versions(&p.id, None).unwrap().len(), 1);
     assert_eq!(fs::read(saved.exported_path.unwrap()).unwrap(), png());
     assert_eq!(
         fs::read_dir(PathBuf::from(&p.workspace_path).join("covers"))
@@ -644,7 +672,7 @@ fn failed_exports_keep_saved_versions_and_remove_only_new_uncommitted_file() {
     let blocked = PathBuf::from(&another.workspace_path).join("covers");
     fs::write(blocked, b"existing file").unwrap();
     assert!(db
-        .save_cover_version(&another.id, config(), Some(&png()))
+        .save_cover_version(&another.id, config(), Some(&png()), None)
         .is_err());
 }
 #[test]
@@ -656,14 +684,14 @@ fn backgrounds_check_project_format_size_and_missing_file_without_losing_config(
     let source = dir.path().join("背景.png");
     fs::write(&source, png()).unwrap();
     let id = db
-        .link_asset(&p.id, source.to_str().unwrap(), None)
+        .link_asset(&p.id, source.to_str().unwrap(), None, None)
         .unwrap();
     assert_eq!(db.read_cover_background(&p.id, &id).unwrap(), png());
     assert!(db.read_cover_background(&other.id, &id).is_err());
     let mut draft = config();
     draft.background_asset_id = Some(id.clone());
     assert!(db
-        .save_cover_version(&other.id, draft.clone(), None)
+        .save_cover_version(&other.id, draft.clone(), None, None)
         .is_err());
     fs::write(&source, b"not an image").unwrap();
     assert!(db.read_cover_background(&p.id, &id).is_err());
@@ -674,8 +702,12 @@ fn backgrounds_check_project_format_size_and_missing_file_without_losing_config(
     assert!(db.read_cover_background(&p.id, &id).is_err());
     fs::remove_file(&source).unwrap();
     assert!(db.read_cover_background(&p.id, &id).is_err());
-    db.save_cover_version(&p.id, draft.clone(), None).unwrap();
-    assert_eq!(db.list_cover_versions(&p.id).unwrap()[0].config, draft);
+    db.save_cover_version(&p.id, draft.clone(), None, None)
+        .unwrap();
+    assert_eq!(
+        db.list_cover_versions(&p.id, None).unwrap()[0].config,
+        draft
+    );
 }
 
 #[test]
@@ -684,9 +716,11 @@ fn video_illustration_uses_its_own_prompt_task_and_files_without_adopting_a_cove
     let db = Database::open(dir.path().join("db.sqlite3"));
     let p = project(&db);
     let provider = image_model(&db);
-    db.save_cover_version(&p.id, config(), None).unwrap();
+    db.save_cover_version(&p.id, config(), None, None).unwrap();
     let start = || {
         db.start_video_illustration(ImageGenerationInput {
+            chapter_id: None,
+
             project_id: p.id.clone(),
             provider_id: provider.id.clone(),
             description: "安静的书房".into(),
@@ -710,10 +744,10 @@ fn video_illustration_uses_its_own_prompt_task_and_files_without_adopting_a_cove
         .unwrap();
     assert!(PathBuf::from(&asset.file_path)
         .starts_with(PathBuf::from(&p.workspace_path).join("video/illustrations")));
-    assert_eq!(db.list_cover_versions(&p.id).unwrap().len(), 1);
-    assert!(db.video_jobs(&p.id).unwrap().is_empty());
+    assert_eq!(db.list_cover_versions(&p.id, None).unwrap().len(), 1);
+    assert!(db.video_jobs(&p.id, None).unwrap().is_empty());
     let task_row = db
-        .list_ai_tasks(&p.id)
+        .list_ai_tasks(&p.id, None)
         .unwrap()
         .into_iter()
         .find(|t| t.id == task)
@@ -739,5 +773,5 @@ fn video_illustration_uses_its_own_prompt_task_and_files_without_adopting_a_cove
     assert!(db
         .finish_image_generation(&cancelled, &test_png(), "video_illustration")
         .is_err());
-    assert_eq!(db.list_assets(&p.id).unwrap().len(), 1);
+    assert_eq!(db.list_assets(&p.id, None).unwrap().len(), 1);
 }

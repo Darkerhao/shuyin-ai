@@ -13,6 +13,8 @@ use std::{io::Write, path::Path, time::UNIX_EPOCH};
 #[serde(rename_all = "camelCase")]
 pub struct ImageGenerationInput {
     pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
     pub provider_id: String,
     pub description: String,
     pub width: u32,
@@ -63,14 +65,14 @@ impl Database {
         self.with_connection(|c| {
             let transaction = c.transaction().map_err(|e|e.to_string())?;
             let c = &transaction;
-            get(c, &input.project_id)?;
+            super::chapters::require_scope(c,&input.project_id,input.chapter_id.as_deref())?;
             let provider = super::ai::provider(c, &input.provider_id)?;
             if !provider.input.is_enabled || provider.input.model_kind != "image" {
                 return Err("请选择已启用的图片模型。".into());
             }
             let id = new_id(c)?;
-            c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?7,?3,?4,?5,'pending',?6,{NOW})"),
-                params![id,input.project_id,input.provider_id,provider.input.model_name,if kind == "cover" { PROMPT_VERSION } else { VIDEO_PROMPT_VERSION },serde_json::to_string(&input).map_err(|e|e.to_string())?,kind]).map_err(|e|e.to_string())?;
+            c.execute(&format!("INSERT INTO ai_tasks(id,project_id,kind,provider_id,model_name,prompt_version,status,input_json,created_at,chapter_id) VALUES(?1,?2,?7,?3,?4,?5,'pending',?6,{NOW},?8)"),
+                params![id,input.project_id,input.provider_id,provider.input.model_name,if kind == "cover" { PROMPT_VERSION } else { VIDEO_PROMPT_VERSION },serde_json::to_string(&input).map_err(|e|e.to_string())?,kind,input.chapter_id]).map_err(|e|e.to_string())?;
             if let Some(binding) = binding { super::automation::bind(c,binding,&input.project_id,&id)?; }
             transaction.commit().map_err(|e|e.to_string())?;
             Ok(id)
@@ -85,7 +87,8 @@ impl Database {
             if c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE (landscape_task_id=?1 OR portrait_task_id=?1 OR widescreen_task_id=?1) AND status!='running')",[id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("自动流程已暂停，背景请求尚未发送。".into()); }
             let json: String = c.query_row("SELECT input_json FROM ai_tasks WHERE id=?1 AND kind=?2 AND status='pending'",params![id,kind],|r|r.get(0)).map_err(|_|"图片任务已取消、已运行或不存在。")?;
             let input: ImageGenerationInput = serde_json::from_str(&json).map_err(|_|"图片任务输入无效。")?;
-            let project = get(c, &input.project_id)?;
+            super::chapters::require_scope(c,&input.project_id,input.chapter_id.as_deref())?;
+            let project = get(c,&input.project_id)?;
             let provider = super::ai::provider(c, &input.provider_id)?;
             if !provider.input.is_enabled || provider.input.model_kind != "image" { return Err("请选择已启用的图片模型。".into()); }
             let ratio = match (input.width, input.height) {
@@ -112,7 +115,7 @@ impl Database {
         let (extension, width, height) = validate_image(bytes).map_err(|e| e.message)?;
         self.with_connection(|c| {
             let tx = c.transaction().map_err(|e|e.to_string())?;
-            let project_id: String = tx.query_row("SELECT project_id FROM ai_tasks WHERE id=?1 AND kind=?2 AND status='running'", params![task_id,kind], |r|r.get(0)).map_err(|_|"生成已取消或结束，图片未写入。")?;
+            let (project_id,chapter_id): (String,Option<String>) = tx.query_row("SELECT project_id,chapter_id FROM ai_tasks WHERE id=?1 AND kind=?2 AND status='running'", params![task_id,kind], |r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|"生成已取消或结束，图片未写入。")?;
             let project = get(&tx, &project_id)?;
             let id = new_id(&tx)?;
             let directory = Path::new(&project.workspace_path).join(if kind == "cover" { "covers" } else { "video/illustrations" });
@@ -127,11 +130,11 @@ impl Database {
                 let modified = std::fs::metadata(&path).and_then(|m|m.modified()).map_err(|e|e.to_string())?.duration_since(UNIX_EPOCH).map_err(|e|e.to_string())?.as_secs() as i64;
                 let created_at: String = tx.query_row(&format!("SELECT {NOW}"),[],|r|r.get(0)).map_err(|e|e.to_string())?;
                 let file_path = path.to_string_lossy().into_owned();
-                tx.execute("INSERT INTO assets(id,project_id,asset_type,file_path,original_name,file_size,modified_at,created_at) VALUES(?1,?2,'image',?3,?4,?5,?6,?7)",params![id,project_id,file_path,name,bytes.len() as i64,modified,created_at]).map_err(|e|e.to_string())?;
+                tx.execute("INSERT INTO assets(id,project_id,asset_type,file_path,original_name,file_size,modified_at,created_at,chapter_id) VALUES(?1,?2,'image',?3,?4,?5,?6,?7,?8)",params![id,project_id,file_path,name,bytes.len() as i64,modified,created_at,chapter_id]).map_err(|e|e.to_string())?;
                 tx.execute("UPDATE ai_tasks SET status='succeeded',asset_id=?2,completed_at=?3 WHERE id=?1",params![task_id,id,created_at]).map_err(|e|e.to_string())?;
                 tx.execute("UPDATE book_projects SET updated_at=?2 WHERE id=?1",params![project_id,created_at]).map_err(|e|e.to_string())?;
                 tx.commit().map_err(|e|e.to_string())?;
-                Ok(Asset { id, project_id, asset_type: "image".into(), file_path, original_name: name, file_size: bytes.len() as i64, modified_at: modified, exists_status: "available".into(), created_at })
+                Ok(Asset { id, project_id, chapter_id, asset_type: "image".into(), file_path, original_name: name, file_size: bytes.len() as i64, modified_at: modified, exists_status: "available".into(), created_at })
             })();
             if result.is_err() { let _ = std::fs::remove_file(path); }
             result

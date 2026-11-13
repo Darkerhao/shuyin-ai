@@ -26,6 +26,21 @@ fn project_for_owner(c: &Connection, owner: &str, kind: &str) -> Result<Option<S
     if kind == "project" && owner == "new" {
         return Ok(None);
     }
+    if let Some((project, chapter)) = owner.split_once(":chapter:") {
+        get(c, project)?;
+        if kind == "project" && chapter == "new" {
+            return Ok(Some(project.into()));
+        }
+        let chapter = if kind == "publishing" {
+            chapter
+                .strip_suffix(":new")
+                .ok_or("章节发布草稿所有者无效。")?
+        } else {
+            chapter
+        };
+        super::chapters::get_chapter(c, project, chapter)?;
+        return Ok(Some(project.into()));
+    }
     let project_id = if kind == "publishing" {
         let (project, task) = owner.split_once(':').ok_or("发布草稿所有者无效。")?;
         if task != "new" && !c.query_row(
@@ -81,9 +96,10 @@ impl Database {
             let book = project_for_owner(c, project_id, kind)?;
             if let (Some(draft),Some(json)) = (draft,json) {
                 if let Some(id) = draft.based_on.as_ref().filter(|_| matches!(kind, "writing" | "cover")) {
-                    let sql = if kind=="writing" { "SELECT EXISTS(SELECT 1 FROM writing_versions WHERE id=?1 AND project_id=?2 AND kind='publishing')" }
-                        else { "SELECT EXISTS(SELECT 1 FROM cover_versions WHERE id=?1 AND project_id=?2)" };
-                    if !c.query_row(sql,params![id,project_id],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("草稿来源版本不属于当前书籍。".into()); }
+                    let chapter = project_id.split_once(":chapter:").map(|(_,chapter)| chapter);
+                    let sql = if kind=="writing" { "SELECT EXISTS(SELECT 1 FROM writing_versions WHERE id=?1 AND project_id=?2 AND chapter_id IS ?3 AND kind='publishing')" }
+                        else { "SELECT EXISTS(SELECT 1 FROM cover_versions WHERE id=?1 AND project_id=?2 AND chapter_id IS ?3)" };
+                    if !c.query_row(sql,params![id,book,chapter],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? { return Err("草稿来源版本不属于当前书籍与章节。".into()); }
                 }
                 c.execute(&format!("INSERT INTO editor_drafts(owner_id,project_id,kind,based_on,content_json,updated_at) VALUES(?1,?2,?3,?4,?5,{NOW}) ON CONFLICT(owner_id,kind) DO UPDATE SET based_on=excluded.based_on,content_json=excluded.content_json,updated_at=excluded.updated_at"),params![project_id,book,kind,draft.based_on,json]).map_err(|e|e.to_string())?;
             } else {
@@ -153,7 +169,7 @@ mod tests {
         for (index, (owner, kind)) in owners.iter().enumerate() {
             db.save_editor_draft(owner, kind, draft(serde_json::json!({"title":"","scheduledAt":"","marker":index,"sourcePaths":["D:/尚未绑定.pdf"]}))).unwrap();
         }
-        assert_eq!(db.list_publish_tasks(&book.id).unwrap().len(), 2);
+        assert_eq!(db.list_publish_tasks(&book.id, None).unwrap().len(), 2);
         assert_eq!(
             db.get_project(&book.id).unwrap().input.title,
             book.input.title

@@ -266,7 +266,7 @@ impl Database {
                 params![id,input.title.trim(),input.author,input.publisher,input.isbn,input.description,input.source_notes,input.theme,input.target_audience,input.content_style,input.target_duration_seconds,input.status,workspace.to_string_lossy().as_ref()]).map_err(|error| error.to_string())?;
             for path in source_paths {
                 fs::File::open(path).map_err(|error| format!("书籍文件无法读取：{error}"))?;
-                super::assets::register_existing(&transaction, &id, Path::new(path), Some("document"), None)?;
+                super::assets::register_existing(&transaction, &id, Path::new(path), Some("document"), None, None)?;
             }
             let saved = get(&transaction, &id)?;
             transaction.execute("DELETE FROM editor_drafts WHERE kind='project' AND owner_id=?1", [existing.as_ref().map(|p| p.id.as_str()).unwrap_or("new")]).map_err(|e| e.to_string())?;

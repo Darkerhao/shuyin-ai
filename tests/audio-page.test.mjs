@@ -193,6 +193,34 @@ test('long prompts round-trip exactly and over-limit prompts are not truncated',
   assert.equal(document.querySelector('#short').value, '')
 })
 
+test('pastes a complete chapter into the replacement Chinese text dialog', async () => {
+  const { core, document } = page('<textarea id="prompt" aria-label="Audio instructions">保留音频指导</textarea><button id="add">添加来源</button><div id="portal"></div>')
+  const text = `《测试书》·第三章\n\n${'章节原文保持完整。\n'.repeat(900)}末尾不丢失。`
+  let inserted = ''
+  document.querySelector('#add').addEventListener('click', () => {
+    document.querySelector('#portal').innerHTML = '<section role="dialog"><button id="copied">复制的文字</button></section>'
+    document.querySelector('#copied').addEventListener('click', () => {
+      document.querySelector('#portal').innerHTML = '<section role="dialog"><h2>粘贴复制的文字</h2><textarea placeholder="在此处粘贴文字"></textarea><button id="insert">插入</button></section>'
+      document.querySelector('#insert').addEventListener('click', () => { inserted = document.querySelector('#portal textarea').value })
+    })
+  })
+  const result = await core.runStep(textJob({ source: { kind: 'text', text } }))
+  assert.equal(result.kind, 'source_submitted')
+  assert.equal(inserted, text)
+  assert.equal(document.querySelector('#prompt').value, '保留音频指导')
+})
+
+test('a text source never uses an Insert button outside the current source dialog', async () => {
+  const { core, document } = page('<button id="outside">插入</button><section role="dialog"><button id="copied">复制的文字</button><textarea placeholder="在此处粘贴文字" hidden></textarea></section>')
+  let unrelatedClicks = 0
+  document.querySelector('#outside').addEventListener('click', () => { unrelatedClicks += 1 })
+  document.querySelector('#copied').addEventListener('click', () => { document.querySelector('textarea').hidden = false })
+  const result = await core.runStep(textJob())
+  assert.equal(unrelatedClicks, 0)
+  assert.equal(result.kind, 'page_error')
+  assert.equal(result.code, 'text_source_insert_missing')
+})
+
 test('adds a text source through the copied-text dialog without changing the prompt', async () => {
   const { core, document } = page(`<button id="add">Add source</button><section id="dialog" role="dialog" hidden><button id="copied">Copied text</button><textarea id="source" aria-label="Copied text" hidden></textarea><button id="insert" hidden>Insert</button></section>`)
   document.querySelector('#add').addEventListener('click', () => { document.querySelector('#dialog').hidden = false })
