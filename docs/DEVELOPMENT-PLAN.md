@@ -1,5 +1,26 @@
 # 书引 AI 开发计划与验收标准
 
+## 资料文本插入按钮时序修复（2026-11-13）
+
+资料已填入NotebookLM，仍报 `text_source_insert_missing`。根因是 `addTextSource` 写入后立即查找可用按钮，而网站异步更新按钮的 `disabled` 状态。官网同一弹窗实测：写入后立即检查（约4.5ms）仍禁用，等待150ms后复查（约161.3ms）已启用并被原中文匹配识别；按钮名称和弹窗未变化。本轮只在可访问的空白笔记本临时填写后清空，没有提交来源或生成音频；时序记录在本地 `output/audio-insert-20261113/live-button-timing.json`。
+
+最小修复复用原 `waitFor` 等待已填写资料弹窗内“插入”可点击，最多3秒；仍只提交一次，暂停可终止等待，超时提示按钮未就绪。独立需求评审发现等待时切换来源弹窗可能误点另一“插入”，已通过失败回归复现并将等待绑定原弹窗和输入框；切换或移除后明确停止。修改 `src-tauri/src/audio_page.js`、`tests/audio-page.test.mjs` 和技术设计/本开发记录。无SQL迁移、依赖、权限或版本变更，属于fix/patch。
+
+实际验证：
+
+- `node --test --test-name-pattern="Chinese Insert" tests/audio-page.test.mjs`：先调整回归夹具，让中文插入按钮在输入事件后的下一轮任务才启用；修复前1失败，返回与用户相同的错误码和提示，修复后1通过。
+- `node --test tests/audio-page.test.mjs tests/audio-package.test.mjs`：最终52通过（含子测试）。覆盖长章节全文回读、延迟启用后单次插入、持续禁用超时保稿、等待时暂停不提交、两种来源弹窗切换、拒绝弹窗外同名按钮和已有文件上传/生成/下载流程。
+- `. ./.tools/env.ps1` 后执行 `cargo test --manifest-path src-tauri/Cargo.toml --locked audio::tests:: -- --nocapture`：最终7通过，覆盖宿主错误解析、观察、导航与音频时长规则。
+- `npm run lint`、`node --check src-tauri/src/audio_page.js`：通过。
+- `npm run build`：TypeScript检查及Vite构建通过；仍有现有产物大于500kB的分块提示和本机npm配置提示。
+- `git diff --check`：通过。
+
+独立评审与补测：以 `1a6f99057d46dfc3ffa82d882b5beaafdc313661` 为固定基线，仅评审上述四文件的未提交差异。工程规范首轮0项发现，需求首轮1项P2（等待期间切换来源弹窗）；主线程新增两个实际 `runStep` 失败子用例，修复前均误点一次并返回 `source_submitted`，修复后两种切换均返回 `text_source_input_changed` 且不点击。`node --test --test-name-pattern="switching source dialogs|Chinese Insert|text Insert" tests/audio-page.test.mjs` 修复后6项通过。另补按钮持续禁用的超时回归，验证内容保留与零点击。
+
+最终独立复审：Standards通过，0项待修；Spec通过，原P2已解决，0项待修。工程规范复审独立运行6项核心回归通过，需求复审独立运行 `node --test --test-name-pattern="switching source dialogs|Chinese Insert|text Insert|outside the current source dialog" tests/audio-page.test.mjs` 为7项通过；两者的 `git diff --check` 均通过。主线程在最终产品修改后重跑本节52项页面/打包、7项Rust、lint、JS语法及含类型检查的构建，结果如上。仍未提交、推送或替换正式安装版。
+
+验收对应：正确识别中文插入、等待可用再点击、全文不丢失、不重复点击、禁用超时保稿、弹窗切换停止和暂停有效均已通过页面回归，官网观察确认按钮状态确实异步变化。已检查最终差异，修改仅限本次时序问题。未构建或替换正式桌面安装包，未执行用户截图任务的来源提交、完整音频生成与下载验收。下一步在包含修复的桌面版本复查资料文本/章节来源上传；既有等待人工核对任务仍遵循原恢复规则。
+
 ## 章节精讲完整流程（2026-11-13）
 
 用户明确要求每章与整书具有一致的封面、视频和发布能力。当前实现已将章节接入唯一完整工作流：章节保存与来源冻结 → 文案/音频 → 字幕校核 → 三尺寸封面 → 分镜/成片 → 发布准备。旧方案中的仅视频目标已撤除，不再作为章节主操作或交付边界。
