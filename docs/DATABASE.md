@@ -1,5 +1,11 @@
 # 书引 AI 数据库设计文档
 
+## 合集名称候选（2026-11-15，仍为v25）
+
+无新表、列或 SQL 迁移。`app_settings` 新增普通设置键 `douyin_collection_options`，值为本地合集名称的 JSON 字符串数组；缺键或空数组表示无候选。保存前对整组名称去首尾空白、校验1—200字符并按原顺序去重，然后单条 UPSERT。无效值拒绝整次写入，删除最后一项保存空数组。
+
+候选跨书籍共用，随原数据库及完整备份恢复，不从历史任务重新补回已删选项。读写不修改 `publish_tasks.douyin_collection`、`automation_runs.input_json` 或账号默认值；任务仍在启动时单独冻结本次名称及已核对账号。备份、重启和历史任务隔离的验证见[合集候选验收](COLLECTION-OPTIONS.md)。
+
 ## 创作流程查询优化（2026-11-14）
 
 仍为 schema v25，无表、列、索引、设置、迁移或历史数据修改。续作快照改用 `ROW_NUMBER() OVER (PARTITION BY project_id,chapter_id ORDER BY running DESC,updated DESC,id DESC)` 筛选每个范围的第一条及全部运行任务，保持原候选来源与归档过滤。自动任务快照仅查询 `status NOT IN ('completed','cancelled')`；已结束记录继续保留并可按 ID 读取。校核复用同一连接内已读取的数据，无持久缓存。见[流程优化记录](WORKFLOW-OPTIMIZATION.md)。

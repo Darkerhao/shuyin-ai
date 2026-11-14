@@ -303,6 +303,61 @@ fn v9_upgrade_preserves_assets_and_publish_records_for_audio_workflow() {
 }
 
 #[test]
+fn collection_options_preserve_task_choices_and_survive_reopen_and_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("collection-options.sqlite3");
+    let db = Database::open(path.clone());
+    assert!(db.douyin_collection_options().unwrap().is_empty());
+    let p = project(&db);
+    let task = db.save_publish_task(None, input(&db, &p)).unwrap();
+    let choice = publishing::CollectionChoice {
+        account_id: None,
+        account_name: "甲子".into(),
+        id: None,
+        name: Some("读书合集".into()),
+    };
+    db.save_douyin_collection(&task.id, &choice, false).unwrap();
+    assert_eq!(
+        db.save_douyin_collection_options(vec![
+            " 读书合集 ".into(),
+            "历史精讲".into(),
+            "读书合集".into()
+        ])
+        .unwrap(),
+        ["读书合集", "历史精讲"]
+    );
+    // Renaming and deleting local suggestions cannot change any task or account authorization.
+    db.save_douyin_collection_options(vec!["历史人物".into()])
+        .unwrap();
+    assert_eq!(
+        db.douyin_collection(&task.id).unwrap(),
+        Some(choice.clone())
+    );
+    db.save_douyin_collection_options(vec![]).unwrap();
+    assert!(db.douyin_collection_options().unwrap().is_empty());
+    let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
+    db.save_douyin_collection_options(vec!["临时选项".into()])
+        .unwrap();
+    db.restore_backup(&backup).unwrap();
+    drop(db);
+    let db = Database::open(path);
+    assert!(db.douyin_collection_options().unwrap().is_empty());
+    assert_eq!(db.douyin_collection(&task.id).unwrap(), Some(choice));
+    let longest = "中".repeat(200);
+    db.save_douyin_collection_options(vec![longest.clone()])
+        .unwrap();
+    drop(db);
+    let db = Database::open(dir.path().join("collection-options.sqlite3"));
+    assert_eq!(db.douyin_collection_options().unwrap(), [longest.as_str()]);
+    for invalid in [" ".into(), "中".repeat(201)] {
+        assert!(db
+            .save_douyin_collection_options(vec!["有效值".into(), invalid])
+            .is_err());
+        assert_eq!(db.douyin_collection_options().unwrap(), [longest.as_str()]);
+    }
+}
+
+#[test]
 fn collection_intent_is_independent_of_media_and_survives_restart_and_backup() {
     use publishing::CollectionChoice;
     let dir = tempfile::tempdir().unwrap();

@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, DOMWrapper } from '@vue/test-utils'
-import ModelOptionInput from '../src/modules/settings/ModelOptionInput.vue'
+import SavedOptionInput from '../src/components/SavedOptionInput.vue'
 import { mockResizeObserver } from './ui'
 
 const wrappers: ReturnType<typeof mount>[] = []
-function popup() { return new DOMWrapper(document.querySelector<HTMLElement>('[data-model-options="test-model"]')!) }
+function popup() { return new DOMWrapper(document.querySelector<HTMLElement>('[data-saved-options="test-model"]')!) }
 async function render(options = ['model-a', 'model-b']) {
   const saveOptions = vi.fn(async (values: string[]) => [...new Set(values.map(value => value.trim()))])
-  const wrapper = mount(ModelOptionInput, { attachTo: document.body, props: {
+  const wrapper = mount(SavedOptionInput, { attachTo: document.body, props: {
     id: 'test-model', label: '模型名称', modelValue: 'model-a', options, disabled: false, placeholder: '输入模型', saveOptions,
+    footer: '编辑或删除选项不改变已保存的模型配置。',
     'onUpdate:modelValue': (value: string) => { void wrapper.setProps({ modelValue: value }) },
   } })
   saveOptions.mockImplementation(async values => {

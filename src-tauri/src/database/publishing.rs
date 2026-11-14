@@ -17,6 +17,14 @@ use std::{
 const PORTAL: &str = "https://creator.douyin.com/";
 const MAX_IMAGE_BYTES: u64 = 15 * 1024 * 1024;
 
+pub(super) fn normalize_collection_name(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > 200 {
+        return Err("请填写1—200字的合集完整名称，或选择不加入合集。".into());
+    }
+    Ok(value.into())
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublishInput {
@@ -536,6 +544,45 @@ impl Database {
             )
             .map(|_| ())
             .map_err(|e| e.to_string())
+        })
+    }
+
+    pub fn douyin_collection_options(&self) -> Result<Vec<String>, String> {
+        self.with_connection(|c| {
+            let json: Option<String> = c
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key='douyin_collection_options'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            json.map(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))
+                .transpose()
+                .map(Option::unwrap_or_default)
+        })
+    }
+
+    pub fn save_douyin_collection_options(
+        &self,
+        values: Vec<String>,
+    ) -> Result<Vec<String>, String> {
+        let mut normalized = Vec::new();
+        for value in values {
+            let value = normalize_collection_name(&value)?;
+            if !normalized.contains(&value) {
+                normalized.push(value);
+            }
+        }
+        let json = serde_json::to_string(&normalized).map_err(|error| error.to_string())?;
+        self.with_connection(|c| {
+            c.execute(
+                "INSERT INTO app_settings(key,value) VALUES('douyin_collection_options',?1)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [json],
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(normalized)
         })
     }
 

@@ -5,6 +5,19 @@ use crate::database::{
 use tauri::State;
 
 #[tauri::command]
+pub fn douyin_collection_options(database: State<'_, Database>) -> Result<Vec<String>, String> {
+    database.douyin_collection_options()
+}
+
+#[tauri::command]
+pub fn save_douyin_collection_options(
+    database: State<'_, Database>,
+    values: Vec<String>,
+) -> Result<Vec<String>, String> {
+    database.save_douyin_collection_options(values)
+}
+
+#[tauri::command]
 pub fn list_publish_queue(database: State<'_, Database>) -> Result<Vec<PublishQueueItem>, String> {
     database.list_publish_queue()
 }

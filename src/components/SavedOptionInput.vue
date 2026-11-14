@@ -13,6 +13,7 @@ const props = defineProps<{
   saveOptions: (values: string[]) => Promise<string[]>
   disabled: boolean
   placeholder: string
+  footer: string
   type?: string
   maxlength?: number
   describedBy?: string
@@ -125,7 +126,7 @@ function cancelEdit() {
 </script>
 
 <template>
-  <div class="model-option-input">
+  <div class="saved-option-input">
     <PopoverRoot v-model:open="open">
       <PopoverAnchor as-child>
         <div
@@ -173,10 +174,10 @@ function cancelEdit() {
       <PopoverPortal>
         <PopoverContent
           ref="content"
-          :data-model-options="id"
+          :data-saved-options="id"
           :aria-label="`${label}选项`"
           :aria-busy="saving"
-          class="model-options-popover"
+          class="saved-options-popover"
           align="start"
           :side-offset="6"
           :collision-padding="12"
@@ -287,7 +288,7 @@ function cancelEdit() {
               <AppIcon name="plus" /><span>保存“{{ newValue }}”</span><kbd>Enter</kbd>
             </Button>
             <p class="option-footer">
-              编辑或删除选项不改变已保存的模型配置。
+              {{ footer }}
             </p>
             <p
               v-if="error"
@@ -311,10 +312,10 @@ function cancelEdit() {
 </template>
 
 <style scoped>
-.model-option-input { min-width: 0; }
+.saved-option-input { min-width: 0; }
 .option-anchor { position: relative; }
 .option-anchor > button { position: absolute; right: 5px; top: 5px; color: var(--muted-foreground); }
-:global(.model-options-popover) { z-index: 50; width: var(--reka-popover-trigger-width); max-width: calc(100vw - 24px); max-height: var(--reka-popover-content-available-height); overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; padding: 8px; color: var(--foreground); background: var(--popover); box-shadow: var(--overlay-shadow); }
+:global(.saved-options-popover) { z-index: 50; width: var(--reka-popover-trigger-width); max-width: calc(100vw - 24px); max-height: var(--reka-popover-content-available-height); overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; padding: 8px; color: var(--foreground); background: var(--popover); box-shadow: var(--overlay-shadow); }
 .option-heading, .option-footer, .option-empty { margin: 0; padding: 8px; color: var(--muted-foreground); font-size: 12px; line-height: 18px; }
 .option-heading { display: flex; justify-content: space-between; }
 .option-list { max-height: 240px; overflow-y: auto; }
