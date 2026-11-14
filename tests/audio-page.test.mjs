@@ -26,6 +26,19 @@ function textJob(overrides = {}) {
   }
 }
 
+test('generation polling follows a completed artifact after page reload without submitting again', async (t) => {
+  const job = textJob({ stage: 'generating', status: 'generating', notebookUrl: 'https://notebook.google.com/notebook/notebook-1' })
+  const stale = page('<section><h2>音频概览</h2><p>正在生成音频</p></section><button>立即生成</button>')
+  const refreshed = page('<section><h2>音频概览</h2><button aria-label="播放">play_arrow</button></section><button>立即生成</button>')
+  t.after(() => { stale.window.close(); refreshed.window.close() })
+  let clicks = 0
+  for (const current of [stale, refreshed]) current.document.addEventListener('click', () => clicks++)
+  for (let poll = 0; poll < 3; poll++) assert.equal((await stale.core.runStep(job)).kind, 'generating')
+  // A new document has no page-side run marker; the persisted job still only observes it.
+  assert.equal((await refreshed.core.runStep(job)).kind, 'generation_complete')
+  assert.equal(clicks, 0)
+})
+
 function chapterSourcePage({ processing = false, selected = true } = {}) {
   return page(`
     <section><h2>来源</h2><button aria-label="添加来源">来源</button>
