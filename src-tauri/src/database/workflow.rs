@@ -1,7 +1,6 @@
-use super::Database;
+use super::{automation::COVER_STEPS, Database};
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
-use std::collections::BTreeMap;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,7 +112,8 @@ impl Database {
         });
         let mut exported = 0;
         let mut changed = false;
-        for (width, height) in [(1440, 1080), (1080, 1440)] {
+        for step in &COVER_STEPS {
+            let (width, height) = (step.width, step.height);
             let saved = covers
                 .iter()
                 .find(|v| v.config.width == width && v.config.height == height);
@@ -165,8 +165,12 @@ impl Database {
         } else if exported > 0 {
             stage(
                 "covers",
-                format!("已导出 {exported}/2"),
-                if exported == 2 { "ready" } else { "attention" },
+                format!("已导出 {exported}/{}", COVER_STEPS.len()),
+                if exported == COVER_STEPS.len() {
+                    "ready"
+                } else {
+                    "attention"
+                },
             )
         } else if covers.is_empty() {
             stage("covers", "未开始", "neutral")
@@ -208,7 +212,10 @@ impl Database {
     pub fn workflow_snapshot(&self) -> Result<WorkflowSnapshot, String> {
         self.with_connection(|c| {
             // Recent activity determines what the creator was doing; active work always wins.
-            let mut q = c.prepare("SELECT p.id,p.title || CASE WHEN ch.id IS NOT NULL THEN ' · ' || ch.title WHEN t.chapter_id='new' THEN ' · 新章节' ELSE '' END,t.kind,t.id,t.status,t.stage,t.updated,t.running,t.chapter_id FROM book_projects p JOIN (
+            let mut q = c.prepare("WITH ranked AS (
+                SELECT t.*,
+                    ROW_NUMBER() OVER (PARTITION BY p.id,t.chapter_id ORDER BY t.running DESC,t.updated DESC,t.id DESC) rank
+                FROM book_projects p JOIN (
                 SELECT project_id,'video' kind,id,status,stage,MAX(updated_at,COALESCE(json_extract(editor_draft_json,'$.updatedAt'),updated_at)) updated,status='running' running,chapter_id FROM video_jobs
                 UNION ALL SELECT project_id,'audio',id,status,stage,updated_at,status IN ('created','preparing','generating','downloading','importing'),chapter_id FROM audio_jobs
                 UNION ALL SELECT project_id,'publishing',id,status,'',updated_at,0,chapter_id FROM publish_tasks
@@ -217,17 +224,18 @@ impl Database {
                     CASE WHEN instr(owner_id,':chapter:')>0 THEN replace(substr(owner_id,instr(owner_id,':chapter:')+9),':new','') ELSE (SELECT chapter_id FROM publish_tasks WHERE id=substr(owner_id,instr(owner_id,':')+1)) END FROM editor_drafts
                 UNION ALL SELECT project_id,'writing',id,'saved','',created_at,0,chapter_id FROM writing_versions
                 UNION ALL SELECT project_id,'covers',id,'saved','',created_at,0,chapter_id FROM cover_versions
-            ) t ON t.project_id=p.id LEFT JOIN book_chapters ch ON ch.id=t.chapter_id AND ch.project_id=p.id WHERE p.status!='archived' ORDER BY t.running DESC,t.updated DESC,t.id DESC").map_err(|e|e.to_string())?;
-            let rows = q.query_map([], |r| Ok(ResumeTask { project_id:r.get(0)?,chapter_id:r.get(8)?,title:r.get(1)?,kind:r.get(2)?,task_id:r.get(3)?,status:r.get(4)?,stage:r.get(5)?,updated_at:r.get(6)?,running:r.get(7)? })).map_err(|e|e.to_string())?;
-            let mut resume = BTreeMap::new();
+            ) t ON t.project_id=p.id WHERE p.status!='archived'
+            ) SELECT t.project_id,p.title || CASE WHEN ch.id IS NOT NULL THEN ' · ' || ch.title WHEN t.chapter_id='new' THEN ' · 新章节' ELSE '' END,t.kind,t.id,t.status,t.stage,t.updated,t.running,t.chapter_id,t.rank
+              FROM ranked t JOIN book_projects p ON p.id=t.project_id LEFT JOIN book_chapters ch ON ch.id=t.chapter_id AND ch.project_id=p.id
+              WHERE t.rank=1 OR t.running ORDER BY t.running DESC,t.updated DESC,t.id DESC").map_err(|e|e.to_string())?;
+            let rows = q.query_map([], |r| Ok((ResumeTask { project_id:r.get(0)?,chapter_id:r.get(8)?,title:r.get(1)?,kind:r.get(2)?,task_id:r.get(3)?,status:r.get(4)?,stage:r.get(5)?,updated_at:r.get(6)?,running:r.get(7)? }, r.get::<_, i64>(9)? == 1))).map_err(|e|e.to_string())?;
+            let mut resume = Vec::new();
             let mut running = Vec::new();
             for row in rows {
-                let row = row.map_err(|e|e.to_string())?;
-                resume.entry((row.project_id.clone(), row.chapter_id.clone())).or_insert_with(|| row.clone());
+                let (row, latest) = row.map_err(|e|e.to_string())?;
+                if latest { resume.push(row.clone()); }
                 if row.running { running.push(row); }
             }
-            let mut resume: Vec<_> = resume.into_values().collect();
-            resume.sort_by(|a,b| b.running.cmp(&a.running).then_with(|| b.updated_at.cmp(&a.updated_at)).then_with(|| b.task_id.cmp(&a.task_id)));
             Ok(WorkflowSnapshot { resume,running })
         })
     }
@@ -298,7 +306,8 @@ mod tests {
         let task = db.save_publish_task(None, input).unwrap();
         db.prepare_publish_task(&task.id).unwrap();
         let after = db.project_progress(&project.id, None).unwrap();
-        assert_eq!(after[2].status, "已导出 2/2");
+        assert_eq!(after[2].status, "已导出 2/3");
+        assert_eq!(after[2].tone, "attention");
         assert_eq!(after[3].status, "成片可用");
         assert_eq!(after[4].status, "已就绪");
         assert!(db.project_progress("missing-book", None).is_err());
@@ -309,12 +318,9 @@ mod tests {
         let (_dir, db, _) = crate::database::video::tests::fixture();
         let project = crate::database::m4_tests::project(&db);
         let input = crate::database::m4_tests::input(&db, &project);
+        crate::database::m4_tests::scoped_cover(&db, &project.id, 1920, 1080, None);
         let versions = db.list_cover_versions(&project.id, None).unwrap();
         let mut configs: Vec<_> = versions.iter().map(|v| v.config.clone()).collect();
-        let mut wide = configs[0].clone();
-        wide.width = 1920;
-        wide.height = 1080;
-        configs.push(wide);
         for config in &mut configs {
             config.subtitle_color = Some(config.text_color.clone());
         }
@@ -330,7 +336,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             db.project_progress(&project.id, None).unwrap()[2].status,
-            "已导出 2/2"
+            "已导出 3/3"
         );
         configs[0].title = "新的未保存标题".into();
         db.save_editor_draft(
@@ -360,7 +366,7 @@ mod tests {
         std::fs::remove_file(versions[0].exported_path.as_ref().unwrap()).unwrap();
         assert_eq!(
             db.project_progress(&project.id, None).unwrap()[2].status,
-            "已导出 1/2"
+            "已导出 2/3"
         );
         let video = db
             .list_assets(&project.id, None)
@@ -373,6 +379,123 @@ mod tests {
             db.project_progress(&project.id, None).unwrap()[3].tone,
             "ready"
         );
+    }
+
+    #[test]
+    fn project_progress_checks_widescreen_drafts_and_files_within_each_chapter() {
+        let (_dir, db, _) = crate::database::video::tests::fixture();
+        let project = crate::database::m4_tests::project(&db);
+        let chapter = db
+            .save_chapter(
+                &project.id,
+                None,
+                crate::database::chapters::ChapterInput {
+                    title: "第一章".into(),
+                    content: "本章正文".into(),
+                },
+            )
+            .unwrap();
+        for scope in [None, Some(chapter.id.as_str())] {
+            let mut configs = Vec::new();
+            let mut widescreen_path = None;
+            for (width, height) in [(1440, 1080), (1080, 1440), (1920, 1080)] {
+                let id =
+                    crate::database::m4_tests::scoped_cover(&db, &project.id, width, height, scope);
+                let cover = db
+                    .list_cover_versions(&project.id, scope)
+                    .unwrap()
+                    .into_iter()
+                    .find(|v| v.id == id)
+                    .unwrap();
+                if width == 1920 {
+                    widescreen_path = cover.exported_path;
+                }
+                configs.push(cover.config);
+            }
+            let progress = db.project_progress(&project.id, scope).unwrap();
+            assert_eq!(progress[2].status, "已导出 3/3");
+            assert_eq!(progress[2].tone, "ready");
+            configs[2].title = "尚未保存的宽屏标题".into();
+            let owner = scope.map_or_else(
+                || project.id.clone(),
+                |id| format!("{}:chapter:{id}", project.id),
+            );
+            db.save_editor_draft(
+                &owner,
+                "cover",
+                Some(crate::database::drafts::EditorDraft {
+                    based_on: None,
+                    content: serde_json::json!({"schemaVersion":2,"activeSize":2,"covers":configs}),
+                    updated_at: String::new(),
+                }),
+            )
+            .unwrap();
+            assert_eq!(
+                db.project_progress(&project.id, scope).unwrap()[2].status,
+                "需保存或重新导出"
+            );
+            db.save_editor_draft(&owner, "cover", None).unwrap();
+            std::fs::remove_file(widescreen_path.unwrap()).unwrap();
+            let progress = db.project_progress(&project.id, scope).unwrap();
+            assert_eq!(progress[2].status, "已导出 2/3");
+            assert_eq!(progress[2].tone, "attention");
+        }
+    }
+
+    #[test]
+    fn workflow_snapshot_keeps_all_running_tasks_and_only_latest_per_scope() {
+        let (_dir, db, input) = crate::database::video::tests::fixture();
+        let book = input.project_id;
+        let chapter = db
+            .save_chapter(
+                &book,
+                None,
+                crate::database::chapters::ChapterInput {
+                    title: "独立章节".into(),
+                    content: "章节正文".into(),
+                },
+            )
+            .unwrap();
+        let archived = crate::database::m4_tests::project(&db);
+        let mut archived_input = archived.input;
+        archived_input.status = "archived".into();
+        db.save_project(Some(&archived.id), archived_input).unwrap();
+        db.with_connection(|c| {
+            c.execute("WITH RECURSIVE history(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM history WHERE n<1000) INSERT INTO video_jobs(id,project_id,status,stage,plan_json,created_at,updated_at) SELECT printf('history-%04d',n),?1,'succeeded','completed','{}','old','old' FROM history", [&book]).unwrap();
+            for (id, project, scope, status, updated) in [
+                ("book-newer-draft", book.as_str(), None, "draft", "9999"),
+                ("chapter-a", book.as_str(), Some(chapter.id.as_str()), "draft", "9999"),
+                ("chapter-b", book.as_str(), Some(chapter.id.as_str()), "draft", "9999"),
+            ] {
+                c.execute("INSERT INTO video_jobs(id,project_id,chapter_id,status,stage,plan_json,created_at,updated_at) VALUES(?1,?2,?3,?4,'preparing','{}',?5,?5)", rusqlite::params![id, project, scope, status, updated]).unwrap();
+            }
+            for (id, project, kind) in [("book-running-a", book.as_str(), "publishing"), ("book-running-b", book.as_str(), "cover"), ("archived-running", archived.id.as_str(), "publishing")] {
+                c.execute("INSERT INTO ai_tasks(id,project_id,kind,model_name,prompt_version,status,input_json,created_at) VALUES(?1,?2,?3,'local-test','test','running','{}','2026-11-14T01:00:00Z')", rusqlite::params![id,project,kind]).unwrap();
+            }
+            Ok(())
+        }).unwrap();
+        let snapshot = db.workflow_snapshot().unwrap();
+        assert_eq!(
+            snapshot
+                .running
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            ["book-running-b", "book-running-a"]
+        );
+        assert_eq!(
+            snapshot
+                .resume
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            ["book-running-b", "chapter-b"]
+        );
+        assert_eq!(
+            snapshot.resume[1].chapter_id.as_deref(),
+            Some(chapter.id.as_str())
+        );
+        assert!(snapshot.resume[1].title.ends_with(" · 独立章节"));
     }
 
     #[test]

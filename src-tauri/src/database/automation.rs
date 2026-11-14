@@ -472,10 +472,10 @@ impl Database {
     pub fn video_automation(&self, id: &str) -> Result<Option<AutomationRun>, String> {
         self.with_connection(|connection| video_run(connection, id))
     }
-    pub fn automation_runs(&self) -> Result<Vec<AutomationRun>, String> {
+    pub fn active_automation_runs(&self) -> Result<Vec<AutomationRun>, String> {
         self.with_connection(|connection| {
             let mut query = connection
-                .prepare("SELECT id FROM automation_runs ORDER BY created_at DESC,id DESC LIMIT 30")
+                .prepare("SELECT id FROM automation_runs WHERE status NOT IN ('completed','cancelled') ORDER BY created_at DESC,id DESC")
                 .map_err(|e| e.to_string())?;
             let ids = query
                 .query_map([], |row| row.get::<_, String>(0))
@@ -667,8 +667,7 @@ impl Database {
             let tx = connection.transaction().map_err(|e|e.to_string())?;
             let current = load(&tx,&run.id)?;
             if current.stage != "content_check" { return Err("流程不在内容校核阶段。".into()); }
-            let video = content_video(&tx,&current)?;
-            let version = task_version(&tx,current.writing_task_id.as_deref())?;
+            let (video, version) = content_video(&tx,&current)?;
             let transcript = crate::video::to_srt(&video.plan.cues);
             if transcript.chars().count() > 80_000 { return Err("完整字幕超过8万字，已保留原稿和音频，请处理后再继续。".into()); }
             let user = serde_json::json!({"bookTitle":run.input.title,"author":run.input.author,"chapterSource":run.input.chapter_source,"sourceVersionId":version.id,"currentContent":version.content,"audioJobId":current.audio_job_id,"audioAssetId":video.audio_asset_id,"videoJobId":video.id,"transcript":transcript,"transcriptSha256":content_digest(&video.plan)?});
@@ -698,8 +697,7 @@ impl Database {
         }
         self.with_connection(|c| {
             let current=load(c,&run.id)?;
-            verify_content(c,&current)?;
-            let video=super::video::get(c,current.video_job_id.as_deref().ok_or("缺少视频任务。")?)?;
+            let video=verify_content(c,&current)?;
             crate::video::validate_scenes(&video.plan.scenes,0,video.plan.cues.len())?;
             if video.status != "awaiting_confirmation" { return Err("分镜尚未准备完成。".into()); }
             let count=c.execute(&format!("UPDATE automation_runs SET render_plan_sha256=?1,stage='render',updated_at={NOW} WHERE id=?2 AND run_id=?3 AND status='running' AND stage='storyboard'"),params![plan_digest(&video.plan)?,run.id,run.run_id]).map_err(|e|e.to_string())?;
@@ -710,10 +708,8 @@ impl Database {
     pub fn verify_automation_video(&self, run: &AutomationRun) -> Result<(), String> {
         self.with_connection(|c| {
             let current = load(c, &run.id)?;
-            verify_content(c, &current)?;
+            let video = verify_content(c, &current)?;
             task_version(c, current.content_check_task_id.as_deref())?;
-            let video =
-                super::video::get(c, current.video_job_id.as_deref().ok_or("缺少视频任务。")?)?;
             if current.render_plan_sha256.as_deref() != Some(plan_digest(&video.plan)?.as_str()) {
                 return Err("分镜与本次渲染快照不一致，请停止流程后重新准备成片。".into());
             }
@@ -800,7 +796,10 @@ impl Database {
     }
 }
 
-fn content_video(c: &Connection, run: &AutomationRun) -> Result<super::video::VideoJob, String> {
+fn content_video(
+    c: &Connection,
+    run: &AutomationRun,
+) -> Result<(super::video::VideoJob, ai::WritingVersion), String> {
     let video = super::video::get(c, run.video_job_id.as_deref().ok_or("缺少视频任务。")?)?;
     let audio = super::audio::job(c, run.audio_job_id.as_deref().ok_or("缺少音频任务。")?)?;
     let base = task_version(c, run.writing_task_id.as_deref())?;
@@ -835,10 +834,10 @@ fn content_video(c: &Connection, run: &AutomationRun) -> Result<super::video::Vi
     {
         return Err("实际音频与完整校对字幕尚未通过检查，已有成果保留。".into());
     }
-    Ok(video)
+    Ok((video, base))
 }
-fn verify_content(c: &Connection, run: &AutomationRun) -> Result<(), String> {
-    let video = content_video(c, run)?;
+fn verify_content(c: &Connection, run: &AutomationRun) -> Result<super::video::VideoJob, String> {
+    let (video, base) = content_video(c, run)?;
     let json: String = c
         .query_row(
             "SELECT input_json FROM ai_tasks WHERE id=?1",
@@ -849,7 +848,6 @@ fn verify_content(c: &Connection, run: &AutomationRun) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     let input: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    let base = task_version(c, run.writing_task_id.as_deref())?;
     if input["transcriptSha256"].as_str() != Some(content_digest(&video.plan)?.as_str())
         || input["sourceVersionId"].as_str() != Some(base.id.as_str())
         || input["audioJobId"].as_str() != run.audio_job_id.as_deref()
@@ -858,7 +856,7 @@ fn verify_content(c: &Connection, run: &AutomationRun) -> Result<(), String> {
     {
         return Err("音频、字幕或来源版本在校核后变化，请停止流程并重新准备对应材料。".into());
     }
-    Ok(())
+    Ok(video)
 }
 fn content_digest(plan: &crate::video::VideoPlan) -> Result<String, String> {
     let input = serde_json::json!({"audioSha256":plan.audio_sha256,"duration":plan.duration,"cues":plan.cues});
