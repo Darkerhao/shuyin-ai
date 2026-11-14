@@ -7,7 +7,7 @@ use crate::database::{
 use serde::Serialize;
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
     time::Duration,
@@ -72,13 +72,58 @@ impl DownloadIntent {
         self.url == url || self.redirects.iter().any(|redirect| redirect == url)
     }
 }
+#[cfg(windows)]
+struct StageWait {
+    job_id: String,
+    run_id: i64,
+    stage: String,
+    started_at: std::time::Instant,
+    refreshed_at: std::time::Instant,
+}
+#[cfg(windows)]
+impl StageWait {
+    fn new(job: &AudioExecutionJob, now: std::time::Instant) -> Self {
+        Self {
+            job_id: job.id.clone(),
+            run_id: job.run_id,
+            stage: job.stage.clone(),
+            started_at: now,
+            refreshed_at: now,
+        }
+    }
+
+    fn matches(&self, job: &AudioExecutionJob) -> bool {
+        self.job_id == job.id && self.run_id == job.run_id && self.stage == job.stage
+    }
+
+    fn refresh_if_due(
+        &mut self,
+        job: &AudioExecutionJob,
+        kind: &str,
+        now: std::time::Instant,
+        reload: impl FnOnce() -> Result<(), String>,
+    ) -> Result<bool, String> {
+        if !self.matches(job)
+            || job.status != "generating"
+            || job.stage != "generating"
+            || !matches!(kind, "generating" | "waiting")
+            || now.duration_since(self.refreshed_at) < Duration::from_secs(180)
+        {
+            return Ok(false);
+        }
+        reload()?;
+        self.refreshed_at = now;
+        Ok(true)
+    }
+}
 pub struct AudioAutomation {
     operation: tokio::sync::Mutex<()>,
     wake: tokio::sync::Notify,
     epoch: AtomicU64,
+    page_loading: AtomicBool,
     window_task: Mutex<Option<String>>,
     #[cfg(windows)]
-    waiting: Mutex<Option<(String, i64, String, std::time::Instant)>>,
+    waiting: Mutex<Option<StageWait>>,
     #[cfg(windows)]
     download: Mutex<Option<DownloadIntent>>,
     instance: Option<InstanceGuard>,
@@ -102,6 +147,7 @@ impl AudioAutomation {
             operation: tokio::sync::Mutex::new(()),
             wake: tokio::sync::Notify::new(),
             epoch: AtomicU64::new(0),
+            page_loading: AtomicBool::new(false),
             window_task: Mutex::new(None),
             #[cfg(windows)]
             download: Mutex::new(None),
@@ -216,9 +262,20 @@ impl AudioAutomation {
                     }) {
                         return true;
                     }
+                    if allowed_url(url) {
+                        state.page_loading.store(true, Ordering::SeqCst);
+                    }
                     state.epoch.fetch_add(1, Ordering::SeqCst);
                     state.notify();
                     allowed_url(url)
+                })
+                .on_page_load(|window, payload| {
+                    let state = window.state::<AudioAutomation>();
+                    state.page_loading.store(
+                        matches!(payload.event(), tauri::webview::PageLoadEvent::Started),
+                        Ordering::SeqCst,
+                    );
+                    state.notify();
                 })
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()
@@ -354,15 +411,8 @@ impl AudioAutomation {
     ) -> Result<u64, String> {
         {
             let mut waiting = self.waiting.lock().map_err(|e| e.to_string())?;
-            if !waiting.as_ref().is_some_and(|(id, run, stage, _)| {
-                *id == job.id && *run == job.run_id && *stage == job.stage
-            }) {
-                *waiting = Some((
-                    job.id.clone(),
-                    job.run_id,
-                    job.stage.clone(),
-                    std::time::Instant::now(),
-                ));
+            if !waiting.as_ref().is_some_and(|wait| wait.matches(job)) {
+                *waiting = Some(StageWait::new(job, std::time::Instant::now()));
             }
             let limit = match job.stage.as_str() {
                 "generating" => 6 * 60 * 60,
@@ -373,7 +423,7 @@ impl AudioAutomation {
             if job.status != "waiting_login"
                 && waiting
                     .as_ref()
-                    .is_some_and(|(_, _, _, start)| start.elapsed() > Duration::from_secs(limit))
+                    .is_some_and(|wait| wait.started_at.elapsed() > Duration::from_secs(limit))
             {
                 return Err("当前阶段等待超时。请查看网站；页面空白或报错时点击“刷新网站”或“重新打开”，核对后继续跟进；不会重新提交生成。".into());
             }
@@ -400,6 +450,10 @@ impl AudioAutomation {
         let window = app
             .get_webview_window(LABEL)
             .ok_or("任务网站已关闭，请点击继续跟进重新打开。")?;
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        if self.page_loading.load(Ordering::SeqCst) {
+            return Ok(2);
+        }
         let url = window.url().map_err(|e| e.to_string())?;
         // WebView2 starts at about:blank before its first navigation commits.
         // The existing stage timeout bounds this wait if navigation fails.
@@ -433,7 +487,6 @@ impl AudioAutomation {
         if job.stage == "verify_remote" && job.notebook_url.is_none() {
             return Err("原任务未保存笔记本地址。请查看原任务的空白笔记本，再点“继续跟进”确认关联；不会自动重新创建或提交生成。".into());
         }
-        let epoch = self.epoch.load(Ordering::SeqCst);
         let intercept = job.stage == "adding_source"
             && matches!(
                 job.source,
@@ -466,6 +519,11 @@ impl AudioAutomation {
             {
                 return Ok(2);
             }
+        }
+        // Generation only observes the page: discard observations invalidated by navigation.
+        // The next tick reads the current task, so pause/cancel and notebook checks still apply.
+        if job.stage == "generating" && self.epoch.load(Ordering::SeqCst) != epoch {
+            return Ok(2);
         }
         let result = result?;
         self.require_current(database, job, epoch)?;
@@ -518,6 +576,20 @@ impl AudioAutomation {
                 let observation: AudioObservation =
                     serde_json::from_value(result).map_err(|e| format!("网页任务观察无效：{e}"))?;
                 database.observe_audio_job(&job.id, job.run_id, &observation)?;
+            }
+        }
+        // Observe first: a ready artifact must enter the existing download flow, not reload.
+        if let Some(wait) = self.waiting.lock().map_err(|e| e.to_string())?.as_mut() {
+            if wait.refresh_if_due(job, &kind, std::time::Instant::now(), || {
+                self.require_current(database, job, epoch)?;
+                self.page_loading.store(true, Ordering::SeqCst);
+                if let Err(error) = window.reload() {
+                    self.page_loading.store(false, Ordering::SeqCst);
+                    return Err(error.to_string());
+                }
+                Ok(())
+            })? {
+                return Ok(2);
             }
         }
         Ok(
@@ -723,6 +795,134 @@ fn acquire_instance() -> Result<Option<InstanceGuard>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    fn generating_job() -> AudioExecutionJob {
+        AudioExecutionJob {
+            id: "job".into(),
+            run_id: 1,
+            status: "generating".into(),
+            stage: "generating".into(),
+            project_title: "书籍".into(),
+            prompt: "原指导".into(),
+            format: "deep_dive".into(),
+            notebook_url: Some("https://notebook.google.com/notebook/task".into()),
+            source: crate::database::audio::AudioSourceData::Text {
+                text: "原来源".into(),
+                name: None,
+            },
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn generation_refresh_reloads_stale_page_every_three_minutes_without_extending_timeout() {
+        let job = generating_job();
+        let start = std::time::Instant::now();
+        let mut wait = StageWait::new(&job, start);
+        let mut reloads = 0;
+        for seconds in [0, 60, 120, 179, 180, 182, 240, 300, 360] {
+            let refreshed = wait
+                .refresh_if_due(
+                    &job,
+                    "generating",
+                    start + Duration::from_secs(seconds),
+                    || {
+                        reloads += 1;
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            assert_eq!(refreshed, seconds == 180 || seconds == 360);
+        }
+        assert_eq!(reloads, 2);
+        assert_eq!(wait.started_at, start);
+        assert_eq!(wait.refreshed_at, start + Duration::from_secs(360));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn generation_refresh_preserves_finished_interrupted_and_other_stage_jobs() {
+        let job = generating_job();
+        let start = std::time::Instant::now();
+        let mut wait = StageWait::new(&job, start);
+        let due = start + Duration::from_secs(180);
+        for kind in [
+            "generation_complete",
+            "download_target",
+            "login_required",
+            "page_changed",
+            "navigating",
+        ] {
+            assert!(!wait
+                .refresh_if_due(&job, kind, due, || panic!("must not reload"))
+                .unwrap());
+        }
+        for status in [
+            "paused",
+            "waiting_user",
+            "waiting_login",
+            "failed",
+            "succeeded",
+            "cancelled",
+        ] {
+            let mut inactive = job.clone();
+            inactive.status = status.into();
+            assert!(!wait
+                .refresh_if_due(&inactive, "generating", due, || panic!("must not reload"))
+                .unwrap());
+        }
+        for stage in [
+            "adding_source",
+            "submitting",
+            "downloading",
+            "importing",
+            "verify_remote",
+        ] {
+            let mut other = job.clone();
+            other.stage = stage.into();
+            let mut other_wait = StageWait::new(&other, start);
+            assert!(!other_wait
+                .refresh_if_due(&other, "waiting", due, || panic!("must not reload"))
+                .unwrap());
+        }
+        let mut resumed = job.clone();
+        resumed.run_id += 1;
+        assert!(!wait
+            .refresh_if_due(&resumed, "waiting", due, || panic!("must not reload"))
+            .unwrap());
+        resumed.id = "other-job".into();
+        assert!(!wait
+            .refresh_if_due(&resumed, "waiting", due, || panic!("must not reload"))
+            .unwrap());
+        let mut new_wait = StageWait::new(&resumed, due);
+        assert!(!new_wait
+            .refresh_if_due(&resumed, "waiting", due, || panic!(
+                "must not reload immediately"
+            ))
+            .unwrap());
+        assert!(wait
+            .refresh_if_due(&job, "waiting", due, || Ok(()))
+            .unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn generation_refresh_reports_reload_failure_without_resetting_clocks() {
+        let job = generating_job();
+        let start = std::time::Instant::now();
+        let mut wait = StageWait::new(&job, start);
+        assert_eq!(
+            wait.refresh_if_due(
+                &job,
+                "generating",
+                start + Duration::from_secs(180),
+                || Err("reload failed".into())
+            ),
+            Err("reload failed".into())
+        );
+        assert_eq!(wait.started_at, start);
+        assert_eq!(wait.refreshed_at, start);
+    }
     #[cfg(windows)]
     #[test]
     fn download_redirects_require_the_original_navigation_and_server_redirect_flag() {
