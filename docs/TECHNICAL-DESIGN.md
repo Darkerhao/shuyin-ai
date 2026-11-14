@@ -1,5 +1,13 @@
 # 书引 AI 技术设计文档
 
+## 合集名称下拉复用（2026-11-15）
+
+将原 `ModelOptionInput` 移为共用 `SavedOptionInput`，模型设置和自动制作的合集输入使用同一套筛选、键盘选择、回车新增及行内编辑/删除实现；说明文案由调用方传入。原模型配置与保存接口保持原职责，无重复下拉组件。
+
+合集候选通过 `publishing.ts` 的两条窄 IPC 命令读写 SQLite `app_settings.douyin_collection_options`。名称规范化与自动任务启动共用同一函数，去首尾空白并限制1—200字符，整组校验后单条 UPSERT，保存成功才更新前端列表。候选读取失败禁用名称控件并提供重读，保存期间沿用原 busy 阻止重复修改及启动。
+
+沿用原 `collectionName` 冻结、账号核对和官方唯一同名匹配，候选不作为账号权限或远端列表。无表结构、依赖版本或外部网站接口变更。已检查本地 Reka UI 2.11.0 PopoverRoot/Anchor/Content 的公开 props、事件及内嵌文档，复用原组件的受控浮层与焦点处理。实际验证见[合集候选验收](COLLECTION-OPTIONS.md)。
+
 ## 音频引子与首尾呼应（2026-11-15，当前规则）
 
 全量 `publishing-v10` 与音频按项 `publishing-revision-v9` 都要求 `hook`、`introduction`、`sections`、`closing`，仍经同一 `AudioDraft::into_prompt` 校验并组装 `audio-template-v6`。引子在欢迎语前、收束在正文后，身份与告别由模板固定添加。预览按同一内容顺序显示；字幕首尾参考复用原标题前缀提取，不增加解析分支或持久字段。原无时长预算及章节来源约束保持，详见[实现与验证](AUDIO-BOOKENDS.md)。

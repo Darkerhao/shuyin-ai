@@ -497,10 +497,7 @@ impl Database {
             return Err("自动任务标识或音频形式无效。".into());
         }
         if let Some(name) = &mut input.collection_name {
-            *name = name.trim().into();
-            if name.is_empty() || name.chars().count() > 200 {
-                return Err("请填写1—200字的合集完整名称，或选择不加入合集。".into());
-            }
+            *name = super::publishing::normalize_collection_name(name)?;
         }
         self.with_connection(|connection| {
             if let Some(id)=connection.query_row("SELECT id FROM automation_runs WHERE request_key=?1",[&input.request_key],|row| row.get::<_,String>(0)).optional().map_err(|error|error.to_string())? {

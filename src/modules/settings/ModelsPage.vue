@@ -14,7 +14,7 @@ import { emptyProvider, type ModelProvider, type ProviderInput, type ReasoningEf
 import { useOperation } from '../../composables/useOperation'
 import AppIcon from '../../components/AppIcon.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
-import ModelOptionInput from './ModelOptionInput.vue'
+import SavedOptionInput from '@/components/SavedOptionInput.vue'
 const reasoningEffortOptions: { value: ReasoningEffort; label: string }[] = [
   { value: 'none', label: '关闭 · none' },
   { value: 'minimal', label: '极低 · minimal' },
@@ -375,10 +375,11 @@ onMounted(() => { if (desktop) void load() })
                       class="required-mark"
                       aria-hidden="true"
                     >*</span></label>
-                    <ModelOptionInput
+                    <SavedOptionInput
                       id="base-url"
                       v-model="form.baseUrl"
                       label="服务地址"
+                      footer="编辑或删除选项不改变已保存的模型配置。"
                       :options="fieldOptions.baseUrl"
                       :save-options="values => saveOptions('baseUrl', values)"
                       :disabled="controlsDisabled"
@@ -398,10 +399,11 @@ onMounted(() => { if (desktop) void load() })
                       class="required-mark"
                       aria-hidden="true"
                     >*</span></label>
-                    <ModelOptionInput
+                    <SavedOptionInput
                       id="model-name"
                       v-model="form.modelName"
                       label="模型名称"
+                      footer="编辑或删除选项不改变已保存的模型配置。"
                       :options="fieldOptions.modelName"
                       :save-options="values => saveOptions('modelName', values)"
                       :disabled="controlsDisabled"

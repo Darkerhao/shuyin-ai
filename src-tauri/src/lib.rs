@@ -151,6 +151,8 @@ pub fn run() {
             commands::inspect_full_backup,
             commands::restore_full_backup,
             publish_commands::list_publish_tasks,
+            publish_commands::douyin_collection_options,
+            publish_commands::save_douyin_collection_options,
             publish_commands::list_publish_queue,
             publish_commands::save_publish_task,
             publish_commands::prepare_publish_task,

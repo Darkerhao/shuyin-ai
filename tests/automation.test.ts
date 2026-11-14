@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { invoke } from '@tauri-apps/api/core'
 import AutomationSetup from '../src/components/AutomationSetup.vue'
 import { automationRuns, automationConsent, automationAccount, renderAutomationCover, type AutomationRun } from '../src/services/automation'
@@ -7,10 +7,13 @@ import { readBackground } from '../src/services/covers'
 import { coverPng, decodeBackground } from '../src/services/coverRenderer'
 import { newCover } from '../src/types/cover'
 import { listProviders } from '../src/services/ai'
+import { douyinCollectionOptions, saveDouyinCollectionOptions } from '../src/services/publishing'
+import { mockResizeObserver } from './ui'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: () => true }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn() }))
+vi.mock('../src/services/publishing', () => ({ douyinCollectionOptions: vi.fn(), saveDouyinCollectionOptions: vi.fn() }))
 vi.mock('../src/services/covers', () => ({ readBackground: vi.fn() }))
 vi.mock('../src/services/coverRenderer', () => ({ coverPng: vi.fn(), decodeBackground: vi.fn() }))
 
@@ -19,7 +22,9 @@ const run = (overrides: Partial<AutomationRun> = {}): AutomationRun => ({
   status: 'running', stage: 'landscape_cover', runId: 2, error: '', audioJobId: 'audio1', videoJobId: 'video1', writingTaskId: 'writing1', writingVersionId: 'version1', finalWritingVersionId: null, actualDurationSeconds: null, widescreenTaskId: null, widescreenCoverId: null, durationTaskId: null, contentCheckTaskId: null, landscapeTaskId: 'background1', portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '', ...overrides,
 })
 beforeEach(() => {
+  mockResizeObserver()
   vi.resetAllMocks(); automationRuns.value = []; automationConsent.value = false; automationAccount.value = null
+  vi.mocked(douyinCollectionOptions).mockResolvedValue([])
   vi.mocked(readBackground).mockResolvedValue(new ArrayBuffer(4))
   vi.mocked(decodeBackground).mockResolvedValue({} as globalThis.HTMLImageElement)
   vi.mocked(coverPng).mockResolvedValue([1, 2, 3])
@@ -65,6 +70,98 @@ describe('automatic cover execution outside the cover page', () => {
 })
 
 describe('automatic workflow setup', () => {
+  it('saves collections with Enter and supports choosing, renaming, deleting and reopening without starting work', async () => {
+    let saved = ['甲子读书 | 读懂一本书', '三国风云录']
+    vi.mocked(douyinCollectionOptions).mockImplementation(async () => [...saved])
+    vi.mocked(saveDouyinCollectionOptions).mockImplementation(async values => {
+      saved = [...new Set(values.map(value => value.trim()))]
+      return [...saved]
+    })
+    const saveSource = vi.fn()
+    const wrapper = mount(AutomationSetup, { attachTo: document.body, props: { saveSource } })
+    const popup = () => new DOMWrapper(document.querySelector<HTMLElement>('[data-saved-options="automation-collection-name"]')!)
+    await flushPromises()
+    wrapper.findAllComponents({ name: 'UiSelect' }).at(-1)!.vm.$emit('update:modelValue', 'named'); await flushPromises()
+    const input = wrapper.get('#automation-collection-name')
+    expect(input.attributes('autocomplete')).toBe('off')
+    await wrapper.get('[aria-label="展开合集选项"]').trigger('click'); await flushPromises()
+    expect(popup().findAll('[data-option-select]')).toHaveLength(2)
+    await popup().get('[aria-label="选择 三国风云录"]').trigger('click'); await flushPromises()
+    expect(input.element).toHaveProperty('value', '三国风云录')
+    expect(saveDouyinCollectionOptions).not.toHaveBeenCalled()
+    await input.setValue('  历史精讲  ')
+    await input.trigger('keydown', { key: 'Enter', isComposing: true }); await flushPromises()
+    expect(saveDouyinCollectionOptions).not.toHaveBeenCalled()
+    await input.trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(input.element).toHaveProperty('value', '历史精讲')
+    expect(saveDouyinCollectionOptions).toHaveBeenCalledWith(['历史精讲', '甲子读书 | 读懂一本书', '三国风云录'])
+    await input.trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(saveDouyinCollectionOptions).toHaveBeenCalledOnce()
+    await wrapper.get('[aria-label="展开合集选项"]').trigger('click'); await flushPromises()
+    await popup().get('[aria-label="编辑选项 历史精讲"]').trigger('click'); await flushPromises()
+    await popup().get('input').setValue(' 历史人物精讲 ')
+    await popup().get('input').trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(input.element).toHaveProperty('value', '历史人物精讲')
+    await popup().get('[aria-label="删除选项 历史人物精讲"]').trigger('click'); await flushPromises()
+    expect(saved).toEqual(['甲子读书 | 读懂一本书', '三国风云录'])
+    expect(input.element).toHaveProperty('value', '历史人物精讲')
+    expect(popup().text()).toContain('不会创建、重命名或删除抖音上的合集')
+    wrapper.unmount()
+    const reopened = mount(AutomationSetup, { attachTo: document.body, props: { saveSource } }); await flushPromises()
+    reopened.findAllComponents({ name: 'UiSelect' }).at(-1)!.vm.$emit('update:modelValue', 'named'); await flushPromises()
+    await reopened.get('[aria-label="展开合集选项"]').trigger('click'); await flushPromises()
+    expect(popup().findAll('[data-option-select]').map(option => option.text())).toEqual(saved)
+    expect(saveSource).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
+    reopened.unmount()
+  })
+
+  it('retries collection loading and keeps the input and saved options when a write fails', async () => {
+    vi.mocked(douyinCollectionOptions).mockRejectedValueOnce('数据库读取失败').mockResolvedValue(['读书'])
+    const wrapper = mount(AutomationSetup, { attachTo: document.body, props: { saveSource: vi.fn() } })
+    await flushPromises()
+    wrapper.findAllComponents({ name: 'UiSelect' }).at(-1)!.vm.$emit('update:modelValue', 'named'); await flushPromises()
+    const input = wrapper.get('#automation-collection-name')
+    expect(input.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('合集选项读取失败')
+    await wrapper.findAll('button').find(button => button.text() === '重新读取合集选项')!.trigger('click'); await flushPromises()
+    expect(input.attributes('disabled')).toBeUndefined()
+    vi.mocked(saveDouyinCollectionOptions).mockRejectedValueOnce('保存失败').mockResolvedValue(['新合集', '读书'])
+    await input.setValue('新合集'); await input.trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(input.element).toHaveProperty('value', '新合集')
+    expect(wrapper.get('[role="alert"]').text()).toBe('保存失败')
+    await wrapper.get('[aria-label="展开合集选项"]').trigger('click'); await flushPromises()
+    const popup = new DOMWrapper(document.querySelector<HTMLElement>('[data-saved-options="automation-collection-name"]')!)
+    expect(popup.findAll('[data-option-select]')).toHaveLength(1)
+    expect(popup.text()).toContain('读书')
+    await input.trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(wrapper.text()).toContain('选项已保存')
+    expect(saveDouyinCollectionOptions).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('blocks starting or repeating a collection save while persistence is pending', async () => {
+    automationConsent.value = true
+    automationAccount.value = { id: null, name: '本次账号', key: 'identity' }
+    let finish!: (values: string[]) => void
+    vi.mocked(saveDouyinCollectionOptions).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const saveSource = vi.fn()
+    const wrapper = mount(AutomationSetup, { attachTo: document.body, props: { saveSource } }); await flushPromises()
+    wrapper.findAllComponents({ name: 'UiSelect' }).at(-1)!.vm.$emit('update:modelValue', 'named'); await flushPromises()
+    const input = wrapper.get('#automation-collection-name')
+    await input.setValue('读书合集'); await input.trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(input.attributes('disabled')).toBeDefined()
+    const start = wrapper.findAll('button').find(button => button.text().includes('正在准备'))!
+    expect(start.attributes('disabled')).toBeDefined()
+    await start.trigger('click'); await input.trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(saveSource).not.toHaveBeenCalled()
+    expect(saveDouyinCollectionOptions).toHaveBeenCalledOnce()
+    finish(['读书合集']); await flushPromises()
+    expect(input.attributes('disabled')).toBeUndefined()
+    expect(wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!.attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
   it('starts a chapter with the same image, account and complete publishing setup as a whole book', async () => {
     automationConsent.value = true
     automationAccount.value = { id: null, name: '精讲账号', key: 'chapter-account' }

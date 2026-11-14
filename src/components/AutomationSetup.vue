@@ -2,12 +2,14 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { isDesktop } from '../services/projects'
 import { listProviders } from '../services/ai'
+import { douyinCollectionOptions, saveDouyinCollectionOptions } from '../services/publishing'
 import { automationRuns, automationConsent, automationAccount, startAutomation, refreshAutomation, prepareAccount, confirmAccount, type AutomationAccount } from '../services/automation'
 import type { ModelProvider } from '../types/ai'
 import type { AudioSourceInput } from '../types/audio'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
+import SavedOptionInput from '@/components/SavedOptionInput.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const props = defineProps<{ saveSource: () => Promise<{ projectId: string; source: AudioSourceInput }>; disabled?: boolean }>()
@@ -20,6 +22,9 @@ const accountReady = computed(() => !!account.value && !!automationAccount.value
   && account.value.id === automationAccount.value.id && account.value.key === automationAccount.value.key
   && account.value.name === automationAccount.value.name)
 const collectionName = ref<string | null>(null)
+const collectionOptions = ref<string[]>([])
+const collectionOptionsReady = ref(false)
+const collectionOptionsError = ref('')
 const collectionMode = computed({
   get: () => collectionName.value === null ? 'none' : 'named',
   set: (value: string) => { collectionName.value = value === 'none' ? null : collectionName.value ?? '' },
@@ -48,7 +53,24 @@ onMounted(async () => {
   try {
     providers.value = await listProviders()
   } catch { error.value = '模型配置读取失败，请在模型设置中检查。' }
+  await loadCollectionOptions()
 })
+async function loadCollectionOptions() {
+  busy.value = true; collectionOptionsError.value = ''
+  try {
+    collectionOptions.value = await douyinCollectionOptions()
+    collectionOptionsReady.value = true
+  } catch (cause) { collectionOptionsError.value = `合集选项读取失败：${String(cause)}` }
+  finally { busy.value = false }
+}
+async function saveCollections(values: string[]) {
+  busy.value = true
+  try {
+    const saved = await saveDouyinCollectionOptions(values)
+    collectionOptions.value = saved
+    return saved
+  } finally { busy.value = false }
+}
 async function readAccount() {
   busy.value = true; error.value = ''; account.value = null
   try { account.value = await prepareAccount() }
@@ -201,19 +223,42 @@ async function start() {
         </Select>
         <template v-if="collectionName !== null">
           <label for="automation-collection-name">合集完整名称</label>
-          <Input
+          <SavedOptionInput
             id="automation-collection-name"
             v-model="collectionName"
-            placeholder="填写此账号已有的合集名称"
-            maxlength="200"
-            :disabled="busy || active"
-            aria-describedby="automation-collection-hint"
+            label="合集"
+            :options="collectionOptions"
+            :save-options="saveCollections"
+            placeholder="选择或输入已有合集名称，回车保存"
+            :maxlength="200"
+            :disabled="busy || active || !collectionOptionsReady"
+            described-by="automation-collection-hint"
+            footer="仅管理本地候选，不会创建、重命名或删除抖音上的合集，也不改变已启动任务。"
           />
+          <div
+            v-if="collectionOptionsError"
+            class="flex flex-wrap items-center gap-2"
+          >
+            <p
+              role="alert"
+              class="text-sm text-destructive"
+            >
+              {{ collectionOptionsError }}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              :disabled="busy || active"
+              @click="loadCollectionOptions"
+            >
+              重新读取合集选项
+            </Button>
+          </div>
           <p
             id="automation-collection-hint"
             class="text-sm text-muted-foreground"
           >
-            上传后自动匹配官方同名合集并选中，无需再次选择。请填写完整名称；同名多项或名称不匹配时会暂停提示。
+            候选保存在本地，可跨书籍复用。请选择当前账号已有的完整合集名称；上传后自动匹配官方唯一同名合集，无法匹配时会暂停提示。
           </p>
         </template>
       </div>
