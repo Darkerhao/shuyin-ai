@@ -17,7 +17,8 @@ const renderSteps = [
   { phase: 'rendering_subtitles', label: '合成字幕', unit: 'seconds' },
   { phase: 'muxing_audio', label: '合入原声', unit: 'seconds' },
 ]
-const renderStep = computed(() => progress.value?.phase === 'checking_video' ? renderSteps.length : renderSteps.findIndex(item => item.phase === progress.value?.phase))
+const audioPhases: Record<string, string> = { measuring_audio: '分析', normalizing_audio: '调整', checking_audio: '核对' }
+const renderStep = computed(() => progress.value?.phase === 'checking_video' ? renderSteps.length : renderSteps.findIndex(item => item.phase === (audioPhases[progress.value?.phase ?? ''] ? 'muxing_audio' : progress.value?.phase)))
 const steps = ['原声字幕', '动画分镜', '确认分镜', '画面渲染', '成片归档']
 const step = computed(() => {
   if (props.job.status === 'succeeded') return steps.length
@@ -28,7 +29,7 @@ const covered = computed(() => (props.job.plan.scenes.at(-1)?.last ?? -1) + 1)
 const reviewed = computed(() => props.job.plan.subtitleReview?.completed ?? 0)
 const percent = computed(() => {
   const p = progress.value
-  const measured = p && rendering.value && renderSteps.some(item => item.phase === p.phase && (p.phase === 'rendering_frames' || item.unit === p.unit))
+  const measured = p && rendering.value && ((audioPhases[p.phase] && p.unit === 'seconds') || renderSteps.some(item => item.phase === p.phase && (p.phase === 'rendering_frames' || item.unit === p.unit)))
   if (p && p.total > 0 && (props.job.stage === 'transcribing' || measured)) return Math.min(100, Math.max(0, Math.floor(p.completed / p.total * 100)))
   if (props.job.stage === 'storyboard' && props.job.plan.cues.length) return Math.min(100, Math.floor(covered.value / props.job.plan.cues.length * 100))
   if (props.job.stage === 'proofreading' && props.job.plan.cues.length) return Math.min(100, Math.floor(reviewed.value / props.job.plan.cues.length * 100))
@@ -44,6 +45,9 @@ const phaseCopy: Record<string, [string, string]> = {
   rendering_frames: ['正在让分镜动起来', '按已完成的视频片段更新真实帧数，复用的缓存也会计入。画面就绪后，再合成字幕与原声。'],
   preparing_subtitles: ['正在准备每一句字幕', '画面已绘制完成，正在按原声时间轴生成字幕图层。下方显示已准备好的字幕数量。'],
   rendering_subtitles: ['正在把字幕放入画面', '正在逐帧合成字幕，进度跟随实际处理的视频位置更新。长视频需要一些时间，可在下方查看处理速度。'],
+  measuring_audio: ['正在分析整段音量', '测量完整原声，为试片与成片确定一致的音量。原音频文件保持不变。'],
+  normalizing_audio: ['正在调整人声音量', '自动提高偏轻的人声并控制峰值，保留语速和字幕时间轴。'],
+  checking_audio: ['正在核对输出音量', '检查编码后的音轨，确认峰值合适后再合入画面。'],
   muxing_audio: ['正在把原声合入画面', '字幕已合成，正在合入原声音轨并写入视频文件。完成后还会检查并归档成片。'],
   checking_video: ['正在核对成片', '检查视频尺寸、时长与音轨，准备保存成片。'],
 }
@@ -88,6 +92,7 @@ const measure = computed(() => {
   if (rendering.value && progress.value?.total) {
     const p = progress.value
     if (p.phase === 'preparing_subtitles' && p.unit === 'cues') return `已准备 ${p.completed} / ${p.total} 条字幕`
+    if (audioPhases[p.phase] && p.unit === 'seconds') return `已${audioPhases[p.phase]} ${time(p.completed)} / ${time(p.total)}`
     if (p.unit === 'seconds' && ['rendering_subtitles', 'muxing_audio'].includes(p.phase)) return `已${p.phase === 'rendering_subtitles' ? '合成' : '合入'} ${time(p.completed)} / ${time(p.total)}`
   }
   if (props.job.stage === 'storyboard' && props.job.plan.cues.length) return `已编排 ${covered.value} / ${props.job.plan.cues.length} 条字幕`
