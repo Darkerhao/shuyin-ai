@@ -471,7 +471,9 @@ Node的`buildEpisode(plan, range?)`生成同一绘图工程：源cue ID、原场
 
 文本协议为 `publishing-v5` / `publishing-revision-v4`，增加 coverPromptWidescreen；全量要求三份非空、不同且标明各自比例的提示词，单项修改沿用候选预览/采用。旧 WritingContent 缺失字段按空字符串读取。CoverConfig 新增 backgroundPrompt，旧配置默认为空。
 
-图片任务冻结 width/height，Rust 只接受三种封面尺寸；`cover-background-v2` 以指定比例独立构图，不再要求方形兼容全部尺寸。现有 GPT Image 适配器按方向请求 1536x1024 / 1024x1536，本地裁切为准确目标尺寸；不猜测第三方自定义尺寸、不静默重试其他协议。服务不支持时返回原错误并保留配置。接口依据：[OpenAI Images Generate](https://developers.openai.com/api/reference/resources/images/methods/generate?site_locale=en)（本轮已读取官方当前页面）；兼容供应商实际支持情况需单独验收。
+图片任务冻结 width/height，Rust 只接受三种封面尺寸；`cover-background-v2` 以指定比例独立构图。图片适配器把冻结宽高原样组成 `size=WIDTHxHEIGHT`，分别请求 1440x1080、1080x1440、1920x1080；完整解码后核对返回宽高，不一致返回 `image_size_mismatch`，不进入素材保存。背景继续按解码的真实比例和尺寸命名，通过校验后与目标封面输出一致。视频插画共用该接口，原样请求 1920x1080。服务拒绝尺寸时沿用原错误处理，不替换请求尺寸；人工封面生成不自动重试，自动制作仍沿用既有有限模型重试规则。
+
+接口依据：[OpenAI Images Generate](https://developers.openai.com/api/reference/resources/images/methods/generate)（2026-11-14 读取）：当前 GPT Image 2/2.5 文档支持自定义 `WIDTHxHEIGHT`，但规定宽高均为16的倍数。1080不满足该约束，本项目按用户明确指定值请求，不能据此宣称官方接口或兼容供应商一定支持这三组尺寸；真实服务支持情况需单独验收。验收与失败保稿边界见 [准确尺寸修复记录](COVER-EXACT-SIZE-VERIFICATION.md)。
 
 无新增依赖、Command、权限或 SQL 表/列。此前“同一配置改变尺寸”的运行路径已替换，旧版本 Prompt 仅作为历史保留。验证见 `COVER-INDEPENDENT-VERIFICATION.md`。
 

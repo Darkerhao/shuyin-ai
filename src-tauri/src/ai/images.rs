@@ -22,8 +22,8 @@ pub(crate) fn test_png() -> Vec<u8> {
     bytes
 }
 #[cfg(test)]
-fn test_image(format: ImageFormat) -> Vec<u8> {
-    let image = image::RgbImage::from_pixel(4, 4, image::Rgb([60, 90, 120]));
+pub(crate) fn test_image(format: ImageFormat, width: u32, height: u32) -> Vec<u8> {
+    let image = image::RgbImage::from_pixel(width, height, image::Rgb([60, 90, 120]));
     let mut bytes = Vec::new();
     image
         .write_to(&mut Cursor::new(&mut bytes), format)
@@ -33,12 +33,12 @@ fn test_image(format: ImageFormat) -> Vec<u8> {
 
 #[cfg(test)]
 pub(crate) fn test_jpeg() -> Vec<u8> {
-    test_image(ImageFormat::Jpeg)
+    test_image(ImageFormat::Jpeg, 4, 4)
 }
 
 #[cfg(test)]
 pub(crate) fn test_webp() -> Vec<u8> {
-    test_image(ImageFormat::WebP)
+    test_image(ImageFormat::WebP, 4, 4)
 }
 
 pub struct ImageRequest {
@@ -94,12 +94,7 @@ impl ImageProvider for OpenAiCompatible<'_> {
             let mut log =
                 super::diagnostics::Call::start(self.diagnostics.as_ref(), &request.model)?;
             let result=async {
-            // GPT Image exposes orientation sizes; the local renderer crops to the exact target ratio.
-            let size = if request.width > request.height {
-                "1536x1024"
-            } else {
-                "1024x1536"
-            };
+            let size = format!("{}x{}", request.width, request.height);
             let data = self.post_json(&request.base_url, "images/generations", request.key,
                 serde_json::json!({"model":request.model,"prompt":request.prompt,"n":1,"size":size,"response_format":"b64_json"}),
                 MAX_IMAGE_BYTES * 4 / 3 + 1024 * 1024, &mut log).await?;
@@ -117,7 +112,13 @@ impl ImageProvider for OpenAiCompatible<'_> {
             let bytes = STANDARD.decode(encoded).map_err(|_| {
                 AiError::new("invalid_response", "图片数据编码无效，已保存内容保留。")
             })?;
-            validate_image(&bytes)?;
+            let (_, width, height) = validate_image(&bytes)?;
+            if (width, height) != (request.width, request.height) {
+                return Err(AiError::new("image_size_mismatch", &format!(
+                    "图片服务返回 {width}×{height}，与请求的 {}×{} 不一致。请使用支持该尺寸的图片模型，原背景和编辑内容已保留。",
+                    request.width, request.height
+                )));
+            }
             Ok(bytes)
             }.await;
             log.finish(&result)?;
