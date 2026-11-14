@@ -1,4 +1,4 @@
-use super::images::{test_jpeg, test_png, test_webp, ImageProvider, ImageRequest};
+use super::images::{test_image, test_jpeg, test_png, test_webp, ImageProvider, ImageRequest};
 use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::sync::Arc;
@@ -112,50 +112,72 @@ async fn call_diagnostics_record_returned_usage_timing_errors_and_cancellation_w
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn image_contract_decodes_image_and_uses_the_configured_model() {
-    let jpeg = test_jpeg();
-    let body = serde_json::json!({"data":[{"b64_json":STANDARD.encode(&jpeg)}]}).to_string();
-    let (url, h) = server(200, &body, Duration::ZERO);
-    let bytes = OpenAiCompatible::new(TIMEOUT, &url)
-        .unwrap()
-        .generate_image(image_request(url))
-        .await
-        .unwrap();
-    assert_eq!(bytes, jpeg);
-    let received = h.join().unwrap();
-    assert!(received.starts_with("POST /v1/images/generations HTTP/1.1"));
-    assert!(received
-        .to_lowercase()
-        .contains("authorization: bearer contract-only-secret"));
-    let body: serde_json::Value =
-        serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-    assert_eq!(
-        body,
-        serde_json::json!({"model":"configured-image-model","prompt":"无字山林","n":1,"size":"1536x1024","response_format":"b64_json"})
-    );
+async fn image_contract_requests_exact_target_dimensions_and_preserves_image_bytes() {
+    for (width, height, format) in [
+        (1440, 1080, image::ImageFormat::Png),
+        (1080, 1440, image::ImageFormat::Jpeg),
+        (1920, 1080, image::ImageFormat::WebP),
+    ] {
+        let image = test_image(format, width, height);
+        let body = serde_json::json!({"data":[{"b64_json":STANDARD.encode(&image)}]}).to_string();
+        let (url, handle) = server(200, &body, Duration::ZERO);
+        let mut request = image_request(url.clone());
+        request.width = width;
+        request.height = height;
+        let bytes = OpenAiCompatible::new(TIMEOUT, &url)
+            .unwrap()
+            .generate_image(request)
+            .await
+            .unwrap();
+        assert_eq!(bytes, image);
+        let received = handle.join().unwrap();
+        assert!(received.starts_with("POST /v1/images/generations HTTP/1.1"));
+        assert!(received
+            .to_lowercase()
+            .contains("authorization: bearer contract-only-secret"));
+        let body: serde_json::Value =
+            serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"model":"configured-image-model","prompt":"无字山林","n":1,"size":format!("{width}x{height}"),"response_format":"b64_json"})
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn image_contract_uses_portrait_size_for_a_portrait_cover() {
-    let body = serde_json::json!({"data":[{"b64_json":STANDARD.encode(test_png())}]}).to_string();
-    let (url, handle) = server(200, &body, Duration::ZERO);
-    let mut request = image_request(url.clone());
-    request.width = 1080;
-    request.height = 1440;
-    OpenAiCompatible::new(TIMEOUT, &url)
-        .unwrap()
-        .generate_image(request)
-        .await
-        .unwrap();
-    let received = handle.join().unwrap();
-    let body: serde_json::Value =
-        serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-    assert_eq!(body["size"], "1024x1536");
+async fn image_contract_rejects_returned_dimensions_that_differ_from_the_request() {
+    for (width, height, actual_width, actual_height) in [
+        (1440, 1080, 1536, 1024),
+        (1080, 1440, 1024, 1536),
+        (1920, 1080, 1536, 1024),
+        (1440, 1080, 720, 540),
+    ] {
+        let image = test_image(image::ImageFormat::Png, actual_width, actual_height);
+        let body = serde_json::json!({"data":[{"b64_json":STANDARD.encode(image)}]}).to_string();
+        let (url, handle) = server(200, &body, Duration::ZERO);
+        let mut request = image_request(url.clone());
+        request.width = width;
+        request.height = height;
+        let Err(error) = OpenAiCompatible::new(TIMEOUT, &url)
+            .unwrap()
+            .generate_image(request)
+            .await
+        else {
+            panic!("尺寸不符的背景不能成为生成结果");
+        };
+        handle.join().unwrap();
+        assert_eq!(error.code, "image_size_mismatch");
+        assert!(error.message.contains(&format!("{width}×{height}")));
+        assert!(error
+            .message
+            .contains(&format!("{actual_width}×{actual_height}")));
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn image_errors_timeout_and_unusable_content_never_return_an_asset() {
     for (status, code) in [
+        (400, "http"),
         (401, "authentication"),
         (403, "forbidden"),
         (429, "rate_limit"),

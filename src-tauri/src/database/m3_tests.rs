@@ -246,25 +246,33 @@ fn generated_background_filenames_use_actual_dimensions_and_format() {
     let db = Database::open(dir.path().join("db.sqlite3"));
     let p = project(&db);
     let provider = image_model(&db);
-    for (format, extension) in [
-        (image::ImageFormat::Png, "png"),
-        (image::ImageFormat::Jpeg, "jpg"),
-        (image::ImageFormat::WebP, "webp"),
+    for (width, height, ratio, format, extension) in [
+        (1440, 1080, "4比3", image::ImageFormat::Png, "png"),
+        (1080, 1440, "3比4", image::ImageFormat::Jpeg, "jpg"),
+        (1920, 1080, "16比9", image::ImageFormat::WebP, "webp"),
     ] {
-        let image = image::RgbImage::from_pixel(12, 8, image::Rgb([60, 90, 120]));
-        let mut bytes = std::io::Cursor::new(Vec::new());
-        image.write_to(&mut bytes, format).unwrap();
-        let task = image_task(&db, &p.id, &provider.id);
+        let bytes = crate::ai::images::test_image(format, width, height);
+        let task = db
+            .start_cover_generation(ImageGenerationInput {
+                chapter_id: None,
+                project_id: p.id.clone(),
+                provider_id: provider.id.clone(),
+                description: "独立构图".into(),
+                width,
+                height,
+            })
+            .unwrap();
         db.prepare_cover_generation(&task).unwrap();
-        let asset = db.finish_cover_generation(&task, bytes.get_ref()).unwrap();
+        let asset = db.finish_cover_generation(&task, &bytes).unwrap();
         assert_eq!(
             asset.original_name,
-            format!("M3测试书-3比2-12x8-背景-v1.{extension}")
+            format!("M3测试书-{ratio}-{width}x{height}-背景-v1.{extension}")
         );
         assert_eq!(
-            db.read_cover_background(&p.id, &asset.id).unwrap(),
-            *bytes.get_ref()
+            PathBuf::from(&asset.file_path).file_name().unwrap(),
+            asset.original_name.as_str()
         );
+        assert_eq!(db.read_cover_background(&p.id, &asset.id).unwrap(), bytes);
     }
 }
 

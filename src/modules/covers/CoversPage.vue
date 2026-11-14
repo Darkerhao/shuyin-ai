@@ -1153,7 +1153,7 @@ onMounted(async () => {
                       />
                     </div>
                     <p class="ai-usage">
-                      仅为 <strong>{{ currentSize.label }}</strong> 生成无文字背景，中文由本地排版。图片服务按横竖方向生成，最终按目标尺寸裁切。书名、作者和画面描述会发送至所选服务，可能产生模型费用。
+                      按 <strong>{{ currentSize.label }}</strong> 请求无文字背景，中文由本地排版。背景图片、文件名和封面输出使用相同的比例与尺寸；服务返回尺寸不符时保留原背景并提示错误。书名、作者和画面描述会发送至所选服务，可能产生模型费用。
                     </p>
                     <div class="ai-generate-actions">
                       <Button
