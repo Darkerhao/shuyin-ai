@@ -9,8 +9,8 @@ pub(crate) mod preview;
 pub mod publishing;
 pub mod revision;
 mod stream;
-pub const PROMPT_VERSION: &str = "publishing-v9";
-pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v9.md");
+pub const PROMPT_VERSION: &str = "publishing-v10";
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/publishing-v10.md");
 pub const TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

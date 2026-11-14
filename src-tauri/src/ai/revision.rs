@@ -4,8 +4,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "publishing-revision-v8";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v8.md");
+pub const PROMPT_VERSION: &str = "publishing-revision-v9";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v9.md");
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -86,7 +86,7 @@ pub fn revise(
         }
         let text = if *field == PublishingField::AudioPrompt {
             serde_json::from_value::<AudioDraft>(value.clone())
-                .map_err(|_| "音频调整需要书籍引入及五个完整部分。")?
+                .map_err(|_| "音频调整需要引子、书籍引入、正文各部分及结尾收束。")?
                 .into_prompt(book, chapter)?
         } else if *field == PublishingField::Tags {
             parse_tags(value.as_str().ok_or("标签调整结果必须是文字。")?)?
@@ -276,7 +276,7 @@ mod tests {
     }
     #[test]
     fn audio_revision_keeps_fixed_template_and_other_content() {
-        let raw = json!({"audioPrompt":{"introduction":"今天聊这本书。","sections":(1..=5).map(|i|json!({"heading":format!("主题{i}"),"guidance":"根据原书来源讲述，不编造。"})).collect::<Vec<_>>()}});
+        let raw = json!({"audioPrompt":{"hook":"一个看似平常的决定，为什么会改变人物的命运？","introduction":"今天聊《测试书》。","sections":(1..=5).map(|i|json!({"heading":format!("主题{i}"),"guidance":"根据原书来源讲述，不编造。"})).collect::<Vec<_>>(),"closing":"回到最初的问题，决定的影响需要放回人物的处境中理解。"}});
         let content = revise(
             &raw.to_string(),
             &original(),
@@ -292,15 +292,49 @@ mod tests {
         assert!(!audio.contains("10分钟"));
         assert!(!audio.contains("30分钟读懂一本书"));
         assert!(!audio.contains("接下来30分钟"));
-        assert!(audio.contains("接下来，我们一起读懂这本书。"));
+        assert!(audio.find("一个看似平常的决定").unwrap() < audio.find("欢迎大家").unwrap());
+        assert!(audio.find("## 第五部分：主题5").unwrap() < audio.find("回到最初的问题").unwrap());
         assert!(audio.ends_with(
-            "我是甲子。如果你喜欢这样的读书分享，记得关注我。下一期，我们继续一起读书。\n"
+            "我是甲子，陪你读懂书里的故事，也读懂故事里的人。喜欢这期分享，记得关注，我们下期见。\n"
         ));
         assert!(audio.contains("## 第五部分：主题5"));
-        assert!(audio.contains("《测试书》这本书"));
+        assert!(audio.contains("《测试书》"));
         let mut expected = serde_json::to_value(original()).unwrap();
         expected["audioPrompt"] = value["audioPrompt"].clone();
         assert_eq!(value, expected);
+        let chapter = revise(
+            &raw.to_string(),
+            &original(),
+            &[PublishingField::AudioPrompt],
+            "测试书",
+            Some("第三章"),
+        )
+        .unwrap();
+        let WritingContent::Publishing { audio_prompt, .. } = chapter else {
+            panic!()
+        };
+        assert!(audio_prompt.contains("本期精讲《测试书》的“第三章”"));
+        assert!(audio_prompt.contains("一个看似平常的决定"));
+        assert!(audio_prompt.contains("回到最初的问题"));
+        for field in ["hook", "closing"] {
+            let mut missing = raw.clone();
+            missing["audioPrompt"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            let mut empty = raw.clone();
+            empty["audioPrompt"][field] = json!(" ");
+            for invalid in [missing, empty] {
+                assert!(revise(
+                    &invalid.to_string(),
+                    &original(),
+                    &[PublishingField::AudioPrompt],
+                    "测试书",
+                    None,
+                )
+                .is_err());
+            }
+        }
         let mut invalid = raw;
         invalid["audioPrompt"]["sections"]
             .as_array_mut()

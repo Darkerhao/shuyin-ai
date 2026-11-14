@@ -16,8 +16,10 @@ pub(crate) fn texts(raw: &str, selected: Option<&[PublishingField]>) -> BTreeMap
         ""
     };
     let mut audio = Vec::new();
-    if let Some(text) = values.get(&format!("{prefix}introduction")) {
-        audio.push(text.clone());
+    for field in ["hook", "introduction"] {
+        if let Some(text) = values.get(&format!("{prefix}{field}")) {
+            audio.push(text.clone());
+        }
     }
     for index in 0..5 {
         let section = ["heading", "guidance"]
@@ -29,6 +31,9 @@ pub(crate) fn texts(raw: &str, selected: Option<&[PublishingField]>) -> BTreeMap
         if !section.is_empty() {
             audio.push(section);
         }
+    }
+    if let Some(text) = values.get(&format!("{prefix}closing")) {
+        audio.push(text.clone());
     }
     let audio = audio.join("\n\n");
     let mut shown = BTreeMap::new();
@@ -233,13 +238,13 @@ mod tests {
 
     #[test]
     fn partial_candidates_decode_text_and_audio_without_json_or_unselected_fields() {
-        let partial = r#"{"title":"读懂\"一本书\"","description":"第一行\n第二行\uD83D\uDE00","introduction":"书籍引入","sections":[{"heading":"主题一","guidance":"已经收到的指导"},{"heading":"主题二","guidance":"正在生"#;
+        let partial = r#"{"title":"读懂\"一本书\"","description":"第一行\n第二行\uD83D\uDE00","hook":"本期引子","introduction":"书籍引入","sections":[{"heading":"主题一","guidance":"已经收到的指导"},{"heading":"主题二","guidance":"正在生"#;
         let shown = texts(partial, None);
         assert_eq!(shown["title"], "读懂\"一本书\"");
         assert_eq!(shown["description"], "第一行\n第二行😀");
         assert_eq!(
             shown["audioPrompt"],
-            "书籍引入\n\n主题一\n已经收到的指导\n\n主题二\n正在生"
+            "本期引子\n\n书籍引入\n\n主题一\n已经收到的指导\n\n主题二\n正在生"
         );
         let shown = texts(partial, Some(&[PublishingField::Description]));
         assert_eq!(shown.len(), 1);
@@ -264,13 +269,16 @@ mod tests {
 
     #[test]
     fn revision_previews_include_only_selected_text_and_nested_audio_guidance() {
-        let raw = r##"{"reasoning_content":"PRIVATE_REASONING","title":"未选标题","audioPrompt":{"introduction":"新的引入","sections":[{"heading":"第一主题","guidance":"继续讲"}]},"coverDesign":{"textColor":"#ffffff"}}"##;
+        let raw = r##"{"reasoning_content":"PRIVATE_REASONING","title":"未选标题","audioPrompt":{"hook":"新的引子","introduction":"新的引入","sections":[{"heading":"第一主题","guidance":"继续讲"}],"closing":"回应引子的收束"},"coverDesign":{"textColor":"#ffffff"}}"##;
         let shown = texts(
             raw,
             Some(&[PublishingField::AudioPrompt, PublishingField::CoverDesign]),
         );
         assert_eq!(shown.len(), 1);
-        assert_eq!(shown["audioPrompt"], "新的引入\n\n第一主题\n继续讲");
+        assert_eq!(
+            shown["audioPrompt"],
+            "新的引子\n\n新的引入\n\n第一主题\n继续讲\n\n回应引子的收束"
+        );
         assert!(texts("非JSON的思考内容", None).is_empty());
     }
 }

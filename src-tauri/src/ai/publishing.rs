@@ -42,8 +42,10 @@ pub struct PublishingDraft {
     title: String,
     description: String,
     tags: String,
+    hook: String,
     introduction: String,
     sections: Vec<Section>,
+    closing: String,
     cover_title: String,
     cover_subtitle: String,
     cover_prompt_landscape: String,
@@ -60,15 +62,22 @@ struct Section {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AudioDraft {
+    hook: String,
     introduction: String,
     sections: Vec<Section>,
+    closing: String,
 }
 impl AudioDraft {
     pub fn into_prompt(self, book: &str, chapter: Option<&str>) -> Result<String, String> {
         if (chapter.is_none() && self.sections.len() != 5)
             || !(1..=5).contains(&self.sections.len())
-            || self.introduction.trim().is_empty()
-            || self.introduction.chars().count() > 1500
+            || [
+                (&self.hook, 200),
+                (&self.introduction, 1500),
+                (&self.closing, 600),
+            ]
+            .iter()
+            .any(|(text, limit)| text.trim().is_empty() || text.chars().count() > *limit)
             || self.sections.iter().any(|s| {
                 s.heading.trim().is_empty()
                     || s.heading.chars().count() > 100
@@ -77,7 +86,7 @@ impl AudioDraft {
             })
         {
             return Err(
-                "音频提示词需要完整引入；整书为五部分，章节为1—5部分，原有内容保留。".into(),
+                "音频提示词需要完整引子、书籍引入和结尾收束；整书为五部分，章节为1—5部分，原有内容保留。".into(),
             );
         }
         let sections = self
@@ -93,26 +102,13 @@ impl AudioDraft {
             })
             .collect::<Vec<_>>()
             .join("\n\n---\n\n");
-        let fixed_opening = chapter.map_or_else(
-            || "欢迎大家收听今天的节目，我是甲子。接下来，我们一起读懂这本书。".to_string(),
-            |chapter| {
-                format!(
-                    "欢迎大家收听今天的节目，我是甲子。今天，我们来读《{}》中的“{}”这一章。",
-                    book.trim().trim_start_matches('《').trim_end_matches('》'),
-                    chapter
-                )
-            },
-        );
         let scope = chapter.map_or_else(String::new, |chapter| format!("本期精讲《{book}》的“{chapter}”。仅以本次上传的章节正文为来源，细致解释重要内容、关键概念、人物动机或论证过程，不只概括要点，不推测其他章节、后续情节或全书结论。"));
-        Ok(include_str!("../../../prompts/audio-template-v5.md")
-            .replace("{{opening}}", &fixed_opening)
+        Ok(include_str!("../../../prompts/audio-template-v6.md")
             .replace("{{scope_instruction}}", &scope)
-            .replace(
-                "{{book}}",
-                book.trim().trim_start_matches('《').trim_end_matches('》'),
-            )
+            .replace("{{hook}}", self.hook.trim())
             .replace("{{introduction}}", self.introduction.trim())
-            .replace("{{sections}}", &sections))
+            .replace("{{sections}}", &sections)
+            .replace("{{closing}}", self.closing.trim()))
     }
 }
 #[derive(Deserialize)]
@@ -210,8 +206,10 @@ impl PublishingDraft {
             &self.cover_prompt_widescreen,
         )?;
         let audio_prompt = AudioDraft {
+            hook: self.hook,
             introduction: self.introduction,
             sections: self.sections,
+            closing: self.closing,
         }
         .into_prompt(book, chapter)?;
         let content = WritingContent::Publishing {
@@ -254,8 +252,9 @@ mod tests {
     #[test]
     fn transcript_output_keeps_actual_audio_guidance_and_rejects_unasked_fields() {
         let mut value = draft();
-        value.as_object_mut().unwrap().remove("introduction");
-        value.as_object_mut().unwrap().remove("sections");
+        for field in ["hook", "introduction", "sections", "closing"] {
+            value.as_object_mut().unwrap().remove(field);
+        }
         let content = serde_json::from_value::<TranscriptDraft>(value.clone())
             .unwrap()
             .into_content("实际音频使用的旧版指导".into())
@@ -316,16 +315,16 @@ mod tests {
             .split_once("\n\n## 书籍引入")
             .unwrap()
             .0;
-        assert_eq!(
-            opening,
-            "欢迎大家收听今天的节目，我是甲子。接下来，我们一起读懂这本书。"
-        );
+        assert_eq!(opening, "欢迎大家收听今天的节目，我是甲子。");
         let closing = audio_prompt
             .split_once("## 固定结尾（逐字朗读）\n\n")
             .unwrap()
             .1
             .trim();
-        assert_eq!(closing, "如果你对今天的内容感兴趣，建议读一读《测试书》这本书。\n我是甲子。如果你喜欢这样的读书分享，记得关注我。下一期，我们继续一起读书。");
+        assert_eq!(
+            closing,
+            "我是甲子，陪你读懂书里的故事，也读懂故事里的人。喜欢这期分享，记得关注，我们下期见。"
+        );
         for removed in ["目标时长：", "口播文字约", "（约", "时长预算不足", "{{"]
         {
             assert!(!audio_prompt.contains(removed), "{removed}");
@@ -333,8 +332,60 @@ mod tests {
         assert!(audio_prompt.contains("不设目标时长、口播字数或分段时间预算"));
         assert_eq!(audio_prompt.matches("## 第").count(), 5);
     }
+    #[test]
+    fn audio_bookends_surround_the_program_and_are_available_to_subtitle_review() {
+        let value = draft();
+        let hook = value["hook"].as_str().unwrap();
+        let closing = value["closing"].as_str().unwrap();
+        let content = serde_json::from_value::<PublishingDraft>(value.clone())
+            .unwrap()
+            .into_content("明朝那些事儿", None)
+            .unwrap();
+        let WritingContent::Publishing { audio_prompt, .. } = content else {
+            panic!()
+        };
+        let ordered = [
+            hook,
+            "欢迎大家收听今天的节目，我是甲子。",
+            value["introduction"].as_str().unwrap(),
+            "## 第一部分：主题0",
+            "## 第五部分：主题4",
+            closing,
+            "我是甲子，陪你读懂书里的故事，也读懂故事里的人。",
+        ];
+        let positions = ordered.map(|text| audio_prompt.find(text).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        let reference = crate::video::subtitles::SubtitleReference::from_prompt(
+            "明朝那些事儿".into(),
+            String::new(),
+            &audio_prompt,
+        );
+        assert_eq!(
+            reference.opening,
+            format!("{hook}\n欢迎大家收听今天的节目，我是甲子。")
+        );
+        assert_eq!(reference.ending, format!("{closing}\n我是甲子，陪你读懂书里的故事，也读懂故事里的人。喜欢这期分享，记得关注，我们下期见。"));
+        assert!(!reference.opening.contains("今天我们要聊"));
+        assert!(!reference.ending.contains("按原书来源"));
+    }
+    #[test]
+    fn rejects_missing_empty_and_oversized_audio_bookends() {
+        for (field, limit) in [("hook", 200), ("closing", 600)] {
+            let mut missing = draft();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<PublishingDraft>(missing).is_err());
+            for text in [" ".into(), "字".repeat(limit + 1)] {
+                let mut invalid = draft();
+                invalid[field] = serde_json::json!(text);
+                assert!(serde_json::from_value::<PublishingDraft>(invalid)
+                    .unwrap()
+                    .into_content("书", None)
+                    .is_err());
+            }
+        }
+    }
     fn draft() -> serde_json::Value {
-        serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "tags":"#读书 #明朝那些事儿 #历史", "introduction":"今天我们要聊的这本书，是《明朝那些事儿》。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。", "coverPromptWidescreen":"横版 16:9，城墙横向绵延，远景开阔，中央留白，无文字。", "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}})
+        serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "tags":"#读书 #明朝那些事儿 #历史", "hook":"一个人的选择，怎样改变一个时代的走向？", "introduction":"今天我们要聊的这本书，是《明朝那些事儿》。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "closing":"回到开头的问题，个人选择与时代处境相互影响。读懂人物怎样作出决定，才能看清故事中的因果。", "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。", "coverPromptWidescreen":"横版 16:9，城墙横向绵延，远景开阔，中央留白，无文字。", "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}})
     }
     #[test]
     fn chapter_audio_accepts_one_to_five_detailed_sections_without_book_wide_opening() {
@@ -350,7 +401,7 @@ mod tests {
             let WritingContent::Publishing { audio_prompt, .. } = result.unwrap() else {
                 panic!()
             };
-            assert!(audio_prompt.contains("《测试书》中的“第一章”这一章"));
+            assert!(audio_prompt.contains("本期精讲《测试书》的“第一章”"));
             assert!(audio_prompt.contains("本期精讲"));
             assert!(!audio_prompt.contains("接下来，我们一起读懂这本书"));
             assert!(!audio_prompt.contains("{{"));
@@ -410,9 +461,9 @@ mod tests {
         };
         assert!(!audio_prompt.contains("10分钟"));
         assert!(audio_prompt.contains("欢迎大家收听今天的节目，我是甲子。"));
-        assert!(audio_prompt.contains("《明朝那些事儿》这本书"));
+        assert!(audio_prompt.contains("《明朝那些事儿》"));
         assert!(audio_prompt.contains("## 第五部分：主题4"));
-        assert!(audio_prompt.contains("下一期，我们继续一起读书。"));
+        assert!(audio_prompt.contains("喜欢这期分享，记得关注，我们下期见。"));
         assert!(!audio_prompt.contains("{{"));
         assert_eq!(cover_title, "权力背后的人间故事");
         assert_eq!(cover_subtitle, "《明朝那些事儿》里的起落");
