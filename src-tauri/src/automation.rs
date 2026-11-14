@@ -28,7 +28,7 @@ fn local_main(window: &WebviewWindow) -> Result<(), String> {
 
 #[tauri::command]
 pub fn automation_snapshot(database: State<'_, Database>) -> Result<Vec<AutomationRun>, String> {
-    database.automation_runs()
+    database.active_automation_runs()
 }
 
 #[tauri::command]

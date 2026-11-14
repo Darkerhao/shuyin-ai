@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 创作流程查询优化（2026-11-14）
+
+仍为 schema v25，无表、列、索引、设置、迁移或历史数据修改。续作快照改用 `ROW_NUMBER() OVER (PARTITION BY project_id,chapter_id ORDER BY running DESC,updated DESC,id DESC)` 筛选每个范围的第一条及全部运行任务，保持原候选来源与归档过滤。自动任务快照仅查询 `status NOT IN ('completed','cancelled')`；已结束记录继续保留并可按 ID 读取。校核复用同一连接内已读取的数据，无持久缓存。见[流程优化记录](WORKFLOW-OPTIMIZATION.md)。
+
 ## 视频响度修复（2026-11-14）
 
 仍为 schema v25，无表、列、设置或迁移变更。仅对本次导出的派生音轨做标准化，原素材引用、SHA-256、字幕和 plan_json 不改写；成片继续通过原事务归档，失败不登记成功。临时音轨不入库。见[视频响度修复](VIDEO-LOUDNESS.md)。

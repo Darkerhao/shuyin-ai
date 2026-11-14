@@ -50,6 +50,32 @@ fn account() -> Account {
     }
 }
 
+#[test]
+fn automation_snapshot_only_loads_active_runs_without_losing_history() {
+    let (_directory, database, input) = setup();
+    let active = database.create_automation(input, account()).unwrap();
+    database.with_connection(|connection| {
+        connection.execute("WITH RECURSIVE history(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM history WHERE n<40)
+            INSERT INTO automation_runs(id,request_key,project_id,input_json,status,stage,created_at,updated_at)
+            SELECT 'finished-'||n,'finished-request-'||n,project_id,input_json,CASE WHEN n%2=0 THEN 'completed' ELSE 'cancelled' END,stage,'9999','9999'
+            FROM automation_runs,history WHERE id=?1", [&active.id]).unwrap();
+        Ok(())
+    }).unwrap();
+    let snapshot = database.active_automation_runs().unwrap();
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].id, active.id);
+    assert_eq!(
+        database.automation_run("finished-1").unwrap().status,
+        "cancelled"
+    );
+    assert_eq!(
+        database.automation_run("finished-2").unwrap().status,
+        "completed"
+    );
+    database.control_automation(&active.id, "cancel").unwrap();
+    assert!(database.active_automation_runs().unwrap().is_empty());
+}
+
 fn legacy_duration_run(status: &str) -> (tempfile::TempDir, Database, AutomationRun) {
     let (directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
@@ -303,7 +329,7 @@ fn automation_collection_validates_before_creating_work_and_old_inputs_keep_no_c
         assert!(database
             .create_automation(input.clone(), account())
             .is_err());
-        assert!(database.automation_runs().unwrap().is_empty());
+        assert!(database.active_automation_runs().unwrap().is_empty());
     }
     let mut old = serde_json::to_value(&input).unwrap();
     old.as_object_mut().unwrap().remove("collectionName");
@@ -436,7 +462,7 @@ fn automation_model_retry_preserves_selection_then_switches_and_stops() {
             database.control_automation(&run.id, "resume").unwrap();
         }
     }
-    assert_eq!(database.automation_runs().unwrap().len(), 1);
+    assert_eq!(database.active_automation_runs().unwrap().len(), 1);
     assert_eq!(
         database.list_ai_tasks(&run.project_id, None).unwrap().len(),
         1
@@ -1122,7 +1148,7 @@ fn automation_start_is_idempotent_and_exclusive() {
     let mut changed = input;
     changed.format = "brief".into();
     assert!(database.create_automation(changed, account()).is_err());
-    assert_eq!(database.automation_runs().unwrap().len(), 1);
+    assert_eq!(database.active_automation_runs().unwrap().len(), 1);
     assert!(serde_json::to_value(&run.input)
         .unwrap()
         .get("targetDurationSeconds")
