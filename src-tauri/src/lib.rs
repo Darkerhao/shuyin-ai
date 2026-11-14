@@ -183,7 +183,6 @@ pub fn run() {
             ai_commands::execute_generation,
             ai_commands::apply_generation,
             ai_commands::cancel_generation,
-            ai_commands::set_audio_duration,
             audio_commands::audio_job_snapshot,
             audio_commands::start_audio_job,
             audio_commands::control_audio_job,

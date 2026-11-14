@@ -121,7 +121,6 @@ mod tests {
                     crate::database::chapters::ChapterInput {
                         title: "本章精讲".into(),
                         content: "本章字幕和分镜的来源".into(),
-                        target_duration_seconds: Some(600),
                     },
                 )
                 .unwrap();

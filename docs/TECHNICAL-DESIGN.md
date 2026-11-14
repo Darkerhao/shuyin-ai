@@ -1,5 +1,9 @@
 # 书引 AI 技术设计文档
 
+## 取消推荐时长（2026-11-14，当前规则）
+
+移除推荐任务分支、目标参数、保存时长 Command 和相应前端状态。自动流程从 writing 开始，旧 duration 阶段直接推进。全量/按项共用无时长预算的 audio-template-v5，入口更新为 publishing-v9 / publishing-revision-v8；网站固定选择默认时长。音频及内容校核仅使用真实版本、来源与实际字幕，不再以旧目标校验。 实现、验收及边界见[取消推荐时长记录](DURATION-REMOVAL.md)。
+
 ## 章节精讲与整书共用工作流（2026-11-13）
 
 以可空chapterId表示整书/章节范围，沿用现有Provider、页面、自动执行器、子任务及恢复。AudioSourceInput增加chapter，由Rust从SQLite读取章节正文并冻结书籍信息、章节名称、正文摘要和目标时长；前置文本生成、文案历史和NotebookLM文本来源贯穿同一快照。原整书文件来源保持不变，不增加制作目标分支或第二套执行器。

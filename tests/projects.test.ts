@@ -96,14 +96,15 @@ describe('M1 projects and materials', () => {
     expect(router.currentRoute.value.query.chapter).toBeUndefined()
   })
 
-  it('restores editable book fields without overwriting a duration changed by background generation', async () => {
+  it('restores editable book fields without resubmitting legacy duration metadata', async () => {
     vi.mocked(api.getProject).mockResolvedValue({ ...saved, targetDurationSeconds: 1200 })
     vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: saved.updatedAt, content: { form: { ...saved, title: '暂存书名', targetDurationSeconds: 600 }, sourcePaths: [] } })
     vi.mocked(api.saveProject).mockResolvedValue({ ...saved, title: '暂存书名', targetDurationSeconds: 1200 })
     const { wrapper } = await render('/projects/p1')
     expect(wrapper.get('#title').element).toHaveProperty('value', '暂存书名')
     await wrapper.get('form').trigger('submit'); await flushPromises()
-    expect(api.saveProject).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '暂存书名', targetDurationSeconds: 1200 }), [])
+    expect(api.saveProject).toHaveBeenCalledWith('p1', expect.objectContaining({ title: '暂存书名' }), [])
+    expect(vi.mocked(api.saveProject).mock.calls[0]?.[1]).not.toHaveProperty('targetDurationSeconds')
   })
   it('formats pending source paths for display but saves the exact selected path', async () => {
     const path = String.raw`\\?\D:\书籍\原书.epub`

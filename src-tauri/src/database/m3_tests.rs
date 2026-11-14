@@ -153,8 +153,6 @@ fn image_and_text_defaults_are_independent_and_wrong_task_types_are_rejected() {
             project_id: p.id.clone(),
             provider_id: image.id.clone(),
             revision: None,
-            target_duration_seconds: None,
-            recommend_duration: false,
         })
         .is_err());
     assert!(db

@@ -364,16 +364,6 @@
   @media (max-width: 1199px) { .writing-workspace.has-candidate { grid-template-columns: minmax(0, 1fr); } .writing-candidate { grid-row: 1; } .candidate-content { max-height: 300px; } }
   @media (max-width: 639px) { .writing-workspace .editor-section, .writing-workspace .history-panel { padding: 16px; } .version-comparison { grid-template-columns: minmax(0, 1fr); } .writing-editor-heading { flex-wrap: wrap; } }
   @media (prefers-reduced-motion: reduce) { .candidate-panel-enter-active { transition: none; } .candidate-panel-enter-from { transform: none; } }
-  .writing-duration { padding: 0; margin-bottom: 12px; overflow: hidden; }
-  .writing-duration > .disclosure-trigger { padding: 10px 16px; }
-  .writing-duration > [data-state='open']:not(button) { padding: 8px 20px 20px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--terminal) 40%, transparent); }
-  .duration-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-  .duration-controls input { width: 112px; height: 30px; padding: 6px 12px; text-align: center; color: var(--primary); font: 400 12px/16px var(--font-mono); }
-  .duration-controls button { height: 30px; padding: 6px 12px; font-family: var(--font-mono); border: 1px solid var(--border); background: var(--input-surface); color: var(--muted-foreground); }
-  .duration-controls button.duration-recommend { border-color: var(--active-border); background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--primary); box-shadow: var(--primary-glow); }
-  .duration-controls button[aria-pressed='true'] { border-color: var(--active-border); color: var(--primary); }
-  .writing-duration label { margin: 0 0 12px; font-family: var(--font-sans); }
-  .writing-duration .muted { margin: 12px 0 0; font-size: 12px; line-height: 1.625; }
   .editor-section { padding: 20px; }
   .editor-fields[data-tab='publishing'] > .editor-section:last-child, .writing-editor [data-slot='tabs-content'] > .panel:last-child { margin-bottom: 0; }
   .editor-section .muted { margin: 0 0 12px; font-size: 12px; line-height: 1.6; }

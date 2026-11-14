@@ -60,7 +60,7 @@ onBeforeUnmount(() => { globalThis.clearInterval(timer) })
           :data-status="isGenerating(job) ? 'running' : job.status === 'failed' ? 'failed' : 'done'"
         >
           <AppIcon :name="isGenerating(job) ? 'clock' : job.status === 'failed' ? 'info' : 'check'" />
-          <span><strong>{{ job.title }} · {{ job.kind === 'cover' ? '封面背景' : job.mode === 'revision' ? '按项调整' : job.mode === 'duration' ? '时长推荐' : '文案生成' }}</strong><small>{{ isGenerating(job) ? '生成中，可继续其他创作' : job.status === 'failed' ? '未完成，查看原因' : '已完成，查看结果' }}</small></span><AppIcon name="chevron" />
+          <span><strong>{{ job.title }} · {{ job.kind === 'cover' ? '封面背景' : job.mode === 'revision' ? '按项调整' : '文案生成' }}</strong><small>{{ isGenerating(job) ? '生成中，可继续其他创作' : job.status === 'failed' ? '未完成，查看原因' : '已完成，查看结果' }}</small></span><AppIcon name="chevron" />
         </RouterLink>
       </li>
     </TransitionGroup>

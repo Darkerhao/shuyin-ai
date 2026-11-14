@@ -38,9 +38,6 @@ pub struct FrozenInput {
     pub description: String,
     #[serde(default)]
     pub source_notes: String,
-    pub target_duration_seconds: Option<i64>,
-    #[serde(default)]
-    pub duration_reason: String,
     pub source_sha256: String,
     pub text_provider: ai::ProviderInput,
     pub image_provider: ai::ProviderInput,
@@ -97,7 +94,6 @@ pub enum Slot {
     Audio,
     Video,
     Writing,
-    Duration,
     ContentCheck,
     LandscapeImage,
     PortraitImage,
@@ -113,7 +109,6 @@ impl Slot {
             Self::Audio => "audio_job_id",
             Self::Video => "video_job_id",
             Self::Writing => "writing_task_id",
-            Self::Duration => "duration_task_id",
             Self::ContentCheck => "content_check_task_id",
             Self::LandscapeImage => "landscape_task_id",
             Self::PortraitImage => "portrait_task_id",
@@ -133,7 +128,6 @@ pub struct Binding<'a> {
 impl AutomationRun {
     pub(crate) fn generation_task(&self) -> Option<&str> {
         match self.stage.as_str() {
-            "duration" => self.duration_task_id.as_deref(),
             "writing" => self.writing_task_id.as_deref(),
             "content_check" => self.content_check_task_id.as_deref(),
             "landscape_image" => self.landscape_task_id.as_deref(),
@@ -155,7 +149,6 @@ impl AutomationRun {
             Slot::Audio => &self.audio_job_id,
             Slot::Video => &self.video_job_id,
             Slot::Writing => &self.writing_task_id,
-            Slot::Duration => &self.duration_task_id,
             Slot::ContentCheck => &self.content_check_task_id,
             Slot::Publish => &self.publish_task_id,
             Slot::LandscapeImage => &self.landscape_task_id,
@@ -302,7 +295,7 @@ pub(super) fn generation_run(
 ) -> Result<Option<AutomationRun>, String> {
     let id: Option<String> = connection
         .query_row(
-            "SELECT id FROM automation_runs WHERE duration_task_id=?1 OR writing_task_id=?1",
+            "SELECT id FROM automation_runs WHERE writing_task_id=?1",
             [task_id],
             |row| row.get(0),
         )
@@ -406,6 +399,8 @@ impl Database {
             let transaction = connection.transaction().map_err(|error| error.to_string())?;
             let current = load(&transaction, &run.id)?;
             if current.run_id != run.run_id || !matches!(current.status.as_str(), "paused" | "waiting_user") { return Err("请先等待流程结束当前操作。".into()); }
+            // Retired recommendation stages resume by advancing, never by requeuing the old request.
+            if current.stage == "duration" { return Ok(()); }
             reset_generation(&transaction, &current)?;
             if restart_cycle {
                 transaction.execute("UPDATE automation_runs SET input_json=json_set(input_json,'$.modelRetry',json(?1)) WHERE id=?2", params![serde_json::to_string(&ModelRetry { enabled: true, ..Default::default() }).map_err(|error| error.to_string())?, run.id]).map_err(|error| error.to_string())?;
@@ -534,18 +529,15 @@ impl Database {
             if !text.input.is_enabled || text.input.model_kind!="text" { return Err("请选择可用的文本模型。".into()); }
             let image=ai::provider(&transaction,&input.image_provider_id)?;
             if !image.input.is_enabled || image.input.model_kind!="image" { return Err("请选择可用的图片模型。".into()); }
-            let target_duration_seconds=if let Some(source)=&chapter_source { source.target_duration_seconds } else { book.audio_duration_source.as_ref().map(|_|book.input.target_duration_seconds) };
-            if let Some(seconds)=target_duration_seconds { crate::ai::audio::validate_duration(seconds)?; }
             let chapter_id=chapter_source.as_ref().map(|source|source.chapter_id.clone());
             let id=new_id(&transaction)?;
             let frozen=FrozenInput {
                 workflow_version:2,title:book.input.title,author:book.input.author,
                 description:if chapter_id.is_some() {String::new()} else {book.input.description},
                 source_notes:if chapter_id.is_some() {String::new()} else {book.input.source_notes},
-                target_duration_seconds,duration_reason:if target_duration_seconds.is_some() { if chapter_id.is_some() {"使用本章已保存的目标时长".into()} else {"使用本书已保存的目标时长".into()} } else {String::new()},
                 source_sha256,text_provider:text.input,image_provider:image.input,model_retry:ModelRetry {enabled:true,..Default::default()},selection:input.clone(),account,chapter_source,
             };
-            transaction.execute(&format!("INSERT INTO automation_runs(id,request_key,project_id,input_json,status,stage,created_at,updated_at,chapter_id) VALUES(?1,?2,?3,?4,'running',?5,{NOW},{NOW},?6)"),params![id,input.request_key,input.project_id,serde_json::to_string(&frozen).map_err(|error|error.to_string())?,if target_duration_seconds.is_some() {"writing"} else {"duration"},chapter_id]).map_err(|error|error.to_string())?;
+            transaction.execute(&format!("INSERT INTO automation_runs(id,request_key,project_id,input_json,status,stage,created_at,updated_at,chapter_id) VALUES(?1,?2,?3,?4,'running',?5,{NOW},{NOW},?6)"),params![id,input.request_key,input.project_id,serde_json::to_string(&frozen).map_err(|error|error.to_string())?,"writing",chapter_id]).map_err(|error|error.to_string())?;
             transaction.commit().map_err(|error|error.to_string())?;
             load(connection,&id)
         })
@@ -599,9 +591,13 @@ impl Database {
     }
     pub fn set_automation_stage(&self, run: &AutomationRun, stage: &str) -> Result<(), String> {
         self.with_connection(|connection| {
-            let changed = connection.execute(&format!("UPDATE automation_runs SET stage=?1,error='',input_json=json_set(input_json,'$.modelRetry.retries',0),updated_at={NOW} WHERE id=?2 AND run_id=?3 AND status='running'"),params![stage,run.id,run.run_id]).map_err(|e|e.to_string())?;
+            let transaction = connection.transaction().map_err(|error| error.to_string())?;
+            let changed = transaction.execute(&format!("UPDATE automation_runs SET stage=?1,error='',input_json=json_set(input_json,'$.modelRetry.retries',0),updated_at={NOW} WHERE id=?2 AND run_id=?3 AND status='running'"),params![stage,run.id,run.run_id]).map_err(|e|e.to_string())?;
             if changed != 1 { return Err("自动流程已暂停或结束。".into()); }
-            Ok(())
+            if run.stage == "duration" && stage == "writing" {
+                transaction.execute(&format!("UPDATE ai_tasks SET status='cancelled',error_code='retired',error_message='推荐时长已取消，流程直接生成内容。',completed_at={NOW} WHERE id=?1 AND status IN ('pending','running')"), [run.duration_task_id.as_deref()]).map_err(|error| error.to_string())?;
+            }
+            transaction.commit().map_err(|error| error.to_string())
         })
     }
     pub fn set_automation_status(
@@ -650,16 +646,8 @@ impl Database {
     }
     pub fn start_automation_generation(&self, run: &AutomationRun) -> Result<String, String> {
         run.require_current_workflow()?;
-        let recommend_duration = run.stage == "duration";
-        if !recommend_duration && run.stage != "writing" {
+        if run.stage != "writing" {
             return Err("流程不在前置创作阶段。".into());
-        }
-        if !recommend_duration {
-            crate::ai::audio::validate_duration(
-                run.input
-                    .target_duration_seconds
-                    .ok_or("目标时长尚未确定。")?,
-            )?;
         }
         self.start_bound_generation(
             ai::GenerationInput {
@@ -669,14 +657,8 @@ impl Database {
                 project_id: run.project_id.clone(),
                 provider_id: run.input.selection.text_provider_id.clone(),
                 revision: None,
-                target_duration_seconds: run.input.target_duration_seconds,
-                recommend_duration,
             },
-            Some(&run.binding(if recommend_duration {
-                Slot::Duration
-            } else {
-                Slot::Writing
-            })),
+            Some(&run.binding(Slot::Writing)),
         )
     }
     pub fn create_content_check_task(&self, run: &AutomationRun) -> Result<String, String> {
@@ -758,7 +740,7 @@ impl Database {
             let (model,input):(String,String)=tx.query_row("SELECT model_name,input_json FROM ai_tasks WHERE id=?1 AND kind='content_check' AND status='running'",[id],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|_|"校核任务已取消或结束。")?;
             let input:serde_json::Value=serde_json::from_str(&input).map_err(|e|e.to_string())?;
             let base=ai::version(&tx,input["sourceVersionId"].as_str().ok_or("缺少创作版本。")?)?;
-            let content=crate::ai::content_check::apply(raw,&base.content,&run.input.title,run.input.target_duration_seconds.ok_or("缺少目标时长。")?)?;
+            let content=crate::ai::content_check::apply(raw,&base.content,&run.input.title)?;
             let version = if content == base.content { base.id } else {
                 ai::append(&tx,&ai::SaveWritingInput {
         chapter_id: run.chapter_id.clone(),
@@ -834,9 +816,8 @@ fn content_video(c: &Connection, run: &AutomationRun) -> Result<super::video::Vi
         .map_err(|e| e.to_string())?;
     if audio.writing_version_id.as_deref() != Some(base.id.as_str())
         || &actual_prompt != audio_prompt
-        || Some(audio.target_duration_seconds) != run.input.target_duration_seconds
     {
-        return Err("实际音频指导或目标与前置方案不一致，请检查原音频任务。".into());
+        return Err("实际音频指导与前置方案不一致，请检查原音频任务。".into());
     }
     crate::video::validate_cues(&video.plan.cues, video.plan.duration)?;
     if video.project_id != run.project_id

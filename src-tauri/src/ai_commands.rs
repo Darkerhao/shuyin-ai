@@ -1,9 +1,7 @@
 use crate::{
     ai::{
-        audio::{self, DurationRecommendation},
-        publishing::PublishingDraft,
-        revision, ActiveTasks, AiError, OpenAiCompatible, TextProvider, TextRequest, SYSTEM_PROMPT,
-        TIMEOUT,
+        publishing::PublishingDraft, revision, ActiveTasks, AiError, OpenAiCompatible,
+        TextProvider, TextRequest, SYSTEM_PROMPT, TIMEOUT,
     },
     credentials::{Credentials, SystemCredentials},
     database::{
@@ -15,16 +13,6 @@ use crate::{
     },
 };
 use tauri::State;
-
-#[tauri::command]
-pub fn set_audio_duration(
-    database: State<'_, Database>,
-    project_id: String,
-    seconds: i64,
-    chapter_id: Option<String>,
-) -> Result<(), String> {
-    database.set_audio_duration(&project_id, seconds, chapter_id.as_deref())
-}
 
 #[tauri::command]
 pub fn model_field_options(
@@ -224,34 +212,27 @@ pub(crate) async fn execute_writing_task(
     let result = run_task(database, active, id, |mut receiver| async move {
         let prepared=database.prepare_generation(id).map_err(AiError::database)?;
         let model=prepared.provider.input.model_name.clone();
-        let system=if prepared.input.recommend_duration { audio::SYSTEM_PROMPT } else if prepared.input.revision.is_some() { revision::SYSTEM_PROMPT } else { SYSTEM_PROMPT };
+        let system=if prepared.input.revision.is_some() { revision::SYSTEM_PROMPT } else { SYSTEM_PROMPT };
         let req=request(prepared.provider,vault,system,prepared.user)?;
-        let mut provider=OpenAiCompatible::new(TIMEOUT, &req.base_url)?.observed(database,Some(id),if prepared.input.recommend_duration {"duration"} else if prepared.input.revision.is_some() {"writing_revision"}else{"writing"});
-        if !prepared.input.recommend_duration {
-            if let Some(channel) = on_preview {
-                let fields = prepared.input.revision.as_ref().map(|revision| revision.fields.clone());
-                provider = provider.with_content_observer(move |raw| {
-                    let content = crate::ai::preview::texts(raw, fields.as_deref());
-                    if !content.is_empty() { let _ = channel.send(content); }
-                });
-            }
+        let mut provider=OpenAiCompatible::new(TIMEOUT, &req.base_url)?.observed(database,Some(id),if prepared.input.revision.is_some() {"writing_revision"}else{"writing"});
+        if let Some(channel) = on_preview {
+            let fields = prepared.input.revision.as_ref().map(|revision| revision.fields.clone());
+            provider = provider.with_content_observer(move |raw| {
+                let content = crate::ai::preview::texts(raw, fields.as_deref());
+                if !content.is_empty() { let _ = channel.send(content); }
+            });
         }
         let raw=tokio::select! {
             biased;
             _=receiver.changed()=>return Err(AiError::new("cancelled","生成已取消，原有内容保留。")),
             response=provider.generate(req)=>response?,
         };
-        if prepared.input.recommend_duration {
-            let recommendation=DurationRecommendation::parse(&raw).map_err(|s|AiError::new("invalid_content",&s))?;
-            return database.finish_duration_recommendation(id,recommendation).map(GenerationResult::Duration).map_err(AiError::database);
-        }
-        let duration=prepared.input.target_duration_seconds.ok_or_else(||AiError::new("invalid_content","任务缺少目标时长。"))?;
         if let (Some(revision),Some(base))=(&prepared.input.revision,&prepared.base) {
-            let content=revision::revise(&raw,&base.content,&revision.fields,&prepared.book_title,duration,prepared.chapter_title.as_deref()).map_err(|s|AiError::new("invalid_content",&s))?;
+            let content=revision::revise(&raw,&base.content,&revision.fields,&prepared.book_title,prepared.chapter_title.as_deref()).map_err(|s|AiError::new("invalid_content",&s))?;
             database.finish_revision(id,&prepared.input,content).map(GenerationResult::Preview).map_err(AiError::database)
         } else {
             let draft:PublishingDraft=serde_json::from_str(&raw).map_err(|_|AiError::new("invalid_content","模型输出不符合发布内容结构，原有内容保留。"))?;
-            let content=draft.into_content(&prepared.book_title,duration,prepared.chapter_title.as_deref()).map_err(|s|AiError::new("invalid_content",&s))?;
+            let content=draft.into_content(&prepared.book_title,prepared.chapter_title.as_deref()).map_err(|s|AiError::new("invalid_content",&s))?;
             database.finish_generation(id,&prepared.input,content,&model).map(GenerationResult::Version).map_err(AiError::database)
         }
     }).await?;
@@ -260,7 +241,6 @@ pub(crate) async fn execute_writing_task(
         app,
         id,
         match &result {
-            GenerationResult::Duration(_) => Completion::Duration,
             GenerationResult::Preview(_) => Completion::Revision,
             GenerationResult::Version(_) => Completion::Writing,
         },

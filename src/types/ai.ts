@@ -26,9 +26,8 @@ export interface SaveWritingInput { projectId: string; chapterId?: string | null
 export type PublishingTextField = keyof Omit<PublishingContent, 'format' | 'coverDesign'>
 export type PublishingField = PublishingTextField | 'coverDesign'
 export interface RevisionInput { basedOn: string; fields: PublishingField[]; instruction: string }
-export interface GenerationInput { projectId: string; chapterId?: string | null; providerId: string; targetDurationSeconds?: number; recommendDuration?: boolean; revision?: RevisionInput }
-export interface DurationRecommendation { minutes: number; reason: string }
+export interface GenerationInput { projectId: string; chapterId?: string | null; providerId: string; revision?: RevisionInput }
 export interface GenerationPreview { taskId: string; fields: PublishingField[]; before: PublishingContent; content: PublishingContent }
-export type GenerationResult = WritingVersion | GenerationPreview | DurationRecommendation
+export type GenerationResult = WritingVersion | GenerationPreview
 
 export type GenerationTextPreview = Partial<Record<PublishingTextField, string>>

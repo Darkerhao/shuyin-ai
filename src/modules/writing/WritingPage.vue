@@ -5,7 +5,6 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { Input } from '@/components/ui/input'
 import { displayPath } from '@/lib/displayPath'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRouter, useRoute } from 'vue-router'
@@ -42,16 +41,9 @@ const readAudioView = () => audioApi.getAudioJobView(props.id, typeof route.quer
 const router = useRouter()
 const desktop = isDesktop()
 const title = ref('')
-const durationMinutes = ref<string | number>(10)
-const savedDurationSeconds = ref(600)
-const durationConfigured = ref(false)
-const durationReason = ref('')
 const generation = computed(() => generationJobs.get(generationKey(props.id, 'writing', chapterId.value)))
 const automaticRun = computed(() => automationRuns.value.find(item => item.projectId === props.id && belongsToChapter(item, chapterId.value) && item.input.workflowVersion === 2 && !['completed', 'cancelled'].includes(item.status)))
 const generating = computed(() => isGenerating(generation.value))
-const recommending = computed(() => generating.value && generation.value?.mode === 'duration')
-const durationValid = computed(() => Number.isInteger(Number(durationMinutes.value)) && Number(durationMinutes.value) >= 1 && Number(durationMinutes.value) <= 1440)
-const durationDirty = computed(() => Number(durationMinutes.value) * 60 !== savedDurationSeconds.value)
 const ready = ref(false)
 const providers = ref<ModelProvider[]>([])
 const providerId = ref('')
@@ -83,14 +75,6 @@ const preview = computed(() => {
 })
 const revisionLocked = computed(() => revising.value || !!preview.value)
 const activeTab = useQueryState('tab', 'publishing', ['publishing', 'audio', 'cover'])
-const durationOpen = ref(false)
-const durationPreference = 'shuyin.writing-duration-open'
-watch(durationOpen, value => {
-  if (ready.value) {
-    try { globalThis.localStorage.setItem(durationPreference, String(value)) }
-    catch { error.value = '时长面板偏好未保存，本次仍可正常使用。' }
-  }
-})
 const clipboard = useCopyFeedback()
 const copiedField = clipboard.copied
 const copyLabel = ref('')
@@ -98,9 +82,9 @@ const historyOpen = ref(false)
 const historyVersionId = ref<string | null>(null)
 const historyVersion = computed(() => versions.value.find(version => version.id === historyVersionId.value))
 const historyAudioCompatible = computed(() => !chapterId.value || (!!historyVersion.value?.sourceSnapshot && !!selected.value?.sourceSnapshot
-  && JSON.stringify(historyVersion.value.sourceSnapshot) === JSON.stringify(selected.value.sourceSnapshot)))
+  && JSON.stringify({ ...historyVersion.value.sourceSnapshot, targetDurationSeconds: null }) === JSON.stringify({ ...selected.value.sourceSnapshot, targetDurationSeconds: null })))
 const candidateVersion = computed(() => versions.value[0]?.sourceType === 'ai' && versions.value[0]?.id !== selected.value?.id ? versions.value[0] : null)
-const candidateVisible = computed(() => !preview.value && (generating.value ? !recommending.value : !!candidateVersion.value))
+const candidateVisible = computed(() => !preview.value && (generating.value || !!candidateVersion.value))
 const candidateContent = computed(() => generating.value ? liveContent.value : candidateVersion.value?.content ?? {})
 const candidateStatus = computed(() => generating.value ? Object.keys(liveContent.value).length ? '正在接收' : '等待返回' : '生成完成')
 const versionSource = (version: WritingVersion) => version.sourceType === 'ai' ? 'AI 生成' : version.sourceType === 'mixed' ? 'AI 生成后修改' : '手动修改'
@@ -132,7 +116,7 @@ const tabs = [
 const { busy: operationBusy, error, message, operation, run } = useOperation()
 const busy = computed(() => operationBusy.value || generating.value)
 // Preserve the current source when a newer history entry has not been adopted.
-const draftRequired = computed(() => dirty.value || selected.value?.id !== versions.value[0]?.id || (!!generation.value && generation.value.mode !== 'duration'))
+const draftRequired = computed(() => dirty.value || selected.value?.id !== versions.value[0]?.id || !!generation.value)
 const autosave = useEditorDraft(() => chapterOwner(props.id, chapterId.value), 'writing', draft, () => selected.value?.id ?? null, draftRequired, ready, prepareLeave)
 const audioBrowser = computed(() => audioView.value?.browser ?? null)
 const audioJob = computed(() => audioView.value?.job ?? null)
@@ -150,7 +134,7 @@ const audioSourceReady = computed(() => audioSourceKey.value === 'text' || audio
   : !!selectedDocument.value && selectedDocument.value.existsStatus === 'available')
 const audioFieldsReady = computed(() => [draft.value.title, draft.value.description, draft.value.audioPrompt].every(value => value.trim()))
 const canStartAudio = computed(() => desktop && ready.value && !busy.value && !!audioBrowser.value?.supported
-  && !activeAudioJob.value && !automaticRun.value && durationValid.value && audioFieldsReady.value
+  && !activeAudioJob.value && !automaticRun.value && audioFieldsReady.value
   && audioSourceReady.value)
 const liveAudioStatuses = new Set<AudioJobStatus>(['created', 'waiting_login', 'preparing', 'generating', 'downloading', 'importing'])
 const audioStatusLabels: Record<AudioJobStatus, string> = {
@@ -170,18 +154,14 @@ function accept(version: WritingVersion | null) {
   original.value = JSON.stringify(draft.value)
 }
 function canDiscard(returnFocusId?: string) { return (!dirty.value && !preview.value) || requestConfirmation(preview.value ? '候选结果尚未采用，确定放弃？' : '当前内容尚未保存，确定放弃修改？', returnFocusId) }
-async function prepareLeave() {
-  if (operationBusy.value) return false
-  try { if (ready.value && durationDirty.value) await persistDuration(); return true }
-  catch (cause) { error.value = errorMessage(cause); return false }
-}
+function prepareLeave() { return !operationBusy.value }
 const canLeave = async () => {
-  if (!await prepareLeave()) return false
+  if (!prepareLeave()) return false
   try { if (ready.value) await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
 onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.chapter === from.query.chapter && to.query.audioJob === from.query.audioJob && to.query.writingVersion === from.query.writingVersion) || canLeave())
-function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || durationDirty.value || busy.value || preview.value) event.preventDefault() }
+function beforeUnload(event: globalThis.BeforeUnloadEvent) { if (dirty.value || busy.value || preview.value) event.preventDefault() }
 globalThis.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { globalThis.removeEventListener('beforeunload', beforeUnload); globalThis.clearTimeout(savedTimer); globalThis.clearInterval(waitingTimer) })
 function setAssets(files: Asset[]) {
@@ -239,16 +219,6 @@ const load = () => run(async () => {
   chapter.value = sourceChapter
   title.value = sourceChapter ? `${project.title} · ${sourceChapter.title}` : project.title
   sourceNotes.value = sourceChapter ? sourceChapter.content : project.sourceNotes
-  const duration = sourceChapter ? sourceChapter.targetDurationSeconds ?? 600 : project.targetDurationSeconds
-  durationMinutes.value = duration / 60
-  savedDurationSeconds.value = duration
-  durationConfigured.value = !!(sourceChapter ? sourceChapter.audioDurationSource : project.audioDurationSource)
-  if (automaticRun.value?.input.targetDurationSeconds) {
-    durationMinutes.value = automaticRun.value.input.targetDurationSeconds / 60
-    savedDurationSeconds.value = automaticRun.value.input.targetDurationSeconds
-    durationConfigured.value = true
-    durationReason.value = automaticRun.value.input.durationReason
-  }
   setAssets(files)
   // Restore task history without replaying past errors as new notifications.
   audioView.value = savedAudio
@@ -268,10 +238,6 @@ const load = () => run(async () => {
       message.value = '本次创作方案已在历史对照中打开，当前暂存稿保持不变。'
     } else accept(requested)
   }
-  try {
-    const preference = globalThis.localStorage.getItem(durationPreference)
-    durationOpen.value = preference === null ? !durationConfigured.value : preference === 'true'
-  } catch { durationOpen.value = !durationConfigured.value }
   if (generation.value?.revision) {
     revisionOpen.value = true
     revisionFields.value = [...generation.value.revision.fields]
@@ -284,8 +250,7 @@ watch([ready, () => generation.value?.status], () => {
   if (!ready.value || !job || isGenerating(job)) return
   if (job.error) {
     error.value = job.error
-    // Keep a failed automatic recommendation until an explicit retry, including after navigation.
-    if (job.mode !== 'duration') dismissGeneration(job)
+    dismissGeneration(job)
     return
   }
   const result = job.result
@@ -295,26 +260,17 @@ watch([ready, () => generation.value?.status], () => {
     revisionFields.value = [...result.fields]
     return
   }
-  if ('minutes' in result) {
-    durationMinutes.value = result.minutes
-    savedDurationSeconds.value = result.minutes * 60
-    durationConfigured.value = true
-    durationReason.value = result.reason
-    message.value = `AI 推荐 ${result.minutes} 分钟，可直接修改后再生成。已有内容保持原样。`
-  } else {
-    versions.value = [result, ...versions.value.filter(version => version.id !== result.id)]
-    const first = !selected.value && !dirty.value
-    if (first) accept(result)
-    historyVersionId.value = result.id; historyOpen.value = !first
-    message.value = first ? `已生成并保存 v${result.versionNo}，可继续编辑。` : `已保存备选 v${result.versionNo}。当前内容保留，可在版本对照中取用。`
-  }
+  versions.value = [result, ...versions.value.filter(version => version.id !== result.id)]
+  const first = !selected.value && !dirty.value
+  if (first) accept(result)
+  historyVersionId.value = result.id; historyOpen.value = !first
+  message.value = first ? `已生成并保存 v${result.versionNo}，可继续编辑。` : `已保存备选 v${result.versionNo}。当前内容保留，可在版本对照中取用。`
   dismissGeneration(job)
 })
 async function switchVersion(id: string | null) {
   if (await canDiscard('writing-version')) accept(versions.value.find(v => v.id === id) ?? null)
 }
 async function persistWriting() {
-  if (chapterId.value) await persistDuration()
   await autosave.flush()
   const saved = await api.saveWriting({ projectId: props.id, ...scopeInput.value, kind: 'publishing', content: { ...draft.value }, basedOn: selected.value?.id ?? null, isConfirmed: false })
   accept(saved); versions.value = [saved, ...versions.value]
@@ -352,8 +308,6 @@ const addSourceDocument = () => run(async () => {
 const startAudio = () => run(async () => {
   if (!audioBrowser.value?.supported) throw new Error(audioBrowser.value?.message || '当前平台暂不支持应用内自动音频。')
   if (!audioSourceReady.value) throw new Error('请选择可用的原书文件或书籍资料文本。')
-  if (!durationValid.value) throw new Error('音频目标时长须为 1—1440 分钟的整数。')
-  await persistDuration()
   if (dirty.value || !selected.value) await persistWriting()
   if (!selected.value) throw new Error('请先保存一套音频提示词。')
   const source = chapterId.value ? { kind: 'chapter' as const, chapterId: chapterId.value } : audioSourceKey.value === 'text'
@@ -401,33 +355,17 @@ function playCompletedAudio() {
   completedPlayer.value?.$el.scrollIntoView?.({ block: 'center' })
   void completedPlayer.value?.play()
 }
-async function persistDuration() {
-  if (!durationValid.value) throw new Error('音频目标时长须为 1—1440 分钟的整数。')
-  const seconds = Number(durationMinutes.value) * 60
-  if (durationDirty.value || !durationConfigured.value) {
-    await api.setAudioDuration(props.id, seconds, chapterId.value)
-    savedDurationSeconds.value = seconds
-    durationConfigured.value = true
-  }
-}
-const saveDuration = () => run(async () => { await persistDuration(); message.value = '目标时长已保存，下次生成时生效。已有内容保持原样。' })
-const recommendDuration = () => run(async () => {
-  if (automaticRun.value) throw new Error('本书正在自动制作，目标时长由本次流程确定。')
-  await startWritingGeneration({ projectId: props.id, ...scopeInput.value, providerId: providerId.value, recommendDuration: true }, title.value)
-})
 const generate = () => run(async () => {
-  await persistDuration()
-  await startWritingGeneration({ projectId: props.id, ...scopeInput.value, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60 }, title.value)
+  await startWritingGeneration({ projectId: props.id, ...scopeInput.value, providerId: providerId.value }, title.value)
 })
 function openRevision() { revisionOpen.value = true }
 function selectRevision(field: PublishingField, checked: boolean | 'indeterminate') {
   revisionFields.value = checked === true ? [...revisionFields.value, field] : revisionFields.value.filter(key => key !== field)
 }
 const generateRevision = () => run(async () => {
-  await persistDuration()
   if (dirty.value) await persistWriting()
   if (!selected.value) throw new Error('请先生成或保存一套内容。')
-  await startWritingGeneration({ projectId: props.id, ...scopeInput.value, providerId: providerId.value, targetDurationSeconds: Number(durationMinutes.value) * 60, revision: { basedOn: selected.value.id, fields: [...revisionFields.value], instruction: revisionInstruction.value.trim() } }, title.value)
+  await startWritingGeneration({ projectId: props.id, ...scopeInput.value, providerId: providerId.value, revision: { basedOn: selected.value.id, fields: [...revisionFields.value], instruction: revisionInstruction.value.trim() } }, title.value)
 })
 const applyRevision = () => run(async () => {
   if (!preview.value) return
@@ -495,11 +433,6 @@ watch([ready, () => automaticRun.value?.writingVersionId], async ([loaded, id]) 
     message.value = '本次创作方案已保存，自动流程将使用该版本制作音频。'
   } catch (cause) { error.value = errorMessage(cause) }
 })
-watch(() => automaticRun.value?.input.targetDurationSeconds, seconds => {
-  if (!ready.value || !seconds || durationDirty.value) return
-  durationMinutes.value = seconds / 60; savedDurationSeconds.value = seconds; durationConfigured.value = true
-  durationReason.value = automaticRun.value?.input.durationReason ?? ''
-})
 onMounted(() => globalThis.addEventListener('keydown', saveShortcut))
 onMounted(() => {
   if (!desktop) return
@@ -517,7 +450,6 @@ onMounted(async () => {
   if (!desktop) return
   await refreshAutomation()
   await load()
-  if (ready.value && !durationConfigured.value && providerId.value && !generation.value && !automaticRun.value) await recommendDuration()
 })
 </script>
 <template>
@@ -569,7 +501,6 @@ onMounted(async () => {
     role="status"
   >
     自动制作：{{ stages[automaticRun.stage] || '准备中' }}。
-    {{ automaticRun.input.targetDurationSeconds ? `本次目标 ${automaticRun.input.targetDurationSeconds / 60} 分钟。` : '正在确定本次目标时长。' }}
     已保存的方案会直接用于音频；当前手工草稿保留，查看本次方案可使用全局任务入口。
   </p>
   <Button
@@ -590,7 +521,7 @@ onMounted(async () => {
           name="bolt"
           :class="{ spin: !!taskId }"
         /></span>
-        <div><h2>让灵感，成为这一期内容</h2><p>甲子 · {{ chapterId ? '读懂一章' : '读懂一本书' }} · {{ automaticRun && !automaticRun.input.targetDurationSeconds ? '目标时长待推荐' : durationValid ? `目标 ${durationMinutes} 分钟` : '请设置目标时长' }}</p></div>
+        <div><h2>让灵感，成为这一期内容</h2><p>甲子 · {{ chapterId ? '读懂一章' : '读懂一本书' }} · 按内容自然展开</p></div>
       </div>
       <div class="generation-actions">
         <template v-if="providers.length">
@@ -627,11 +558,11 @@ onMounted(async () => {
         </template>
         <Button
           class="primary-gradient"
-          :disabled="busy || !!automaticRun || !providerId || !!preview || !durationValid"
+          :disabled="busy || !!automaticRun || !providerId || !!preview"
           type="button"
           @click="generate"
         >
-          <AppIcon name="sparkle" />{{ taskId && !recommending ? '生成中…' : versions.length ? '生成备选' : '一键生成' }}
+          <AppIcon name="sparkle" />{{ taskId ? '生成中…' : versions.length ? '生成备选' : '一键生成' }}
         </Button>
         <Button
           class="px-4"
@@ -653,89 +584,6 @@ onMounted(async () => {
         </Button>
       </div>
     </section>
-    <Collapsible
-      v-model:open="durationOpen"
-      class="panel writing-duration"
-      :unmount-on-hide="false"
-    >
-      <CollapsibleTrigger class="disclosure-trigger">
-        <AppIcon name="clock" /><span>生成时长：<strong class="text-primary">{{ automaticRun && !automaticRun.input.targetDurationSeconds ? '推荐中' : `${durationMinutes} 分钟` }}</strong> · {{ automaticRun ? '本次自动制作目标' : '调整音频目标时长' }}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <label
-          id="audio-duration-heading"
-          for="audio-duration"
-        >音频目标时长（分钟）</label>
-        <p
-          v-if="automaticRun && !automaticRun.input.targetDurationSeconds"
-          class="muted"
-        >
-          正在根据本次资料推荐目标时长，结果保存后继续生成完整方案。
-        </p>
-        <div
-          v-else
-          class="duration-controls"
-        >
-          <Input
-            id="audio-duration"
-            v-model="durationMinutes"
-            class="w-28 h-[30px] px-3 py-1.5 text-center font-mono text-xs font-normal text-primary"
-            type="number"
-            min="1"
-            max="1440"
-            step="1"
-            :aria-invalid="!durationValid"
-            aria-describedby="audio-duration-help"
-            :disabled="busy || !!automaticRun || !!preview"
-          />
-          <Button
-            variant="outline"
-            class="duration-recommend"
-            :disabled="busy || !!automaticRun || !providerId || !!preview"
-            @click="recommendDuration"
-          >
-            <AppIcon name="sparkle" />{{ recommending ? '推荐中…' : 'AI 推荐时长' }}
-          </Button>
-          <Button
-            v-if="durationDirty"
-            variant="outline"
-            :disabled="busy || !!preview || !durationValid"
-            @click="saveDuration"
-          >
-            保存时长
-          </Button>
-          <div
-            class="flex flex-wrap gap-2.5"
-            aria-label="常用音频时长"
-          >
-            <Button
-              v-for="minutes in [5, 10, 15, 20, 30, 60]"
-              :key="minutes"
-              size="sm"
-              :aria-pressed="Number(durationMinutes) === minutes"
-              :variant="Number(durationMinutes) === minutes ? 'secondary' : 'ghost'"
-              :disabled="busy || !!automaticRun || !!preview"
-              @click="durationMinutes = minutes"
-            >
-              {{ minutes }} 分钟
-            </Button>
-          </div>
-        </div>
-        <p
-          id="audio-duration-help"
-          class="muted"
-        >
-          {{ durationValid ? '生成前可自由修改时长，生成时自动保存。开场、分段安排、结尾及相关文案按此时长生成；已有内容需重新生成或按项调整。' : '请输入 1—1440 分钟的整数。' }}
-        </p>
-        <p
-          v-if="durationReason"
-          class="muted"
-          role="status"
-        >
-          AI 推荐依据：{{ durationReason }}
-        </p>
-      </CollapsibleContent>
-    </Collapsible>
     <p
       v-if="!providers.length"
       class="notice"
@@ -749,7 +597,7 @@ onMounted(async () => {
       class="notice"
       role="status"
     >
-      {{ recommending ? '正在推荐时长，可停止后手动设置。' : revising ? '正在调整选中内容，完成后先预览再采用。' : '正在生成备选，你可以继续编辑，当前内容保留。' }}可切换页面继续创作，请保持应用运行。已等待 {{ waitingSeconds }} 秒，单次最多等待 5 分钟。
+      {{ revising ? '正在调整选中内容，完成后先预览再采用。' : '正在生成备选，你可以继续编辑，当前内容保留。' }}可切换页面继续创作，请保持应用运行。已等待 {{ waitingSeconds }} 秒，单次最多等待 5 分钟。
     </p>
     <section
       v-if="revisionOpen"
@@ -870,7 +718,7 @@ onMounted(async () => {
         </Button>
         <Button
           v-else
-          :disabled="busy || !revisionFields.length || !canSave || !providerId || !durationValid"
+          :disabled="busy || !revisionFields.length || !canSave || !providerId"
           type="button"
           @click="generateRevision"
         >
@@ -1083,7 +931,7 @@ onMounted(async () => {
                       id="audio-source-hint"
                       class="muted"
                     >
-                      将通过“复制的文字”上传本章。{{ selected?.sourceSnapshot?.content !== chapter?.content ? '所选版本使用此前保存的章节内容与时长。' : '音频提示词与正文来自同一次章节创作。' }}
+                      将通过“复制的文字”上传本章。{{ selected?.sourceSnapshot?.content !== chapter?.content ? '所选版本使用此前保存的章节内容。' : '音频提示词与正文来自同一次章节创作。' }}
                     </p>
                     <p
                       v-else-if="selectedDocument"
@@ -1155,7 +1003,7 @@ onMounted(async () => {
                   >
                     <AppIcon name="headphones" />开始生成音频
                   </Button>
-                  <span class="muted">启动前会保存目标时长和当前提示词，再冻结来源与版本。</span>
+                  <span class="muted">启动前会保存当前提示词，再冻结来源与版本。</span>
                 </div>
               </template>
               <div
@@ -1574,7 +1422,7 @@ onMounted(async () => {
               v-if="activeTab === 'audio' && !historyAudioCompatible"
               class="text-sm text-muted-foreground"
             >
-              此版本的章节来源或目标时长与当前稿不同，请使用“用于当前编辑”切换完整版本，保留对应正文和音频指导。
+              此版本的章节来源与当前稿不同，请使用“用于当前编辑”切换完整版本，保留对应正文和音频指导。
             </p>
             <div
               v-for="field in historyFields"

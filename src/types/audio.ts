@@ -31,7 +31,6 @@ export interface AudioJob {
   assetId: string | null
   format: AudioFormat
   sourceLabel: string
-  targetDurationSeconds: number
   submittedAt: string | null
   lastCheckedAt: string | null
   createdAt: string

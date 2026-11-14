@@ -10,7 +10,7 @@ export interface GenerationJob {
   chapterId?: string | null
   title: string
   kind: 'writing' | 'cover'
-  mode: 'writing' | 'revision' | 'duration' | 'cover'
+  mode: 'writing' | 'revision' | 'cover'
   id: string
   startedAt: number
   status: 'starting' | 'running' | 'succeeded' | 'failed' | 'cancelled'
@@ -54,7 +54,7 @@ function newJob(projectId: string, title: string, kind: GenerationJob['kind'], m
 }
 
 export function startWritingGeneration(input: GenerationInput, title: string) {
-  const job = newJob(input.projectId, title, 'writing', input.recommendDuration ? 'duration' : input.revision ? 'revision' : 'writing')
+  const job = newJob(input.projectId, title, 'writing', input.revision ? 'revision' : 'writing')
   job.chapterId = input.chapterId ?? null
   job.revision = input.revision
   return start(job, () => ai.startGeneration(input), id => ai.executeGeneration(id, content => {

@@ -4,8 +4,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "publishing-revision-v7";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v7.md");
+pub const PROMPT_VERSION: &str = "publishing-revision-v8";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v8.md");
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +67,6 @@ pub fn revise(
     base: &WritingContent,
     fields: &[PublishingField],
     book: &str,
-    duration_seconds: i64,
     chapter: Option<&str>,
 ) -> Result<WritingContent, String> {
     let patch: serde_json::Map<String, serde_json::Value> =
@@ -88,7 +87,7 @@ pub fn revise(
         let text = if *field == PublishingField::AudioPrompt {
             serde_json::from_value::<AudioDraft>(value.clone())
                 .map_err(|_| "音频调整需要书籍引入及五个完整部分。")?
-                .into_prompt(book, duration_seconds, chapter)?
+                .into_prompt(book, chapter)?
         } else if *field == PublishingField::Tags {
             parse_tags(value.as_str().ok_or("标签调整结果必须是文字。")?)?
         } else {
@@ -137,7 +136,6 @@ mod tests {
             &base,
             &[PublishingField::Tags],
             "测试书",
-            600,
             None,
         )
         .unwrap();
@@ -157,7 +155,6 @@ mod tests {
                 &base,
                 &[PublishingField::Tags],
                 "测试书",
-                600,
                 None
             )
             .is_err());
@@ -173,7 +170,6 @@ mod tests {
             &base,
             &[PublishingField::CoverPromptWidescreen],
             "测试书",
-            600,
             None,
         )
         .unwrap();
@@ -189,7 +185,6 @@ mod tests {
                 &base,
                 &[PublishingField::CoverPromptWidescreen],
                 "测试书",
-                600,
                 None
             )
             .is_err());
@@ -210,7 +205,6 @@ mod tests {
             &base,
             &[PublishingField::CoverDesign],
             "书",
-            600,
             None,
         )
         .unwrap();
@@ -222,7 +216,6 @@ mod tests {
             &revised,
             &[PublishingField::Title],
             "书",
-            600,
             None,
         )
         .unwrap();
@@ -238,7 +231,6 @@ mod tests {
                 &base,
                 &[PublishingField::CoverDesign],
                 "书",
-                600,
                 None
             )
             .is_err());
@@ -252,7 +244,6 @@ mod tests {
             &base,
             &[PublishingField::Title],
             "测试书",
-            600,
             None,
         )
         .unwrap();
@@ -264,22 +255,13 @@ mod tests {
             "{}",
             r#"{"title":" "}"#,
         ] {
-            assert!(revise(
-                invalid,
-                &base,
-                &[PublishingField::Title],
-                "测试书",
-                600,
-                None
-            )
-            .is_err());
+            assert!(revise(invalid, &base, &[PublishingField::Title], "测试书", None).is_err());
         }
         assert!(revise(
             &json!({"title":"字".repeat(31)}).to_string(),
             &base,
             &[PublishingField::Title],
             "测试书",
-            600,
             None
         )
         .is_err());
@@ -288,7 +270,6 @@ mod tests {
             &base,
             &[PublishingField::CoverPromptPortrait],
             "测试书",
-            600,
             None
         )
         .is_err());
@@ -301,14 +282,13 @@ mod tests {
             &original(),
             &[PublishingField::AudioPrompt],
             "测试书",
-            1800,
             None,
         )
         .unwrap();
         let value = serde_json::to_value(&content).unwrap();
         let audio = value["audioPrompt"].as_str().unwrap();
         assert!(audio.contains("欢迎大家收听今天的节目，我是甲子。"));
-        assert!(audio.contains("30分钟"));
+        assert!(!audio.contains("30分钟"));
         assert!(!audio.contains("10分钟"));
         assert!(!audio.contains("30分钟读懂一本书"));
         assert!(!audio.contains("接下来30分钟"));
@@ -331,7 +311,6 @@ mod tests {
             &original(),
             &[PublishingField::AudioPrompt],
             "测试书",
-            600,
             None
         )
         .is_err());

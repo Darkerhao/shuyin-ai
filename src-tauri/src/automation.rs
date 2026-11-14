@@ -327,20 +327,17 @@ async fn drive(app: &AppHandle, id: &str) {
 async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
     let database = app.state::<Database>();
     match run.stage.as_str() {
-        "duration" | "writing" => {
-            let duration = run.stage == "duration";
-            let existing = if duration {
-                &run.duration_task_id
-            } else {
-                &run.writing_task_id
-            };
+        // Older workflows can resume past their retired recommendation stage without a model call.
+        "duration" => database.set_automation_stage(run, "writing")?,
+        "writing" => {
+            let existing = &run.writing_task_id;
             let id = match existing {
                 Some(id) => id.clone(),
                 None => database.start_automation_generation(run)?,
             };
             let (status, _, _, error) = database.automation_ai_result(&id)?;
             if status == "succeeded" {
-                database.set_automation_stage(run, if duration { "writing" } else { "audio" })?;
+                database.set_automation_stage(run, "audio")?;
             } else if status == "pending" {
                 ai_commands::execute_writing_task(
                     app,

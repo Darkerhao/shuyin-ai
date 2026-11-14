@@ -42,9 +42,9 @@ it('saves a chapter without rewriting its book and keeps the complete workflow v
   const { wrapper } = await editor('/projects/book?chapter=new')
   await wrapper.get('#chapter-title').setValue('第三章：论证的细节')
   await wrapper.get('#chapter-content').setValue('本章完整正文\n需要逐条解释的论证。')
-  await wrapper.get('#chapter-duration').setValue('18')
+  expect(wrapper.find('#chapter-duration').exists()).toBe(false)
   await wrapper.get('form').trigger('submit'); await flushPromises()
-  expect(projects.saveChapter).toHaveBeenCalledExactlyOnceWith('book', null, { title: '第三章：论证的细节', content: '本章完整正文\n需要逐条解释的论证。', targetDurationSeconds: 1080 })
+  expect(projects.saveChapter).toHaveBeenCalledExactlyOnceWith('book', null, { title: '第三章：论证的细节', content: '本章完整正文\n需要逐条解释的论证。' })
   expect(drafts.saveDraft).toHaveBeenCalledWith('book:chapter:new', 'project', expect.objectContaining({ content: expect.objectContaining({ title: '第三章：论证的细节' }) }))
   expect(wrapper.text()).toContain('每章独立制作文案、音频、三尺寸封面和视频，并继续发布准备')
 })
@@ -63,15 +63,13 @@ it('blocks switching chapters when saving the current draft fails', async () => 
   expect(drafts.saveDraft).toHaveBeenCalledWith('book:chapter:one', 'project', expect.objectContaining({ content: expect.objectContaining({ content: '第一章未保存的精讲资料' }) }))
 })
 
-it('restores duration edits only when the underlying chapter has not changed', async () => {
-  vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: chapter('one').updatedAt, content: { title: '恢复的第一章', content: '恢复正文', targetDurationSeconds: 1200 } })
-  const first = await editor()
-  expect(first.wrapper.get('#chapter-duration').element).toHaveProperty('value', '20')
-  first.wrapper.unmount()
+it('restores chapter text from legacy drafts without submitting a retired duration', async () => {
   vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: 'older-version', content: { title: '恢复的第一章', content: '恢复正文', targetDurationSeconds: 1200 } })
-  const second = await editor()
-  expect(second.wrapper.get('#chapter-duration').element).toHaveProperty('value', '5')
-  expect(second.wrapper.get('#chapter-content').element).toHaveProperty('value', '恢复正文')
+  const { wrapper } = await editor()
+  expect(wrapper.find('#chapter-duration').exists()).toBe(false)
+  expect(wrapper.get('#chapter-content').element).toHaveProperty('value', '恢复正文')
+  await wrapper.get('form').trigger('submit'); await flushPromises()
+  expect(projects.saveChapter).toHaveBeenCalledWith('book', 'one', { title: '恢复的第一章', content: '恢复正文' })
 })
 
 it('keeps the selected chapter across all five steps and clears old output ids when changing scope', async () => {

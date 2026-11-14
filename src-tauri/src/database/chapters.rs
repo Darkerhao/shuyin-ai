@@ -11,8 +11,6 @@ use sha2::{Digest, Sha256};
 pub struct ChapterInput {
     pub title: String,
     pub content: String,
-    #[serde(default)]
-    pub target_duration_seconds: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -22,6 +20,7 @@ pub struct Chapter {
     pub project_id: String,
     #[serde(flatten)]
     pub input: ChapterInput,
+    pub target_duration_seconds: Option<i64>,
     pub audio_duration_source: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -83,8 +82,8 @@ fn row_chapter(row: &Row<'_>) -> rusqlite::Result<Chapter> {
         input: ChapterInput {
             title: row.get(2)?,
             content: row.get(3)?,
-            target_duration_seconds: row.get(4)?,
         },
+        target_duration_seconds: row.get(4)?,
         audio_duration_source: row.get(5)?,
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
@@ -132,7 +131,7 @@ pub(super) fn snapshot(
         author: book.input.author,
         chapter_title: chapter.input.title,
         sha256: text_hash(&chapter.input.content),
-        target_duration_seconds: chapter.input.target_duration_seconds,
+        target_duration_seconds: None,
         content: chapter.input.content,
     })
 }
@@ -193,15 +192,12 @@ impl Database {
         {
             return Err("章节名称必填且最多200字，正文必填且最多10万字。".into());
         }
-        if let Some(seconds) = input.target_duration_seconds {
-            crate::ai::audio::validate_duration(seconds)?;
-        }
         let is_new = id.is_none();
         self.with_connection(|connection| {
             let transaction = connection.transaction().map_err(|error| error.to_string())?;
             get(&transaction, project)?;
             let id = match id { Some(id) => { get_chapter(&transaction,project,id)?; id.to_owned() }, None => new_id(&transaction)? };
-            transaction.execute(&format!("INSERT INTO book_chapters(id,project_id,title,content,target_duration_seconds,audio_duration_source,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,CASE WHEN ?5 IS NULL THEN NULL ELSE 'manual' END,{NOW},{NOW}) ON CONFLICT(id) DO UPDATE SET title=excluded.title,content=excluded.content,target_duration_seconds=coalesce(excluded.target_duration_seconds,book_chapters.target_duration_seconds),audio_duration_source=CASE WHEN excluded.target_duration_seconds IS NULL OR book_chapters.target_duration_seconds IS excluded.target_duration_seconds THEN book_chapters.audio_duration_source ELSE excluded.audio_duration_source END,updated_at={NOW}"), params![id,project,input.title,input.content,input.target_duration_seconds]).map_err(|error| error.to_string())?;
+            transaction.execute(&format!("INSERT INTO book_chapters(id,project_id,title,content,created_at,updated_at) VALUES(?1,?2,?3,?4,{NOW},{NOW}) ON CONFLICT(id) DO UPDATE SET title=excluded.title,content=excluded.content,updated_at={NOW}"), params![id,project,input.title,input.content]).map_err(|error| error.to_string())?;
             transaction.execute("DELETE FROM editor_drafts WHERE owner_id=?1 AND kind='project'", [format!("{project}:chapter:{id}")]).map_err(|error| error.to_string())?;
             if is_new {
                 transaction.execute("DELETE FROM editor_drafts WHERE owner_id=?1 AND kind='project'", [format!("{project}:chapter:new")]).map_err(|error| error.to_string())?;

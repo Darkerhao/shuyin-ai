@@ -22,7 +22,6 @@ pub struct ProjectInput {
     pub theme: String,
     pub target_audience: String,
     pub content_style: String,
-    pub target_duration_seconds: i64,
     pub status: String,
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,6 +30,7 @@ pub struct Project {
     pub id: String,
     #[serde(flatten)]
     pub input: ProjectInput,
+    pub target_duration_seconds: i64,
     pub workspace_path: String,
     pub created_at: String,
     pub updated_at: String,
@@ -56,9 +56,9 @@ fn row_project(row: &Row<'_>) -> rusqlite::Result<Project> {
             theme: row.get(7)?,
             target_audience: row.get(8)?,
             content_style: row.get(9)?,
-            target_duration_seconds: row.get(10)?,
             status: row.get(11)?,
         },
+        target_duration_seconds: row.get(10)?,
         workspace_path: row.get(12)?,
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
@@ -168,8 +168,8 @@ fn validate(input: &ProjectInput) -> Result<(), String> {
     if input.title.trim().is_empty() || input.title.chars().count() > 200 {
         return Err("书名必填，且不能超过 200 字。".into());
     }
-    if !(1..=86400).contains(&input.target_duration_seconds) || !valid_status(&input.status) {
-        return Err("项目状态或目标时长无效。".into());
+    if !valid_status(&input.status) {
+        return Err("项目状态无效。".into());
     }
     Ok(())
 }
@@ -258,12 +258,12 @@ impl Database {
             };
             let result = (|| {
             let transaction = c.transaction().map_err(|error| error.to_string())?;
-            // Existing duration belongs to the duration commands, not a stale book-details form.
-            transaction.execute(&format!("INSERT INTO book_projects ({COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,{NOW},{NOW},CASE WHEN ?12='archived' THEN {NOW} END)
+            // Keep the mandatory legacy column for backup compatibility; it is never used for new creation.
+            transaction.execute(&format!("INSERT INTO book_projects ({COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,600,?11,?12,{NOW},{NOW},CASE WHEN ?11='archived' THEN {NOW} END)
                
                 ON CONFLICT(id) DO UPDATE SET
                 title=excluded.title,author=excluded.author,publisher=excluded.publisher,isbn=excluded.isbn,description=excluded.description,source_notes=excluded.source_notes,theme=excluded.theme,target_audience=excluded.target_audience,content_style=excluded.content_style,status=excluded.status,updated_at=excluded.updated_at,archived_at=CASE WHEN excluded.status='archived' THEN coalesce(book_projects.archived_at,excluded.archived_at) END"),
-                params![id,input.title.trim(),input.author,input.publisher,input.isbn,input.description,input.source_notes,input.theme,input.target_audience,input.content_style,input.target_duration_seconds,input.status,workspace.to_string_lossy().as_ref()]).map_err(|error| error.to_string())?;
+                params![id,input.title.trim(),input.author,input.publisher,input.isbn,input.description,input.source_notes,input.theme,input.target_audience,input.content_style,input.status,workspace.to_string_lossy().as_ref()]).map_err(|error| error.to_string())?;
             for path in source_paths {
                 fs::File::open(path).map_err(|error| format!("书籍文件无法读取：{error}"))?;
                 super::assets::register_existing(&transaction, &id, Path::new(path), Some("document"), None, None)?;

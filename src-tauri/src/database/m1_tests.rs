@@ -11,7 +11,6 @@ fn input(title: &str) -> ProjectInput {
         theme: "成长".into(),
         target_audience: "读者".into(),
         content_style: "通俗".into(),
-        target_duration_seconds: 180,
         status: "draft".into(),
     }
 }

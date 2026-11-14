@@ -6,9 +6,10 @@ export type ProjectStatus = keyof typeof projectStatuses
 export interface ProjectInput {
   title: string; author: string; publisher: string; isbn: string; description: string
   sourceNotes: string; theme: string; targetAudience: string; contentStyle: string
-  targetDurationSeconds: number; status: ProjectStatus
+  status: ProjectStatus
 }
 export interface Project extends ProjectInput {
+  readonly targetDurationSeconds?: number
   id: string; workspacePath: string; createdAt: string; updatedAt: string; archivedAt: string | null
   audioDurationSource?: 'ai' | 'manual' | null
 }
@@ -21,9 +22,9 @@ export interface Asset {
 export interface WorkspaceSettings { root: string; databasePath: string }
 export const emptyProject = (): ProjectInput => ({
   title: '', author: '', publisher: '', isbn: '', description: '', sourceNotes: '', theme: '',
-  targetAudience: '', contentStyle: '', targetDurationSeconds: 600, status: 'draft',
+  targetAudience: '', contentStyle: '', status: 'draft',
 })
 export function projectInput(project: Project): ProjectInput {
-  const { title, author, publisher, isbn, description, sourceNotes, theme, targetAudience, contentStyle, targetDurationSeconds, status } = project
-  return { title, author, publisher, isbn, description, sourceNotes, theme, targetAudience, contentStyle, targetDurationSeconds, status }
+  const { title, author, publisher, isbn, description, sourceNotes, theme, targetAudience, contentStyle, status } = project
+  return { title, author, publisher, isbn, description, sourceNotes, theme, targetAudience, contentStyle, status }
 }
