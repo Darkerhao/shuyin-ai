@@ -15,9 +15,10 @@
     copiedText: ['Copied text', 'Paste text', 'Text', '复制的文字', '粘贴的文字', '文字'],
     pastedText: ['Paste copied text', 'Paste text', 'Copied text', 'Text', '粘贴复制的文字', '在此处粘贴文字', '粘贴的文字', '复制的文字', '文字'],
     insert: ['Insert', 'Add', 'Insert text', '插入', '添加'],
+    closeNote: ['Close note view', '关闭笔记视图'],
     audioOverview: ['Audio Overview', 'Audio overview', 'Audio overviews', '音频概览', '音频总览', '摘要音频'],
     customize: ['Customize', 'Customize audio', 'Customize Audio Overview', 'Customize audio overview', '自定义', '自定义音频'],
-    generate: ['Generate', 'Generate audio', '生成', '生成音频'],
+    generate: ['Generate now', '立即生成', 'Generate', 'Generate audio', '生成', '生成音频'],
     download: ['Download', '下载'],
     more: ['More options', 'More', '更多', '更多选项'],
     deepDive: ['Deep Dive', 'Deep dive', '深入探究', '深入探索', '深度探索'],
@@ -405,28 +406,25 @@
     return { kind: 'source_submitted' }
   }
 
-  function closestSourceRow(element, sourceNameValue) {
-    const row = element.closest('li, [role="listitem"]')
-    if (row) return row
-    let current = element
-    for (let depth = 0; current && depth < 7; depth += 1, current = current.parentElement) {
-      const text = normalize(current.textContent)
-      if (text.includes(sourceNameValue) && (current.getAttribute('role') === 'listitem' || current.tagName === 'LI' || current.querySelector?.('[role="progressbar"], progress, [aria-busy="true"]') || text.length < sourceNameValue.length + 300)) {
-        return current
-      }
-    }
-    return element.parentElement ?? element
-  }
-
   function sourceIsReady(job) {
-    const name = sourceName(job)
-    const markers = job.source.kind === 'text' && job.source.text ? [name, job.source.text.slice(0, 80)] : [name]
-    const matches = findTextElements(markers, document)
-    if (!matches.length) return hasAnyText(UI.processing) ? false : null
-    const row = closestSourceRow(matches[0].element, name)
+    // Pasted text is now a note in Sources. Its row uses the first nonempty line
+    // as its title, not our local chapter label; the notebook's document count stays 0.
+    const markers = [sourceName(job)]
+    if (job.source.kind === 'text') markers.push(job.source.text.split(/\r?\n/).map(normalize).find(Boolean))
+    const names = markers.filter(Boolean).map(normalize)
+    const rows = [...document.querySelectorAll('.single-source-container')]
+      .filter(visible)
+      .filter(row => [row, ...row.querySelectorAll('span, [title], [aria-label]')]
+        .some(element => labelsOf(element).some(label => names.includes(label))))
+    if (!rows.length) return null
+    if (rows.length !== 1) throw new UiError('ambiguous_source', '发现多个同名来源，请在网站核对本次章节后继续。')
+    const [row] = rows
     const rowText = normalize(row.textContent)
     if (row.getAttribute('aria-busy') === 'true' || row.querySelector('[role="progressbar"], progress, [aria-busy="true"]')) return false
     if (UI.processing.some(label => rowText.toLocaleLowerCase().includes(label.toLocaleLowerCase()))) return false
+    const checkbox = row.querySelector('input[type="checkbox"], [role="checkbox"]')
+    if (checkbox && !selectedChoice(checkbox)) throw new UiError('source_not_selected', '本次来源尚未勾选，请在网站选择本章来源后继续。')
+    if (!checkbox || !visible(checkbox)) return false
     return true
   }
 
@@ -482,6 +480,13 @@
 
   async function configureAudio(job) {
     ensureTaskNotebook(job)
+    const closeNote = findInteractive(UI.closeNote)
+    if (closeNote) {
+      click(closeNote, '关闭笔记视图')
+      if (!await waitFor(() => !findInteractive(UI.closeNote), 3000)) {
+        throw new UiError('note_view_open', '笔记视图尚未关闭，请返回 Studio 后继续跟进。')
+      }
+    }
     let prompt = promptInput()
     if (!prompt) {
       const audio = await waitFor(() => findInteractive(UI.audioOverview), 3000)
@@ -502,9 +507,10 @@
 
   async function submitGeneration() {
     const scope = dialogScope()
-    const generate = findInteractive(UI.generate, scope) ?? findInteractive(UI.generate)
-    if (!generate) throw new UiError('generate_missing', '未找到生成音频按钮。')
-    click(generate, '生成音频')
+    const generate = findElements(UI.generate, scope).filter(match => match.score === 100)
+    if (generate.length > 1) throw new UiError('ambiguous_control', '页面存在多个生成音频按钮，已停止自动操作。')
+    if (!generate.length) throw new UiError('generate_missing', '未找到生成音频按钮。')
+    click(generate[0].element, '生成音频')
     await sleep(250)
     return { kind: 'generation_submitted' }
   }
