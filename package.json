@@ -12,7 +12,7 @@
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run && npm run test:video && npm run test:release && npm run test:queue",
-    "test:video": "node --test tests/video-render.test.mjs",
+    "test:video": "node --test tests/video-render.test.mjs tests/video-audio.test.mjs",
     "test:release": "node --test tests/release.test.mjs tests/release-assets.test.mjs tests/audio-package.test.mjs tests/audio-page.test.mjs",
     "test:queue": "node --test tests/codex-queue.test.mjs",
     "codex:queue": "node scripts/codex-queue.mjs",

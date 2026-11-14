@@ -174,6 +174,20 @@ it('reports subtitle preparation and audio muxing in their own units and resets 
   expect(wrapper.find('.render-speed').exists()).toBe(false)
 })
 
+it('shows full-source loudness processing for both previews and complete videos', async () => {
+  const wrapper = render({ ...job, stage: 'rendering' })
+  for (const stage of ['rendering', 'previewing']) {
+    for (const [phase, verb, title] of [['measuring_audio', '分析', '正在分析整段音量'], ['normalizing_audio', '调整', '正在调整人声音量'], ['checking_audio', '核对', '正在核对输出音量']] as const) {
+      await wrapper.setProps({ job: { ...job, stage, progress: { ...progress, stage, phase, completed: 50, total: 100, unit: 'seconds' } } })
+      expect(wrapper.text()).toContain(title)
+      expect(wrapper.text()).toContain(`已${verb} 00:50 / 01:40`)
+      expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('50')
+      expect(wrapper.get('[aria-label="渲染步骤"] [aria-current="step"]').text()).toContain('合入原声')
+      expect(wrapper.text()).not.toContain('成片和字幕已保存')
+    }
+  }
+})
+
 it('keeps a stalled snapshot honest and suspends decorative motion on sync errors', async () => {
   vi.useFakeTimers()
   vi.setSystemTime(startedAt + 60000)

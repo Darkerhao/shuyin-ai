@@ -168,15 +168,79 @@ export function writeProgress(file, progress) {
   }
 }
 
-function run(executable, args, cwd, onLine) {
+function run(executable, args, cwd, onLine, onErrorLine) {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { cwd, stdio: onLine ? ['ignore', 'pipe', 'inherit'] : 'inherit', windowsHide: true });
+    const child = spawn(executable, args, { cwd, stdio: ['ignore', onLine ? 'pipe' : 'inherit', onErrorLine ? 'pipe' : 'inherit'], windowsHide: true });
     if (onLine) {
       createInterface({ input: child.stdout }).on('line', onLine);
     }
+    if (onErrorLine) createInterface({ input: child.stderr }).on('line', onErrorLine);
     child.on('error', reject);
     child.on('close', code => code === 0 ? resolve() : reject(new Error(`Render process exited ${code}`)));
   });
+}
+
+const audioFormat = 'aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS';
+// The extra 0.5 dB leaves room for AAC; the encoded track is also measured below.
+const audioTarget = 'loudnorm=I=-16:TP=-2:LRA=11';
+
+async function measureAudio(ffmpeg, audio, duration, phase, report) {
+  let analysis = '';
+  report(phase, { completed: 0, total: duration, unit: 'seconds' });
+  try {
+    await run(ffmpeg, ['-hide_banner', '-progress', 'pipe:1', '-stats_period', '1', '-nostats', '-nostdin',
+      '-protocol_whitelist', 'file,pipe', '-i', audio, '-map', '0:a:0', '-af', `${audioFormat},${audioTarget}:print_format=json`, '-f', 'null', '-'],
+    path.dirname(audio), encodingProgress(duration, counts => report(phase, counts)), line => { analysis = (analysis + line + '\n').slice(-8192); });
+  } catch (error) { throw new Error(`无法测量原音频响度：${error.message}\n${analysis.slice(-1500)}`); }
+  const json = /\{[^{}]*"input_i"[^{}]*\}/s.exec(analysis)?.[0];
+  if (!json) throw new Error('无法读取音频响度测量结果。');
+  const stats = JSON.parse(json);
+  if (!(stats.input_i === '-inf' && stats.input_tp === '-inf')) {
+    const keys = ['input_i', 'input_tp', 'input_lra', 'input_thresh', 'target_offset'];
+    if (!keys.every(key => typeof stats[key] === 'string' && stats[key].trim() && Number.isFinite(Number(stats[key])))) {
+      throw new Error('音频没有有效的响度测量结果，请检查音频文件。');
+    }
+  }
+  return stats;
+}
+
+export async function muxVideoAudio(ffmpeg, { video, audio, output, duration, range }, report) {
+  if (fs.existsSync(output)) throw new Error('输出视频已存在，请使用新的任务目录；已有成片未修改。');
+  // Always normalize and check the full source before cutting a preview. Both
+  // paths then copy the same AAC packets, including any peak correction.
+  const stats = await measureAudio(ffmpeg, audio, duration, 'measuring_audio', report);
+  const normalization = stats.input_i === '-inf' ? 'anull'
+    : `${audioTarget}:measured_I=${Number(stats.input_i)}:measured_TP=${Number(stats.input_tp)}:measured_LRA=${Number(stats.input_lra)}:measured_thresh=${Number(stats.input_thresh)}:offset=${Number(stats.target_offset)}:linear=true`;
+  const directory = fs.mkdtempSync(path.join(path.dirname(output), 'normalized-audio-'));
+  const tracks = [path.join(directory, 'audio.m4a'), path.join(directory, 'corrected.m4a')];
+  try {
+    let track, gain = 0;
+    for (let attempt = 0; attempt < tracks.length; attempt++) {
+      track = tracks[attempt];
+      report('normalizing_audio', { completed: 0, total: duration, unit: 'seconds' });
+      await run(ffmpeg, ['-progress', 'pipe:1', '-stats_period', '1', '-nostats', '-nostdin', '-n', '-loglevel', 'error',
+        '-protocol_whitelist', 'file,pipe', '-i', audio, '-map', '0:a:0', '-af', `${audioFormat},${normalization},aresample=48000,volume=${gain}dB`,
+        '-ar', '48000', '-c:a', 'aac', '-b:a', '192k', track], directory,
+      encodingProgress(duration, counts => report('normalizing_audio', counts)));
+      const checked = await measureAudio(ffmpeg, track, duration, 'checking_audio', report);
+      if (checked.input_tp === '-inf' || Number(checked.input_tp) <= -1.5) break;
+      if (attempt === tracks.length - 1) throw new Error('音轨编码后的峰值仍过高，请检查原音频；已保存的字幕与分镜保留。');
+      // Re-encode from the source once, never repeatedly encode the lossy track.
+      gain = -1.5 - Number(checked.input_tp) - 0.2;
+    }
+    const clipDuration = range ? range.end - range.start : duration;
+    report('muxing_audio', { completed: 0, total: clipDuration, unit: 'seconds' });
+    await run(ffmpeg, ['-progress', 'pipe:1', '-stats_period', '1', '-nostats', '-nostdin', '-n', '-loglevel', 'error',
+      '-protocol_whitelist', 'file,pipe', '-i', video,
+      ...(range ? ['-ss', String(range.start), '-t', String(clipDuration)] : []),
+      '-protocol_whitelist', 'file,pipe', '-i', track, '-map', '0:v:0', '-map', '1:a:0',
+      '-c:v', 'copy', '-c:a', 'copy', '-movflags', '+faststart', output],
+    directory, encodingProgress(clipDuration, counts => report('muxing_audio', counts)));
+    report('muxing_audio', { completed: clipDuration, total: clipDuration, unit: 'seconds' });
+  } finally {
+    for (const track of tracks) if (fs.existsSync(track)) fs.unlinkSync(track);
+    fs.rmdirSync(directory);
+  }
 }
 
 async function main(inputFile, outputFile) {
@@ -295,8 +359,7 @@ async function main(inputFile, outputFile) {
     '-filter_complex', '[1:v]fps=24,format=rgba[s];[0:v][s]overlay=0:0:format=auto:shortest=1,format=yuv420p[v]',
     '-map', '[v]', '-map', '0:a?', '-c:a', 'copy', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-r', '24', '-movflags', '+faststart', subtitled]);
   const video = path.join(path.dirname(inputFile), 'video.mp4');
-  // Render without the engine's voice track: its mixer normalizes speech. Keep the user's original track instead.
-  await encode('muxing_audio', ['-nostdin', '-n', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', subtitled, ...(range ? ['-ss', String(range.start), '-t', String(duration)] : []), '-protocol_whitelist', 'file,pipe', '-i', input.audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', video]);
+  await muxVideoAudio(FFMPEG, { video: subtitled, audio: input.audioPath, output: video, duration: plan.duration, range }, report);
   report('checking_video');
   const output = probe(video);
   if (output.width !== 1920 || output.height !== 1080 || Math.abs(output.duration - duration) > 0.2) throw new Error('Rendered video metadata does not match the audio.');
