@@ -543,8 +543,7 @@
     return 'unknown'
   }
 
-  function waitForGeneration() {
-    const state = detectGenerationState()
+  function waitForGeneration(state = detectGenerationState()) {
     if (state === 'generating') return { kind: 'generating' }
     if (state === 'complete') return { kind: 'generation_complete' }
     if (state === 'failed') throw new UiError('generation_failed', 'Gemini Notebook 明确显示音频生成失败。')
@@ -672,6 +671,11 @@
     if (issue) return { kind: 'page_changed', message: issue }
     if (job.status === 'waiting_login') return runLogin(job)
     if (job.notebookUrl) ensureTaskNotebook(job)
+    // The user may have generated audio while the local preparation was paused or stuck.
+    if (job.notebookUrl && ['source_processing', 'configuring_audio', 'submitting'].includes(job.stage)) {
+      const state = detectGenerationState()
+      if (state !== 'unknown') return waitForGeneration(state)
+    }
     switch (job.stage) {
       case 'opening_site':
       case 'awaiting_extension':

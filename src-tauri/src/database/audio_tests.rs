@@ -983,6 +983,99 @@ fn verify_remote_allows_only_read_only_generation_observations() {
         ("downloading", "downloading")
     );
 }
+
+#[test]
+fn manual_audio_recovers_preparation_and_archives_in_the_original_job() {
+    for stage in ["source_processing", "configuring_audio", "submitting"] {
+        for generating in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let database = Database::open(directory.path().join("data.sqlite3"));
+            let project = sample_project(&database, "手动音频续作", "原书资料");
+            let writing = sample_writing(&database, &project, "完整指导");
+            let original = start_text_job(&database, &project, &writing);
+            database
+                .observe_audio_job(&original.id, original.run_id, &AudioObservation::LoginReady)
+                .unwrap();
+            database
+                .observe_audio_job(
+                    &original.id,
+                    original.run_id,
+                    &AudioObservation::NotebookCreated {
+                        notebook_url: "https://notebook.google.com/notebook/task".into(),
+                    },
+                )
+                .unwrap();
+            database
+                .observe_audio_job(
+                    &original.id,
+                    original.run_id,
+                    &AudioObservation::SourceSubmitted,
+                )
+                .unwrap();
+            if stage != "source_processing" {
+                database
+                    .observe_audio_job(
+                        &original.id,
+                        original.run_id,
+                        &AudioObservation::SourceReady,
+                    )
+                    .unwrap();
+            }
+            if stage == "submitting" {
+                database
+                    .observe_audio_job(
+                        &original.id,
+                        original.run_id,
+                        &AudioObservation::AudioConfigured,
+                    )
+                    .unwrap();
+            }
+            // An error requires explicit resume; late results from the old run stay invalid.
+            database
+                .audio_step_failed(&original.id, original.run_id, "等待超时")
+                .unwrap();
+            let complete = AudioObservation::GenerationComplete {
+                download_url: None,
+                suggested_filename: None,
+            };
+            assert!(database
+                .observe_audio_job(&original.id, original.run_id, &complete)
+                .is_err());
+            let resumed = database.control_audio_job(&original.id, "resume").unwrap();
+            assert!(database
+                .observe_audio_job(&original.id, original.run_id, &complete)
+                .is_err());
+            if generating {
+                let observed = database
+                    .observe_audio_job(&resumed.id, resumed.run_id, &AudioObservation::Generating)
+                    .unwrap();
+                assert_eq!(
+                    (observed.status.as_str(), observed.stage.as_str()),
+                    ("generating", "generating")
+                );
+            }
+            let downloading = database
+                .observe_audio_job(&resumed.id, resumed.run_id, &complete)
+                .unwrap();
+            assert_eq!(
+                (downloading.status.as_str(), downloading.stage.as_str()),
+                ("downloading", "downloading")
+            );
+            let download = database
+                .audio_download_path(&resumed.id, resumed.run_id)
+                .unwrap();
+            fs::create_dir_all(download.parent().unwrap()).unwrap();
+            fs::write(&download, wav_bytes()).unwrap();
+            let completed = database
+                .complete_audio_download(&resumed.id, resumed.run_id, download.to_str().unwrap())
+                .unwrap();
+            assert_eq!(completed.id, original.id);
+            assert_eq!(completed.writing_version_id, original.writing_version_id);
+            assert_eq!(completed.status, "succeeded");
+            assert!(completed.asset_id.is_some());
+        }
+    }
+}
 #[test]
 fn asset_transaction_failure_keeps_audio_for_retry_without_duplicate_registration() {
     for restart in [false, true] {

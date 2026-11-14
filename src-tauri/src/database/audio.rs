@@ -954,6 +954,8 @@ impl Database {
             let current = job(connection, job_id)?;
             require_run(&current, run_id)?;
             if matches!(current.status.as_str(), "paused" | "failed" | "succeeded" | "cancelled") { return Err("音频任务当前不接受页面操作结果。".into()); }
+            let can_observe_generation = (current.status == "generating" && current.stage == "generating")
+                || (current.status == "preparing" && matches!(current.stage.as_str(), "source_processing" | "configuring_audio" | "submitting" | "verify_remote"));
             match observation {
                 AudioObservation::LoginRequired => {
                     if current.status == "waiting_login" {
@@ -1031,7 +1033,7 @@ impl Database {
                     ).map_err(|error| error.to_string())?;
                 }
                 AudioObservation::Generating => {
-                    if !matches!(current.status.as_str(), "preparing" | "generating") || !matches!(current.stage.as_str(), "verify_remote" | "submitting" | "generating") { return Err("当前阶段不能登记生成中状态。".into()); }
+                    if !can_observe_generation { return Err("当前阶段不能登记生成中状态。".into()); }
                     connection.execute(
                         &format!("UPDATE audio_jobs SET status='generating',stage='generating',submitted_at=coalesce(submitted_at,{NOW}),error_code=NULL,error_message=NULL,last_checked_at={NOW},updated_at={NOW} WHERE id=?1"),
                         [job_id],
@@ -1039,7 +1041,7 @@ impl Database {
                 }
                 AudioObservation::GenerationComplete { .. } => {
                     if current.status == "downloading" && current.stage == "downloading" { self.touch_job(connection, job_id)?; return job(connection, job_id); }
-                    if current.status != "generating" && !(current.status == "preparing" && current.stage == "verify_remote") { return Err("当前阶段不能登记音频生成完成。".into()); }
+                    if !can_observe_generation { return Err("当前阶段不能登记音频生成完成。".into()); }
                     self.set_job(connection, job_id, "downloading", "downloading", None, None)?;
                 }
                 AudioObservation::PageChanged { message } => {

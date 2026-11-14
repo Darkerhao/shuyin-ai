@@ -46,6 +46,40 @@ function chapterSourcePage({ processing = false, selected = true } = {}) {
 
 const chapterTextSource = { kind: 'text', name: '第二章：张翼德怒鞭督邮何国舅谋诛宦竖 · 完整章节', text: '第二章 张翼德怒鞭督邮\n\n且说董卓字仲颖，陇西临洮人也。' }
 
+for (const stage of ['source_processing', 'configuring_audio', 'submitting']) {
+  for (const [markup, expected] of [
+    ['<button aria-label="播放">play_arrow</button>', 'generation_complete'],
+    ['<p>正在生成音频</p>', 'generating'],
+    ['<p>生成失败</p>', 'page_error'],
+  ]) {
+    test(`${stage} follows manual audio ${expected} without configuring or submitting again`, async (t) => {
+      const { core, document, window } = chapterSourcePage()
+      t.after(() => window.close())
+      document.querySelector('aside').innerHTML = `<section><h2>音频概览</h2>${markup}</section><button>立即生成</button>`
+      let clicks = 0
+      document.addEventListener('click', () => { clicks++ })
+      const result = await core.runStep(textJob({ stage, notebookUrl: window.location.href, source: chapterTextSource }))
+      assert.equal(result.kind, expected)
+      if (expected === 'page_error') assert.equal(result.code, 'generation_failed')
+      assert.equal(clicks, 0)
+    })
+  }
+}
+
+test('manual audio recovery keeps the recorded notebook identity check', async (t) => {
+  const { core, window } = page('<section><h2>音频概览</h2><audio></audio></section>')
+  t.after(() => window.close())
+  const result = await core.runStep(textJob({ stage: 'source_processing', notebookUrl: 'https://notebook.google.com/notebook/other' }))
+  assert.equal(result.code, 'wrong_notebook')
+})
+
+test('a source with no remote audio still proceeds to audio configuration', async (t) => {
+  const { core, window } = chapterSourcePage()
+  t.after(() => window.close())
+  const result = await core.runStep(textJob({ stage: 'source_processing', notebookUrl: window.location.href, source: chapterTextSource }))
+  assert.equal(result.kind, 'source_ready')
+})
+
 test('recognizes a pasted chapter by its actual source row despite a different local label and zero document count', () => {
   const { core, window } = chapterSourcePage()
   try {
