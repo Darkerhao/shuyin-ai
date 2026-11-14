@@ -10,7 +10,7 @@ test('ignores create controls inside CSS-hidden responsive panels', async () => 
 })
 
 test('source name alone does not hide its row processing indicator', () => {
-  const { core } = page('<ul><li><span>原书.txt</span><span role="progressbar"></span></li></ul>')
+  const { core } = page('<div class="single-source-container"><span>原书.txt</span><span role="progressbar"></span></div>')
   assert.equal(core.sourceIsReady(textJob({ source: { kind: 'asset', name: '原书.txt' } })), false)
 })
 function page(html, url = 'https://notebook.google.com/notebook/notebook-1') {
@@ -25,6 +25,128 @@ function textJob(overrides = {}) {
     targetDurationSeconds: 1500, prompt: '完整音频指导\n第二段', source: { kind: 'text', text: '用户提供的资料文本。' }, ...overrides,
   }
 }
+
+function chapterSourcePage({ processing = false, selected = true } = {}) {
+  return page(`
+    <section><h2>来源</h2><button aria-label="添加来源">来源</button>
+      <div class="single-source-container">
+        <button class="source-stretched-button" aria-label="第二章 张翼德怒鞭督邮"></button>
+        <div aria-hidden="true"><span>第二章 张翼德怒鞭督邮</span></div>
+        ${processing ? '<span role="progressbar"></span>' : `<input type="checkbox" aria-label="选择本章" ${selected ? 'checked' : ''}>`}
+      </div>
+    </section>
+    <main><span>0 个来源</span><div>第二章 张翼德怒鞭督邮</div></main>
+    <aside><h2>Studio &gt; 笔记</h2><button aria-label="关闭笔记视图">collapse_content</button>
+      <form class="note-form"><input aria-label="可修改笔记名称" value="第二章 张翼德怒鞭督邮">
+        <div contenteditable="true"><p>第二章 张翼德怒鞭督邮</p><p>且说董卓字仲颖，陇西临洮人也。</p></div>
+      </form>
+    </aside>
+  `)
+}
+
+const chapterTextSource = { kind: 'text', name: '第二章：张翼德怒鞭督邮何国舅谋诛宦竖 · 完整章节', text: '第二章 张翼德怒鞭督邮\n\n且说董卓字仲颖，陇西临洮人也。' }
+
+test('recognizes a pasted chapter by its actual source row despite a different local label and zero document count', () => {
+  const { core, window } = chapterSourcePage()
+  try {
+    assert.equal(core.sourceIsReady(textJob({ source: chapterTextSource })), true)
+  } finally { window.close() }
+})
+
+test('chapter note text cannot conceal source processing or substitute for the source row', () => {
+  const { core, document, window } = chapterSourcePage({ processing: true })
+  try {
+    assert.equal(core.sourceIsReady(textJob({ source: chapterTextSource })), false)
+    document.querySelector('.single-source-container').remove()
+    assert.equal(core.sourceIsReady(textJob({ source: chapterTextSource })), null)
+  } finally { window.close() }
+})
+
+test('a chapter title in note lists cannot substitute for the actual source row', () => {
+  const { core, document, window } = chapterSourcePage()
+  try {
+    document.querySelector('.single-source-container').remove()
+    document.querySelector('[contenteditable]').innerHTML = '<ul><li>第二章 张翼德怒鞭督邮</li></ul>'
+    assert.equal(core.sourceIsReady(textJob({ source: chapterTextSource })), null)
+  } finally { window.close() }
+})
+
+test('a real chapter source stays ready when note lists repeat its title', () => {
+  const { core, document, window } = chapterSourcePage()
+  try {
+    document.querySelector('[contenteditable]').innerHTML = '<ul><li>第二章 张翼德怒鞭督邮</li></ul>'
+    assert.equal(core.sourceIsReady(textJob({ source: chapterTextSource })), true)
+  } finally { window.close() }
+})
+
+test('an unselected chapter stops with a specific error instead of waiting until timeout', async (t) => {
+  const { core, window } = chapterSourcePage({ selected: false })
+  t.after(() => window.close())
+  const result = await core.runStep(textJob({ stage: 'source_processing', source: chapterTextSource }))
+  assert.equal(result.kind, 'page_error')
+  assert.equal(result.code, 'source_not_selected')
+})
+
+test('current audio dialog submits Generate now, never Generate later', async (t) => {
+  const { core, document, window } = page('<section role="dialog"><button id="later">稍后生成</button><button id="now">立即生成</button></section>')
+  t.after(() => window.close())
+  const clicks = []
+  document.querySelector('#later').addEventListener('click', () => clicks.push('later'))
+  document.querySelector('#now').addEventListener('click', () => clicks.push('now'))
+  const result = await core.runStep(textJob({ stage: 'submitting', notebookUrl: window.location.href }))
+  assert.equal(result.kind, 'generation_submitted', JSON.stringify(result))
+  assert.deepEqual(clicks, ['now'])
+})
+
+test('remote verification with a ready chapter never closes the note or generates again', async (t) => {
+  const { core, document, window } = chapterSourcePage()
+  t.after(() => window.close())
+  let clicks = 0
+  document.querySelector('[aria-label="关闭笔记视图"]').addEventListener('click', () => { clicks++ })
+  const result = await core.runStep(textJob({ stage: 'verify_remote', notebookUrl: window.location.href, source: chapterTextSource }))
+  assert.equal(result.kind, 'source_processing')
+  assert.equal(clicks, 0)
+})
+
+test('an exact source title still waits for a sibling processing message', () => {
+  const { core, window } = page('<div class="single-source-container"><span>原书.txt</span><span>Processing source</span></div>')
+  try { assert.equal(core.sourceIsReady(textJob({ source: { kind: 'asset', name: '原书.txt' } })), false) }
+  finally { window.close() }
+})
+
+test('a Generate later button alone must never submit an audio task', async (t) => {
+  const { core, document, window } = page('<section role="dialog"><button>稍后生成</button></section>')
+  t.after(() => window.close())
+  let clicks = 0
+  document.querySelector('button').addEventListener('click', () => { clicks++ })
+  const result = await core.runStep(textJob({ stage: 'submitting', notebookUrl: window.location.href }))
+  assert.equal(result.code, 'generate_missing')
+  assert.equal(clicks, 0)
+})
+
+test('returns from the pasted chapter note to Studio before configuring and submitting audio once', async (t) => {
+  const { core, document, window } = chapterSourcePage()
+  t.after(() => window.close())
+  let closeClicks = 0
+  let generationClicks = 0
+  const prompt = '请完整解释本章人物动机与事件经过。\n不要引用其他章节。'
+  document.querySelector('[aria-label="关闭笔记视图"]').addEventListener('click', () => {
+    closeClicks++
+    document.querySelector('aside').innerHTML = '<h2>Studio</h2><button id="audio">音频概览</button>'
+    document.querySelector('#audio').addEventListener('click', () => {
+      document.querySelector('aside').innerHTML += '<section role="dialog"><button aria-checked="true">深入探究</button><button>中文（简体）</button><button aria-checked="true">默认</button><textarea aria-label="音频指导"></textarea><button id="generate">生成</button></section>'
+      document.querySelector('#generate').addEventListener('click', () => { generationClicks++ })
+    })
+  })
+  const job = textJob({ stage: 'configuring_audio', notebookUrl: window.location.href, source: chapterTextSource, prompt })
+  const result = await core.runStep(job)
+  assert.equal(result.kind, 'audio_configured', JSON.stringify(result))
+  assert.equal(closeClicks, 1)
+  assert.equal(document.querySelector('textarea').value, prompt)
+  assert.equal(generationClicks, 0)
+  assert.equal((await core.runStep({ ...job, stage: 'submitting' })).kind, 'generation_submitted')
+  assert.equal(generationClicks, 1)
+})
 
 test('a website 404 stops opening immediately with an actionable recovery message', async () => {
   const { core } = page('<h1>Error: Not Found</h1><h2>The requested URL / was not found on this server.</h2>', 'https://notebook.google/')
@@ -400,7 +522,7 @@ test('verify_remote only observes the recorded notebook and never resubmits gene
   assert.equal(result.kind, 'generation_complete')
   assert.equal(clicks, 0)
 
-  fixture = page('<div role="listitem">book.pdf</div><button id="generate">Generate</button>', notebookUrl)
+  fixture = page('<div class="single-source-container"><span>book.pdf</span><input type="checkbox" checked></div><button id="generate">Generate</button>', notebookUrl)
   fixture.document.querySelector('#generate').addEventListener('click', () => { clicks += 1 })
   result = await fixture.core.runStep(textJob({ stage: 'verify_remote', status: 'waiting_user', notebookUrl, source: { kind: 'asset', name: 'book.pdf', size: 10, sha256: 'a'.repeat(64) } }), {})
   assert.equal(result.kind, 'source_processing')
