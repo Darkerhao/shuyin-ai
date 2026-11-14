@@ -38,9 +38,7 @@ const busy = ref(false)
 const error = ref('')
 function audioDuration(run: AutomationRun) {
   const seconds = Math.round(run.actualDurationSeconds ?? 0)
-  const target = run.input.targetDurationSeconds
-  const difference = target === null ? '' : seconds === target ? ' · 与目标一致' : ` · 比目标${seconds > target ? '长' : '短'} ${Math.abs(seconds - target)} 秒`
-  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒${difference}`
+  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
 }
 useWindowCloseGuard(() => working.value, () => !working.value || requestConfirmation('自动制作仍在进行。退出会中断本地执行，重开后可核对并继续。确定退出？'))
 let disposed = false
@@ -124,9 +122,6 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
         <p v-if="run.input.textProvider && run.input.imageProvider">
           当前文本模型：{{ run.input.textProvider.name }} · {{ run.input.textProvider.modelName }}
           · 当前图片模型：{{ run.input.imageProvider.name }} · {{ run.input.imageProvider.modelName }}
-        </p>
-        <p>
-          {{ run.input.targetDurationSeconds ? `目标 ${run.input.targetDurationSeconds / 60} 分钟` : '目标时长待推荐' }}<span v-if="run.input.durationReason"> · {{ run.input.durationReason }}</span>
         </p>
         <p
           v-if="run.actualDurationSeconds"

@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 取消推荐时长（2026-11-14，当前规则）
+
+仍为 schema v25，无新迁移。书籍/章节旧时长列保留为历史元数据，资料接口不再编辑，新书的旧非空列使用原默认占位值600，新章节为NULL；该值不参与生成。新生成/音频任务不写目标参数，既有版本、来源快照及媒体记录保留。旧推荐任务不再执行，旧自动 duration 阶段恢复后直接进入 writing。 实现、验收及边界见[取消推荐时长记录](DURATION-REMOVAL.md)。
+
 ## 章节精讲数据与兼容迁移（2026-11-13，v25）
 
 [0025_chapter_creation.sql](../src-tauri/migrations/0025_chapter_creation.sql)新增book_chapters，保存章节名称、完整正文和独立可空目标时长；writing_versions、ai_tasks、audio_jobs、video_jobs、automation_runs、cover_versions、publish_tasks与assets增加可空chapter_id。旧记录均为NULL整书范围，原路径及书籍内版本号不重编。writing_versions增加只读source_snapshot_json。

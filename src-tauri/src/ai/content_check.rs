@@ -17,12 +17,7 @@ struct Check {
     changes: Map<String, Value>,
 }
 
-pub fn apply(
-    raw: &str,
-    base: &WritingContent,
-    book: &str,
-    seconds: i64,
-) -> Result<WritingContent, String> {
+pub fn apply(raw: &str, base: &WritingContent, book: &str) -> Result<WritingContent, String> {
     let check: Check =
         serde_json::from_str(raw).map_err(|_| "内容校核必须返回结论和必要修改项。")?;
     if check.reason.trim().is_empty() || check.reason.chars().count() > 500 {
@@ -54,7 +49,6 @@ pub fn apply(
             base,
             &fields,
             book,
-            seconds,
             None,
         )?
     };
@@ -85,8 +79,7 @@ mod tests {
             apply(
                 r#"{"verified":true,"reason":"一致","changes":{}}"#,
                 &original,
-                "书",
-                600
+                "书"
             )
             .unwrap(),
             original
@@ -95,7 +88,6 @@ mod tests {
             r#"{"verified":true,"reason":"字幕谈的是阅读","changes":{"title":"阅读"}}"#,
             &original,
             "书",
-            600,
         )
         .unwrap();
         let mut expected = serde_json::to_value(original).unwrap();
@@ -114,7 +106,7 @@ mod tests {
             r#"{"verified":false,"reason":"字幕缺少有效讲述","changes":{}}"#,
             r#"{"verified":false,"reason":"不能确定","changes":{"title":"猜测标题"}}"#,
         ] {
-            assert!(apply(raw, &base(), "书", 600).is_err());
+            assert!(apply(raw, &base(), "书").is_err());
         }
     }
 }

@@ -125,7 +125,6 @@ const remove = async () => {
           <p class="book-author">
             {{ project.author || '作者待补充' }}
           </p>
-          <span class="book-facts">目标音频 {{ Math.round(project.targetDurationSeconds / 60) }} 分钟</span>
         </div>
         <div class="project-card-footer">
           <span>{{ new Date(project.updatedAt).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }} 更新</span>
@@ -226,7 +225,6 @@ const remove = async () => {
 .project-card[data-tone='warm'] .book-author { color: #fbbf24cc; }
 .project-card-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0; color: #fff; font-size: 20px; font-weight: 900; line-height: 28px; letter-spacing: .5px; }
 .book-author { margin: 8px 0 0; font: 400 12px/16px var(--font-mono); color: #00e5ff; }
-.book-facts { margin-top: 16px; padding: 4px 12px; border: 1px solid #1e293b; border-radius: 4px; background: #00000080; color: #94a3b8; font: 400 10px/15px var(--font-mono); }
 .project-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted-foreground); font: 400 12px/16px var(--font-mono); }
 .book-more { position: absolute; top: 19px; right: 16px; width: 24px; height: 24px; padding: 4px; border-radius: 8px; color: var(--muted-foreground); background: transparent; }
 .project-card:focus-within .book-jacket { box-shadow: 4px 4px 0 -1px #cbd5e14d, 0 16px 28px -12px color-mix(in srgb, var(--info) 35%, transparent); }

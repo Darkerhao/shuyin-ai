@@ -4,7 +4,6 @@ use tauri::{AppHandle, Emitter};
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Completion {
-    Duration,
     Writing,
     Revision,
     CoverBackground,

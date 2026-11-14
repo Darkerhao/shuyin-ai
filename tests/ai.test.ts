@@ -19,7 +19,7 @@ vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn(
 import { emptyProject, type Asset } from '../src/types/project'
 import { emptyProvider, emptyPublishing, type ModelProvider, type WritingVersion } from '../src/types/ai'
 import type { AudioJob, AudioJobStatus, AudioJobView } from '../src/types/audio'
-vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), modelFieldOptions: vi.fn(), saveModelFieldOptions: vi.fn(), setAudioDuration: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
+vi.mock('../src/services/ai', () => ({ listProviders: vi.fn(), modelFieldOptions: vi.fn(), saveModelFieldOptions: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), testConnection: vi.fn(), listVersions: vi.fn(), saveWriting: vi.fn(), startGeneration: vi.fn(), executeGeneration: vi.fn(), applyGeneration: vi.fn(), cancelGeneration: vi.fn() }))
 vi.mock('../src/services/audio', () => ({ getAudioJobView: vi.fn(), startAudioJob: vi.fn(), controlAudioJob: vi.fn() }))
 vi.mock('../src/services/audioWaveform', () => ({ loadWaveform: vi.fn().mockResolvedValue([.2, .6, .8, .1]) }))
 vi.mock('../src/services/projects', () => ({ isDesktop: vi.fn(), getChapter: vi.fn(), listChapters: vi.fn(), getProject: vi.fn(), saveProject: vi.fn(), listAssets: vi.fn(), chooseAudio: vi.fn(), chooseSourceDocument: vi.fn(), linkAsset: vi.fn(), openAsset: vi.fn(), mediaSource: vi.fn() }))
@@ -27,7 +27,7 @@ const provider: ModelProvider = { ...emptyProvider(), id: 'm1', name: '本机模
 const initial: WritingVersion = { id: 'v1', projectId: 'p1', kind: 'publishing', versionNo: 1, content: { ...emptyPublishing(), title: '原有标题', description: '原有内容', audioPrompt: '原有提示词' }, sourceType: 'ai', modelName: 'model', promptVersion: 'publishing-v1', isConfirmed: true, createdAt: '2026-10-23T00:00:00Z' }
 const generated: WritingVersion = { ...initial, id: 'v2', versionNo: 2, content: { ...initial.content, title: '新标题', description: '新内容', tags: '#读书 #生死疲劳 #文学', audioPrompt: '新提示词', coverTitle: '换了几辈子，还是放不下', coverSubtitle: '《生死疲劳》：轮回里的执念', coverPromptLandscape: '横版 4:3，田野横向延伸\n中央留白，无文字。', coverPromptPortrait: '竖版 3:4，田垄引向远方\n中央留白，无文字。' }, isConfirmed: false }
 function automaticRun(): AutomationRun {
-  return { id: 'automatic1', projectId: 'p1', input: { workflowVersion: 2, title: '测试书', author: '作者', targetDurationSeconds: null, durationReason: '', selection: { projectId: 'p1', source: { kind: 'asset', assetId: 'doc1' }, textProviderId: 'm1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'one' } }, status: 'running', stage: 'duration', runId: 1, error: '', audioJobId: null, videoJobId: null, writingTaskId: null, durationTaskId: null, contentCheckTaskId: null, writingVersionId: null, finalWritingVersionId: null, actualDurationSeconds: null, widescreenTaskId: null, widescreenCoverId: null, landscapeTaskId: null, portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '' }
+  return { id: 'automatic1', projectId: 'p1', input: { workflowVersion: 2, title: '测试书', author: '作者', selection: { projectId: 'p1', source: { kind: 'asset', assetId: 'doc1' }, textProviderId: 'm1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'one' } }, status: 'running', stage: 'writing', runId: 1, error: '', audioJobId: null, videoJobId: null, writingTaskId: null, durationTaskId: null, contentCheckTaskId: null, writingVersionId: null, finalWritingVersionId: null, actualDurationSeconds: null, widescreenTaskId: null, widescreenCoverId: null, landscapeTaskId: null, portraitTaskId: null, landscapeCoverId: null, portraitCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '' }
 }
 const browser = { supported: true, open: false, url: null, message: null }
 function makeAudioJob(status: AudioJobStatus, overrides: Partial<AudioJob> = {}): AudioJob {
@@ -35,7 +35,7 @@ function makeAudioJob(status: AudioJobStatus, overrides: Partial<AudioJob> = {})
     id: 'job-1', projectId: 'p1', projectTitle: '测试书', writingVersionId: 'v1', status, stage: 'generating', runId: 1,
     errorCode: null, errorMessage: null, notebookUrl: 'https://notebook.google.com/notebook/one', remoteAudioRef: null,
     outputSize: null, outputSha256: null, assetId: null, format: 'deep_dive', sourceLabel: '书籍资料文本',
-    targetDurationSeconds: 600, submittedAt: null, lastCheckedAt: '2026-10-27T10:05:00Z',
+    submittedAt: null, lastCheckedAt: '2026-10-27T10:05:00Z',
     createdAt: '2026-10-27T10:00:00Z', updatedAt: '2026-10-27T10:05:00Z', ...overrides,
   }
 }
@@ -71,7 +71,6 @@ beforeEach(() => {
   vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   vi.mocked(projects.isDesktop).mockReturnValue(true)
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), audioDurationSource: 'manual', id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
-  vi.mocked(api.setAudioDuration).mockResolvedValue(undefined)
   vi.mocked(api.listProviders).mockResolvedValue([provider])
   vi.mocked(api.modelFieldOptions).mockImplementation(async field => [provider[field]])
   vi.mocked(api.saveModelFieldOptions).mockImplementation(async (_field, values) => [...new Set(values.map(value => value.trim()))])
@@ -104,10 +103,10 @@ describe('publishing workflow', () => {
     expect(audio.startAudioJob).toHaveBeenCalledWith(expect.objectContaining({ writingVersionId: previous.id, source: { kind: 'chapter', chapterId: 'one' } }))
   })
 
-  it('allows taking only the historical audio prompt when chapter source and target are identical', async () => {
+  it('allows taking historical audio from the same chapter source despite a different retired duration', async () => {
     const source = { chapterId: 'one', bookTitle: '测试书', author: '', chapterTitle: '第一章', content: '同一份正文', sha256: 'same-source', targetDurationSeconds: 600 }
     vi.mocked(projects.getChapter).mockResolvedValue({ id: 'one', projectId: 'p1', title: '第一章', content: source.content, targetDurationSeconds: 600, audioDurationSource: 'manual', createdAt: '', updatedAt: '' })
-    vi.mocked(api.listVersions).mockResolvedValue([{ ...generated, chapterId: 'one', sourceSnapshot: source }, { ...initial, chapterId: 'one', sourceSnapshot: source }])
+    vi.mocked(api.listVersions).mockResolvedValue([{ ...generated, chapterId: 'one', sourceSnapshot: source }, { ...initial, chapterId: 'one', sourceSnapshot: { ...source, targetDurationSeconds: 300 } }])
     const { wrapper } = await render('/projects/p1/writing?chapter=one&tab=audio')
     await chooseSelect(wrapper, '#writing-version', /^v1 ·/)
     const take = button(wrapper, '取用音频生成提示词')
@@ -132,12 +131,12 @@ describe('publishing workflow', () => {
     expect(audio.startAudioJob).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'p1', writingVersionId: 'v1', source: { kind: 'chapter', chapterId: 'one' } }))
   })
 
-  it('does not recommend again while automatic creation is determining the duration', async () => {
+  it('does not launch a second model request during automatic creation', async () => {
     automationRuns.value = [automaticRun()]
     vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), audioDurationSource: null, id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
     const { wrapper } = await render()
     expect(api.startGeneration).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('正在确定本次目标时长')
+    expect(wrapper.text()).not.toContain('目标时长')
     expect(button(wrapper, '生成备选').attributes('disabled')).toBeDefined()
   })
   it('opens the exact automatic version and preserves a recovered manual draft', async () => {
@@ -153,11 +152,11 @@ describe('publishing workflow', () => {
     const { wrapper } = await render()
     await wrapper.get('#result-title').setValue('当前手写内容')
     vi.mocked(api.listVersions).mockResolvedValue([generated, initial])
-    automationRuns.value = [{ ...current, stage: 'audio', writingVersionId: generated.id, input: { ...current.input, targetDurationSeconds: 900, durationReason: '本期重点' } }]
+    automationRuns.value = [{ ...current, stage: 'audio', writingVersionId: generated.id }]
     await flushPromises()
     expect(wrapper.get('#result-title').element).toHaveProperty('value', '当前手写内容')
     expect(wrapper.get('#history-candidate-title').element).toHaveProperty('value', generated.content.title)
-    expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '15')
+    expect(wrapper.find('#audio-duration').exists()).toBe(false)
     expect(api.startGeneration).not.toHaveBeenCalled()
     expect(api.saveWriting).not.toHaveBeenCalled()
   })
@@ -355,104 +354,43 @@ describe('publishing workflow', () => {
     await router.replace({ query: { tab: 'invalid' } }); await flushPromises()
     expect(wrapper.get('[role="tab"][data-state="active"]').text()).toBe('发布文案')
   })
-  it('recommends duration automatically once for an unconfigured book and retains the current content', async () => {
+  it('opens and revisits an unconfigured book without recommending a duration', async () => {
     vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), audioDurationSource: null, id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
-    vi.mocked(api.executeGeneration).mockResolvedValue({ minutes: 25, reason: '长篇小说需展开人物关系，资料不足时仅作估计。' })
-    const { wrapper } = await render()
-    expect(api.startGeneration).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', providerId: 'm1', recommendDuration: true })
-    expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '25')
-    expect(wrapper.text()).toContain('长篇小说需展开人物关系')
+    const { wrapper, router } = await render()
+    expect(wrapper.find('#audio-duration').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('AI 推荐时长')
     expect(wrapper.get('#result-audioPrompt').element).toHaveProperty('value', initial.content.audioPrompt)
+    await router.push('/projects'); await router.push('/projects/p1/writing'); await flushPromises()
+    expect(api.startGeneration).not.toHaveBeenCalled()
     expect(api.saveWriting).not.toHaveBeenCalled()
   })
-  it.each(['failed', 'cancelled'])('does not repeat a %s duration recommendation on returning and allows an explicit retry', async code => {
-    vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), audioDurationSource: null, id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
-    let fail!: (cause: unknown) => void
-    vi.mocked(api.executeGeneration).mockReturnValue(new Promise((_resolve, reject) => { fail = reject }))
-    const { wrapper, router } = await render()
-    await router.push('/projects'); await flushPromises()
-    fail({ code, message: code === 'cancelled' ? '生成已取消' : '模型请求超时' }); await flushPromises()
-    for (let visit = 0; visit < 2; visit++) {
-      await router.push('/projects/p1/writing'); await flushPromises()
-      expect(api.startGeneration).toHaveBeenCalledOnce()
-      expect(api.executeGeneration).toHaveBeenCalledOnce()
-      expect(wrapper.get('#result-title').element).toHaveProperty('value', initial.content.title)
-      if (visit === 0) { await router.push('/projects'); await flushPromises() }
-    }
-    vi.mocked(api.executeGeneration).mockResolvedValueOnce({ minutes: 25, reason: '用户主动重试后推荐。' })
-    await button(wrapper, 'AI 推荐时长').trigger('click'); await flushPromises()
-    expect(api.executeGeneration).toHaveBeenCalledTimes(2)
-    expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '25')
-  })
-  it('restores configured duration and sends a manual override to full generation', async () => {
-    vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), targetDurationSeconds: 1500, audioDurationSource: 'ai', id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
+  it.each([null, 'ai'] as const)('generates content independently of legacy duration source %s', async source => {
+    vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), targetDurationSeconds: 1500, audioDurationSource: source, id: 'p1', title: '测试书', workspacePath: '', archivedAt: null, createdAt: '', updatedAt: '' })
     vi.mocked(api.executeGeneration).mockResolvedValue(generated)
     const { wrapper } = await render()
-    expect(api.startGeneration).not.toHaveBeenCalled()
-    expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '25')
-    await wrapper.get('#audio-duration').setValue('35')
     await button(wrapper, '生成备选').trigger('click'); await flushPromises()
-    expect(api.setAudioDuration).toHaveBeenCalledExactlyOnceWith('p1', 2100, null)
-    expect(api.startGeneration).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', providerId: 'm1', targetDurationSeconds: 2100 })
-    expect(wrapper.text()).toContain('读懂一本书 · 目标 35 分钟')
-    expect(wrapper.text()).not.toContain('35分钟读懂一本书')
+    expect(api.startGeneration).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', providerId: 'm1' })
+    expect(wrapper.get('#result-title').element).toHaveProperty('value', initial.content.title)
+    expect(wrapper.text()).toContain('按内容自然展开')
   })
-  it('passes the chosen duration to audio revision while keeping other fields unchanged', async () => {
-    vi.mocked(api.executeGeneration).mockResolvedValue({ taskId: 't1', fields: ['audioPrompt'], before: initial.content, content: { ...initial.content, audioPrompt: '30分钟的新指导' } })
+  it('generates an unconfigured chapter without a recommendation', async () => {
+    vi.mocked(projects.getChapter).mockResolvedValue({ id: 'one', projectId: 'p1', title: '第一章', content: '完整的章节正文', targetDurationSeconds: null, audioDurationSource: null, createdAt: '', updatedAt: '' })
+    vi.mocked(api.executeGeneration).mockResolvedValue({ ...generated, chapterId: 'one' })
+    const { wrapper } = await render('/projects/p1/writing?chapter=one')
+    expect(api.startGeneration).not.toHaveBeenCalled()
+    await button(wrapper, '生成备选').trigger('click'); await flushPromises()
+    expect(api.startGeneration).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', chapterId: 'one', providerId: 'm1' })
+  })
+  it('revises audio without a duration and preserves unselected content', async () => {
+    vi.mocked(api.executeGeneration).mockResolvedValue({ taskId: 't1', fields: ['audioPrompt'], before: initial.content, content: { ...initial.content, audioPrompt: '按内容自然展开的新指导' } })
     const { wrapper } = await render()
-    await button(wrapper, '30 分钟').trigger('click')
     await button(wrapper, '按项调整').trigger('click')
     await wrapper.get('#revision-title').trigger('click')
     await wrapper.get('#revision-audioPrompt').trigger('click')
     await button(wrapper, '生成预览').trigger('click'); await flushPromises()
-    expect(api.startGeneration).toHaveBeenLastCalledWith({ projectId: 'p1', providerId: 'm1', targetDurationSeconds: 1800, revision: { basedOn: initial.id, fields: ['audioPrompt'], instruction: '' } })
-    expect(wrapper.get('#revision-after-audioPrompt').element).toHaveProperty('value', '30分钟的新指导')
+    expect(api.startGeneration).toHaveBeenLastCalledWith({ projectId: 'p1', providerId: 'm1', revision: { basedOn: initial.id, fields: ['audioPrompt'], instruction: '' } })
+    expect(wrapper.get('#revision-after-audioPrompt').element).toHaveProperty('value', '按内容自然展开的新指导')
     expect(wrapper.get('#result-title').element).toHaveProperty('value', initial.content.title)
-    expect(wrapper.get('#audio-duration').attributes('disabled')).toBeDefined()
-  })
-  it.each(['', '0', '-1', '1.5', '1441'])('blocks invalid duration %s', async value => {
-    const { wrapper } = await render()
-    await wrapper.get('#audio-duration').setValue(value)
-    expect(button(wrapper, '生成备选').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('#audio-duration').attributes('aria-invalid')).toBe('true')
-    expect(api.startGeneration).not.toHaveBeenCalled()
-  })
-  it('keeps duration and edits after a failed recommendation and supports manual recovery', async () => {
-    vi.mocked(api.executeGeneration).mockRejectedValueOnce({ message: '模型请求超时' })
-    const { wrapper } = await render()
-    await wrapper.get('#result-title').setValue('我的标题')
-    await button(wrapper, 'AI 推荐时长').trigger('click'); await flushPromises()
-    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('模型请求超时')
-    expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '10')
-    expect(wrapper.get('#result-title').element).toHaveProperty('value', '我的标题')
-    await wrapper.get('#audio-duration').setValue('18')
-    await button(wrapper, '保存时长').trigger('click'); await flushPromises()
-    expect(api.setAudioDuration).toHaveBeenCalledWith('p1', 1080, null)
-    expect(api.saveWriting).not.toHaveBeenCalled()
-  })
-  it('cancels recommendation without changing the duration or saved content', async () => {
-    let reject!: (cause: unknown) => void
-    vi.mocked(api.executeGeneration).mockReturnValue(new Promise((_resolve, fail) => { reject = fail }))
-    vi.mocked(api.cancelGeneration).mockImplementation(async () => { reject({ message: '生成已取消' }) })
-    const { wrapper } = await render()
-    await button(wrapper, 'AI 推荐时长').trigger('click'); await flushPromises()
-    expect(wrapper.get('#audio-duration').attributes('disabled')).toBeDefined()
-    await button(wrapper, '取消生成').trigger('click'); await flushPromises()
-    expect(api.cancelGeneration).toHaveBeenCalledWith('t1')
-    expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '10')
-    expect(wrapper.get('#audio-duration').attributes('disabled')).toBeUndefined()
-    expect(wrapper.get('#result-audioPrompt').element).toHaveProperty('value', initial.content.audioPrompt)
-  })
-  it('preserves an unsaved duration and prevents navigation when saving it fails', async () => {
-    vi.mocked(api.setAudioDuration).mockRejectedValue('时长保存失败')
-    const { wrapper, router } = await render()
-    await wrapper.get('#audio-duration').setValue('18')
-    await button(wrapper, '生成备选').trigger('click'); await flushPromises()
-    expect(api.startGeneration).not.toHaveBeenCalled()
-    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('时长保存失败')
-    await router.push('/projects')
-    expect(router.currentRoute.value.path).toContain('/writing')
-    expect(wrapper.get('#audio-duration').element).toHaveProperty('value', '18')
   })
   it('previews and adopts only AI cover design for an existing version', async () => {
     const design = { titleSize: 148, subtitleSize: 54, textColor: '#ffe45c', subtitleColor: '#ffffff', accentColor: '#ff7547', backgroundColor: '#141414', overlayOpacity: 0.75 }
@@ -503,7 +441,7 @@ describe('publishing workflow', () => {
     await button(wrapper, '按项调整').trigger('click')
     await wrapper.get('#revision-instruction').setValue('标题更有悬念，不剧透')
     await button(wrapper, '生成预览').trigger('click'); await flushPromises()
-    expect(api.startGeneration).toHaveBeenLastCalledWith({ projectId: 'p1', providerId: 'm1', targetDurationSeconds: 600, revision: { basedOn: 'v1', fields: ['title'], instruction: '标题更有悬念，不剧透' } })
+    expect(api.startGeneration).toHaveBeenLastCalledWith({ projectId: 'p1', providerId: 'm1', revision: { basedOn: 'v1', fields: ['title'], instruction: '标题更有悬念，不剧透' } })
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('原有标题')
     expect((wrapper.get('#revision-after-title').element as HTMLTextAreaElement).value).toBe(candidate.title)
     expect(wrapper.get('#result-description').attributes('disabled')).toBeDefined()
@@ -611,7 +549,7 @@ describe('publishing workflow', () => {
     expect(wrapper.find('#writing-reference').exists()).toBe(false)
     vi.mocked(api.executeGeneration).mockResolvedValue(generated)
     await button(wrapper, '一键生成').trigger('click'); await flushPromises()
-    expect(api.startGeneration).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', providerId: 'm1', targetDurationSeconds: 600 })
+    expect(api.startGeneration).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', providerId: 'm1' })
     expect((wrapper.get('#result-title').element as HTMLTextAreaElement).value).toBe('新标题')
     expect((wrapper.get('#result-description').element as HTMLTextAreaElement).value).toBe('新内容')
     expect(wrapper.get('#result-tags').element).toHaveProperty('value', generated.content.tags)
@@ -916,15 +854,13 @@ describe('audio automation', () => {
     expect(wrapper.text()).toContain('还没有可选来源')
   })
 
-  it('does not start when saving the changed duration fails', async () => {
-    vi.mocked(projects.getProject).mockResolvedValue(projectNotes())
-    vi.mocked(api.setAudioDuration).mockRejectedValueOnce('时长保存失败')
+  it('starts audio for an unconfigured book without a duration save', async () => {
+    vi.mocked(projects.getProject).mockResolvedValue({ ...projectNotes(), audioDurationSource: null })
     const { wrapper } = await render()
     await tab(wrapper, '音频制作').trigger('click')
-    await wrapper.get('#audio-duration').setValue('15')
     await button(wrapper, '开始生成音频').trigger('click'); await flushPromises()
-    expect(audio.startAudioJob).not.toHaveBeenCalled()
-    expect(wrapper.get('[data-sonner-toast][data-type="error"]:not([data-removed="true"])').text()).toContain('时长保存失败')
+    expect(audio.startAudioJob).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'p1', writingVersionId: initial.id }))
+    expect(wrapper.find('#audio-duration').exists()).toBe(false)
   })
 
   it('saves a dirty prompt and starts with the new version id', async () => {

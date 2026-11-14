@@ -6,7 +6,6 @@ fn chapter_input(title: &str, content: &str) -> ChapterInput {
     ChapterInput {
         title: title.into(),
         content: content.into(),
-        target_duration_seconds: None,
     }
 }
 
@@ -47,7 +46,7 @@ fn chapter_review_media_preview_resolves_exact_audio_and_video_but_rejects_inval
 }
 
 #[test]
-fn chapter_review_manual_audio_edit_updates_target_while_preserving_original_source() {
+fn chapter_review_manual_edits_keep_original_source_without_duration_constraints() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("manual-audio.sqlite3"));
     let book = m4_tests::project(&database);
@@ -59,11 +58,11 @@ fn chapter_review_manual_audio_edit_updates_target_while_preserving_original_sou
         )
         .unwrap();
     database
-        .set_audio_duration(&book.id, 300, Some(&chapter.id))
+        .seed_legacy_duration(&book.id, 300, Some(&chapter.id))
         .unwrap();
     let original = writing(&database, &book.id, &chapter.id);
     database
-        .set_audio_duration(&book.id, 900, Some(&chapter.id))
+        .seed_legacy_duration(&book.id, 900, Some(&chapter.id))
         .unwrap();
     database
         .save_chapter(
@@ -72,12 +71,12 @@ fn chapter_review_manual_audio_edit_updates_target_while_preserving_original_sou
             chapter_input("第一章新名称", "后来的正文，不得混入旧指导"),
         )
         .unwrap();
-    for (field, expected) in [("title", 300), ("audioPrompt", 900)] {
+    for field in ["title", "audioPrompt"] {
         let mut content = serde_json::to_value(&original.content).unwrap();
         content[field] = serde_json::json!(if field == "title" {
             "只修改标题"
         } else {
-            "手动修改的十五分钟章节精讲指导"
+            "手动修改的章节精讲指导"
         });
         let saved=database.save_writing(serde_json::from_value(serde_json::json!({
             "projectId":book.id,"chapterId":chapter.id,"kind":"publishing","content":content,"basedOn":original.id,"isConfirmed":false
@@ -86,8 +85,7 @@ fn chapter_review_manual_audio_edit_updates_target_while_preserving_original_sou
         assert_eq!(snapshot.content, "制作旧方案时的原文");
         assert_eq!(snapshot.chapter_title, "第一章");
         assert_eq!(
-            snapshot.target_duration_seconds,
-            Some(expected),
+            snapshot.target_duration_seconds, None,
             "manual {field} edit"
         );
         let audio = database
@@ -100,7 +98,10 @@ fn chapter_review_manual_audio_edit_updates_target_while_preserving_original_sou
                 format: "deep_dive".into(),
             })
             .unwrap();
-        assert_eq!(audio.target_duration_seconds, expected);
+        assert!(serde_json::to_value(&audio)
+            .unwrap()
+            .get("targetDurationSeconds")
+            .is_none());
         assert_eq!(
             database.audio_job_prompt(&audio.id).unwrap(),
             content["audioPrompt"].as_str().unwrap()
@@ -117,7 +118,7 @@ fn chapter_review_manual_audio_edit_updates_target_while_preserving_original_sou
             .as_ref()
             .unwrap()
             .target_duration_seconds,
-        Some(300)
+        None
     );
 }
 
@@ -232,7 +233,7 @@ fn chapter_generation_freezes_the_selected_text_and_duration_only_updates_that_c
         )
         .unwrap()
         .provider;
-    let request = database.start_generation(serde_json::from_value(serde_json::json!({"projectId":book.id,"chapterId":first.id,"providerId":provider.id,"recommendDuration":true})).unwrap()).unwrap();
+    let request = database.start_generation(serde_json::from_value(serde_json::json!({"projectId":book.id,"chapterId":first.id,"providerId":provider.id})).unwrap()).unwrap();
     database
         .save_chapter(
             &book.id,
@@ -245,54 +246,35 @@ fn chapter_generation_freezes_the_selected_text_and_duration_only_updates_that_c
     assert_eq!(sent["book"]["sourceNotes"], "冻结的第一章正文。");
     assert!(!prepared.user.contains("原始资料"));
     assert!(!prepared.user.contains("第二章正文不能混入"));
+    assert_eq!(sent["audio"], serde_json::json!({"seriesName":"读懂一章"}));
+    assert!(prepared
+        .input
+        .source_snapshot
+        .as_ref()
+        .unwrap()
+        .target_duration_seconds
+        .is_none());
+    for chapter in [&first.id, &second.id] {
+        assert!(database
+            .get_chapter(&book.id, chapter)
+            .unwrap()
+            .target_duration_seconds
+            .is_none());
+    }
     database
-        .finish_duration_recommendation(
-            &request,
-            crate::ai::audio::DurationRecommendation {
-                minutes: 3,
-                reason: "根据本章内容推荐。".into(),
-            },
-        )
+        .finish_generation(&request, &prepared.input, m2_tests::publishing(), "text")
         .unwrap();
     assert_eq!(
         database
-            .get_chapter(&book.id, &first.id)
+            .list_versions(&book.id, "publishing", Some(&first.id))
             .unwrap()
-            .input
-            .target_duration_seconds,
-        Some(180)
+            .len(),
+        1
     );
-    assert_eq!(
-        database
-            .get_chapter(&book.id, &second.id)
-            .unwrap()
-            .input
-            .target_duration_seconds,
-        None
-    );
-    assert_eq!(
-        database
-            .get_project(&book.id)
-            .unwrap()
-            .input
-            .target_duration_seconds,
-        600
-    );
-    database
-        .save_chapter(
-            &book.id,
-            Some(&first.id),
-            chapter_input("第一章", "继续修改正文，保留刚推荐的目标。"),
-        )
-        .unwrap();
-    assert_eq!(
-        database
-            .get_chapter(&book.id, &first.id)
-            .unwrap()
-            .input
-            .target_duration_seconds,
-        Some(180)
-    );
+    assert!(database
+        .list_versions(&book.id, "publishing", Some(&second.id))
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -412,7 +394,7 @@ fn chapter_versions_and_audio_keep_original_text_after_the_chapter_is_edited() {
         )
         .unwrap();
     database
-        .set_audio_duration(&book.id, 300, Some(&first.id))
+        .seed_legacy_duration(&book.id, 300, Some(&first.id))
         .unwrap();
     let version = writing(&database, &book.id, &first.id);
     let original = version.source_snapshot.clone().unwrap();
@@ -424,7 +406,7 @@ fn chapter_versions_and_audio_keep_original_text_after_the_chapter_is_edited() {
         )
         .unwrap();
     database
-        .set_audio_duration(&book.id, 900, Some(&first.id))
+        .seed_legacy_duration(&book.id, 900, Some(&first.id))
         .unwrap();
     assert!(database
         .start_audio_job(audio::StartAudioJobInput {
@@ -447,7 +429,10 @@ fn chapter_versions_and_audio_keep_original_text_after_the_chapter_is_edited() {
         })
         .unwrap();
     assert_eq!(job.chapter_id.as_deref(), Some(first.id.as_str()));
-    assert_eq!(job.target_duration_seconds, 300);
+    assert!(serde_json::to_value(&job)
+        .unwrap()
+        .get("targetDurationSeconds")
+        .is_none());
     assert!(job.source_label.contains("第一章") && !job.source_label.contains("新名称"));
     let frozen: serde_json::Value = database
         .with_connection(|c| {
@@ -468,7 +453,7 @@ fn chapter_versions_and_audio_keep_original_text_after_the_chapter_is_edited() {
         .save_provider(None, m2_tests::model(), None, &m2_tests::Vault::default())
         .unwrap()
         .provider;
-    for (field, expected_duration) in [("title", 300), ("audioPrompt", 900)] {
+    for field in ["title", "audioPrompt"] {
         let task = database.start_generation(serde_json::from_value(serde_json::json!({
             "projectId":book.id,"chapterId":first.id,"providerId":provider.id,"targetDurationSeconds":900,
             "revision":{"basedOn":version.id,"fields":[field],"instruction":"细化这一项"}
@@ -479,8 +464,10 @@ fn chapter_versions_and_audio_keep_original_text_after_the_chapter_is_edited() {
             original.content
         );
         assert_eq!(
-            prepared.input.target_duration_seconds,
-            Some(expected_duration)
+            serde_json::to_value(&prepared.input)
+                .unwrap()
+                .get("targetDurationSeconds"),
+            None
         );
         database
             .finish_revision(&task, &prepared.input, version.content.clone())
@@ -488,7 +475,7 @@ fn chapter_versions_and_audio_keep_original_text_after_the_chapter_is_edited() {
         let adopted = database.apply_generation(&task).unwrap();
         assert_eq!(
             adopted.source_snapshot.unwrap().target_duration_seconds,
-            Some(expected_duration)
+            None
         );
         assert_eq!(database.apply_generation(&task).unwrap().id, adopted.id);
     }
@@ -519,7 +506,7 @@ fn chapter_covers_video_publishing_and_drafts_are_independent_and_survive_full_r
             .save_chapter(&book.id, None, chapter_input(name, text))
             .unwrap();
         database
-            .set_audio_duration(&book.id, 300, Some(&chapter.id))
+            .seed_legacy_duration(&book.id, 300, Some(&chapter.id))
             .unwrap();
         let version = writing(&database, &book.id, &chapter.id);
         let mut input = m4_tests::scoped_input(&database, &book, Some(&chapter.id));

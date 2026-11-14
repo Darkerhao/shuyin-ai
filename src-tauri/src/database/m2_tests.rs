@@ -3,6 +3,25 @@ use super::*;
 use crate::{ai::WritingContent, credentials::Credentials};
 use rusqlite::params;
 use std::collections::HashMap;
+// Populate historical values to verify that retiring the feature preserves old databases.
+impl Database {
+    pub(super) fn seed_legacy_duration(
+        &self,
+        project: &str,
+        seconds: i64,
+        chapter: Option<&str>,
+    ) -> Result<(), String> {
+        self.with_connection(|c| {
+            if let Some(chapter) = chapter {
+                c.execute("UPDATE book_chapters SET target_duration_seconds=?1,audio_duration_source='manual' WHERE id=?2 AND project_id=?3",params![seconds,chapter,project])
+            } else {
+                c.execute("UPDATE book_projects SET target_duration_seconds=?1,audio_duration_source='manual' WHERE id=?2",params![seconds,project])
+            }.map_err(|error|error.to_string())?;
+            Ok(())
+        })
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Vault {
     entries: Mutex<HashMap<String, String>>,
@@ -37,7 +56,6 @@ fn project(db: &Database) -> Project {
             theme: "".into(),
             target_audience: "".into(),
             content_style: "".into(),
-            target_duration_seconds: 180,
             status: "draft".into(),
         },
     )
@@ -76,12 +94,10 @@ fn generation(project_id: &str, provider_id: &str) -> GenerationInput {
         project_id: project_id.into(),
         provider_id: provider_id.into(),
         revision: None,
-        target_duration_seconds: None,
-        recommend_duration: false,
     }
 }
 #[test]
-fn duration_is_saved_independently_and_generation_snapshots_the_selected_value() {
+fn generation_ignores_legacy_duration_and_backup_preserves_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("duration.sqlite3");
     let db = Database::open(path.clone());
@@ -101,31 +117,31 @@ fn duration_is_saved_independently_and_generation_snapshots_the_selected_value()
             is_confirmed: false,
         })
         .unwrap();
-    db.set_audio_duration(&p.id, 1500, None).unwrap();
+    db.seed_legacy_duration(&p.id, 1500, None).unwrap();
     let task = db
         .start_generation(generation(&p.id, &provider.id))
         .unwrap();
-    db.set_audio_duration(&p.id, 1800, None).unwrap();
+    db.seed_legacy_duration(&p.id, 1800, None).unwrap();
     let prepared = db.prepare_generation(&task).unwrap();
-    assert_eq!(prepared.input.target_duration_seconds, Some(1500));
+    assert!(serde_json::to_value(&prepared.input)
+        .unwrap()
+        .get("targetDurationSeconds")
+        .is_none());
     let user: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
-    assert_eq!(user["audio"]["duration"], "25分钟");
-    assert_eq!(user["audio"]["spokenCharacters"], 5500);
+    assert_eq!(
+        user["audio"],
+        serde_json::json!({"seriesName":"读懂一本书"})
+    );
     assert_eq!(user["book"]["sourceNotes"], p.input.source_notes);
-    assert!(db.set_audio_duration(&p.id, 61, None).is_err());
-    assert!(db.set_audio_duration("missing", 600, None).is_err());
-    let mut invalid = generation(&p.id, &provider.id);
-    invalid.target_duration_seconds = Some(0);
-    assert!(db.start_generation(invalid).is_err());
     db.end_generation(&task, "cancelled", "cancelled", "cancelled")
         .unwrap();
     let backup = db.create_backup(dir.path().to_str().unwrap()).unwrap();
-    db.set_audio_duration(&p.id, 600, None).unwrap();
+    db.seed_legacy_duration(&p.id, 600, None).unwrap();
     db.restore_backup(&backup).unwrap();
     drop(db);
     let db = Database::open(path);
     let restored = db.get_project(&p.id).unwrap();
-    assert_eq!(restored.input.target_duration_seconds, 1800);
+    assert_eq!(restored.target_duration_seconds, 1800);
     assert_eq!(restored.audio_duration_source.as_deref(), Some("manual"));
     assert_eq!(restored.input.source_notes, p.input.source_notes);
     assert_eq!(
@@ -240,117 +256,49 @@ fn model_options_reject_invalid_values_without_overwriting_saved_choices() {
 }
 
 #[test]
-fn saving_project_details_preserves_duration_completed_after_the_form_was_loaded() {
-    use crate::ai::audio::DurationRecommendation;
+fn saving_project_details_preserves_legacy_duration() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Database::open(dir.path().join("duration-details.sqlite3"));
+    let db = Database::open(dir.path().join("legacy-duration.sqlite3"));
     let book = project(&db);
-    let mut stale_form = book.input.clone();
-    stale_form.title = "更新书名".into();
-    let provider = db
-        .save_provider(None, model(), None, &Vault::default())
-        .unwrap()
-        .provider;
-    let mut input = generation(&book.id, &provider.id);
-    input.recommend_duration = true;
-    let task = db.start_generation(input).unwrap();
-    db.prepare_generation(&task).unwrap();
-    db.finish_duration_recommendation(
-        &task,
-        DurationRecommendation {
-            minutes: 20,
-            reason: "后台推荐完成。".into(),
-        },
-    )
-    .unwrap();
-    let saved = db.save_project(Some(&book.id), stale_form.clone()).unwrap();
+    let mut form = book.input.clone();
+    form.title = "更新书名".into();
+    db.seed_legacy_duration(&book.id, 1800, None).unwrap();
+    let saved = db.save_project(Some(&book.id), form).unwrap();
     assert_eq!(saved.input.title, "更新书名");
-    assert_eq!(saved.input.target_duration_seconds, 1200);
-    assert_eq!(saved.audio_duration_source.as_deref(), Some("ai"));
-
-    db.set_audio_duration(&book.id, 1800, None).unwrap();
-    let saved = db.save_project(Some(&book.id), stale_form).unwrap();
-    assert_eq!(saved.input.target_duration_seconds, 1800);
+    assert_eq!(saved.target_duration_seconds, 1800);
     assert_eq!(saved.audio_duration_source.as_deref(), Some("manual"));
 }
 
 #[test]
-fn recommended_duration_is_atomic_and_cancelled_or_invalid_results_do_not_change_it() {
-    use crate::ai::audio::DurationRecommendation;
+fn retired_recommendation_tasks_cannot_send_new_requests() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Database::open(dir.path().join("duration.sqlite3"));
-    let p = project(&db);
+    let db = Database::open(dir.path().join("legacy-recommendation.sqlite3"));
+    let book = project(&db);
     let provider = db
         .save_provider(None, model(), None, &Vault::default())
         .unwrap()
         .provider;
-    let mut input = generation(&p.id, &provider.id);
-    input.recommend_duration = true;
-    let task = db.start_generation(input.clone()).unwrap();
-    let prepared = db.prepare_generation(&task).unwrap();
-    let user: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
-    assert!(user.get("audio").is_none());
-    db.end_generation(&task, "cancelled", "cancelled", "cancelled")
+    let task = db
+        .start_generation(generation(&book.id, &provider.id))
         .unwrap();
-    let result = || DurationRecommendation {
-        minutes: 25,
-        reason: "按现有资料估计。".into(),
-    };
-    assert!(db.finish_duration_recommendation(&task, result()).is_err());
-    assert_eq!(
-        db.get_project(&p.id).unwrap().input.target_duration_seconds,
-        p.input.target_duration_seconds
-    );
-    let task = db.start_generation(input.clone()).unwrap();
-    db.prepare_generation(&task).unwrap();
+    db.with_connection(|c| {
+        c.execute("UPDATE ai_tasks SET prompt_version='audio-duration-v4',input_json=json_set(input_json,'$.recommendDuration',json('true')) WHERE id=?1",[&task]).unwrap();
+        Ok(())
+    }).unwrap();
     assert!(db
-        .finish_duration_recommendation(
-            &task,
-            DurationRecommendation {
-                minutes: 0,
-                reason: "无效".into()
-            }
-        )
-        .is_err());
-    db.with_connection(|c| { c.execute_batch("CREATE TRIGGER fail_duration BEFORE UPDATE ON ai_tasks WHEN NEW.status='succeeded' BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap(); Ok(()) }).unwrap();
-    assert!(db.finish_duration_recommendation(&task, result()).is_err());
-    assert_eq!(
-        db.get_project(&p.id).unwrap().input.target_duration_seconds,
-        p.input.target_duration_seconds
-    );
+        .prepare_generation(&task)
+        .err()
+        .unwrap()
+        .contains("时长推荐已取消"));
     assert!(db
-        .get_project(&p.id)
+        .list_versions(&book.id, "publishing", None)
+        .unwrap()
+        .is_empty());
+    assert!(db
+        .get_project(&book.id)
         .unwrap()
         .audio_duration_source
         .is_none());
-    db.with_connection(|c| {
-        c.execute_batch("DROP TRIGGER fail_duration").unwrap();
-        Ok(())
-    })
-    .unwrap();
-    db.finish_duration_recommendation(&task, result()).unwrap();
-    assert_eq!(
-        db.get_project(&p.id).unwrap().input.target_duration_seconds,
-        1500
-    );
-    assert_eq!(
-        db.get_project(&p.id)
-            .unwrap()
-            .audio_duration_source
-            .as_deref(),
-        Some("ai")
-    );
-    assert!(db
-        .list_versions(&p.id, "publishing", None)
-        .unwrap()
-        .is_empty());
-    assert!(db.finish_duration_recommendation(&task, result()).is_err());
-    input.revision = Some(crate::ai::revision::RevisionInput {
-        based_on: "missing".into(),
-        fields: vec![],
-        instruction: String::new(),
-    });
-    assert!(db.start_generation(input).is_err());
 }
 
 #[test]
@@ -373,7 +321,7 @@ fn v12_duration_migration_preserves_old_data_and_rolls_back_conflicts() {
             assert!(db.read().is_err());
         } else {
             let p = db.get_project("p").unwrap();
-            assert_eq!(p.input.target_duration_seconds, 900);
+            assert_eq!(p.target_duration_seconds, 900);
             assert!(p.audio_duration_source.is_none());
             assert_eq!(p.updated_at, "original");
             assert_eq!(
@@ -833,7 +781,7 @@ fn v2_backup_is_upgraded_in_memory_and_active_generation_blocks_restore() {
     );
 }
 
-fn publishing() -> WritingContent {
+pub(super) fn publishing() -> WritingContent {
     WritingContent::Publishing {
         title: "发布标题".into(),
         description: "发布内容".into(),
@@ -989,8 +937,6 @@ fn v3_upgrade_preserves_old_versions_task_links_and_backup_and_allows_title_only
             project_id: "p".into(),
             provider_id: "m".into(),
             revision: None,
-            target_duration_seconds: None,
-            recommend_duration: false,
         })
         .unwrap();
     db.prepare_generation(&new).unwrap();
@@ -1003,8 +949,6 @@ fn v3_upgrade_preserves_old_versions_task_links_and_backup_and_allows_title_only
             project_id: "p".into(),
             provider_id: "m".into(),
             revision: None,
-            target_duration_seconds: None,
-            recommend_duration: false,
         },
         publishing(),
         "model",
@@ -1102,7 +1046,6 @@ fn revision_preview_requires_adoption_and_adoption_is_atomic_and_idempotent() {
         &base.content,
         &input.revision.as_ref().unwrap().fields,
         "书名",
-        600,
         None,
     )
     .unwrap();

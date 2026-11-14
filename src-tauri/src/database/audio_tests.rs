@@ -437,7 +437,6 @@ fn sample_project(database: &Database, title: &str, notes: &str) -> Project {
                 theme: String::new(),
                 target_audience: String::new(),
                 content_style: String::new(),
-                target_duration_seconds: 1_500,
                 status: "draft".into(),
             },
         )
@@ -614,7 +613,7 @@ fn migrates_v12_database_to_current_without_losing_projects() {
 }
 
 #[test]
-fn freezes_prompt_source_and_duration_and_rejects_a_second_book() {
+fn freezes_prompt_and_source_without_duration_and_rejects_a_second_book() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("data.sqlite3"));
     let project = sample_project(&database, "书一", "第一版资料");
@@ -623,7 +622,10 @@ fn freezes_prompt_source_and_duration_and_rejects_a_second_book() {
     assert_eq!(job.id, start_text_job(&database, &project, &writing).id);
     let bridge = database.audio_execution_job().unwrap().unwrap();
     assert_eq!(bridge.prompt, "第一版完整指导");
-    assert_eq!(bridge.target_duration_seconds, 1_500);
+    assert!(serde_json::to_value(&bridge)
+        .unwrap()
+        .get("targetDurationSeconds")
+        .is_none());
     assert!(
         matches!(bridge.source, AudioSourceData::Text { ref text, .. } if text == "第一版资料")
     );

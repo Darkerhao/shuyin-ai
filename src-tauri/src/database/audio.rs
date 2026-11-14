@@ -64,7 +64,6 @@ pub struct AudioJob {
     pub asset_id: Option<String>,
     pub format: String,
     pub source_label: String,
-    pub target_duration_seconds: i64,
     pub submitted_at: Option<String>,
     pub last_checked_at: Option<String>,
     pub created_at: String,
@@ -120,7 +119,6 @@ pub struct AudioExecutionJob {
     pub stage: String,
     pub project_title: String,
     pub prompt: String,
-    pub target_duration_seconds: i64,
     pub format: String,
     pub notebook_url: Option<String>,
     pub source: AudioSourceData,
@@ -147,7 +145,6 @@ pub enum AudioSourceData {
 struct FrozenAudioInput {
     prompt_version: String,
     prompt: String,
-    target_duration_seconds: i64,
     format: String,
     source: FrozenSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -239,7 +236,6 @@ fn row_job(row: &Row<'_>) -> rusqlite::Result<AudioJob> {
         asset_id: row.get(14)?,
         format: input.format.clone(),
         source_label: input.source_label(),
-        target_duration_seconds: input.target_duration_seconds,
         submitted_at: row.get(15)?,
         last_checked_at: row.get(16)?,
         created_at: row.get(17)?,
@@ -556,7 +552,7 @@ impl Database {
                 existing.project_title, existing.source_label
             ));
         }
-        let (project, prompt_version, prompt, duration, source, source_label) = self.with_connection(|connection| {
+        let (project, prompt_version, prompt, source, source_label) = self.with_connection(|connection| {
             super::chapters::require_scope(connection,project_id,chapter_id.as_deref())?;
             let project = get(connection,project_id)?;
             let version = ai::version(connection,writing_version_id)?;
@@ -570,15 +566,6 @@ impl Database {
             } else { None };
             let WritingContent::Publishing { audio_prompt, .. } = version.content else { return Err("所选版本不是发布文案。".into()); };
             if audio_prompt.trim().is_empty() { return Err("所选版本的音频生成提示词为空。".into()); }
-            let duration = if let Some(source) = &chapter_source {
-                source.target_duration_seconds.ok_or("所选章节版本缺少目标时长，请重新保存本章方案。")?
-            } else if let Some(run) = automation {
-                run.input.target_duration_seconds.ok_or("自动制作尚未确定目标时长。")?
-            } else { project.input.target_duration_seconds };
-            crate::ai::audio::validate_duration(duration)?;
-            if automation.is_some_and(|run| run.input.target_duration_seconds != Some(duration)) {
-                return Err("音频目标时长与本次冻结方案不一致。".into());
-            }
             let source = match source_input {
                 AudioSourceInput::Text => {
                     if project.input.source_notes.trim().is_empty() { return Err("本书还没有可用的资料文本。".into()); }
@@ -602,7 +589,7 @@ impl Database {
                 }
             };
             let label = chapter_source.as_ref().map(super::chapters::ChapterSource::label);
-            Ok((project,version.prompt_version,audio_prompt,duration,source,label))
+            Ok((project,version.prompt_version,audio_prompt,source,label))
         })?;
         let (size, sha256) = match (&source.frozen, &source.path) {
             (FrozenSource::Asset { asset_id, name, .. }, Some(path)) => {
@@ -641,7 +628,6 @@ impl Database {
         let input_json = serde_json::to_string(&FrozenAudioInput {
             prompt_version,
             prompt,
-            target_duration_seconds: duration,
             format: format.into(),
             source: frozen_source,
             source_label,
@@ -782,7 +768,6 @@ impl Database {
                 stage: current.stage,
                 project_title: current.project_title,
                 prompt: input.prompt,
-                target_duration_seconds: input.target_duration_seconds,
                 format: input.format,
                 notebook_url: current.notebook_url,
                 source,

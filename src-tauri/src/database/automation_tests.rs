@@ -50,6 +50,92 @@ fn account() -> Account {
     }
 }
 
+fn legacy_duration_run(status: &str) -> (tempfile::TempDir, Database, AutomationRun) {
+    let (directory, database, input) = setup();
+    let run = database.create_automation(input, account()).unwrap();
+    let task = database.start_automation_generation(&run).unwrap();
+    database.with_connection(|connection| {
+        connection.execute("UPDATE ai_tasks SET prompt_version='audio-duration-v4',status=?2,input_json=json_set(input_json,'$.recommendDuration',json('true')) WHERE id=?1", rusqlite::params![task,status]).unwrap();
+        connection.execute("UPDATE automation_runs SET stage='duration',duration_task_id=writing_task_id,writing_task_id=NULL WHERE id=?1", [&run.id]).unwrap();
+        Ok(())
+    }).unwrap();
+    let run = database.automation_run(&run.id).unwrap();
+    (directory, database, run)
+}
+
+#[test]
+fn retired_duration_resume_and_retry_leave_no_active_recommendation() {
+    for retry in [false, true] {
+        for status in ["failed", "cancelled", "succeeded", "pending", "running"] {
+            let (_directory, database, run) = legacy_duration_run(status);
+            let task = run.duration_task_id.clone().unwrap();
+            let paused = database.control_automation(&run.id, "pause").unwrap();
+            // Replay the command's resume/retry decision before the executor advances.
+            if retry {
+                database.retry_automation_generation(&paused, true).unwrap();
+            } else if let Some(id) = paused.generation_task() {
+                if matches!(
+                    database.automation_ai_result(id).unwrap().0.as_str(),
+                    "failed" | "cancelled"
+                ) {
+                    database
+                        .retry_automation_generation(&paused, false)
+                        .unwrap();
+                }
+            }
+            assert_eq!(
+                database.automation_ai_result(&task).unwrap().0,
+                status,
+                "retired recommendation must not be requeued: retry={retry}"
+            );
+            let resumed = database.control_automation(&run.id, "resume").unwrap();
+            database.set_automation_stage(&resumed, "writing").unwrap();
+            let writing = database.automation_run(&run.id).unwrap();
+            let finished = finish_creation(&database, &writing);
+            assert_eq!(finished.stage, "audio");
+            assert!(finished.writing_version_id.is_some());
+            assert_eq!(finished.duration_task_id.as_deref(), Some(task.as_str()));
+            assert_eq!(
+                database.automation_ai_result(&task).unwrap().0,
+                if matches!(status, "pending" | "running") {
+                    "cancelled"
+                } else {
+                    status
+                }
+            );
+            assert!(database.workflow_snapshot().unwrap().running.is_empty());
+        }
+    }
+}
+
+#[test]
+fn retired_duration_transition_rolls_back_on_failure_and_rejects_stale_runs() {
+    let (_directory, database, run) = legacy_duration_run("pending");
+    let task = run.duration_task_id.clone().unwrap();
+    database.with_connection(|connection| {
+        connection.execute_batch("CREATE TRIGGER reject_retirement BEFORE UPDATE ON ai_tasks WHEN NEW.status='cancelled' BEGIN SELECT RAISE(ABORT,'fixture retirement failure'); END;").unwrap();
+        Ok(())
+    }).unwrap();
+    assert!(database.set_automation_stage(&run, "writing").is_err());
+    assert_eq!(database.automation_run(&run.id).unwrap().stage, "duration");
+    assert_eq!(database.automation_ai_result(&task).unwrap().0, "pending");
+    database
+        .with_connection(|connection| {
+            connection
+                .execute_batch("DROP TRIGGER reject_retirement")
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let paused = database.control_automation(&run.id, "pause").unwrap();
+    assert!(database.set_automation_stage(&run, "writing").is_err());
+    assert_eq!(database.automation_ai_result(&task).unwrap().0, "pending");
+    assert_eq!(
+        database.automation_run(&run.id).unwrap().run_id,
+        paused.run_id
+    );
+}
+
 #[test]
 fn chapter_automation_uses_the_full_workflow_and_freezes_only_its_own_source() {
     let (_directory, database, mut input) = setup();
@@ -60,7 +146,6 @@ fn chapter_automation_uses_the_full_workflow_and_freezes_only_its_own_source() {
             chapters::ChapterInput {
                 title: "第一章精讲".into(),
                 content: "本章的概念、论证和具体细节。".into(),
-                target_duration_seconds: Some(900),
             },
         )
         .unwrap();
@@ -89,7 +174,10 @@ fn chapter_automation_uses_the_full_workflow_and_freezes_only_its_own_source() {
         .is_err());
     let run = database.create_automation(input, account()).unwrap();
     assert_eq!(run.stage, "writing");
-    assert_eq!(run.input.target_duration_seconds, Some(900));
+    assert!(serde_json::to_value(&run.input)
+        .unwrap()
+        .get("targetDurationSeconds")
+        .is_none());
     assert_eq!(run.input.image_provider.model_kind, "image");
     assert!(run.input.source_notes.is_empty());
     assert_eq!(run.chapter_id, Some(chapter.id.clone()));
@@ -100,7 +188,6 @@ fn chapter_automation_uses_the_full_workflow_and_freezes_only_its_own_source() {
             chapters::ChapterInput {
                 title: "已修改的第一章".into(),
                 content: "编辑后的内容不属于正在执行的任务。".into(),
-                target_duration_seconds: Some(1200),
             },
         )
         .unwrap();
@@ -108,14 +195,17 @@ fn chapter_automation_uses_the_full_workflow_and_freezes_only_its_own_source() {
     let prepared = database.prepare_generation(&task).unwrap();
     let sent: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
     assert_eq!(sent["book"]["sourceNotes"], chapter.input.content);
-    assert_eq!(sent["audio"]["targetDurationSeconds"], 900);
+    assert!(sent["audio"].get("targetDurationSeconds").is_none());
     assert!(!prepared.user.contains("原始资料") && !prepared.user.contains("编辑后的内容"));
     database.finish_generation(&task,&prepared.input,serde_json::from_value(serde_json::json!({"format":"publishing","title":"第一章精讲","description":"细读本章的论证。","audioPrompt":"本章保存的完整指导。"})).unwrap(),"text").unwrap();
     database.set_automation_stage(&run, "audio").unwrap();
     let run = database.automation_run(&run.id).unwrap();
     let job = database.start_automatic_audio(&run).unwrap();
     assert_eq!(job.chapter_id, run.chapter_id);
-    assert_eq!(job.target_duration_seconds, 900);
+    assert!(serde_json::to_value(&job)
+        .unwrap()
+        .get("targetDurationSeconds")
+        .is_none());
     assert_eq!(
         database
             .project_progress(&run.project_id, Some(&chapter.id))
@@ -771,23 +861,7 @@ fn automation_legacy_retry_state_is_enabled_by_resume_without_losing_saved_input
 }
 
 fn finish_creation(database: &Database, run: &AutomationRun) -> AutomationRun {
-    let run = if run.stage == "duration" {
-        let id = database.start_automation_generation(run).unwrap();
-        database.prepare_generation(&id).unwrap();
-        database
-            .finish_duration_recommendation(
-                &id,
-                crate::ai::audio::DurationRecommendation {
-                    minutes: 12,
-                    reason: "依据本期重点估计".into(),
-                },
-            )
-            .unwrap();
-        database.set_automation_stage(run, "writing").unwrap();
-        database.automation_run(&run.id).unwrap()
-    } else {
-        database.automation_run(&run.id).unwrap()
-    };
+    let run = database.automation_run(&run.id).unwrap();
     let id = database.start_automation_generation(&run).unwrap();
     let prepared = database.prepare_generation(&id).unwrap();
     let content: crate::ai::WritingContent = serde_json::from_value(serde_json::json!({"format":"publishing","title":"已保存的创作标题","description":"这期依据原书介绍核心问题","audioPrompt":"本次保存的完整指导，请依据上传原书制作，不补造情节。","tags":"#读书 #主题 #理解","coverTitle":"封面标题","coverSubtitle":"书籍副标题","coverPromptLandscape":"4:3横向书房","coverPromptPortrait":"3:4竖向书架","coverPromptWidescreen":"16:9宽阔空间","coverDesign":{"titleSize":136,"subtitleSize":50,"textColor":"#ffffff","subtitleColor":"#ffffff","accentColor":"#abcdef","backgroundColor":"#123456","overlayOpacity":0.7}})).unwrap();
@@ -799,48 +873,55 @@ fn finish_creation(database: &Database, run: &AutomationRun) -> AutomationRun {
 }
 
 #[test]
-fn automation_frontloaded_duration_starts_before_audio() {
+fn automation_frontloaded_writing_starts_without_duration_before_audio() {
     let (_directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
-    assert_eq!(run.stage, "duration");
+    assert_eq!(run.stage, "writing");
     let frozen = serde_json::to_value(&run.input).unwrap();
-    assert!(frozen["targetDurationSeconds"].is_null());
+    assert!(frozen.get("targetDurationSeconds").is_none());
+    assert!(frozen.get("durationReason").is_none());
+    assert!(run.duration_task_id.is_none());
     assert_eq!(frozen["sourceNotes"], "原始资料");
     assert!(database.start_automatic_audio(&run).is_err());
 }
 
 #[test]
-fn automation_frontloaded_respects_saved_fifteen_minutes() {
+fn automation_frontloaded_ignores_legacy_fifteen_minute_target() {
     let (_directory, database, input) = setup();
     database
-        .set_audio_duration(&input.project_id, 900, None)
+        .seed_legacy_duration(&input.project_id, 900, None)
         .unwrap();
     let run = database.create_automation(input, account()).unwrap();
     assert_eq!(
-        serde_json::to_value(&run.input).unwrap()["targetDurationSeconds"],
-        900
+        serde_json::to_value(&run.input)
+            .unwrap()
+            .get("targetDurationSeconds"),
+        None
     );
     assert_eq!(run.stage, "writing");
     assert!(database.start_automatic_audio(&run).is_err());
 }
 
 #[test]
-fn automation_frontloaded_accepts_saved_target_beyond_fifteen_minutes() {
+fn automation_frontloaded_ignores_legacy_long_target() {
     let (_directory, database, input) = setup();
     database
-        .set_audio_duration(&input.project_id, 1200, None)
+        .seed_legacy_duration(&input.project_id, 1200, None)
         .unwrap();
     let run = database.create_automation(input, account()).unwrap();
-    assert_eq!(run.input.target_duration_seconds, Some(1200));
+    assert!(serde_json::to_value(&run.input)
+        .unwrap()
+        .get("targetDurationSeconds")
+        .is_none());
     assert_eq!(run.stage, "writing");
     let task = database.start_automation_generation(&run).unwrap();
     let prepared = database.prepare_generation(&task).unwrap();
     let user: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
-    assert_eq!(user["audio"]["targetDurationSeconds"], 1200);
+    assert!(user["audio"].get("targetDurationSeconds").is_none());
 }
 
 #[test]
-fn automation_frontloaded_freezes_notes_and_commits_duration_with_task() {
+fn automation_frontloaded_freezes_notes_and_saves_creation_when_paused() {
     let (_directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
     let id = database.start_automation_generation(&run).unwrap();
@@ -854,51 +935,24 @@ fn automation_frontloaded_freezes_notes_and_commits_duration_with_task() {
     let user: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
     assert_eq!(user["book"]["sourceNotes"], "原始资料");
     assert!(user.get("durationLimits").is_none());
-    assert!(database
-        .finish_duration_recommendation(
-            &id,
-            crate::ai::audio::DurationRecommendation {
-                minutes: 0,
-                reason: "无效时长".into()
-            }
-        )
-        .is_err());
-    assert!(database
-        .automation_run(&run.id)
-        .unwrap()
-        .input
-        .target_duration_seconds
-        .is_none());
+    assert_eq!(
+        user["audio"],
+        serde_json::json!({"seriesName":"读懂一本书"})
+    );
     assert_eq!(database.automation_ai_result(&id).unwrap().0, "running");
+    database.control_automation(&run.id, "pause").unwrap();
+    database
+        .finish_generation(&id, &prepared.input, super::m2_tests::publishing(), "text")
+        .unwrap();
+    let saved = database.automation_run(&run.id).unwrap();
+    assert_eq!(saved.status, "paused");
+    assert!(saved.writing_version_id.is_some());
     assert!(database
         .get_project(&run.project_id)
         .unwrap()
         .audio_duration_source
         .is_none());
-    database.control_automation(&run.id, "pause").unwrap();
-    database
-        .finish_duration_recommendation(
-            &id,
-            crate::ai::audio::DurationRecommendation {
-                minutes: 25,
-                reason: "资料不足，按已知重点估计".into(),
-            },
-        )
-        .unwrap();
-    let saved = database.automation_run(&run.id).unwrap();
-    assert_eq!(saved.status, "paused");
-    assert_eq!(saved.input.target_duration_seconds, Some(1500));
-    assert_eq!(saved.input.duration_reason, "资料不足，按已知重点估计");
-    assert_eq!(
-        database
-            .get_project(&run.project_id)
-            .unwrap()
-            .input
-            .target_duration_seconds,
-        1500
-    );
-    assert_eq!(database.automation_ai_result(&id).unwrap().0, "succeeded");
-    assert!(database.set_automation_stage(&run, "writing").is_err());
+    assert!(database.set_automation_stage(&run, "audio").is_err());
 }
 
 #[test]
@@ -906,23 +960,11 @@ fn automation_frontloaded_cancel_rejects_late_result_and_stale_binding() {
     let (_directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
     let id = database.start_automation_generation(&run).unwrap();
-    database.prepare_generation(&id).unwrap();
+    let prepared = database.prepare_generation(&id).unwrap();
     database.control_automation(&run.id, "cancel").unwrap();
     assert!(database
-        .finish_duration_recommendation(
-            &id,
-            crate::ai::audio::DurationRecommendation {
-                minutes: 12,
-                reason: "迟到结果".into()
-            }
-        )
+        .finish_generation(&id, &prepared.input, super::m2_tests::publishing(), "text")
         .is_err());
-    assert!(database
-        .automation_run(&run.id)
-        .unwrap()
-        .input
-        .target_duration_seconds
-        .is_none());
     assert!(database.start_automation_generation(&run).is_err());
     assert!(database
         .list_versions(&run.project_id, "publishing", None)
@@ -941,25 +983,18 @@ fn automation_frontloaded_restart_keeps_creation_and_requires_explicit_retry() {
     database.recover_ai_tasks().unwrap();
     database.recover_automation().unwrap();
     let paused = database.automation_run(&run.id).unwrap();
-    assert_eq!(paused.duration_task_id.as_deref(), Some(id.as_str()));
+    assert_eq!(paused.writing_task_id.as_deref(), Some(id.as_str()));
     assert_eq!(database.automation_ai_result(&id).unwrap().0, "failed");
     assert!(database.prepare_generation(&id).is_err());
     database.retry_automation_generation(&paused, true).unwrap();
     assert!(database.prepare_generation(&id).is_err());
     let resumed = database.control_automation(&run.id, "resume").unwrap();
-    database.prepare_generation(&id).unwrap();
+    let prepared = database.prepare_generation(&id).unwrap();
     database
-        .finish_duration_recommendation(
-            &id,
-            crate::ai::audio::DurationRecommendation {
-                minutes: 12,
-                reason: "恢复原任务".into(),
-            },
-        )
+        .finish_generation(&id, &prepared.input, super::m2_tests::publishing(), "text")
         .unwrap();
-    database.set_automation_stage(&resumed, "writing").unwrap();
+    database.set_automation_stage(&resumed, "audio").unwrap();
     let ready = database.automation_run(&run.id).unwrap();
-    let ready = finish_creation(&database, &ready);
     let version = ready.writing_version_id.clone();
     database.control_automation(&run.id, "pause").unwrap();
     let backup = database
@@ -981,8 +1016,7 @@ fn automation_frontloaded_blocks_manual_duplicate_generation() {
 
         project_id: run.project_id.clone(),
         provider_id: run.input.selection.text_provider_id.clone(),
-        recommend_duration: true,
-        target_duration_seconds: None,
+
         revision: None,
     };
     assert!(database.start_generation(request.clone()).is_err());
@@ -1089,20 +1123,23 @@ fn automation_start_is_idempotent_and_exclusive() {
     changed.format = "brief".into();
     assert!(database.create_automation(changed, account()).is_err());
     assert_eq!(database.automation_runs().unwrap().len(), 1);
-    assert_eq!(run.input.target_duration_seconds, None);
+    assert!(serde_json::to_value(&run.input)
+        .unwrap()
+        .get("targetDurationSeconds")
+        .is_none());
     assert_eq!(run.input.account.key, account().key);
 }
 
 #[test]
-fn automatic_audio_uses_saved_creation_and_frozen_duration() {
+fn automatic_audio_uses_saved_creation_without_legacy_duration() {
     let (_directory, database, input) = setup();
     database
-        .set_audio_duration(&input.project_id, 900, None)
+        .seed_legacy_duration(&input.project_id, 900, None)
         .unwrap();
     let run = database.create_automation(input, account()).unwrap();
     let run = finish_creation(&database, &run);
     database
-        .set_audio_duration(&run.project_id, 300, None)
+        .seed_legacy_duration(&run.project_id, 300, None)
         .unwrap();
     assert!(database
         .start_audio_job(audio::StartAudioJobInput {
@@ -1114,7 +1151,10 @@ fn automatic_audio_uses_saved_creation_and_frozen_duration() {
         .is_err());
     let audio = database.start_automatic_audio(&run).unwrap();
     assert_eq!(audio.writing_version_id, run.writing_version_id);
-    assert_eq!(audio.target_duration_seconds, 900);
+    assert!(serde_json::to_value(&audio)
+        .unwrap()
+        .get("targetDurationSeconds")
+        .is_none());
     assert_eq!(
         database
             .automation_run(&run.id)
@@ -1625,7 +1665,6 @@ fn transcript_fixture_for(chapter: bool) -> (tempfile::TempDir, Database, Automa
                 chapters::ChapterInput {
                     title: "第一章：细读与理解".into(),
                     content: "实际声音里的句子".into(),
-                    target_duration_seconds: Some(300),
                 },
             )
             .unwrap();
@@ -1799,10 +1838,7 @@ fn automatic_content_check_accepts_actual_audio_beyond_target_and_two_hours() {
         .unwrap();
     let saved = database.automation_run(&run.id).unwrap();
     database.verify_automation_content(&saved).unwrap();
-    assert_eq!(
-        saved.input.target_duration_seconds,
-        run.input.target_duration_seconds
-    );
+    assert_eq!(saved.input.source_sha256, run.input.source_sha256);
     assert_eq!(
         database.video_job(&video.id).unwrap().plan.duration,
         10800.0

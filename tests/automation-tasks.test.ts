@@ -8,7 +8,7 @@ vi.mock('../src/services/projects', () => ({ isDesktop: () => false }))
 vi.mock('../src/composables/useWindowCloseGuard', () => ({ useWindowCloseGuard: vi.fn() }))
 
 const fixture = (overrides: Partial<AutomationRun> = {}): AutomationRun => ({
-  id: 'run1', projectId: 'book1', input: { workflowVersion: 2, title: '原书', author: '', targetDurationSeconds: 600, durationReason: '', selection: { projectId: 'book1', source: { kind: 'asset', assetId: 'source1' }, textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'key1' } },
+  id: 'run1', projectId: 'book1', input: { workflowVersion: 2, title: '原书', author: '', selection: { projectId: 'book1', source: { kind: 'asset', assetId: 'source1' }, textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'key1' } },
   status: 'running', stage: 'audio', runId: 1, error: '', audioJobId: 'audio1', videoJobId: null, writingTaskId: 'writing1', writingVersionId: 'version1', finalWritingVersionId: null, actualDurationSeconds: null,
   durationTaskId: null, contentCheckTaskId: null, landscapeTaskId: null, portraitTaskId: null, widescreenTaskId: null, landscapeCoverId: null, portraitCoverId: null, widescreenCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '', ...overrides,
 })
@@ -43,7 +43,8 @@ it('announces automatic retries and displays the actual model after fallback', a
 it('preserves paused and failed phase feedback and only exposes saved cover versions', async () => {
   const wrapper = await render(fixture({ status: 'paused', stage: 'portrait_image', error: '图片生成失败，已有结果保留', actualDurationSeconds: 625, landscapeCoverId: 'cover1' }))
   expect(wrapper.get('[aria-current="step"]').text()).toBe('三尺寸封面已暂停')
-  expect(wrapper.text()).toContain('比目标长 25 秒')
+  expect(wrapper.text()).toContain('实际音频 10 分 25 秒')
+  expect(wrapper.text()).not.toContain('目标')
   expect(wrapper.findAll('a[href*="coverVersion="]')).toHaveLength(1)
   expect(wrapper.get('a[href="/projects/book1/covers?coverVersion=cover1"]').text()).toBe('4:3 成品封面')
   automationRuns.value = [fixture({ status: 'waiting_user', stage: 'portrait_image', error: '请检查模型设置' })]

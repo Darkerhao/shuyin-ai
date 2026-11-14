@@ -26,8 +26,6 @@
     format: ['Format', 'Audio format', '格式', '音频格式'],
     chinese: ['Chinese (Simplified)', 'Chinese', '中文（简体）', '中文(简体)', '简体中文'],
     defaultLength: ['Default', 'Default length', '默认', '默认时长'],
-    longer: ['Longer', 'Longer audio', '更长', '详细'],
-    shorter: ['Shorter', 'Shorter audio', '更短', '简短', '短'],
     generating: ['Generating', 'Generating audio', 'Preparing', 'Preparing audio', '正在生成', '正在准备', '生成中'],
     failed: ["Can't generate", 'Could not generate', 'Something went wrong', '生成失败', '无法生成', '出现错误'],
     processing: ['Processing', 'Processing source', 'Analyzing', '正在处理', '正在分析'],
@@ -478,13 +476,6 @@
     throw new UiError('language_missing', '未找到简体中文音频语言选项。')
   }
 
-  async function chooseLength(job) {
-    const minutes = Number(job.targetDurationSeconds ?? 0) / 60
-    const labels = minutes >= 20 ? UI.longer : minutes > 0 && minutes <= 10 ? UI.shorter : UI.defaultLength
-    await chooseDirectChoice(labels, { timeout: 500 }).catch(() => false)
-    return labels[0]
-  }
-
   function promptInput() {
     return findEditable(['Audio instructions', 'Instructions', 'Customize', 'Prompt', 'What should', 'AI 主持人在本集节目中应着重于哪些方面', '音频指导', '音频提示词', '自定义音频', '指导', '提示词'], dialogScope())
   }
@@ -504,9 +495,9 @@
     if (!prompt) throw new UiError('audio_prompt_missing', '未找到音频指导输入框。')
     const format = await chooseFormat(job)
     const language = await chooseLanguage()
-    const length = await chooseLength(job)
+    if (!await chooseDirectChoice(UI.defaultLength)) throw new UiError('length_missing', '未找到默认音频时长选项。')
     writeAndVerify(prompt, job.prompt)
-    return { kind: 'audio_configured', format, language, length }
+    return { kind: 'audio_configured', format, language, length: 'default' }
   }
 
   async function submitGeneration() {

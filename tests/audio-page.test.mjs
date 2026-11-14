@@ -301,7 +301,7 @@ test('adds a text source through the copied-text dialog without changing the pro
   assert.equal(document.querySelector('#source').value, '用户提供的资料文本。')
 })
 
-test('configures audio, language, duration and verifies the full prompt before generation', async () => {
+test('configures audio and language and verifies the full prompt before generation', async () => {
   const longPrompt = `${'主持人甲子需要完整讲述这一段。\n'.repeat(250)}结束`
   const { core, document } = page(`<button id="audio">Audio Overview</button><section id="panel" hidden><button id="customize">Customize</button><button id="deep" aria-checked="true">Deep Dive</button><button id="brief" aria-checked="false">Brief</button><button id="language" aria-label="Language">English</button><div id="languages" hidden><button id="chinese" role="option">Chinese (Simplified)</button></div><button id="default" aria-checked="true">Default</button><textarea id="prompt" aria-label="Audio instructions"></textarea><button id="generate">Generate</button></section>`)
   document.querySelector('#audio').addEventListener('click', () => { document.querySelector('#panel').hidden = false })
@@ -324,8 +324,8 @@ test('configures the current Chinese audio dialog without submitting generation'
         <label><input id="deep" type="radio" name="format">深入探究</label>
         <label><input id="brief" type="radio" name="format">摘要</label>
         <div id="language" role="combobox" aria-label="选择语言" tabindex="0">${format === 'deep_dive' ? '中文（简体）' : 'English'}</div>
-        <button id="short" role="radio" aria-checked="false">短</button>
-        <button id="default" role="radio" aria-checked="true">默认</button>
+        <button id="short" role="radio" aria-checked="true">短</button>
+        <button id="default" role="radio" aria-checked="false">默认</button>
         <label id="prompt-label" ${format === 'deep_dive' ? 'for="prompt"' : ''}>AI 主持人在本集节目中应着重于哪些方面？</label>
         <textarea id="prompt" ${format === 'brief' ? 'aria-labelledby="prompt-label"' : ''}></textarea>
         <button id="generate">生成</button>
@@ -334,8 +334,10 @@ test('configures the current Chinese audio dialog without submitting generation'
     let submissions = 0
     let languageOpens = 0
     let shortClicks = 0
+    let defaultClicks = 0
     document.querySelector('#generate').addEventListener('click', () => { submissions += 1 })
     document.querySelector('#short').addEventListener('click', () => { shortClicks += 1 })
+    document.querySelector('#default').addEventListener('click', () => { defaultClicks += 1 })
     document.querySelector('#language').addEventListener('click', () => {
       languageOpens += 1
       const option = document.createElement('div')
@@ -344,7 +346,7 @@ test('configures the current Chinese audio dialog without submitting generation'
       option.addEventListener('click', () => { document.querySelector('#language').textContent = option.textContent; option.remove() })
       document.body.append(option)
     })
-    const job = textJob({ stage: 'configuring_audio', format, targetDurationSeconds: 600 })
+    const job = textJob({ stage: 'configuring_audio', format, targetDurationSeconds: format === 'brief' ? 1800 : 600 })
     const result = await core.runStep(job)
     assert.equal(result.kind, 'audio_configured', JSON.stringify(result))
     assert.equal(result.format, format)
@@ -352,7 +354,9 @@ test('configures the current Chinese audio dialog without submitting generation'
     assert.equal(document.querySelector(format === 'brief' ? '#brief' : '#deep').checked, true)
     assert.equal(document.querySelector('#language').textContent, '中文（简体）')
     assert.equal(languageOpens, format === 'deep_dive' ? 0 : 1)
-    assert.equal(shortClicks, 1)
+    assert.equal(shortClicks, 0)
+    assert.equal(defaultClicks, 1)
+    assert.equal(result.length, 'default')
     assert.equal(document.querySelector('#prompt').value, job.prompt)
     assert.equal(document.querySelector('input[aria-label="Notebook title"]').value, '人生由我')
     assert.equal(submissions, 0)
