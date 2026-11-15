@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import SavedOptionInput from '@/components/SavedOptionInput.vue'
+import AutomationAccountPreference from './AutomationAccountPreference.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const props = defineProps<{ saveSource: () => Promise<{ projectId: string; source: AudioSourceInput }>; disabled?: boolean }>()
@@ -32,7 +33,8 @@ const collectionMode = computed({
 const collectionValid = computed(() => collectionName.value === null || !!collectionName.value.trim())
 const consent = automationConsent
 const busy = ref(false)
-watch(busy, value => emit('busy', value), { flush: 'sync' })
+const preferenceBusy = ref(false)
+watch([busy, preferenceBusy], ([working, saving]) => emit('busy', working || saving), { flush: 'sync' })
 const error = ref('')
 const requestKey = ref(globalThis.crypto.randomUUID())
 const textModels = computed(() => providers.value.filter(provider => provider.modelKind === 'text' && provider.isEnabled))
@@ -85,7 +87,7 @@ async function acceptAccount() {
   finally { busy.value = false }
 }
 async function start() {
-  if (busy.value || props.disabled || active.value || !consent.value || !textProvider.value || !accountReady.value || !collectionValid.value || !imageProvider.value || !isDesktop()) return
+  if (busy.value || preferenceBusy.value || props.disabled || active.value || !consent.value || !textProvider.value || !accountReady.value || !collectionValid.value || !imageProvider.value || !isDesktop()) return
   busy.value = true; error.value = ''
   try {
     const source = await props.saveSource()
@@ -162,7 +164,7 @@ async function start() {
           本次发布账号与合集
         </h3>
         <p class="mt-1 text-sm text-muted-foreground">
-          在这里确认一次，后续步骤自动沿用；账号变化、登录失效或合集无法匹配时才需要处理。
+          在这里确认一次；开启下方自动沿用后，重开窗口或重新登录仍会核对账号并自动继续。账号变化或合集无法匹配时会暂停。
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-3">
@@ -263,6 +265,11 @@ async function start() {
         </template>
       </div>
     </div>
+    <AutomationAccountPreference
+      v-if="isDesktop()"
+      :disabled="busy"
+      @busy="preferenceBusy = $event"
+    />
     <label class="flex items-start gap-3 text-sm">
       <Checkbox
         v-model="consent"
@@ -280,7 +287,7 @@ async function start() {
     </p>
     <Button
       class="justify-self-start"
-      :disabled="busy || disabled || active || !consent || !textProvider || !accountReady || !collectionValid || !imageProvider || !isDesktop()"
+      :disabled="busy || preferenceBusy || disabled || active || !consent || !textProvider || !accountReady || !collectionValid || !imageProvider || !isDesktop()"
       @click="start"
     >
       {{ busy ? '正在准备…' : '自动制作并准备发布' }}

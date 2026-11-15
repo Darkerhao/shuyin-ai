@@ -3,6 +3,7 @@ import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { invoke } from '@tauri-apps/api/core'
 import AutomationSetup from '../src/components/AutomationSetup.vue'
 import { automationRuns, automationConsent, automationAccount, renderAutomationCover, type AutomationRun } from '../src/services/automation'
+import * as automation from '../src/services/automation'
 import { readBackground } from '../src/services/covers'
 import { coverPng, decodeBackground } from '../src/services/coverRenderer'
 import { newCover } from '../src/types/cover'
@@ -24,6 +25,7 @@ const run = (overrides: Partial<AutomationRun> = {}): AutomationRun => ({
 beforeEach(() => {
   mockResizeObserver()
   vi.resetAllMocks(); automationRuns.value = []; automationConsent.value = false; automationAccount.value = null
+  vi.spyOn(automation, 'getAutomationAccountReuse').mockResolvedValue(true)
   vi.mocked(douyinCollectionOptions).mockResolvedValue([])
   vi.mocked(readBackground).mockResolvedValue(new ArrayBuffer(4))
   vi.mocked(decodeBackground).mockResolvedValue({} as globalThis.HTMLImageElement)
@@ -70,6 +72,26 @@ describe('automatic cover execution outside the cover page', () => {
 })
 
 describe('automatic workflow setup', () => {
+  it('waits for account reuse settings to finish saving before starting a new automatic task', async () => {
+    automationConsent.value = true
+    automationAccount.value = { id: null, name: '已确认账号', key: 'identity' }
+    let finish!: () => void
+    vi.spyOn(automation, 'setAutomationAccountReuse').mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const saveSource = vi.fn()
+    const wrapper = mount(AutomationSetup, { props: { saveSource } }); await flushPromises()
+    const preference = wrapper.get('label[for] [role="checkbox"]')
+    await preference.trigger('click'); await flushPromises()
+    const start = () => wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!
+    expect(start().attributes('disabled')).toBeDefined()
+    expect(wrapper.emitted('busy')?.at(-1)).toEqual([true])
+    await start().trigger('click'); await flushPromises()
+    expect(saveSource).not.toHaveBeenCalled()
+    finish(); await flushPromises()
+    expect(start().attributes('disabled')).toBeUndefined()
+    expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
+    wrapper.unmount()
+  })
+
   it('saves collections with Enter and supports choosing, renaming, deleting and reopening without starting work', async () => {
     let saved = ['甲子读书 | 读懂一本书', '三国风云录']
     vi.mocked(douyinCollectionOptions).mockImplementation(async () => [...saved])
@@ -213,7 +235,7 @@ describe('automatic workflow setup', () => {
     expect(wrapper.get('#automation-account-name').element).toHaveProperty('value', '本次账号')
     await button('确认使用此账号').trigger('click'); await flushPromises()
     expect(button('自动制作并准备发布').attributes('disabled')).toBeDefined()
-    await wrapper.get('[role="checkbox"]').trigger('click'); await flushPromises()
+    await wrapper.get('[aria-label="允许自动制作和上传"]').trigger('click'); await flushPromises()
     expect(button('自动制作并准备发布').attributes('disabled')).toBeUndefined()
     await button('自动制作并准备发布').trigger('click'); await flushPromises()
     expect(saveSource).toHaveBeenCalledTimes(1)

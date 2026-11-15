@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 自动流程账号复用偏好（2026-11-15，仍为v25）
+
+复用 `app_settings`，新增普通设置键 `automation_account_reuse`，值为 JSON 布尔文本 `true` / `false`，不存在时默认开启。设置随重启、数据库及完整备份恢复保留；不保存 Cookie、密码或新增账号状态。各任务身份仍取原 `automation_runs.input_json.account`，读取官方身份匹配后才能沿用启动授权。无表、列或 SQL 迁移，人工材料确认字段仍保持原值。详见[一次确认与账号复用](AUTOMATION-CONFIRMATION.md)。
+
 ## 音频内容提醒（2026-11-15，仍为v25）
 
 无表、列、索引、设置或迁移变更。成功内容校核的原始结果继续存入 `ai_tasks.preview_json`，新增 JSON `warnings` 数组；无提醒的历史记录派生为空数组。自动任务快照只从成功校核任务读取提醒，不将提示复制到流程状态或 `error`；备份、重开和阶段切换沿用原记录。恢复旧失败任务保留音频、字幕与输入快照，只在实际发出新校核时记录当前 Prompt 版本。未修改正式书库。见[内容提醒修复](CONTENT-CHECK-WARNINGS.md)。

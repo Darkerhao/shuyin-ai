@@ -27,6 +27,19 @@ fn local_main(window: &WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn automation_account_reuse(database: State<'_, Database>) -> Result<bool, String> {
+    database.automation_account_reuse()
+}
+
+#[tauri::command]
+pub fn set_automation_account_reuse(
+    database: State<'_, Database>,
+    enabled: bool,
+) -> Result<(), String> {
+    database.set_automation_account_reuse(enabled)
+}
+
+#[tauri::command]
 pub fn automation_snapshot(database: State<'_, Database>) -> Result<Vec<AutomationRun>, String> {
     database.active_automation_runs()
 }
@@ -536,7 +549,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
             if run.publish_started {
                 let session = douyin::flow::automation_session(&app.state::<DouyinPublisher>())?;
                 let mut session = session.filter(|session|Some(&session.task_id)==run.publish_task_id.as_ref()).ok_or("上次上传已经开始，但网页会话已丢失。请在发布详情核对原草稿或已发布作品，不会自动再次上传。")?;
-                if session.status == "failed" {
+                if session.status == "failed" || session.waiting_for.as_deref() == Some("account") {
                     let window = app.get_webview_window("main").ok_or("工作台窗口已关闭。")?;
                     session = douyin::flow::start_douyin_task(
                         app.clone(),
