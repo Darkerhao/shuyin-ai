@@ -28,6 +28,7 @@ export interface AutomationRun {
   writingTaskId: string | null
   durationTaskId: string | null
   contentCheckTaskId: string | null
+  contentCheckWarnings: string[]
   writingVersionId: string | null
   finalWritingVersionId: string | null
   actualDurationSeconds: number | null

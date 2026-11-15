@@ -6,8 +6,8 @@ use super::{
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-pub const VERSION: &str = "content-check-v2";
-pub const PROMPT: &str = include_str!("../../../prompts/content-check-v2.md");
+pub const VERSION: &str = "content-check-v3";
+pub const PROMPT: &str = include_str!("../../../prompts/content-check-v3.md");
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -15,6 +15,8 @@ struct Check {
     verified: bool,
     reason: String,
     changes: Map<String, Value>,
+    #[serde(default)]
+    warnings: Vec<String>,
 }
 
 pub fn apply(raw: &str, base: &WritingContent, book: &str) -> Result<WritingContent, String> {
@@ -22,6 +24,14 @@ pub fn apply(raw: &str, base: &WritingContent, book: &str) -> Result<WritingCont
         serde_json::from_str(raw).map_err(|_| "内容校核必须返回结论和必要修改项。")?;
     if check.reason.trim().is_empty() || check.reason.chars().count() > 500 {
         return Err("内容校核缺少有效依据。".into());
+    }
+    if check.warnings.len() > 5
+        || check
+            .warnings
+            .iter()
+            .any(|warning| warning.trim().is_empty() || warning.chars().count() > 500)
+    {
+        return Err("音频内容提醒必须为1—500字，最多5条。".into());
     }
     if !check.verified {
         return Err(format!(
@@ -95,6 +105,18 @@ mod tests {
         assert_eq!(serde_json::to_value(changed).unwrap(), expected);
     }
     #[test]
+    fn audio_quality_warnings_do_not_reject_valid_publishing_materials() {
+        let original = base();
+        let checked = apply(
+            r#"{"verified":true,"reason":"发布文案与实际讲述一致","changes":{},"warnings":["04:30—05:14 的心理分析缺少章节依据，请在发布前试听。"]}"#,
+            &original,
+            "三国演义",
+        )
+        .expect("音频内容疑点应保留为提醒，不应中断已校核文案的制作");
+        assert_eq!(checked, original);
+    }
+
+    #[test]
     fn rejects_rewritten_audio_invalid_content_and_extra_fields() {
         for raw in [
             r#"{"verified":true,"reason":"替换","changes":{"audioPrompt":"换指导"}}"#,
@@ -105,8 +127,19 @@ mod tests {
             r#"{"reason":"无法核对","changes":{}}"#,
             r#"{"verified":false,"reason":"字幕缺少有效讲述","changes":{}}"#,
             r#"{"verified":false,"reason":"不能确定","changes":{"title":"猜测标题"}}"#,
+            r#"{"verified":false,"reason":"缺少可核对的讲述","changes":{},"warnings":["人物心理推断待试听"]}"#,
+            r#"{"verified":true,"reason":"一致","changes":{},"warnings":"未试听"}"#,
+            r#"{"verified":true,"reason":"一致","changes":{},"warnings":["  "]}"#,
+            r#"{"verified":true,"reason":"一致","changes":{"audioPrompt":"换指导"},"warnings":["仅提醒"]}"#,
         ] {
             assert!(apply(raw, &base(), "书").is_err());
+        }
+        for warnings in [
+            serde_json::json!(["疑".repeat(501)]),
+            serde_json::json!(vec!["疑点"; 6]),
+        ] {
+            let response = serde_json::json!({"verified":true,"reason":"一致","changes":{},"warnings":warnings});
+            assert!(apply(&response.to_string(), &base(), "书").is_err());
         }
     }
 }

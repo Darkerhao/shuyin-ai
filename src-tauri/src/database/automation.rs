@@ -73,6 +73,7 @@ pub struct AutomationRun {
     pub writing_task_id: Option<String>,
     pub duration_task_id: Option<String>,
     pub content_check_task_id: Option<String>,
+    pub content_check_warnings: Vec<String>,
     pub writing_version_id: Option<String>,
     pub final_writing_version_id: Option<String>,
     pub actual_duration_seconds: Option<f64>,
@@ -271,10 +272,14 @@ pub(super) fn bind(
 }
 
 fn load(connection: &Connection, id: &str) -> Result<AutomationRun, String> {
-    connection.query_row("SELECT id,project_id,input_json,status,stage,run_id,error,audio_job_id,video_job_id,writing_task_id,landscape_task_id,portrait_task_id,landscape_cover_id,portrait_cover_id,publish_task_id,created_at,updated_at,publish_started,duration_task_id,content_check_task_id,(SELECT version_id FROM ai_tasks WHERE id=automation_runs.writing_task_id AND status='succeeded'),widescreen_task_id,widescreen_cover_id,render_plan_sha256,(SELECT version_id FROM ai_tasks WHERE id=automation_runs.content_check_task_id AND status='succeeded'),(SELECT NULLIF(json_extract(plan_json,'$.duration'),0) FROM video_jobs WHERE id=automation_runs.video_job_id),chapter_id FROM automation_runs WHERE id=?1", [id], |row| {
+    connection.query_row("SELECT id,project_id,input_json,status,stage,run_id,error,audio_job_id,video_job_id,writing_task_id,landscape_task_id,portrait_task_id,landscape_cover_id,portrait_cover_id,publish_task_id,created_at,updated_at,publish_started,duration_task_id,content_check_task_id,(SELECT version_id FROM ai_tasks WHERE id=automation_runs.writing_task_id AND status='succeeded'),widescreen_task_id,widescreen_cover_id,render_plan_sha256,(SELECT version_id FROM ai_tasks WHERE id=automation_runs.content_check_task_id AND status='succeeded'),(SELECT NULLIF(json_extract(plan_json,'$.duration'),0) FROM video_jobs WHERE id=automation_runs.video_job_id),chapter_id,(SELECT json_extract(preview_json,'$.warnings') FROM ai_tasks WHERE id=automation_runs.content_check_task_id AND status='succeeded') FROM automation_runs WHERE id=?1", [id], |row| {
         let json: String = row.get(2)?;
         let input = serde_json::from_str(&json).map_err(|error| rusqlite::Error::FromSqlConversionFailure(2,rusqlite::types::Type::Text,Box::new(error)))?;
-        Ok(AutomationRun { chapter_id:row.get(26)?,id:row.get(0)?,project_id:row.get(1)?,input,status:row.get(3)?,stage:row.get(4)?,run_id:row.get(5)?,error:row.get(6)?,audio_job_id:row.get(7)?,video_job_id:row.get(8)?,writing_task_id:row.get(9)?,landscape_task_id:row.get(10)?,portrait_task_id:row.get(11)?,landscape_cover_id:row.get(12)?,portrait_cover_id:row.get(13)?,publish_task_id:row.get(14)?,created_at:row.get(15)?,updated_at:row.get(16)?,publish_started:row.get(17)?,duration_task_id:row.get(18)?,content_check_task_id:row.get(19)?,writing_version_id:row.get(20)?,widescreen_task_id:row.get(21)?,widescreen_cover_id:row.get(22)?,render_plan_sha256:row.get(23)?,final_writing_version_id:row.get(24)?,actual_duration_seconds:row.get(25)? })
+        let warnings: Option<String> = row.get(27)?;
+        let content_check_warnings = warnings.map(|json| serde_json::from_str(&json)
+            .map_err(|error| rusqlite::Error::FromSqlConversionFailure(27,rusqlite::types::Type::Text,Box::new(error))))
+            .transpose()?.unwrap_or_default();
+        Ok(AutomationRun { content_check_warnings,chapter_id:row.get(26)?,id:row.get(0)?,project_id:row.get(1)?,input,status:row.get(3)?,stage:row.get(4)?,run_id:row.get(5)?,error:row.get(6)?,audio_job_id:row.get(7)?,video_job_id:row.get(8)?,writing_task_id:row.get(9)?,landscape_task_id:row.get(10)?,portrait_task_id:row.get(11)?,landscape_cover_id:row.get(12)?,portrait_cover_id:row.get(13)?,publish_task_id:row.get(14)?,created_at:row.get(15)?,updated_at:row.get(16)?,publish_started:row.get(17)?,duration_task_id:row.get(18)?,content_check_task_id:row.get(19)?,writing_version_id:row.get(20)?,widescreen_task_id:row.get(21)?,widescreen_cover_id:row.get(22)?,render_plan_sha256:row.get(23)?,final_writing_version_id:row.get(24)?,actual_duration_seconds:row.get(25)? })
     }).map_err(|error| format!("自动流程不可读取：{error}"))
 }
 
@@ -720,7 +725,7 @@ impl Database {
             if run.status!="running" { return Err("自动流程已暂停，校核尚未发送。".into()); }
             verify_content(c,&run)?;
             let input=c.query_row("SELECT input_json FROM ai_tasks WHERE id=?1 AND kind='content_check' AND status='pending'",[id],|row|row.get(0)).map_err(|_|"内容校核已执行，不能重复请求。")?;
-            c.execute("UPDATE ai_tasks SET status='running' WHERE id=?1",[id]).map_err(|e|e.to_string())?;
+            c.execute("UPDATE ai_tasks SET status='running',prompt_version=?2 WHERE id=?1",params![id,CONTENT_CHECK_PROMPT]).map_err(|e|e.to_string())?;
             Ok(input)
         })
     }

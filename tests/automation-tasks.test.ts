@@ -10,7 +10,7 @@ vi.mock('../src/composables/useWindowCloseGuard', () => ({ useWindowCloseGuard: 
 const fixture = (overrides: Partial<AutomationRun> = {}): AutomationRun => ({
   id: 'run1', projectId: 'book1', input: { workflowVersion: 2, title: '原书', author: '', selection: { projectId: 'book1', source: { kind: 'asset', assetId: 'source1' }, textProviderId: 'text1', imageProviderId: 'image1', format: 'deep_dive', requestKey: 'key1' } },
   status: 'running', stage: 'audio', runId: 1, error: '', audioJobId: 'audio1', videoJobId: null, writingTaskId: 'writing1', writingVersionId: 'version1', finalWritingVersionId: null, actualDurationSeconds: null,
-  durationTaskId: null, contentCheckTaskId: null, landscapeTaskId: null, portraitTaskId: null, widescreenTaskId: null, landscapeCoverId: null, portraitCoverId: null, widescreenCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '', ...overrides,
+  durationTaskId: null, contentCheckWarnings: [], contentCheckTaskId: null, landscapeTaskId: null, portraitTaskId: null, widescreenTaskId: null, landscapeCoverId: null, portraitCoverId: null, widescreenCoverId: null, publishTaskId: null, createdAt: '', updatedAt: '', ...overrides,
 })
 const mounted: ReturnType<typeof mount>[] = []
 beforeEach(() => { automationRuns.value = []; automationError.value = '' })
@@ -94,4 +94,24 @@ it('opens every saved output in the chapter that produced it', async () => {
   for (const link of wrapper.findAll('a')) expect(link.attributes('href')).toContain('chapter=chapter-one')
   expect(wrapper.findAll('a[href*="coverVersion="]')).toHaveLength(3)
   expect(wrapper.get('a[href*="task=publish-one"]').text()).toContain('发布详情')
+})
+
+it('keeps audio quality warnings visible while progressing and awaiting final publishing', async () => {
+  const warnings = ['04:30—05:14 的心理分析缺少章节依据，请在发布前试听。']
+  const wrapper = await render(fixture({ stage: 'landscape_image', contentCheckWarnings: warnings }))
+  expect(wrapper.get('[aria-current="step"]').text()).toBe('三尺寸封面进行中')
+  const note = wrapper.get('[aria-label="音频内容提醒"]')
+  expect(note.text()).toContain(warnings[0])
+  expect(note.text()).toContain('自动制作继续')
+  expect(wrapper.findAll('button').some(button => button.text() === '暂停后续步骤')).toBe(true)
+  expect(wrapper.findAll('button').some(button => button.text() === '继续流程')).toBe(false)
+  automationRuns.value = [fixture({ status: 'awaiting_publish', stage: 'publishing', publishTaskId: 'publish1', contentCheckWarnings: warnings })]
+  await flushPromises()
+  expect(wrapper.get('[aria-label="音频内容提醒"]').text()).toContain(warnings[0])
+  expect(wrapper.text()).toContain('等待最终发布')
+  expect(wrapper.get('[aria-label="音频内容提醒"]').text()).toContain('发布前请试听确认')
+  expect(wrapper.get('[aria-label="音频内容提醒"]').text()).not.toContain('自动制作继续')
+  automationRuns.value = [fixture()]
+  await flushPromises()
+  expect(wrapper.find('[aria-label="音频内容提醒"]').exists()).toBe(false)
 })

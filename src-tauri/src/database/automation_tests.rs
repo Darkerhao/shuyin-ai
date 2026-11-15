@@ -1836,6 +1836,106 @@ fn automatic_content_check_preserves_audio_and_does_not_duplicate_consistent_ver
 }
 
 #[test]
+fn automatic_content_check_warnings_continue_and_survive_stage_changes_and_reopen() {
+    for chapter in [false, true] {
+        let (directory, db, run) = transcript_fixture_for(chapter);
+        let task = db.create_content_check_task(&run).unwrap();
+        db.prepare_content_check_task(&task).unwrap();
+        let warning = "04:30—05:14 的心理分析缺少章节依据，请在发布前试听。";
+        let response = serde_json::json!({
+            "verified": true,
+            "reason": "发布文案仅保留本期可确认的内容",
+            "changes": {},
+            "warnings": [warning]
+        });
+        db.finish_content_check_task(&task, &response.to_string())
+            .expect("内容疑点不应暂停后续制作");
+        let checked = db.automation_run(&run.id).unwrap();
+        assert_eq!(checked.status, "running");
+        assert!(checked.error.is_empty());
+        assert_eq!(checked.final_writing_version_id, run.writing_version_id);
+        assert_eq!(checked.audio_job_id, run.audio_job_id);
+        assert_eq!(checked.video_job_id, run.video_job_id);
+        db.verify_automation_content(&checked).unwrap();
+        db.set_automation_stage(&checked, "landscape_image")
+            .unwrap();
+        let advanced = db.automation_run(&run.id).unwrap();
+        assert_eq!(advanced.stage, "landscape_image");
+        assert_eq!(advanced.status, "running");
+        assert_eq!(
+            serde_json::to_value(&advanced).unwrap()["contentCheckWarnings"],
+            response["warnings"]
+        );
+        db.control_automation(&run.id, "pause").unwrap();
+        drop(db);
+        let reopened = Database::open(directory.path().join("data.sqlite3"));
+        let resumed = reopened.control_automation(&run.id, "resume").unwrap();
+        assert_eq!(resumed.stage, "landscape_image");
+        assert_eq!(
+            serde_json::to_value(&resumed).unwrap()["contentCheckWarnings"],
+            response["warnings"]
+        );
+        reopened.verify_automation_content(&resumed).unwrap();
+    }
+}
+
+#[test]
+fn automatic_content_check_retries_a_legacy_audio_quality_rejection_with_current_prompt() {
+    let (_directory, db, run) = transcript_fixture_for(true);
+    let task = db.create_content_check_task(&run).unwrap();
+    let original_input = db.prepare_content_check_task(&task).unwrap();
+    let error = db.finish_content_check_task(&task,
+        r#"{"verified":false,"reason":"04:30—05:14 的人物心理推断缺少本章依据，保留原声交由处理","changes":{}}"#
+    ).unwrap_err();
+    assert!(error.contains("无法完成内容校核"));
+    db.end_generation(&task, "failed", "storage", &error)
+        .unwrap();
+    db.with_connection(|c| {
+        c.execute(
+            "UPDATE ai_tasks SET prompt_version='content-check-v2' WHERE id=?1",
+            [&task],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    db.set_automation_status(&run, "waiting_user", &error)
+        .unwrap();
+    let waiting = db.automation_run(&run.id).unwrap();
+    assert!(waiting.content_check_warnings.is_empty());
+    db.retry_automation_generation(&waiting, false).unwrap();
+    let resumed = db.control_automation(&run.id, "resume").unwrap();
+    assert_eq!(resumed.content_check_task_id.as_ref(), Some(&task));
+    assert_eq!(
+        db.prepare_content_check_task(&task).unwrap(),
+        original_input
+    );
+    let version: String = db
+        .with_connection(|c| {
+            c.query_row(
+                "SELECT prompt_version FROM ai_tasks WHERE id=?1",
+                [&task],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    assert_eq!(version, crate::ai::content_check::VERSION);
+    db.finish_content_check_task(&task,
+        r#"{"verified":true,"reason":"发布材料保留有依据的内容，音频疑点另作提醒","changes":{},"warnings":["04:30—05:14 的人物心理推断可能缺少章节依据，发布前请试听确认。"]}"#
+    ).unwrap();
+    let checked = db.automation_run(&run.id).unwrap();
+    assert_eq!(checked.content_check_warnings.len(), 1);
+    assert_eq!(checked.audio_job_id, run.audio_job_id);
+    assert_eq!(checked.video_job_id, run.video_job_id);
+    assert_eq!(checked.final_writing_version_id, run.writing_version_id);
+    db.verify_automation_content(&checked).unwrap();
+    db.set_automation_stage(&checked, "landscape_image")
+        .unwrap();
+    assert_eq!(db.automation_run(&run.id).unwrap().status, "running");
+}
+
+#[test]
 fn automatic_content_check_accepts_actual_audio_beyond_target_and_two_hours() {
     let (_directory, database, run) = transcript_fixture();
     let mut video = database
@@ -1979,7 +2079,13 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
         let (_dir, db, run) = transcript_fixture_for(chapter);
         let check = db.create_content_check_task(&run).unwrap();
         db.prepare_content_check_task(&check).unwrap();
-        db.finish_content_check_task(&check, r#"{"verified":true,"reason":"一致","changes":{}}"#)
+        let warnings = if chapter {
+            vec!["人物心理推断待试听确认"]
+        } else {
+            Vec::new()
+        };
+        let response = serde_json::json!({"verified":true,"reason":"发布材料一致","changes":{},"warnings":warnings});
+        db.finish_content_check_task(&check, &response.to_string())
             .unwrap();
         for step in &COVER_STEPS {
             let run = db.automation_run(&run.id).unwrap();
@@ -2061,6 +2167,7 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
         }
         let run = db.automation_run(&run.id).unwrap();
         assert_eq!(run.stage, "storyboard");
+        assert_eq!(run.content_check_warnings, warnings);
         assert_eq!(
             db.list_cover_versions(&run.project_id, run.chapter_id.as_deref())
                 .unwrap()
