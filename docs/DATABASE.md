@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 本期介绍与遗漏提醒（2026-11-15，仍为v25）
+
+无表、列、设置、索引或迁移变更。完整报题在原 `writing_versions.content_json.audioPrompt` 组装保存，音频继续使用 `audio_jobs.input_json.prompt`；章节名称与正文沿用所选版本原 `source_snapshot_json`。开场疑似遗漏复用成功校核的 `ai_tasks.preview_json.warnings`，不单独保存重复状态、不改旧记录或原音轨。见[本期介绍修复](AUDIO-INTRODUCTION.md)。
+
 ## 自动流程账号复用偏好（2026-11-15，仍为v25）
 
 复用 `app_settings`，新增普通设置键 `automation_account_reuse`，值为 JSON 布尔文本 `true` / `false`，不存在时默认开启。设置随重启、数据库及完整备份恢复保留；不保存 Cookie、密码或新增账号状态。各任务身份仍取原 `automation_runs.input_json.account`，读取官方身份匹配后才能沿用启动授权。无表、列或 SQL 迁移，人工材料确认字段仍保持原值。详见[一次确认与账号复用](AUTOMATION-CONFIRMATION.md)。

@@ -55,17 +55,17 @@ pub struct PublishingDraft {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Section {
-    heading: String,
-    guidance: String,
+pub(super) struct Section {
+    pub heading: String,
+    pub guidance: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AudioDraft {
-    hook: String,
-    introduction: String,
-    sections: Vec<Section>,
-    closing: String,
+    pub hook: String,
+    pub introduction: String,
+    pub sections: Vec<Section>,
+    pub closing: String,
 }
 impl AudioDraft {
     pub fn into_prompt(self, book: &str, chapter: Option<&str>) -> Result<String, String> {
@@ -86,9 +86,14 @@ impl AudioDraft {
             })
         {
             return Err(
-                "音频提示词需要完整引子、书籍引入和结尾收束；整书为五部分，章节为1—5部分，原有内容保留。".into(),
+                "音频提示词需要完整引子、本期看点和结尾收束；整书为五部分，章节为1—5部分，原有内容保留。".into(),
             );
         }
+        Ok(self.render(book, chapter))
+    }
+
+    // Partial streaming previews use this renderer; only into_prompt accepts a final draft.
+    pub(super) fn render(&self, book: &str, chapter: Option<&str>) -> String {
         let sections = self
             .sections
             .iter()
@@ -103,12 +108,19 @@ impl AudioDraft {
             .collect::<Vec<_>>()
             .join("\n\n---\n\n");
         let scope = chapter.map_or_else(String::new, |chapter| format!("本期精讲《{book}》的“{chapter}”。仅以本次上传的章节正文为来源，细致解释重要内容、关键概念、人物动机或论证过程，不只概括要点，不推测其他章节、后续情节或全书结论。"));
-        Ok(include_str!("../../../prompts/audio-template-v6.md")
+        let introduction = chapter.map_or_else(
+            || format!("这一期，我们一起读《{book}》。"),
+            |chapter| format!("这一期，我们一起读《{book}》中的“{chapter}”。"),
+        );
+        include_str!("../../../prompts/audio-template-v7.md")
             .replace("{{scope_instruction}}", &scope)
             .replace("{{hook}}", self.hook.trim())
-            .replace("{{introduction}}", self.introduction.trim())
+            .replace(
+                "{{introduction}}",
+                &format!("{introduction}\n{}", self.introduction.trim()),
+            )
             .replace("{{sections}}", &sections)
-            .replace("{{closing}}", self.closing.trim()))
+            .replace("{{closing}}", self.closing.trim())
     }
 }
 #[derive(Deserialize)]
@@ -312,7 +324,7 @@ mod tests {
             .split_once("## 固定开场（逐字朗读）\n\n")
             .unwrap()
             .1
-            .split_once("\n\n## 书籍引入")
+            .split_once("\n\n## 开场介绍")
             .unwrap()
             .0;
         assert_eq!(opening, "欢迎大家收听今天的节目，我是甲子。");
@@ -331,6 +343,66 @@ mod tests {
         }
         assert!(audio_prompt.contains("不设目标时长、口播字数或分段时间预算"));
         assert_eq!(audio_prompt.matches("## 第").count(), 5);
+    }
+    #[test]
+    fn audio_introduction_announces_the_book_and_any_saved_chapter_title() {
+        for (chapter, expected) in [
+            (None, "这一期，我们一起读《测试书》。"),
+            (
+                Some("第五回：发矫诏诸镇应曹公破关兵三英战吕布"),
+                "这一期，我们一起读《测试书》中的“第五回：发矫诏诸镇应曹公破关兵三英战吕布”。",
+            ),
+            (
+                Some("第三章：习惯的形成"),
+                "这一期，我们一起读《测试书》中的“第三章：习惯的形成”。",
+            ),
+            (Some("序言"), "这一期，我们一起读《测试书》中的“序言”。"),
+            (Some("论求知"), "这一期，我们一起读《测试书》中的“论求知”。"),
+            (
+                Some("上篇·第二节"),
+                "这一期，我们一起读《测试书》中的“上篇·第二节”。",
+            ),
+            (
+                Some("Chapter IV — A New Beginning"),
+                "这一期，我们一起读《测试书》中的“Chapter IV — A New Beginning”。",
+            ),
+        ] {
+            let mut value = draft();
+            value["introduction"] =
+                serde_json::json!("从关键选择出发，看看人物如何面对眼前的困境。");
+            let content = serde_json::from_value::<PublishingDraft>(value)
+                .unwrap()
+                .into_content("测试书", chapter)
+                .unwrap();
+            let WritingContent::Publishing { audio_prompt, .. } = content else {
+                panic!()
+            };
+            let introduction = audio_prompt
+                .split_once("## 开场介绍（逐字朗读）\n\n")
+                .expect("本期介绍必须被列为定稿口播")
+                .1
+                .split_once("\n\n---")
+                .unwrap()
+                .0;
+            assert_eq!(
+                introduction,
+                format!("{expected}\n从关键选择出发，看看人物如何面对眼前的困境。")
+            );
+            assert_eq!(introduction.matches(expected).count(), 1);
+            let welcome = audio_prompt
+                .find("欢迎大家收听今天的节目，我是甲子。")
+                .unwrap();
+            let announcement = audio_prompt.find(expected).unwrap();
+            assert!(
+                welcome < announcement && announcement < audio_prompt.find("## 第一部分").unwrap()
+            );
+            let reference = crate::video::subtitles::SubtitleReference::from_prompt(
+                "测试书".into(),
+                String::new(),
+                &audio_prompt,
+            );
+            assert!(reference.opening.contains(introduction));
+        }
     }
     #[test]
     fn audio_bookends_surround_the_program_and_are_available_to_subtitle_review() {
@@ -362,10 +434,10 @@ mod tests {
         );
         assert_eq!(
             reference.opening,
-            format!("{hook}\n欢迎大家收听今天的节目，我是甲子。")
+            format!("{hook}\n欢迎大家收听今天的节目，我是甲子。\n这一期，我们一起读《明朝那些事儿》。\n{}", value["introduction"].as_str().unwrap())
         );
         assert_eq!(reference.ending, format!("{closing}\n我是甲子，陪你读懂书里的故事，也读懂故事里的人。喜欢这期分享，记得关注，我们下期见。"));
-        assert!(!reference.opening.contains("今天我们要聊"));
+        assert!(!reference.opening.contains("按原书来源"));
         assert!(!reference.ending.contains("按原书来源"));
     }
     #[test]
@@ -385,7 +457,7 @@ mod tests {
         }
     }
     fn draft() -> serde_json::Value {
-        serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "tags":"#读书 #明朝那些事儿 #历史", "hook":"一个人的选择，怎样改变一个时代的走向？", "introduction":"今天我们要聊的这本书，是《明朝那些事儿》。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "closing":"回到开头的问题，个人选择与时代处境相互影响。读懂人物怎样作出决定，才能看清故事中的因果。", "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。", "coverPromptWidescreen":"横版 16:9，城墙横向绵延，远景开阔，中央留白，无文字。", "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}})
+        serde_json::json!({"title":"一本书的故事", "description":"今天用十分钟聊这本书。", "tags":"#读书 #明朝那些事儿 #历史", "hook":"一个人的选择，怎样改变一个时代的走向？", "introduction":"从关键选择出发，看看人物如何面对眼前的困境。", "sections":(0..5).map(|i| serde_json::json!({"heading":format!("主题{i}"),"guidance":format!("按原书来源讲主题{i}，不写完整口播稿。") })).collect::<Vec<_>>(), "closing":"回到开头的问题，个人选择与时代处境相互影响。读懂人物怎样作出决定，才能看清故事中的因果。", "coverTitle":"权力背后的人间故事", "coverSubtitle":"《明朝那些事儿》里的起落", "coverPromptLandscape":"横版 4:3，城阙横向展开，中央留白，无文字。", "coverPromptPortrait":"竖版 3:4，宫门向远处延伸，中央留白，无文字。", "coverPromptWidescreen":"横版 16:9，城墙横向绵延，远景开阔，中央留白，无文字。", "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}})
     }
     #[test]
     fn chapter_audio_accepts_one_to_five_detailed_sections_without_book_wide_opening() {

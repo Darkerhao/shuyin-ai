@@ -1,5 +1,11 @@
 # 书引 AI 技术设计文档
 
+## 整书与章节本期介绍（2026-11-15，当前规则）
+
+`publishing-v11` 与 `publishing-revision-v10` 的 `introduction` 仅输出本期看点。`AudioDraft::render` 根据已准备的书名与可选完整章节标题添加报题首句，和全量/按项的 `into_prompt` 共用 `audio-template-v7`，生成中预览也走同一渲染入口；只有完整结果通过原验证后才能保存/采用。章节名称使用原来源快照，仍按整体传递，不增加编号解析或第二套状态。
+
+新模板将“开场介绍”列为定稿口播，同一主讲人连续读完引子、欢迎语与介绍。标题沿用“开场”前缀，原字幕参考解析即可提取，原“不按指导补台词”规则继续生效。`content-check-v4` 使用实际指导与字幕识别开场疑似遗漏，沿用 `warnings`、持久化及非阻断展示；不做机械逐字比较，不自动裁音或重生成。历史模板仅作追溯，运行入口切换新版本，无迁移、依赖或自动状态变更。见[实现与验证](AUDIO-INTRODUCTION.md)。
+
 ## 自动发布准备的一次确认（2026-11-15）
 
 `AutomationAccountPreference` 在自动制作开始区与未编辑的自动发布材料区复用原 Checkbox，读取及写入 SQLite `automation_account_reuse` 布尔偏好；等待保存时阻止重复操作与新流程启动，失败保留原值并允许重试。仅主工作台的 automation capability 开放两条设置命令。

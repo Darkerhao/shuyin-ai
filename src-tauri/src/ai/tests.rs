@@ -680,7 +680,7 @@ async fn live_candidates_arrive_before_completion_and_never_include_reasoning_or
     let provider = OpenAiCompatible::new(TIMEOUT, &url)
         .unwrap()
         .with_content_observer(move |raw| {
-            let shown = super::preview::texts(raw, None);
+            let shown = super::preview::texts(raw, None, "测试书", None);
             if !shown.is_empty() {
                 if let Some(sender) = first.lock().unwrap().take() {
                     let _ = sender.send(shown);
@@ -696,7 +696,10 @@ async fn live_candidates_arrive_before_completion_and_never_include_reasoning_or
     assert_eq!(early.len(), 1);
     assert_eq!(early["title"], "正在生成");
     let raw = generation.await.unwrap();
-    assert_eq!(super::preview::texts(&raw, None)["title"], "正在生成的标题");
+    assert_eq!(
+        super::preview::texts(&raw, None, "测试书", None)["title"],
+        "正在生成的标题"
+    );
     assert!(!raw.contains("PRIVATE_REASONING"));
     assert!(server.join().unwrap().contains("chat/completions"));
 }

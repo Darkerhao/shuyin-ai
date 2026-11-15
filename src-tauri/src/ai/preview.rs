@@ -1,9 +1,17 @@
-use super::revision::PublishingField;
+use super::{
+    publishing::{AudioDraft, Section},
+    revision::PublishingField,
+};
 use std::collections::BTreeMap;
 
 /// Read only JSON string values. An unfinished string contributes its decoded prefix;
 /// the original response still goes through the unchanged final business validation.
-pub(crate) fn texts(raw: &str, selected: Option<&[PublishingField]>) -> BTreeMap<String, String> {
+pub(crate) fn texts(
+    raw: &str,
+    selected: Option<&[PublishingField]>,
+    book: &str,
+    chapter: Option<&str>,
+) -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
     let mut reader = Reader { raw, offset: 0 };
     if !raw.trim_start().starts_with('{') {
@@ -15,27 +23,30 @@ pub(crate) fn texts(raw: &str, selected: Option<&[PublishingField]>) -> BTreeMap
     } else {
         ""
     };
-    let mut audio = Vec::new();
-    for field in ["hook", "introduction"] {
-        if let Some(text) = values.get(&format!("{prefix}{field}")) {
-            audio.push(text.clone());
-        }
-    }
-    for index in 0..5 {
-        let section = ["heading", "guidance"]
-            .iter()
-            .filter_map(|key| values.get(&format!("{prefix}sections.{index}.{key}")))
+    let text = |field: &str| {
+        values
+            .get(&format!("{prefix}{field}"))
             .cloned()
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !section.is_empty() {
-            audio.push(section);
-        }
-    }
-    if let Some(text) = values.get(&format!("{prefix}closing")) {
-        audio.push(text.clone());
-    }
-    let audio = audio.join("\n\n");
+            .unwrap_or_default()
+    };
+    let draft = AudioDraft {
+        hook: text("hook"),
+        introduction: text("introduction"),
+        sections: (0..5)
+            .filter_map(|index| {
+                let heading = text(&format!("sections.{index}.heading"));
+                let guidance = text(&format!("sections.{index}.guidance"));
+                (!heading.is_empty() || !guidance.is_empty())
+                    .then_some(Section { heading, guidance })
+            })
+            .collect(),
+        closing: text("closing"),
+    };
+    let audio = (!draft.hook.is_empty()
+        || !draft.introduction.is_empty()
+        || !draft.sections.is_empty()
+        || !draft.closing.is_empty())
+    .then(|| draft.render(book, chapter));
     let mut shown = BTreeMap::new();
     for field in [
         PublishingField::Title,
@@ -52,7 +63,7 @@ pub(crate) fn texts(raw: &str, selected: Option<&[PublishingField]>) -> BTreeMap
             continue;
         }
         let text = if field == PublishingField::AudioPrompt {
-            Some(&audio)
+            audio.as_ref()
         } else {
             values.get(field.key())
         };
@@ -227,26 +238,92 @@ mod tests {
     use crate::ai::revision::PublishingField;
 
     #[test]
+    fn audio_previews_match_saved_introduction_for_book_and_chapter() {
+        let draft = serde_json::json!({
+            "title":"本期标题", "description":"本期介绍", "tags":"#读书 #测试书 #选择",
+            "hook":"一个选择会带来什么变化？", "introduction":"从关键选择出发，看看人物面对的困境。",
+            "sections":(1..=5).map(|index|serde_json::json!({"heading":format!("看点{index}"),"guidance":"根据来源讲清因果。"})).collect::<Vec<_>>(),
+            "closing":"回到开头，选择需要放回具体处境中理解。",
+            "coverTitle":"选择的力量", "coverSubtitle":"本期看点",
+            "coverPromptLandscape":"横版4:3无字背景", "coverPromptPortrait":"竖版3:4无字背景", "coverPromptWidescreen":"宽屏16:9无字背景",
+            "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}
+        });
+        for chapter in [None, Some("序言"), Some("上篇·第二节")] {
+            let content =
+                serde_json::from_value::<crate::ai::publishing::PublishingDraft>(draft.clone())
+                    .unwrap()
+                    .into_content("测试书", chapter)
+                    .unwrap();
+            let crate::ai::WritingContent::Publishing { audio_prompt, .. } = &content else {
+                panic!()
+            };
+            let shown = texts(&draft.to_string(), None, "测试书", chapter);
+            assert_eq!(
+                shown["audioPrompt"], *audio_prompt,
+                "complete preview for {chapter:?}"
+            );
+            let patch = serde_json::json!({"audioPrompt":{
+                "hook":draft["hook"],"introduction":draft["introduction"],"sections":draft["sections"],"closing":draft["closing"]
+            }});
+            let revised = crate::ai::revision::revise(
+                &patch.to_string(),
+                &content,
+                &[PublishingField::AudioPrompt],
+                "测试书",
+                chapter,
+            )
+            .unwrap();
+            let crate::ai::WritingContent::Publishing { audio_prompt, .. } = revised else {
+                panic!()
+            };
+            assert_eq!(
+                texts(
+                    &patch.to_string(),
+                    Some(&[PublishingField::AudioPrompt]),
+                    "测试书",
+                    chapter
+                )["audioPrompt"],
+                audio_prompt
+            );
+        }
+    }
+    #[test]
     fn previews_partial_tags_without_leaking_unselected_text() {
         let raw = r##"{"title":"当前书籍","tags":"#读书 #当前主"##;
-        assert_eq!(texts(raw, None)["tags"], "#读书 #当前主");
-        let shown = texts(raw, Some(&[PublishingField::Tags]));
+        assert_eq!(texts(raw, None, "测试书", None)["tags"], "#读书 #当前主");
+        let shown = texts(raw, Some(&[PublishingField::Tags]), "测试书", None);
         assert_eq!(shown.len(), 1);
         assert_eq!(shown["tags"], "#读书 #当前主");
-        assert!(!texts(raw, Some(&[PublishingField::Title])).contains_key("tags"));
+        assert!(!texts(raw, Some(&[PublishingField::Title]), "测试书", None).contains_key("tags"));
     }
 
     #[test]
     fn partial_candidates_decode_text_and_audio_without_json_or_unselected_fields() {
         let partial = r#"{"title":"读懂\"一本书\"","description":"第一行\n第二行\uD83D\uDE00","hook":"本期引子","introduction":"书籍引入","sections":[{"heading":"主题一","guidance":"已经收到的指导"},{"heading":"主题二","guidance":"正在生"#;
-        let shown = texts(partial, None);
+        let shown = texts(partial, None, "测试书", Some("序言"));
         assert_eq!(shown["title"], "读懂\"一本书\"");
         assert_eq!(shown["description"], "第一行\n第二行😀");
-        assert_eq!(
-            shown["audioPrompt"],
-            "本期引子\n\n书籍引入\n\n主题一\n已经收到的指导\n\n主题二\n正在生"
+        let audio = &shown["audioPrompt"];
+        let positions = [
+            "## 开场引子",
+            "本期引子",
+            "欢迎大家收听今天的节目，我是甲子。",
+            "这一期，我们一起读《测试书》中的“序言”。",
+            "书籍引入",
+            "## 第一部分：主题一",
+            "已经收到的指导",
+            "## 第二部分：主题二",
+            "正在生",
+        ]
+        .map(|text| audio.find(text).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(!audio.contains("{{"));
+        let shown = texts(
+            partial,
+            Some(&[PublishingField::Description]),
+            "测试书",
+            None,
         );
-        let shown = texts(partial, Some(&[PublishingField::Description]));
         assert_eq!(shown.len(), 1);
         assert_eq!(shown["description"], "第一行\n第二行😀");
     }
@@ -259,10 +336,10 @@ mod tests {
             r#"{"title":"前\uD83D"#,
             r#"{"title":"前\uD83D\uDE"#,
         ] {
-            assert_eq!(texts(raw, None)["title"], "前");
+            assert_eq!(texts(raw, None, "测试书", None)["title"], "前");
         }
         assert_eq!(
-            texts(r#"{"title":"前\uD83D\uDE00后"#, None)["title"],
+            texts(r#"{"title":"前\uD83D\uDE00后"#, None, "测试书", None)["title"],
             "前😀后"
         );
     }
@@ -273,12 +350,15 @@ mod tests {
         let shown = texts(
             raw,
             Some(&[PublishingField::AudioPrompt, PublishingField::CoverDesign]),
+            "测试书",
+            None,
         );
         assert_eq!(shown.len(), 1);
-        assert_eq!(
-            shown["audioPrompt"],
-            "新的引子\n\n新的引入\n\n第一主题\n继续讲\n\n回应引子的收束"
-        );
-        assert!(texts("非JSON的思考内容", None).is_empty());
+        let audio = &shown["audioPrompt"];
+        assert!(audio.contains("这一期，我们一起读《测试书》。\n新的引入"));
+        assert!(audio.contains("## 第一部分：第一主题\n\n继续讲"));
+        assert!(audio.contains("## 结尾收束（逐字朗读）\n\n回应引子的收束"));
+        assert!(!audio.contains("PRIVATE_REASONING") && !audio.contains("未选标题"));
+        assert!(texts("非JSON的思考内容", None, "测试书", None).is_empty());
     }
 }

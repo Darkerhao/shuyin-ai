@@ -6,8 +6,8 @@ use super::{
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-pub const VERSION: &str = "content-check-v3";
-pub const PROMPT: &str = include_str!("../../../prompts/content-check-v3.md");
+pub const VERSION: &str = "content-check-v4";
+pub const PROMPT: &str = include_str!("../../../prompts/content-check-v4.md");
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
