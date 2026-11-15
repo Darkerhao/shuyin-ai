@@ -137,6 +137,25 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
       >
         <AppIcon :name="run.status === 'running' ? 'info' : 'pause'" />{{ run.error || '保持应用运行，可切换页面。完成后请在抖音窗口检查并亲自发布。' }}
       </p>
+      <div
+        v-if="run.contentCheckWarnings.length"
+        class="automation-note needs-attention"
+        role="status"
+        aria-label="音频内容提醒"
+      >
+        <AppIcon name="info" />
+        <div>
+          <p>{{ run.status === 'running' ? '音频内容有待确认，自动制作继续；发布前请试听确认。' : '音频内容有待确认，发布前请试听确认。' }}</p>
+          <ul>
+            <li
+              v-for="(warning, index) in run.contentCheckWarnings"
+              :key="index"
+            >
+              {{ warning }}
+            </li>
+          </ul>
+        </div>
+      </div>
       <TransitionGroup
         name="task-output"
         tag="div"
@@ -225,6 +244,8 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
 .automation-note { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted-foreground); overflow-wrap: anywhere; }
 .automation-note .app-icon { flex-shrink: 0; width: 15px; height: 15px; margin-top: 3px; }
 .automation-note.needs-attention { color: var(--warning); }
+.automation-note p { margin: 0; }
+.automation-note ul { margin: 4px 0 0; padding-left: 18px; }
 .automation-outputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
 .automation-outputs:not(:empty) { margin-top: 16px; }
 .automation-output { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--input-surface); color: var(--text-secondary); font-size: 12px; text-decoration: none; transition: border-color 180ms, background-color 180ms; }
