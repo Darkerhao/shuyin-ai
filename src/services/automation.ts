@@ -47,6 +47,8 @@ export const automationRuns = ref<AutomationRun[]>([])
 export const automationError = ref('')
 export const automationConsent = ref(false)
 export const automationAccount = ref<AutomationAccount | null>(null)
+export const getAutomationAccountReuse = () => invoke<boolean>('automation_account_reuse')
+export const setAutomationAccountReuse = (enabled: boolean) => invoke<void>('set_automation_account_reuse', { enabled })
 export const stages: Record<string, string> = {
   video_prepare: '准备字幕与分镜（旧流程）',
   duration: '准备创作', writing: '生成完整创作方案', audio: '按本次方案制作音频', transcript: '识别并校对实际字幕', content_check: '核对文案与实际音频',

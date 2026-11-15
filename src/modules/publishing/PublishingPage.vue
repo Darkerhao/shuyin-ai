@@ -28,6 +28,7 @@ import AppIcon from '../../components/AppIcon.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
 import CoverThumbnail from '../../components/CoverThumbnail.vue'
+import AutomationAccountPreference from '../../components/AutomationAccountPreference.vue'
 import DouyinVerification from './DouyinVerification.vue'
 import ConfirmAction from '../../components/ConfirmAction.vue'
 import { requestConfirmation } from '../../composables/useConfirmation'
@@ -74,6 +75,7 @@ const audio = computed(() => audios.value.find(a => a.id === draft.value.audioAs
 const selectedLandscape = computed(() => landscape.value.find(c => c.id === draft.value.landscapeCoverId))
 const selectedPortrait = computed(() => portrait.value.find(c => c.id === draft.value.portraitCoverId))
 const automaticCoversChecked = computed(() => !dirty.value && selected.value?.checklist.some(item => item.key === 'covers' && item.passed && item.label.includes('自动流程')))
+const automaticMaterialsChecked = computed(() => automaticCoversChecked.value && selected.value?.checklist.some(item => item.key === 'title' && item.passed && item.label.includes('自动流程')))
 const videoInfo = ref<VideoMetadata | null>(null)
 const videoInfoError = ref('')
 let videoInfoRequest = Promise.resolve()
@@ -97,7 +99,8 @@ const record = ref({ publishedAt: '', postUrl: '', notes: '' })
 const recordTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const { busy: operationBusy, error, message, run } = useOperation()
 const douyinBusy = ref(false)
-const busy = computed(() => operationBusy.value || douyinBusy.value)
+const preferenceBusy = ref(false)
+const busy = computed(() => operationBusy.value || douyinBusy.value || preferenceBusy.value)
 const restoringDraft = ref(false)
 const draftOwner = computed(() => selected.value ? `${props.id}:${selected.value.id}` : `${chapterOwner(props.id, chapterId.value)}:new`)
 const draftReady = computed(() => loaded.value && !published.value && !restoringDraft.value)
@@ -254,14 +257,17 @@ async function showAssets() {
 async function prepareDouyinTask() {
   await videoInfoRequest
   if (!canReview.value) throw new Error('请先补齐文案、有效原声和成片，以及两张发布封面。')
-  if (selected.value?.status === 'ready' && !dirty.value) return selected.value
+  if (selected.value && !dirty.value && (selected.value.status === 'ready' || automaticMaterialsChecked.value)) {
+    if (selected.value.status !== 'ready') update(await api.preparePublishTask(selected.value.id))
+    return selected.value!
+  }
   const id = await persistReviewed()
   if (selected.value?.status !== 'ready') update(await api.preparePublishTask(id))
   return selected.value!
 }
 const save = () => run(async () => { await persist(); message.value = '发布草稿已保存。' })
 const prepare = () => run(async () => {
-  const id = await persistReviewed()
+  const id = automaticMaterialsChecked.value && selected.value ? selected.value.id : await persistReviewed()
   update(await api.preparePublishTask(id))
   message.value = '任务包已生成。请检查平台预览并手动发布，成功后回来记录结果。'
 })
@@ -899,7 +905,7 @@ onMounted(() => { if (desktop) void loadTask() })
         <dl class="preflight-summary">
           <div>
             <dt><AppIcon name="pen" />发布标题</dt><dd>
-              {{ titleCount }} / 30 字 · {{ draft.titleConfirmed ? '已核对' : '待核对' }}<Button
+              {{ titleCount }} / 30 字 · {{ draft.titleConfirmed ? '已核对' : automaticMaterialsChecked ? '自动流程已校验' : '待核对' }}<Button
                 v-if="!draft.title.trim() && !published"
                 variant="link"
                 size="sm"
@@ -991,13 +997,24 @@ onMounted(() => { if (desktop) void loadTask() })
           </div>
         </dl>
         <template v-if="!published">
+          <AutomationAccountPreference
+            v-if="desktop && automaticMaterialsChecked"
+            :disabled="operationBusy || recordOpen"
+            @busy="preferenceBusy = $event"
+          />
           <p
             id="publish-confirmation-help"
-            class="notice"
+            :class="automaticMaterialsChecked ? 'text-sm text-muted-foreground' : 'notice'"
             tabindex="-1"
           >
-            <strong class="block">确认发布标题和两张封面</strong>
-            核对本次标题、内容、成片与横竖两张封面后，点击「确认并开始辅助发布」或「确认并导出任务包」，即可一并确认并保存。
+            <template v-if="automaticMaterialsChecked">
+              <strong class="block">发布材料已通过自动流程校验</strong>
+              标题、内容、成片与横竖两张封面沿用本次自动任务，无需再次确认。完成上传和填写后，请在抖音页面检查并发布。
+            </template>
+            <template v-else>
+              <strong class="block">确认发布标题和两张封面</strong>
+              核对本次标题、内容、成片与横竖两张封面后，点击「确认并开始辅助发布」或「确认并导出任务包」，即可一并确认并保存。
+            </template>
           </p>
           <p class="muted">
             应用辅助上传和填写，最终由你在抖音页面发布。
@@ -1019,7 +1036,7 @@ onMounted(() => { if (desktop) void loadTask() })
               :disabled="busy || recordOpen || !canReview"
               @click="assistant?.start()"
             >
-              <AppIcon name="upload" />确认并开始辅助发布
+              <AppIcon name="upload" />{{ automaticMaterialsChecked ? '继续辅助发布' : '确认并开始辅助发布' }}
             </Button>
             <Button
               id="publish-export"
@@ -1028,7 +1045,7 @@ onMounted(() => { if (desktop) void loadTask() })
               :disabled="busy || recordOpen || !canReview"
               @click="prepare"
             >
-              <AppIcon name="download" />确认并导出任务包
+              <AppIcon name="download" />{{ automaticMaterialsChecked ? '导出任务包' : '确认并导出任务包' }}
             </Button>
           </div>
           <DouyinVerification

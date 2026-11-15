@@ -100,6 +100,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_probe,
             automation::automation_snapshot,
+            automation::automation_account_reuse,
+            automation::set_automation_account_reuse,
             automation::start_automation,
             automation::control_automation,
             automation::automation_cover,

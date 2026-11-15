@@ -3,6 +3,8 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "read_probe",
             "automation_snapshot",
+            "automation_account_reuse",
+            "set_automation_account_reuse",
             "start_automation",
             "control_automation",
             "automation_cover",

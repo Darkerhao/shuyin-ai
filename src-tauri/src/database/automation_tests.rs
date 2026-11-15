@@ -51,6 +51,25 @@ fn account() -> Account {
 }
 
 #[test]
+fn automation_account_reuse_is_enabled_by_default_and_survives_restart_and_backup() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.sqlite3");
+    let database = Database::open(path.clone());
+    assert!(database.automation_account_reuse().unwrap());
+    database.set_automation_account_reuse(false).unwrap();
+    drop(database);
+    let database = Database::open(path);
+    assert!(!database.automation_account_reuse().unwrap());
+    let backup = database
+        .create_backup(directory.path().to_str().unwrap())
+        .unwrap();
+    database.set_automation_account_reuse(true).unwrap();
+    assert!(database.automation_account_reuse().unwrap());
+    database.restore_backup(&backup).unwrap();
+    assert!(!database.automation_account_reuse().unwrap());
+}
+
+#[test]
 fn automation_snapshot_only_loads_active_runs_without_losing_history() {
     let (_directory, database, input) = setup();
     let active = database.create_automation(input, account()).unwrap();

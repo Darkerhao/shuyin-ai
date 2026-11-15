@@ -374,6 +374,34 @@ pub(super) fn policy_matches(
 }
 
 impl Database {
+    pub fn automation_account_reuse(&self) -> Result<bool, String> {
+        self.with_connection(|connection| {
+            let value: Option<String> = connection
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key='automation_account_reuse'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            serde_json::from_str(value.as_deref().unwrap_or("true"))
+                .map_err(|error| format!("自动流程账号设置读取失败：{error}"))
+        })
+    }
+
+    pub fn set_automation_account_reuse(&self, enabled: bool) -> Result<(), String> {
+        self.with_connection(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO app_settings(key,value) VALUES('automation_account_reuse',?1)
+                     ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    [if enabled { "true" } else { "false" }],
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+    }
+
     pub fn fail_automation_cover(&self, id: &str, run_id: i64, stage: &str) -> Result<(), String> {
         if !cover_step(stage).is_some_and(|step| step.cover_stage == stage) {
             return Err("封面阶段无效。".into());

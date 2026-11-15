@@ -12,6 +12,7 @@ import * as projects from '../src/services/projects'
 import * as ai from '../src/services/ai'
 import * as covers from '../src/services/covers'
 import * as douyin from '../src/services/douyin'
+import * as automation from '../src/services/automation'
 import * as video from '../src/services/video'
 import type { VideoJob } from '../src/types/video'
 import { emptyPublishing } from '../src/types/ai'
@@ -53,6 +54,7 @@ async function render(path = '/projects/p1/publishing') {
 }
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.spyOn(automation, 'getAutomationAccountReuse').mockResolvedValue(true)
   vi.mocked(drafts.readDraft).mockResolvedValue(null)
   vi.mocked(drafts.saveDraft).mockResolvedValue(undefined)
   vi.mocked(douyin.onDouyinProgress).mockResolvedValue(vi.fn())
@@ -272,6 +274,37 @@ describe('M4 publish preparation', () => {
     expect(api.savePublishTask).not.toHaveBeenCalled()
     expect(api.preparePublishTask).not.toHaveBeenCalled()
     expect(api.recordPublishSuccess).not.toHaveBeenCalled()
+  })
+  it('does not ask to reconfirm materials that already passed the automatic workflow', async () => {
+    vi.mocked(api.listPublishTasks).mockResolvedValue([{ ...task, titleConfirmed: false, coversConfirmed: false, checklist: [
+      { key: 'title', label: '标题已通过自动流程校验', passed: true },
+      { key: 'covers', label: '封面已通过自动流程校验', passed: true },
+    ] }])
+    const { wrapper } = await render('/projects/p1/publishing?task=t1')
+    expect(wrapper.get('#publish-confirmation-help').text()).not.toContain('确认发布标题和两张封面')
+    await button(wrapper, '继续辅助发布').trigger('click'); await flushPromises()
+    expect(douyin.startDouyinTask).toHaveBeenCalledExactlyOnceWith('t1')
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+    expect(api.preparePublishTask).not.toHaveBeenCalled()
+    expect(api.recordPublishSuccess).not.toHaveBeenCalled()
+    await wrapper.get('#publish-title').setValue('手动修改后的标题')
+    expect(wrapper.get('#publish-confirmation-help').text()).toContain('确认发布标题和两张封面')
+  })
+  it('prepares an automatic task package without fabricating a manual materials confirmation', async () => {
+    const automatic = { ...task, status: 'draft' as const, titleConfirmed: false, coversConfirmed: false, checklist: [
+      { key: 'title', label: '标题已通过自动流程校验', passed: true },
+      { key: 'covers', label: '封面已通过自动流程校验', passed: true },
+    ] }
+    vi.mocked(api.listPublishTasks).mockResolvedValue([automatic])
+    vi.mocked(api.preparePublishTask).mockResolvedValue({ ...automatic, status: 'ready' })
+    const { wrapper } = await render('/projects/p1/publishing?task=t1')
+    await wrapper.get('#publish-export').trigger('click'); await flushPromises()
+    expect(api.preparePublishTask).toHaveBeenCalledExactlyOnceWith('t1')
+    expect(api.savePublishTask).not.toHaveBeenCalled()
+    expect(api.recordPublishSuccess).not.toHaveBeenCalled()
+    await button(wrapper, '继续辅助发布').trigger('click'); await flushPromises()
+    expect(douyin.startDouyinTask).toHaveBeenCalledExactlyOnceWith('t1')
+    expect(api.preparePublishTask).toHaveBeenCalledOnce()
   })
   it('records successfully before starting the explicitly selected next task and consumes the action', async () => {
     const nextTask = { ...task, id: 't2', title: '下一篇', projectTitle: '测试书' }

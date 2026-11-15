@@ -173,6 +173,7 @@ impl Session {
         observed: &Account,
         confirmed: Option<&Account>,
         expected: Option<&Account>,
+        reuse_automatic_account: bool,
     ) -> bool {
         if expected.is_some() && !same_account(expected, Some(observed)) {
             self.reset_page_proofs();
@@ -187,7 +188,10 @@ impl Session {
             self.reset_page_proofs();
         }
         if !self.account_confirmed {
-            if let Some(account) = confirmed.filter(|a| same_account(Some(a), Some(observed))) {
+            if let Some(account) = confirmed
+                .filter(|a| same_account(Some(a), Some(observed)))
+                .or_else(|| expected.filter(|_| reuse_automatic_account))
+            {
                 self.account = Some(account.clone());
                 self.account_confirmed = true;
             } else {
@@ -391,6 +395,7 @@ fn resumable_session(
     Ok(current(publisher)?.filter(|session| {
         session.task_id == snapshot.task_id
             && ["running", "waiting", "review"].contains(&session.status.as_str())
+            && session.waiting_for.as_deref() != Some("account")
             && running(publisher, snapshot).is_ok()
     }))
 }
@@ -817,11 +822,20 @@ async fn drive(
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
-    if !session.use_account(account, confirmed.as_ref(), automatic_account.as_ref()) {
+    let reuse_account = automatic_account.is_some() && database.automation_account_reuse()?;
+    if !session.use_account(
+        account,
+        confirmed.as_ref(),
+        automatic_account.as_ref(),
+        reuse_account,
+    ) {
         if let Some(account) = session.account.as_mut().filter(|a| a.name.is_empty()) {
             account.name = database.douyin_account_name()?;
         }
         return Ok(());
+    }
+    if reuse_account {
+        *publisher.confirmed.lock().map_err(|e| e.to_string())? = session.account.clone();
     }
     session.done("connect", false);
     if session.cover_pending {
@@ -1381,6 +1395,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn waiting_account_is_rechecked_instead_of_returning_the_same_wait() {
+        let publisher = DouyinPublisher::default();
+        let snapshot = super::super::tests::snapshot();
+        let mut session = Session::new(1, snapshot.task_id.clone());
+        session.sent_video = true;
+        session.video_key = "existing-upload".into();
+        session.wait("account", "等待再次确认账号");
+        *publisher.task.lock().unwrap() = Some(snapshot.clone());
+        *publisher.session.lock().unwrap() = Some(session);
+        assert!(resumable_session(&publisher, &snapshot).unwrap().is_none());
+        let retained = current(&publisher).unwrap().unwrap();
+        assert!(retained.sent_video);
+        assert_eq!(retained.video_key, "existing-upload");
+        // Other decisions still require their explicit handling.
+        publisher
+            .session
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .wait("text", "文案需要处理");
+        assert!(resumable_session(&publisher, &snapshot).unwrap().is_some());
+    }
+
+    #[test]
     fn changed_publish_settings_cannot_reuse_a_review_session() {
         let publisher = DouyinPublisher::default();
         let original = super::super::tests::snapshot();
@@ -1666,6 +1705,52 @@ mod tests {
         assert!(!same_account(Some(&b), Some(&b)));
     }
     #[test]
+    fn automatic_account_confirmation_survives_a_reopened_window() {
+        let expected = Account {
+            id: None,
+            name: "启动时已确认账号".into(),
+            key: "same-visible-account".into(),
+        };
+        let observed = Account {
+            name: String::new(),
+            ..expected.clone()
+        };
+        let mut session = Session::new(2, "automatic-task".into());
+        assert!(session.use_account(&observed, None, Some(&expected), true));
+        assert_eq!(session.account.as_ref(), Some(&expected));
+        assert!(session.waiting_for.is_none());
+    }
+
+    #[test]
+    fn automatic_account_reuse_requires_the_same_identity_and_can_be_disabled() {
+        let expected = Account {
+            id: None,
+            name: "相同昵称".into(),
+            key: "original-account".into(),
+        };
+        for reuse in [false, true] {
+            let mut session = Session::new(1, "automatic-task".into());
+            assert_eq!(
+                session.use_account(&expected, None, Some(&expected), reuse),
+                reuse
+            );
+            let mut manual = Session::new(2, "manual-task".into());
+            assert!(!manual.use_account(&expected, None, None, reuse));
+            for key in ["another-account", "", "0"] {
+                let observed = Account {
+                    key: key.into(),
+                    ..expected.clone()
+                };
+                let mut session = Session::new(3, "automatic-task".into());
+                assert!(!session.use_account(&observed, None, Some(&expected), reuse));
+                assert_eq!(session.waiting_for.as_deref(), Some("account"));
+                assert!(!session.account_confirmed);
+                assert!(!session.sent_video);
+            }
+        }
+    }
+
+    #[test]
     fn startup_account_confirmation_is_reused_across_steps_and_same_task_recovery() {
         let confirmed = Account {
             id: None,
@@ -1675,7 +1760,7 @@ mod tests {
         let mut observed = confirmed.clone();
         observed.name.clear();
         let mut session = Session::new(1, "automatic-task".into());
-        assert!(session.use_account(&observed, Some(&confirmed), Some(&confirmed)));
+        assert!(session.use_account(&observed, Some(&confirmed), Some(&confirmed), false));
         assert_eq!(session.account.as_ref(), Some(&confirmed));
         let choice = CollectionChoice {
             account_id: None,
@@ -1695,16 +1780,16 @@ mod tests {
             "review",
         ] {
             session.done(step, false);
-            assert!(session.use_account(&observed, None, Some(&confirmed)));
+            assert!(session.use_account(&observed, None, Some(&confirmed), false));
             assert!(session.waiting_for.is_none());
             assert_eq!(session.collection.as_ref(), Some(&choice));
             assert!(session.completed.iter().any(|field| field == step));
         }
         // Stopping/continuing the same window keeps proofs; closing it does not.
         session.status = "stopped".into();
-        assert!(session.use_account(&observed, Some(&confirmed), Some(&confirmed)));
+        assert!(session.use_account(&observed, Some(&confirmed), Some(&confirmed), false));
         session.reset_page_proofs();
-        assert!(!session.use_account(&observed, None, Some(&confirmed)));
+        assert!(!session.use_account(&observed, None, Some(&confirmed), false));
         assert_eq!(session.waiting_for.as_deref(), Some("account"));
     }
 
@@ -1726,16 +1811,16 @@ mod tests {
             name: Some("原账号合集".into()),
         };
         let mut session = Session::new(1, "automatic-task".into());
-        assert!(session.use_account(&original, Some(&original), Some(&original)));
+        assert!(session.use_account(&original, Some(&original), Some(&original), true));
         session.restore_collection(choice.clone(), Some(&original));
-        assert!(!session.use_account(&another, Some(&another), Some(&original)));
+        assert!(!session.use_account(&another, Some(&another), Some(&original), true));
         assert!(!session.account_confirmed);
         assert!(session.collection.is_none());
         session.restore_collection(choice.clone(), Some(&original));
         assert!(session.collection.is_none());
 
         let mut manual = Session::new(2, "manual-task".into());
-        assert!(manual.use_account(&original, Some(&original), None));
+        assert!(manual.use_account(&original, Some(&original), None, true));
         manual.restore_collection(choice, None);
         assert!(manual.collection.is_none());
         let stable = Account {
@@ -1743,7 +1828,7 @@ mod tests {
             ..original
         };
         let mut manual = Session::new(3, "manual-stable-account-task".into());
-        assert!(manual.use_account(&stable, Some(&stable), None));
+        assert!(manual.use_account(&stable, Some(&stable), None, true));
         manual.restore_collection(
             CollectionChoice {
                 account_id: stable.id,
