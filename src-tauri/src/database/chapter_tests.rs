@@ -10,6 +10,117 @@ fn chapter_input(title: &str, content: &str) -> ChapterInput {
 }
 
 #[test]
+fn audio_introduction_revision_and_audio_use_the_saved_source_names() {
+    use crate::ai::{
+        publishing::PublishingDraft,
+        revision::{self, PublishingField},
+        WritingContent,
+    };
+    for title in [None, Some("序言"), Some("上篇·第二节")] {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("introduction.sqlite3"));
+        database
+            .set_workspace_root(directory.path().to_str().unwrap())
+            .unwrap();
+        let book = m4_tests::project(&database);
+        let chapter = title.map(|title| {
+            database
+                .save_chapter(&book.id, None, chapter_input(title, "本次冻结的正文。"))
+                .unwrap()
+        });
+        let chapter_id = chapter.as_ref().map(|chapter| chapter.id.as_str());
+        let provider = database
+            .save_provider(None, m2_tests::model(), None, &m2_tests::Vault::default())
+            .unwrap()
+            .provider;
+        let draft = serde_json::json!({
+            "title":"本期标题", "description":"本期介绍", "tags":"#读书 #测试书 #理解",
+            "hook":"一个选择会带来什么变化？", "introduction":"从关键选择出发，理解人物所处的困境。",
+            "sections":(1..=5).map(|index|serde_json::json!({"heading":format!("看点{index}"),"guidance":"根据来源讲清因果。"})).collect::<Vec<_>>(),
+            "closing":"回到开头，选择需要放回具体处境中理解。",
+            "coverTitle":"选择的力量", "coverSubtitle":"本期看点",
+            "coverPromptLandscape":"横版4:3无字背景", "coverPromptPortrait":"竖版3:4无字背景", "coverPromptWidescreen":"宽屏16:9无字背景",
+            "coverDesign":{"titleSize":148,"subtitleSize":54,"textColor":"#ffe45c","subtitleColor":"#ffffff","accentColor":"#ff7547","backgroundColor":"#141414","overlayOpacity":0.75}
+        });
+        let task = database.start_generation(serde_json::from_value(serde_json::json!({"projectId":book.id,"chapterId":chapter_id,"providerId":provider.id})).unwrap()).unwrap();
+        let prepared = database.prepare_generation(&task).unwrap();
+        let content = serde_json::from_value::<PublishingDraft>(draft.clone())
+            .unwrap()
+            .into_content(&prepared.book_title, prepared.chapter_title.as_deref())
+            .unwrap();
+        let original = database
+            .finish_generation(&task, &prepared.input, content, "text")
+            .unwrap();
+        if let Some(chapter) = &chapter {
+            database
+                .save_chapter(
+                    &book.id,
+                    Some(&chapter.id),
+                    chapter_input("后来的章节名", "后来的正文。"),
+                )
+                .unwrap();
+            let mut renamed = book.input.clone();
+            renamed.title = "后来的书名".into();
+            database.save_project(Some(&book.id), renamed).unwrap();
+        }
+        let task = database.start_generation(serde_json::from_value(serde_json::json!({
+            "projectId":book.id,"chapterId":chapter_id,"providerId":provider.id,
+            "revision":{"basedOn":original.id,"fields":["audioPrompt"],"instruction":"细化本期看点"}
+        })).unwrap()).unwrap();
+        let prepared = database.prepare_generation(&task).unwrap();
+        let patch = serde_json::json!({"audioPrompt":{
+            "hook":draft["hook"],"introduction":"沿着关键事件，仔细理解其中的因果。","sections":draft["sections"],"closing":draft["closing"]
+        }});
+        let revised = revision::revise(
+            &patch.to_string(),
+            &original.content,
+            &[PublishingField::AudioPrompt],
+            &prepared.book_title,
+            prepared.chapter_title.as_deref(),
+        )
+        .unwrap();
+        database
+            .finish_revision(&task, &prepared.input, revised)
+            .unwrap();
+        let adopted = database.apply_generation(&task).unwrap();
+        let WritingContent::Publishing { audio_prompt, .. } = &adopted.content else {
+            panic!()
+        };
+        assert!(audio_prompt.contains("这一期，我们一起读《中文书籍》"));
+        if let Some(title) = title {
+            assert!(audio_prompt.contains(&format!("中的“{title}”。")));
+        }
+        assert!(!audio_prompt.contains("后来的章节名") && !audio_prompt.contains("后来的书名"));
+        let source = chapter_id.map_or(audio::AudioSourceInput::Text, |id| {
+            audio::AudioSourceInput::Chapter {
+                chapter_id: id.into(),
+            }
+        });
+        let audio = database
+            .start_audio_job(audio::StartAudioJobInput {
+                project_id: book.id.clone(),
+                writing_version_id: adopted.id.clone(),
+                source,
+                format: "deep_dive".into(),
+            })
+            .unwrap();
+        assert_eq!(database.audio_job_prompt(&audio.id).unwrap(), *audio_prompt);
+        assert_eq!(adopted.source_snapshot, original.source_snapshot);
+        let history = database
+            .list_versions(&book.id, "publishing", chapter_id)
+            .unwrap();
+        assert_eq!(
+            history
+                .iter()
+                .find(|version| version.id == original.id)
+                .unwrap()
+                .content,
+            original.content
+        );
+    }
+}
+
+#[test]
 fn chapter_review_media_preview_resolves_exact_audio_and_video_but_rejects_invalid_assets() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("preview.sqlite3"));

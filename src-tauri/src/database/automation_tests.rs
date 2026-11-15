@@ -1860,7 +1860,11 @@ fn automatic_content_check_warnings_continue_and_survive_stage_changes_and_reope
         let (directory, db, run) = transcript_fixture_for(chapter);
         let task = db.create_content_check_task(&run).unwrap();
         db.prepare_content_check_task(&task).unwrap();
-        let warning = "04:30—05:14 的心理分析缺少章节依据，请在发布前试听。";
+        let warning = if chapter {
+            "00:13—00:36 的开场只报出章节编号，字幕中疑似遗漏完整章节名称，请试听确认。"
+        } else {
+            "00:13—00:36 的开场字幕中疑似遗漏本期书名，请试听确认。"
+        };
         let response = serde_json::json!({
             "verified": true,
             "reason": "发布文案仅保留本期可确认的内容",

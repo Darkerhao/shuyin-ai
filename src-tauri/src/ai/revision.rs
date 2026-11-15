@@ -4,8 +4,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "publishing-revision-v9";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v9.md");
+pub const PROMPT_VERSION: &str = "publishing-revision-v10";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v10.md");
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -86,7 +86,7 @@ pub fn revise(
         }
         let text = if *field == PublishingField::AudioPrompt {
             serde_json::from_value::<AudioDraft>(value.clone())
-                .map_err(|_| "音频调整需要引子、书籍引入、正文各部分及结尾收束。")?
+                .map_err(|_| "音频调整需要引子、本期看点、正文各部分及结尾收束。")?
                 .into_prompt(book, chapter)?
         } else if *field == PublishingField::Tags {
             parse_tags(value.as_str().ok_or("标签调整结果必须是文字。")?)?
@@ -276,7 +276,7 @@ mod tests {
     }
     #[test]
     fn audio_revision_keeps_fixed_template_and_other_content() {
-        let raw = json!({"audioPrompt":{"hook":"一个看似平常的决定，为什么会改变人物的命运？","introduction":"今天聊《测试书》。","sections":(1..=5).map(|i|json!({"heading":format!("主题{i}"),"guidance":"根据原书来源讲述，不编造。"})).collect::<Vec<_>>(),"closing":"回到最初的问题，决定的影响需要放回人物的处境中理解。"}});
+        let raw = json!({"audioPrompt":{"hook":"一个看似平常的决定，为什么会改变人物的命运？","introduction":"从人物的处境出发，理解这个决定如何发生。","sections":(1..=5).map(|i|json!({"heading":format!("主题{i}"),"guidance":"根据原书来源讲述，不编造。"})).collect::<Vec<_>>(),"closing":"回到最初的问题，决定的影响需要放回人物的处境中理解。"}});
         let content = revise(
             &raw.to_string(),
             &original(),
@@ -299,6 +299,7 @@ mod tests {
         ));
         assert!(audio.contains("## 第五部分：主题5"));
         assert!(audio.contains("《测试书》"));
+        assert!(audio.contains("## 开场介绍（逐字朗读）\n\n这一期，我们一起读《测试书》。\n从人物的处境出发，理解这个决定如何发生。"));
         let mut expected = serde_json::to_value(original()).unwrap();
         expected["audioPrompt"] = value["audioPrompt"].clone();
         assert_eq!(value, expected);
@@ -314,6 +315,7 @@ mod tests {
             panic!()
         };
         assert!(audio_prompt.contains("本期精讲《测试书》的“第三章”"));
+        assert!(audio_prompt.contains("## 开场介绍（逐字朗读）\n\n这一期，我们一起读《测试书》中的“第三章”。\n从人物的处境出发，理解这个决定如何发生。"));
         assert!(audio_prompt.contains("一个看似平常的决定"));
         assert!(audio_prompt.contains("回到最初的问题"));
         for field in ["hook", "closing"] {

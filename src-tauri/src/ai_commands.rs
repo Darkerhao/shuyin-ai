@@ -217,8 +217,10 @@ pub(crate) async fn execute_writing_task(
         let mut provider=OpenAiCompatible::new(TIMEOUT, &req.base_url)?.observed(database,Some(id),if prepared.input.revision.is_some() {"writing_revision"}else{"writing"});
         if let Some(channel) = on_preview {
             let fields = prepared.input.revision.as_ref().map(|revision| revision.fields.clone());
+            let book = prepared.book_title.clone();
+            let chapter = prepared.chapter_title.clone();
             provider = provider.with_content_observer(move |raw| {
-                let content = crate::ai::preview::texts(raw, fields.as_deref());
+                let content = crate::ai::preview::texts(raw, fields.as_deref(), &book, chapter.as_deref());
                 if !content.is_empty() { let _ = channel.send(content); }
             });
         }
