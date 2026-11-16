@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 音频临时创建地址（2026-11-16，仍为v25）
+
+无表、列、索引、设置或迁移变更。`audio_jobs.notebook_url` 不再接受 `/notebook/creating`。已误存该路由的未提交准备任务，只有点击「重新打开」才以同一 UPDATE 清空地址、转为 `paused/verify_remote` 并递增原 `run_id`；输入快照、版本和创建时间保留。有生成、下载或素材记录时不清除。真实地址继续由已有空白笔记本确认流程登记；没有启动时批量清洗或正式书库修改。见[验证记录](IN-APP-AUDIO-VERIFICATION.md#临时创建页误识别修复2026-11-16)。
+
 ## 细致水墨视频与双主题（2026-11-16，仍为v25）
 
 仍为 schema25，无表、列或迁移。每镜描述、运镜、AI 图片 taskId、冻结资产和 SHA-256 一起保存于 `video_jobs.plan_json.scenes[]`；图片模型标识 `imageProviderId` 区分新逐镜水墨与旧水墨渲染。图片生成继续复用 `ai_tasks` 和 `assets`，`kind=video_ink` 保存镜头任务；资产和 plan 引用事务提交/备份恢复。自动流程 `selection.detailedInk` 可选且默认 false，旧流程不追加收费图片请求。用户改字幕会清空依赖旧字幕的水墨镜头，单镜修改描述只解除本镜引用。详见[水墨视频实现与验证](INK-VIDEO.md)。

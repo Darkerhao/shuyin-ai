@@ -1,5 +1,9 @@
 # 书引 AI 技术设计文档
 
+## 音频临时创建路由（2026-11-16）
+
+页面 `isNotebookPath` 和 SQLite 笔记本地址校验都排除 `/notebook/creating`。页面调度在该路由只返回等待；已经记录地址的任务返回明确恢复提示，不继续来源或生成操作。旧任务只有显式 `reopen_browser`、准备阶段及全部提交/下载/素材标记为空时，才清除临时地址并停在 `paused/verify_remote`，原窗口打开首页，再复用原生空白笔记本确认和原任务上传路径。不增加状态、IPC、依赖或迁移，见[创建页修复](IN-APP-AUDIO-VERIFICATION.md#临时创建页误识别修复2026-11-16)。
+
 ## 细致水墨视频与双主题（2026-11-16）
 
 `VideoPlan` 保留可选 `theme`（`classic` / `ink`），并以可选 `imageProviderId` 明确新逐镜水墨任务。只有这个字段存在时才按字幕设计绘画、逐镜调用 `ImageProvider` 和锁定渲染流程；旧 `ink` 计划没有此字段时走原画面，不因升级增加图片费用。自动流程的可选 `selection.detailedInk` 默认关闭，手动创建固定本次图片模型。所有状态和素材复用 `plan_json`、`ai_tasks`、`assets`；schema25无迁移。

@@ -293,6 +293,7 @@ fn validate_notebook_url(value: &str) -> bool {
             && url.port_or_known_default() == Some(443)
             && url.path().strip_prefix("/notebook/").is_some_and(|id| {
                 !id.is_empty()
+                    && id != "creating"
                     && id
                         .bytes()
                         .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
@@ -690,7 +691,15 @@ impl Database {
                 "open_browser" => {}
                 "refresh_browser" | "reopen_browser" => {
                     if !matches!(current.status.as_str(), "succeeded" | "cancelled") {
-                        connection.execute(&format!("UPDATE audio_jobs SET status='paused',run_id=run_id+1,error_code=NULL,error_message=NULL,updated_at={NOW} WHERE id=?1"), [id]).map_err(|error| error.to_string())?;
+                        // A saved creation route has no notebook identity. Recover through the
+                        // existing manual confirmation, without recreating or resubmitting.
+                        let reset_creation = action == "reopen_browser"
+                            && matches!(current.stage.as_str(), "creating_notebook" | "adding_source" | "verify_remote")
+                            && current.notebook_url.as_deref().is_some_and(|value| tauri::Url::parse(value).is_ok_and(|url| url.path().trim_end_matches('/') == "/notebook/creating"))
+                            && current.submitted_at.is_none() && current.remote_audio_ref.is_none()
+                            && current.output_size.is_none() && current.output_sha256.is_none() && current.asset_id.is_none();
+                        let (stage, notebook_url) = if reset_creation { ("verify_remote", None) } else { (current.stage.as_str(), current.notebook_url.as_deref()) };
+                        connection.execute(&format!("UPDATE audio_jobs SET status='paused',stage=?2,notebook_url=?3,run_id=run_id+1,error_code=NULL,error_message=NULL,updated_at={NOW} WHERE id=?1"), params![id, stage, notebook_url]).map_err(|error| error.to_string())?;
                     }
                 }
                 _ => return Err("不支持的音频任务操作。".into()),
