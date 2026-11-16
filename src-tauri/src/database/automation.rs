@@ -22,8 +22,16 @@ pub struct StartAutomationInput {
     pub image_provider_id: String,
     pub format: String,
     pub request_key: String,
+    #[serde(default = "classic_theme")]
+    pub theme: String,
+    #[serde(default)]
+    pub detailed_ink: bool,
     #[serde(default)]
     pub collection_name: Option<String>,
+}
+
+fn classic_theme() -> String {
+    "classic".into()
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -529,6 +537,10 @@ impl Database {
         {
             return Err("自动任务标识或音频形式无效。".into());
         }
+        crate::video::validate_theme(&input.theme)?;
+        if input.detailed_ink && input.theme != "ink" {
+            return Err("逐镜水墨画作仅用于水墨主题。".into());
+        }
         if let Some(name) = &mut input.collection_name {
             *name = super::publishing::normalize_collection_name(name)?;
         }
@@ -729,6 +741,7 @@ impl Database {
             let current=load(c,&run.id)?;
             let video=verify_content(c,&current)?;
             crate::video::validate_scenes(&video.plan.scenes,0,video.plan.cues.len())?;
+            crate::video::VideoWork::Render.window(&video.plan)?;
             if video.status != "awaiting_confirmation" { return Err("分镜尚未准备完成。".into()); }
             let count=c.execute(&format!("UPDATE automation_runs SET render_plan_sha256=?1,stage='render',updated_at={NOW} WHERE id=?2 AND run_id=?3 AND status='running' AND stage='storyboard'"),params![plan_digest(&video.plan)?,run.id,run.run_id]).map_err(|e|e.to_string())?;
             if count!=1 { return Err("流程已变化，未开始渲染。".into()); }

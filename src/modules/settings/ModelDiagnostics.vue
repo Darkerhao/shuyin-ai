@@ -19,7 +19,7 @@ const tableContainer = ref<globalThis.HTMLElement | null>(null)
 let timer: ReturnType<typeof globalThis.setInterval> | undefined
 let disposed = false
 let refreshAfterMaintenance = false
-const stages: Record<string, string> = { connection_test: '连接测试', writing: '内容生成', writing_revision: '文案调整', duration: '时长建议', cover: '封面生成', video_illustration: '视频插画', video_scene_revision: '单镜调整', proofreading: '字幕校对', storyboard: '分镜生成' }
+const stages: Record<string, string> = { connection_test: '连接测试', writing: '内容生成', writing_revision: '文案调整', duration: '时长建议', cover: '封面生成', video_illustration: '视频插画', video_ink: '水墨画作', video_scene_revision: '单镜调整', proofreading: '字幕校对', storyboard: '分镜生成' }
 const statuses: Record<string, string> = { running: '请求中', succeeded: '响应完成', failed: '请求失败', cancelled: '已取消', interrupted: '被中断' }
 const retentionOptions = [{ value: '0', label: '全部保留' }, ...[7, 30, 90].map(days => ({ value: String(days), label: `保留最近 ${days} 天` }))]
 const rows = computed(() => result.value?.rows ?? [])

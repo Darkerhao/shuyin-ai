@@ -8,15 +8,26 @@ import { assertNodeRuntime, enginePackage } from './runtime.mjs';
 export { assertNodeRuntime } from './runtime.mjs';
 
 const catalog = JSON.parse(fs.readFileSync(new URL('./visual-catalog.json', import.meta.url), 'utf8'));
-const visuals = fs.readFileSync(new URL('./illustrations.js', import.meta.url), 'utf8');
+const visuals = fs.readFileSync(new URL('./ink-painting.js', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('./illustrations.js', import.meta.url), 'utf8');
 
 // The model selects trusted drawings and subtitle anchors; it never supplies code.
 export function buildEpisode(plan, range, images = {}) {
   const shortText = (value, limit) => typeof value === 'string' && value.trim() && [...value].length <= limit && !/[\p{Cc}{}*`]/u.test(value);
+  const theme = plan.theme ?? 'classic';
+  if (!['classic', 'ink'].includes(theme)) throw new Error('Unknown video theme.');
   let next = 0;
   for (const scene of plan.scenes) {
     const { environment = 'plain', framing = 'reference' } = scene;
-    if (Object.keys(scene).some(key => !['first', 'last', 'title', 'kind', 'labels', 'beats', 'environment', 'framing', 'image'].includes(key))) throw new Error('Unknown scene field.');
+    if (Object.keys(scene).some(key => !['first', 'last', 'title', 'kind', 'labels', 'beats', 'environment', 'framing', 'image', 'painting'].includes(key))) throw new Error('Unknown scene field.');
+    if (scene.painting) {
+      const painting = scene.painting;
+      if (theme !== 'ink' || !scene.image || scene.beats?.length
+        || typeof painting.description !== 'string' || [...painting.description.trim()].length < 80 || [...painting.description].length > 1200
+        || !['static', 'push_in', 'pull_out', 'pan_left', 'pan_right'].includes(painting.motion)
+        || Object.keys(painting).some(key => !['description', 'motion', 'taskId'].includes(key))) throw new Error('Invalid or unfinished ink painting.');
+      if (!images[scene.image.assetId]?.dataUri) throw new Error('A detailed ink painting must be embedded from the host-verified local image.');
+    }
+    if (plan.imageProviderId && !scene.painting) throw new Error('Detailed ink video requires a painting for every scene.');
     if (!Object.hasOwn(catalog.environments, environment)) throw new Error('Unknown scene environment.');
     if (!Object.hasOwn(catalog.framings, framing)) throw new Error('Unknown scene framing.');
     if (!scene.beats?.length && !scene.image) throw new Error('旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。');
@@ -50,15 +61,16 @@ export function buildEpisode(plan, range, images = {}) {
     const start = index === 0 ? 0 : plan.cues[scene.first].start;
     const end = index + 1 === plan.scenes.length ? plan.duration : plan.cues[plan.scenes[index + 1].first].start;
     return {
-      id: `p${String(index + 1).padStart(4, '0')}`, index, title: scene.title, kind: scene.kind,
-      environment: scene.environment ?? 'plain', framing: scene.framing ?? 'reference',
+      id: `p${String(index + 1).padStart(4, '0')}`, index, title: scene.title, kind: scene.kind, theme,
+      environment: scene.environment ?? 'plain', framing: scene.framing ?? 'reference', ...(scene.painting ? { painting: scene.painting } : {}),
       // Keep the full drawing clock even when the preview ends before this scene does.
-      drawDuration: end - start, ...(scene.image ? { image: { ...scene.image, src: images[scene.image.assetId].src, at: plan.cues[scene.first].start - start } } : {}), beats: (scene.beats ?? []).map(b => ({ ...b, at: plan.cues[b.cue].start - start })),
+      drawDuration: end - start, ...(scene.image ? { image: { ...scene.image, src: scene.painting ? `ink-image:${scene.image.assetId}` : images[scene.image.assetId].src, at: plan.cues[scene.first].start - start } } : {}), beats: (scene.beats ?? []).map(b => ({ ...b, at: plan.cues[b.cue].start - start })),
       start: start - from, end: Math.min(end, to) - from,
       cues: plan.cues.slice(scene.first, scene.last + 1).map((c, offset) => ({ id: scene.first + offset, t: c.text, start: c.start - from, end: (range ? Math.min(c.end, to) : c.end) - from })).filter(c => c.start < to - from && c.end > 0),
     };
   }).filter(p => p.start >= 0 && p.start < to - from).map((p, index) => ({ ...p, sourceIndex: p.index, index }));
-  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style: 'study', extras: ['timeline.js', 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, duration: to - from };
+  const inkImages = Object.fromEntries(plan.scenes.filter(scene => scene.painting).map(scene => [scene.image.assetId, images[scene.image.assetId].dataUri]).filter(([,uri]) => !!uri));
+  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style: 'study', theme, extras: ['timeline.js', 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, INK_IMAGES: inkImages, duration: to - from };
   const script = `(function(root) {
 root.SCRIPT = ${JSON.stringify(data)};
 root.applyVideoTimeline = function() {
@@ -75,7 +87,7 @@ if (root.TIMING) root.applyVideoTimeline();
 
 // Only the host resolves asset IDs to bounded, frozen local files. No path comes from the plan.
 export function freezeImages(plan, files, episode) {
-  const images = {};
+  const images = {}, inkAssets = new Set(plan.scenes.filter(scene => scene.painting && scene.image).map(scene => scene.image.assetId));
   for (const scene of plan.scenes) {
     if (!scene.image || Object.hasOwn(images, scene.image.assetId)) continue;
     const image = scene.image, file = files?.[image.assetId];
@@ -91,7 +103,8 @@ export function freezeImages(plan, files, episode) {
     const src = `assets/${hash}.${file.extension}`;
     fs.mkdirSync(path.join(episode, 'assets'), { recursive: true });
     fs.writeFileSync(path.join(episode, src), bytes);
-    images[image.assetId] = { src, sha256: hash };
+    const mime = file.extension === 'jpg' ? 'image/jpeg' : `image/${file.extension}`;
+    images[image.assetId] = { src, sha256: hash, ...(inkAssets.has(image.assetId) ? { dataUri: `data:${mime};base64,${bytes.toString('base64')}` } : {}) };
   }
   return images;
 }
@@ -298,11 +311,15 @@ async function main(inputFile, outputFile) {
   // Engine readiness covers DOM/fonts, not paint. All capture workers must await the initial paint too.
   fs.writeFileSync(path.join(episode, 'index.html'), `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="engine-modules" content="${modulesUrl}"><script src="script.js"></script><script src="${bootUrl}"></script>
 <script>window.__ready = window.__ready.then(async duration => {
-  await Promise.all([...new Set(SCRIPT.PAGES.filter(p => p.image).map(p => p.image.src))].map(async src => {
+  await Promise.all([...new Set(SCRIPT.PAGES.filter(p => p.image).map(p => p.image.src.startsWith('ink-image:') ? SCRIPT.INK_IMAGES[p.image.src.slice(10)] : p.image.src))].map(async src => {
     const image = new Image(); image.src = src;
     try { await image.decode(); } catch { throw new Error('Scene image failed to decode: ' + src); }
     if (!image.naturalWidth || !image.naturalHeight) throw new Error('Scene image is empty: ' + src);
   }));
+  if (window.INK_PAINTING?.ready.length) {
+    await Promise.all(window.INK_PAINTING.ready);
+    window.ENGINE.renderAt(0);
+  }
   return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(duration))));
 });</script>
 </head><body></body></html>`);

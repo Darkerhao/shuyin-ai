@@ -219,7 +219,7 @@ impl Database {
                 SELECT project_id,'video' kind,id,status,stage,MAX(updated_at,COALESCE(json_extract(editor_draft_json,'$.updatedAt'),updated_at)) updated,status='running' running,chapter_id FROM video_jobs
                 UNION ALL SELECT project_id,'audio',id,status,stage,updated_at,status IN ('created','preparing','generating','downloading','importing'),chapter_id FROM audio_jobs
                 UNION ALL SELECT project_id,'publishing',id,status,'',updated_at,0,chapter_id FROM publish_tasks
-                UNION ALL SELECT project_id,CASE WHEN kind='video_scene_revision' OR kind='video_illustration' THEN 'video' WHEN kind='cover' THEN 'covers' ELSE 'writing' END,id,status,kind,created_at,1,chapter_id FROM ai_tasks WHERE status IN ('pending','running')
+                UNION ALL SELECT project_id,CASE WHEN kind IN ('video_scene_revision','video_illustration','video_ink') THEN 'video' WHEN kind='cover' THEN 'covers' ELSE 'writing' END,id,status,kind,created_at,1,chapter_id FROM ai_tasks WHERE status IN ('pending','running')
                 UNION ALL SELECT project_id,CASE kind WHEN 'cover' THEN 'covers' WHEN 'project' THEN 'project' WHEN 'publishing' THEN 'publishing' ELSE 'writing' END,CASE WHEN kind='publishing' THEN CASE WHEN instr(owner_id,':chapter:')>0 THEN 'new' ELSE substr(owner_id,instr(owner_id,':')+1) END ELSE '' END,'draft','',updated_at,0,
                     CASE WHEN instr(owner_id,':chapter:')>0 THEN replace(substr(owner_id,instr(owner_id,':chapter:')+9),':new','') ELSE (SELECT chapter_id FROM publish_tasks WHERE id=substr(owner_id,instr(owner_id,':')+1)) END FROM editor_drafts
                 UNION ALL SELECT project_id,'writing',id,'saved','',created_at,0,chapter_id FROM writing_versions

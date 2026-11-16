@@ -1,5 +1,13 @@
 # 书引 AI 技术设计文档
 
+## 细致水墨视频与双主题（2026-11-16）
+
+`VideoPlan` 保留可选 `theme`（`classic` / `ink`），并以可选 `imageProviderId` 明确新逐镜水墨任务。只有这个字段存在时才按字幕设计绘画、逐镜调用 `ImageProvider` 和锁定渲染流程；旧 `ink` 计划没有此字段时走原画面，不因升级增加图片费用。自动流程的可选 `selection.detailedInk` 默认关闭，手动创建固定本次图片模型。所有状态和素材复用 `plan_json`、`ai_tasks`、`assets`；schema25无迁移。
+
+水墨分镜把逐条字幕、时间码和相邻画面发送文本模型，输出严格校验的画面描述和有限运镜。对每镜创建带 `videoBinding` 的 `video_ink` 子任务；图像校验、素材登记、plan 场景绑定在同一 SQLite 事务中完成。失败后 taskId 保留，重试仅处理缺失镜头；重启后共享 AI 恢复标记与任务代次同时恢复。编辑画面描述只令当前镜 asset/taskId 失效，字幕变化会清空整套水墨 scenes，必须按新音频重做分镜。
+
+`ink-painting.js` 仅消费宿主已摘要校验的本地图片；源图解码后提取确定性笔触，半尺寸离屏 Canvas 累计墨线，可见 Canvas 按当前运镜重绘。回退时从相同笔触重新累计，重复帧不会清空旧笔画；原图保留细节并执行低幅度运镜。冻结图片按资产 ID 嵌入一次，避免 Chromium 对 file 图片的 Canvas 跨源像素读取限制。预览与全片共用渲染/cache/compiler 和源 cue 时钟。完成全部画作前，`VideoWork::Render`、自动流程确认和 UI 均拒绝试片/成片。图片生成仍复用原 Provider、尺寸校验、本书素材和备份，不增加权限或网络路径。详见[水墨视频实现与验证](INK-VIDEO.md)。
+
 ## 整书与章节本期介绍（2026-11-15，当前规则）
 
 `publishing-v11` 与 `publishing-revision-v10` 的 `introduction` 仅输出本期看点。`AudioDraft::render` 根据已准备的书名与可选完整章节标题添加报题首句，和全量/按项的 `into_prompt` 共用 `audio-template-v7`，生成中预览也走同一渲染入口；只有完整结果通过原验证后才能保存/采用。章节名称使用原来源快照，仍按整体传递，不增加编号解析或第二套状态。

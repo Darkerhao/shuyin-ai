@@ -242,7 +242,11 @@ use std::{
     thread,
 };
 
-fn server(status: u16, body: &str, delay: Duration) -> (String, thread::JoinHandle<String>) {
+pub(crate) fn server(
+    status: u16,
+    body: &str,
+    delay: Duration,
+) -> (String, thread::JoinHandle<String>) {
     let body = body.to_string();
     reply_server(move |_, stream| {
         thread::sleep(delay);

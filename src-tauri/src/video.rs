@@ -2,10 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::OnceLock};
 
 pub mod environment;
+pub mod ink;
 pub mod revision;
 pub mod subtitles;
 
 pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v5.md");
+pub const VIDEO_THEMES: [&str; 2] = ["classic", "ink"];
 pub const BATCH_SIZE: usize = 24;
 pub const MODEL_FAILURE_PREFIX: &str = "模型生成失败：";
 
@@ -51,7 +53,10 @@ pub fn parse_storyboard(raw: &str, first: usize, end: usize) -> Result<Vec<Scene
     let scenes: Vec<Scene> =
         serde_json::from_str(raw).map_err(|_| "模型分镜不是合法 JSON，已保留字幕和此前分镜。")?;
     validate_scenes(&scenes, first, end)?;
-    if scenes.iter().any(|scene| scene.image.is_some()) {
+    if scenes
+        .iter()
+        .any(|scene| scene.image.is_some() || scene.painting.is_some())
+    {
         return Err("分镜模型只能选择手绘目录；关键图片须由用户选用并确认来源。".into());
     }
     if scenes.iter().any(|scene| scene.beats[0].cue != scene.first) {
@@ -144,6 +149,8 @@ pub struct Scene {
     pub beats: Vec<Beat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<SceneImage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub painting: Option<ink::Painting>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,7 +210,7 @@ pub struct Beat {
     pub label: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VideoPlan {
     pub title: String,
@@ -211,8 +218,43 @@ pub struct VideoPlan {
     pub duration: f64,
     pub cues: Vec<Cue>,
     pub scenes: Vec<Scene>,
+    #[serde(default = "classic_theme", skip_serializing_if = "is_classic_theme")]
+    pub theme: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_provider_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_review: Option<subtitles::SubtitleReview>,
+}
+
+impl Default for VideoPlan {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            audio_sha256: String::new(),
+            duration: 0.0,
+            cues: Vec::new(),
+            scenes: Vec::new(),
+            theme: classic_theme(),
+            image_provider_id: None,
+            subtitle_review: None,
+        }
+    }
+}
+
+fn classic_theme() -> String {
+    "classic".into()
+}
+
+fn is_classic_theme(theme: &str) -> bool {
+    theme == "classic"
+}
+
+pub fn validate_theme(theme: &str) -> Result<(), String> {
+    if VIDEO_THEMES.contains(&theme) {
+        Ok(())
+    } else {
+        Err("视频主题无效，请选择书卷手绘或水墨宣纸。".into())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -250,8 +292,17 @@ impl VideoWork {
         if matches!(self, Self::Prepare | Self::Transcript) {
             return Ok(None);
         }
+        validate_theme(&plan.theme)?;
         validate_cues(&plan.cues, plan.duration)?;
         validate_scenes(&plan.scenes, 0, plan.cues.len())?;
+        if plan.image_provider_id.is_some()
+            && plan
+                .scenes
+                .iter()
+                .any(|scene| scene.painting.is_none() || scene.image.is_none())
+        {
+            return Err("水墨画作尚未全部完成，请先继续准备画作。".into());
+        }
         if let Self::Preview(request) = self {
             if !matches!(request.seconds, 30 | 60) {
                 return Err("试片请选择30秒或60秒。".into());
@@ -306,8 +357,14 @@ pub fn validate_scenes(scenes: &[Scene], first: usize, end: usize) -> Result<(),
     let catalog = visual_catalog();
     let mut next = first;
     for scene in scenes {
-        if scene.beats.is_empty() && scene.image.is_none() {
+        if scene.beats.is_empty() && scene.image.is_none() && scene.painting.is_none() {
             return Err("旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。".into());
+        }
+        if let Some(painting) = &scene.painting {
+            painting.validate()?;
+            if !scene.beats.is_empty() {
+                return Err("水墨画作与手绘物体不能同时作为主体。".into());
+            }
         }
         if scene.first != next
             || scene.last < scene.first
@@ -499,6 +556,22 @@ mod tests {
     }
 
     #[test]
+    fn saved_plans_default_to_the_classic_theme_and_reject_unknown_styles() {
+        let mut plan: VideoPlan = serde_json::from_value(serde_json::json!({
+            "title":"原声", "audioSha256":"hash", "duration":1,
+            "cues":[{"start":0,"end":1,"text":"一句"}],
+            "scenes":[{"first":0,"last":0,"kind":"opening","title":"开场","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]}]
+        })).unwrap();
+        assert_eq!(plan.theme, "classic");
+        assert!(serde_json::to_value(&plan).unwrap().get("theme").is_none());
+        assert!(validate_theme("classic").is_ok());
+        assert!(validate_theme("ink").is_ok());
+        plan.theme = "watercolor".into();
+        assert!(serde_json::to_value(&plan).unwrap().get("theme").is_some());
+        assert!(VideoWork::Render.window(&plan).is_err());
+    }
+
+    #[test]
     fn subtitles_preserve_measured_silence_and_round_trip() {
         let srt = "\u{feff}1\r\n00:00:00,500 --> 00:00:02,000\r\n第一句\r\n\r\n2\r\n00:00:05,125 --> 00:00:08,000\r\n第二句\r\n";
         let cues = parse_srt(srt, 10.0).unwrap();
@@ -577,6 +650,7 @@ mod tests {
     fn storyboard_must_cover_exact_batch_and_use_allowed_components() {
         let mut scenes = vec![Scene {
             image: None,
+            painting: None,
             first: 24,
             last: 27,
             kind: "route".into(),

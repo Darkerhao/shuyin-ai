@@ -9,7 +9,7 @@ import { coverPng, decodeBackground } from '../src/services/coverRenderer'
 import { newCover } from '../src/types/cover'
 import { listProviders } from '../src/services/ai'
 import { douyinCollectionOptions, saveDouyinCollectionOptions } from '../src/services/publishing'
-import { mockResizeObserver } from './ui'
+import { chooseSelect, mockResizeObserver } from './ui'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: () => true }))
@@ -197,8 +197,21 @@ describe('automatic workflow setup', () => {
     const start = wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!
     expect(start.attributes('disabled')).toBeUndefined()
     await start.trigger('click'); await flushPromises()
-    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, imageProviderId: 'image1', textProviderId: 'text1', collectionName: null }) })
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, imageProviderId: 'image1', textProviderId: 'text1', theme: 'ink', detailedInk: true, collectionName: null }) })
     wrapper.unmount()
+  })
+
+  it('passes the selected classic video theme to automatic creation', async () => {
+    automationConsent.value = true
+    automationAccount.value = { id: null, name: '精讲账号', key: 'classic-account' }
+    vi.mocked(invoke).mockImplementation(async command => command === 'automation_snapshot' ? [] : run())
+    const source = { projectId: 'book1', source: { kind: 'asset' as const, assetId: 'source1' } }
+    const wrapper = mount(AutomationSetup, { props: { saveSource: vi.fn().mockResolvedValue(source) } })
+    await flushPromises()
+    await chooseSelect(wrapper, '#automation-theme', '书卷手绘')
+    const start = wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!
+    await start.trigger('click'); await flushPromises()
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, theme: 'classic', detailedInk: false }) })
   })
 
   it('shows the active task models after reopening and after an automatic switch', async () => {

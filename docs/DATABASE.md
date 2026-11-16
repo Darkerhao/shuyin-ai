@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## 细致水墨视频与双主题（2026-11-16，仍为v25）
+
+仍为 schema25，无表、列或迁移。每镜描述、运镜、AI 图片 taskId、冻结资产和 SHA-256 一起保存于 `video_jobs.plan_json.scenes[]`；图片模型标识 `imageProviderId` 区分新逐镜水墨与旧水墨渲染。图片生成继续复用 `ai_tasks` 和 `assets`，`kind=video_ink` 保存镜头任务；资产和 plan 引用事务提交/备份恢复。自动流程 `selection.detailedInk` 可选且默认 false，旧流程不追加收费图片请求。用户改字幕会清空依赖旧字幕的水墨镜头，单镜修改描述只解除本镜引用。详见[水墨视频实现与验证](INK-VIDEO.md)。
+
 ## 本期介绍与遗漏提醒（2026-11-15，仍为v25）
 
 无表、列、设置、索引或迁移变更。完整报题在原 `writing_versions.content_json.audioPrompt` 组装保存，音频继续使用 `audio_jobs.input_json.prompt`；章节名称与正文沿用所选版本原 `source_snapshot_json`。开场疑似遗漏复用成功校核的 `ai_tasks.preview_json.warnings`，不单独保存重复状态、不改旧记录或原音轨。见[本期介绍修复](AUDIO-INTRODUCTION.md)。

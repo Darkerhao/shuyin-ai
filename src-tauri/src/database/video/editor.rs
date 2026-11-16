@@ -152,6 +152,8 @@ mod tests {
                 audio_asset_id: input.audio_asset_id.clone(),
                 provider_id: input.provider_id.clone(),
                 subtitle_asset_id: None,
+                theme: Some("classic".into()),
+                image_provider_id: None,
             })
             .unwrap();
         let first = db.create_video_job(input).unwrap();

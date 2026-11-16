@@ -53,6 +53,7 @@ fn preview_signature(plan: &video::VideoPlan) -> Result<String, String> {
     hash.update(serde_json::to_vec(plan).map_err(|e| e.to_string())?);
     hash.update(include_bytes!("../video/render.mjs"));
     hash.update(include_bytes!("../video/illustrations.js"));
+    hash.update(include_bytes!("../video/ink-painting.js"));
     hash.update(include_bytes!("../video/visual-catalog.json"));
     Ok(hash
         .finalize()
@@ -177,12 +178,13 @@ pub async fn execute_video_illustration(
     id: String,
 ) -> Result<crate::database::Asset, crate::ai::AiError> {
     crate::cover_commands::execute_image_task(
-        &app,
+        Some(&app),
         database.inner(),
         vault.inner(),
         active.inner(),
         &id,
         "video_illustration",
+        None,
     )
     .await
 }
@@ -523,7 +525,7 @@ async fn stage(
     .map_err(|e| e.to_string())?
 }
 
-async fn cancelled(flag: Arc<AtomicBool>) {
+pub(crate) async fn cancelled(flag: Arc<AtomicBool>) {
     while !flag.load(Ordering::SeqCst) {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -628,6 +630,10 @@ async fn execute(
     process::write_new(
         &directory.join("illustrations.js"),
         include_bytes!("../video/illustrations.js"),
+    )?;
+    process::write_new(
+        &directory.join("ink-painting.js"),
+        include_bytes!("../video/ink-painting.js"),
     )?;
     process::write_new(
         &directory.join("visual-catalog.json"),
@@ -816,21 +822,64 @@ async fn execute(
         let request = ai_commands::request(
             config.clone(),
             app.state::<SystemCredentials>().inner(),
-            &video::storyboard_prompt(),
-            user,
+            &if job.plan.image_provider_id.is_some() {
+                video::ink::prompt()
+            } else {
+                video::storyboard_prompt()
+            },
+            if job.plan.image_provider_id.is_some() {
+                video::ink::input(&job.plan, first, end)
+            } else {
+                user
+            },
         )
         .map_err(|error| video::model_failure(error.message))?;
         let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)
             .map_err(|error| video::model_failure(error.message))?
             .observed(&db, Some(&job.id), "storyboard");
         let raw = tokio::select! { biased; _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()), response = provider.generate(request) => response.map_err(|error| video::model_failure(error.message))? };
-        let scenes = video::parse_storyboard(&raw, first, end).map_err(video::model_failure)?;
+        let scenes = if job.plan.image_provider_id.is_some() {
+            video::ink::parse(&raw, first, end)
+        } else {
+            video::parse_storyboard(&raw, first, end)
+        }
+        .map_err(video::model_failure)?;
         job.plan.scenes.extend(scenes);
         db.save_video_progress(&job.id, job.run_id, &job.plan, "storyboard")?;
         first = end;
     }
     if flag.load(Ordering::SeqCst) {
         return Err("视频任务已停止。".into());
+    }
+    if job.plan.image_provider_id.is_some() {
+        for index in 0..job.plan.scenes.len() {
+            if flag.load(Ordering::SeqCst) {
+                return Err("视频任务已停止。".into());
+            }
+            if job.plan.scenes[index].image.is_some() {
+                continue;
+            }
+            let task = db.prepare_video_painting(&job.id, job.run_id, index)?;
+            crate::cover_commands::execute_image_task(
+                None,
+                &db,
+                app.state::<SystemCredentials>().inner(),
+                app.state::<crate::ai::ActiveTasks>().inner(),
+                &task,
+                "video_ink",
+                Some(flag.clone()),
+            )
+            .await
+            .map_err(|e| {
+                format!(
+                    "第{}镜水墨画作生成失败：{} 已完成画作保留，继续时只处理未完成镜头。",
+                    index + 1,
+                    e.message
+                )
+            })?;
+            job = db.video_job(&job.id)?;
+        }
+        db.video_image_snapshots(&job.project_id, &job.plan.scenes, job.chapter_id.as_deref())?;
     }
     db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")?;
     crate::completion::notify(

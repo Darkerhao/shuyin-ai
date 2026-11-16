@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { ref } from 'vue'
 import type { CoverConfig } from '../types/cover'
 import type { AudioSourceInput } from '../types/audio'
+import type { VideoTheme } from '../types/video'
 import { coverPng, decodeBackground } from './coverRenderer'
 import { readBackground } from './covers'
 
@@ -12,6 +13,8 @@ export interface AutomationInput {
   imageProviderId: string
   format: 'deep_dive' | 'brief'
   requestKey: string
+  theme?: VideoTheme
+  detailedInk?: boolean
   collectionName?: string | null
 }
 export interface AutomationRun {
