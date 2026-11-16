@@ -192,6 +192,82 @@ fn recovery_never_resubmits_an_uncertain_generation_or_source_upload() {
 }
 
 #[test]
+fn reopening_a_saved_creation_placeholder_recovers_the_original_job_for_manual_confirmation() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = Database::open(directory.path().join("data.sqlite3"));
+    let project = sample_project(&database, "创建中恢复", "原书资料");
+    let writing = sample_writing(&database, &project, "完整指导");
+    let original = start_text_job(&database, &project, &writing);
+    database.with_connection(|connection| {
+        connection.execute("UPDATE audio_jobs SET status='paused',stage='verify_remote',notebook_url='https://notebook.google.com/notebook/creating' WHERE id=?1", [&original.id]).map_err(|e| e.to_string())?;
+        Ok(())
+    }).unwrap();
+    let refreshed = database
+        .control_audio_job(&original.id, "refresh_browser")
+        .unwrap();
+    assert!(refreshed.notebook_url.is_some());
+    let reopened = database
+        .control_audio_job(&original.id, "reopen_browser")
+        .unwrap();
+    assert_eq!(reopened.status, "paused");
+    assert_eq!(reopened.stage, "verify_remote");
+    assert!(reopened.notebook_url.is_none());
+    assert_eq!(reopened.id, original.id);
+    assert_eq!(reopened.writing_version_id, original.writing_version_id);
+    assert_eq!(reopened.created_at, original.created_at);
+    assert!(database
+        .observe_audio_job(&original.id, original.run_id, &AudioObservation::LoginReady)
+        .is_err());
+    let confirmed = database
+        .confirm_audio_notebook(
+            &original.id,
+            reopened.run_id,
+            "https://notebook.google.com/notebook/confirmed",
+        )
+        .unwrap();
+    let ready = database
+        .observe_audio_job(
+            &original.id,
+            confirmed.run_id,
+            &AudioObservation::NotebookCreated {
+                notebook_url: confirmed.notebook_url.clone().unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(ready.stage, "adding_source");
+    assert!(ready.submitted_at.is_none());
+}
+
+#[test]
+fn reopening_preserves_creation_placeholders_with_remote_submission_or_download_evidence() {
+    for evidence in [
+        "submitted_at='2026-11-16T04:00:00Z'",
+        "remote_audio_ref='remote-audio'",
+        "output_size=100",
+        "output_sha256=printf('%064d',0)",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::open(directory.path().join("data.sqlite3"));
+        let project = sample_project(&database, "保留远端记录", "原书资料");
+        let writing = sample_writing(&database, &project, "完整指导");
+        let original = start_text_job(&database, &project, &writing);
+        database.with_connection(|connection| {
+            connection.execute(&format!("UPDATE audio_jobs SET status='paused',stage='verify_remote',notebook_url='https://notebook.google.com/notebook/creating',{evidence} WHERE id=?1"), [&original.id]).map_err(|e| e.to_string())?;
+            Ok(())
+        }).unwrap();
+        let reopened = database
+            .control_audio_job(&original.id, "reopen_browser")
+            .unwrap();
+        assert_eq!(
+            reopened.notebook_url.as_deref(),
+            Some("https://notebook.google.com/notebook/creating"),
+            "{evidence}"
+        );
+        assert_eq!(reopened.stage, "verify_remote");
+    }
+}
+
+#[test]
 fn stopped_jobs_can_resume_but_cannot_take_over_another_active_job() {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(directory.path().join("data.sqlite3"));
@@ -1183,6 +1259,8 @@ fn notebook_identity_requires_an_exact_official_notebook_url() {
         "https://notebook.google.com.evil.test/notebook/task",
         "https://user@notebook.google.com/notebook/task",
         "https://notebook.google.com/notebook/",
+        "https://notebook.google.com/notebook/creating",
+        "https://notebooklm.google.com/notebook/creating",
     ] {
         assert!(!validate_notebook_url(url), "{url}");
     }

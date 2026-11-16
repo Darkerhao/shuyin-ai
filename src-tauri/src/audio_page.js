@@ -241,7 +241,7 @@
   }
 
   function isNotebookPath(path = currentPath()) {
-    return /^\/notebook\/[A-Za-z0-9_-]+$/.test(path)
+    return path !== '/notebook/creating' && /^\/notebook\/[A-Za-z0-9_-]+$/.test(path)
   }
 
   function sameRecordedNotebook(recorded, current = location.href) {
@@ -669,6 +669,10 @@
     assertRunning()
     const issue = websiteIssue()
     if (issue) return { kind: 'page_changed', message: issue }
+    if (currentPath() === '/notebook/creating') {
+      if (job.notebookUrl) return { kind: 'page_changed', message: '当前是临时创建页面，不是已创建的笔记本。请点击“重新打开”，核对真实笔记本后继续跟进。' }
+      return { kind: 'waiting', message: '网站正在创建笔记本，等待真实笔记本地址；不会重复创建。' }
+    }
     if (job.status === 'waiting_login') return runLogin(job)
     if (job.notebookUrl) ensureTaskNotebook(job)
     // The user may have generated audio while the local preparation was paused or stuck.

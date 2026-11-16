@@ -1,5 +1,28 @@
 # 应用内自动音频实施与验收
 
+## 临时创建页误识别修复（2026-11-16）
+
+真实应用窗口停在 `https://notebook.google.com/notebook/creating`，页面显示「正在创建笔记本」，本地任务已暂停在远端核对阶段。原页面 `isNotebookPath` 将 `creating` 当作合法 ID，存在创建意图时返回 `notebook_identified`；数据库校验也接受它，后续刷新/重开就会使用该临时地址。本地最小重现与新增页面回归均在修复前得到相同错误观察。这解释了临时地址被保存及反复刷新无法恢复；没有抓取真实网站创建请求，不能据此判断网站首次创建未完成的外部原因。
+
+修复仅调整原页面与数据库入口：临时路由不作为笔记本身份，创建中等待最终地址；旧任务显式「重新打开」时，只有准备阶段且无提交/音频引用/下载/素材记录，才清除临时地址，保留原任务并转为 `paused/verify_remote`，由原生窗口打开首页。随后复用已有空白笔记本确认流程。真实地址、冻结输入、已提交生成、下载和归档路径继续原规则。无新依赖、状态、权限或 SQL 迁移，不手动升版本，归类 fix/patch。
+
+修复前验证：`node --test --test-name-pattern='creating route|recorded creating URL' tests/audio-page.test.mjs` 的 3 项新增回归全部失败，分别复现误存地址、临时页被当作既有笔记本和缺少恢复指导；Rust 新增恢复回归也因地址未清除而失败。首轮另一个 Rust 记录保留用例的 SHA 夹具长度不合法，修正为满足现有约束的 64 字符后再验证。
+
+修复后实际验证（Rust 命令先执行 `. ./.tools/env.ps1`）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `node --test tests/audio-page.test.mjs tests/audio-package.test.mjs` | 77 项通过，包括 3 项临时创建页回归 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked audio:: -- --nocapture` | 33 项通过，含原任务恢复、真实地址校验及提交/下载记录保留 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 331 项通过、2 项既有忽略（原生凭据与需要额外 Node 配置的进程取消测试） |
+| `npm run lint` | 通过，0 ESLint 警告 |
+| `npm run build` | TypeScript 与 Vite 构建通过，保留既有大于 500 kB 分包提示 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `git diff --check` | 通过 |
+
+原始 JSDOM 最小重现再次运行，返回 `waiting`，不再返回 `notebook_identified`。验收对应：临时页刷新不误绑定、真实地址仍可识别、旧任务原地恢复及提交/下载证据保留均通过；原 UI 已有确认入口和原生窗口真实恢复尚未在新桌面构建中实测。当前正式安装程序和用户任务均未修改，本轮未打包或发布；真实 Google 新建/上传/生成/下载及安装更新不计为通过。
+
 ## 原书上传的后台窗口验收（2026-11-09）
 
 正式0.55.0真实整链在添加原书时出现file_input_missing。当前NotebookLM上传器仅在首次focus/mouseover创建输入，原生后台窗口focus()未触发；关闭调试器焦点模拟后，同一网页稳定复现。以mouseover替代focus后，同样失焦条件下产生唯一来源输入；45项音频页面/打包回归通过。

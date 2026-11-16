@@ -287,6 +287,45 @@ test('notebook creation waits for navigation without clicking Create again', asy
   assert.equal(clicks, 1)
 })
 
+test('the creating route waits through reload and only records the final notebook URL', async (t) => {
+  const job = textJob({ stage: 'creating_notebook' })
+  const { core, window, document } = page('<button>Create new notebook</button>', 'https://notebook.google.com/')
+  t.after(() => window.close())
+  let clicks = 0
+  document.querySelector('button').addEventListener('click', () => clicks++)
+  assert.equal((await core.runStep(job)).kind, 'navigating')
+  window.history.pushState({}, '', '/notebook/creating')
+  document.body.innerHTML = '<p>正在创建笔记本…</p><div role="progressbar"></div>'
+  assert.equal((await core.runStep(job)).kind, 'waiting')
+  // Reload preserves session storage but reinjects the automation script.
+  window.eval(contentSource)
+  assert.equal((await window.ShuyinAudioPage.runStep(job)).kind, 'waiting')
+  assert.equal(window.sessionStorage.getItem('shuyin-create-intent'), job.id)
+  window.history.pushState({}, '', '/notebook/real-notebook')
+  const result = await window.ShuyinAudioPage.runStep(job)
+  assert.equal(result.kind, 'notebook_identified')
+  assert.equal(result.notebookUrl, window.location.href)
+  assert.equal(clicks, 1)
+})
+
+test('the creating route never becomes a logged-in or recoverable notebook', async (t) => {
+  const { core, window } = page('<button>Add source</button><span>0 sources</span>', 'https://notebook.google.com/notebook/creating')
+  t.after(() => window.close())
+  assert.equal((await core.runStep(textJob({ stage: 'opening_site' }))).kind, 'waiting')
+  assert.equal(core.canRecoverEmptyNotebook(), false)
+})
+
+test('a previously recorded creating URL stops with recovery guidance before any website action', async (t) => {
+  const { core, window, document } = page('<p>正在创建笔记本…</p><button>Generate</button>', 'https://notebook.google.com/notebook/creating')
+  t.after(() => window.close())
+  let clicks = 0
+  document.addEventListener('click', () => clicks++)
+  const result = await core.runStep(textJob({ stage: 'verify_remote', notebookUrl: window.location.href }))
+  assert.equal(result.kind, 'page_changed')
+  assert.match(result.message, /临时.*重新打开/)
+  assert.equal(clicks, 0)
+})
+
 test('an untracked existing notebook is never renamed or treated as the new task notebook', async () => {
   const job = textJob({ stage: 'creating_notebook', projectTitle: '测试书' })
   const { core, document } = page(`
