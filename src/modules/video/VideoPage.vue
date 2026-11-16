@@ -86,6 +86,7 @@ const editable = computed(() => selected.value && editorJobId.value === selected
 const legacyPlan = computed(() => scenes.value.some(scene => !scene.beats?.length && !scene.image && !scene.painting))
 const paintingsReady = computed(() => !selected.value?.plan.imageProviderId || (scenes.value.length > 0 && scenes.value.every((scene, i) => !!scene.painting && !!scene.image && scene.painting.description === selected.value?.plan.scenes[i]?.painting?.description)))
 const completePlan = computed(() => scenes.value.length > 0 && !legacyPlan.value && scenes.value.at(-1)!.last + 1 === selected.value?.plan.cues.length)
+const paintingsOnly = computed(() => !!selected.value?.plan.imageProviderId && completePlan.value && scenes.value.every(scene => !!scene.painting))
 const storyboardNotes = computed(() => selected.value ? inspectStoryboard({ ...selected.value.plan, scenes: scenes.value }) : [])
 const sceneSnapshot = computed(() => JSON.stringify(scenes.value))
 const editorValue = () => JSON.stringify([subtitleText.value, sceneSnapshot.value])
@@ -221,11 +222,11 @@ const create = () => begin(audioId.value, subtitleId.value === 'auto' ? null : s
 const remake = () => { const job = selected.value; if (job?.audioAssetId && job.subtitleAssetId) return begin(job.audioAssetId, job.subtitleAssetId) }
 const resume = (render: boolean) => run(async () => {
   if (!selected.value) return
-  if (!render && !providerId.value) throw new Error('请选择已启用的文本模型生成分镜。')
+  if (!render && !providerId.value && !paintingsOnly.value) throw new Error('请选择已启用的文本模型生成分镜。')
   if (configDirty.value) throw new Error('请先保存运行环境配置。')
   if (render) { await persistPlan(scenes.value); selected.value.preview = null }
   else if (dirty.value) throw new Error('字幕已修改，请使用“保存字幕并重新生成分镜”。')
-  await startSavedWork(() => api.continueJob(selected.value!.id, render, render ? null : providerId.value))
+  await startSavedWork(() => api.continueJob(selected.value!.id, render, render || !providerId.value ? null : providerId.value))
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
@@ -723,7 +724,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                 </Button>
                 <Button
                   v-if="['draft', 'failed', 'cancelled'].includes(selected.status) || (selected.status === 'awaiting_confirmation' && !paintingsReady)"
-                  :disabled="busy || running || legacyPlan || !providerId"
+                  :disabled="busy || running || legacyPlan || (!providerId && !paintingsOnly)"
                   @click="resume(false)"
                 >
                   {{ selected.plan.imageProviderId ? '继续准备字幕、分镜与水墨画作' : '继续准备字幕与分镜' }}

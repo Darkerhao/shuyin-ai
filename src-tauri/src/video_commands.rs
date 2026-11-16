@@ -62,6 +62,14 @@ fn preview_signature(plan: &video::VideoPlan) -> Result<String, String> {
         .collect())
 }
 
+fn needs_text_model(plan: &video::VideoPlan) -> bool {
+    plan.cues.is_empty()
+        || plan.scenes.last().map_or(0, |scene| scene.last + 1) < plan.cues.len()
+        || (plan.image_provider_id.is_some()
+            && plan.scenes.iter().any(|scene| scene.painting.is_none()))
+        || subtitles::pending(plan)
+}
+
 fn preview_directory(database: &Database, job: &VideoJob) -> Result<PathBuf, String> {
     Ok(
         Path::new(&database.get_project(&job.project_id)?.workspace_path)
@@ -299,10 +307,10 @@ pub(crate) fn continue_bound_video_job(
     if active.is_some() {
         return Err("已有视频任务正在执行或停止中。".into());
     }
-    if !render && provider_id.is_none() {
+    let database = app.state::<Database>();
+    if !render && provider_id.is_none() && needs_text_model(&database.video_job(&id)?.plan) {
         return Err("请选择已启用的文本模型生成分镜。".into());
     }
-    let database = app.state::<Database>();
     let owner = if automation.is_none() {
         database.video_automation(&id)?
     } else {
@@ -780,12 +788,18 @@ async fn execute(
     if first > 0 {
         video::validate_scenes(&job.plan.scenes, 0, first)?;
     }
-    let config = db.get_provider(
-        job.provider_id
-            .as_deref()
-            .ok_or("分镜模型已被移除，请新建任务。")?,
-    )?;
+    let text_required = subtitles::pending(&job.plan) || first < job.plan.cues.len();
+    let config = text_required
+        .then(|| -> Result<crate::database::ai::ProviderConfig, String> {
+            let provider_id = job
+                .provider_id
+                .as_deref()
+                .ok_or("分镜模型已被移除，请新建任务。")?;
+            db.get_provider(provider_id)
+        })
+        .transpose()?;
     if subtitles::pending(&job.plan) {
+        let config = config.as_ref().ok_or("分镜模型已被移除，请新建任务。")?;
         let request = ai_commands::request(
             config.clone(),
             app.state::<SystemCredentials>().inner(),
@@ -814,6 +828,7 @@ async fn execute(
         return Ok(());
     }
     while first < job.plan.cues.len() {
+        let config = config.as_ref().ok_or("分镜模型已被移除，请新建任务。")?;
         if flag.load(Ordering::SeqCst) {
             return Err("视频任务已停止。".into());
         }
@@ -893,6 +908,30 @@ async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_storyboards_do_not_require_a_text_model_for_painting_resume() {
+        let mut plan: video::VideoPlan = serde_json::from_value(serde_json::json!({
+            "title":"原书","audioSha256":"hash","duration":2,
+            "cues":[{"start":0,"end":1,"text":"第一句"}],
+            "scenes":[{"first":0,"last":0,"kind":"opening","title":"开场",
+                "beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]}]
+        }))
+        .unwrap();
+        assert!(!needs_text_model(&plan));
+        plan.image_provider_id = Some("ink-model".into());
+        assert!(needs_text_model(&plan));
+        plan.image_provider_id = None;
+        plan.cues.push(Cue {
+            start: 1.0,
+            end: 2.0,
+            text: "第二句".into(),
+        });
+        assert!(needs_text_model(&plan));
+        plan.scenes.clear();
+        plan.cues.clear();
+        assert!(needs_text_model(&plan));
+    }
 
     struct ReviewProvider {
         requests: Mutex<Vec<TextRequest>>,
