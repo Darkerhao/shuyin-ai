@@ -476,6 +476,25 @@ it('shows unfinished ink directions without treating them as legacy drawings or 
   expect(wrapper.get('[data-test="preview-video"]').attributes('disabled')).toBeDefined()
 })
 
+it('continues missing ink paintings without requiring an available text model', async () => {
+  const current = structuredClone(job)
+  current.status = 'failed'
+  current.stage = 'painting'
+  current.providerId = 'removed-text-model'
+  current.plan.theme = 'ink'
+  current.plan.imageProviderId = 'im1'
+  current.plan.scenes[0]!.beats = []
+  current.plan.scenes[0]!.painting = { description: '前景细密描绘江边草堂的书案木纹和书卷纸边，中景阅读者侧影以细笔勾勒，衣袖和翻开的书页细节清楚；远景江岸群山用浓淡层次交代空间，留白与主体形成平衡，也展现人物和环境的连续关系。', motion: 'push_in' }
+  vi.mocked(ai.listProviders).mockResolvedValue([{ ...emptyProvider(), id: 'im1', modelKind: 'image', name: '水墨图片模型', isEnabled: true, credentialStatus: 'available' }])
+  vi.mocked(api.listJobs).mockResolvedValue([current])
+  vi.mocked(api.continueJob).mockResolvedValue({ ...current, status: 'running', stage: 'painting', runId: 2 })
+  const wrapper = await render()
+  const resume = wrapper.findAll('button').find(button => button.text() === '继续准备字幕、分镜与水墨画作')!
+  expect(resume.attributes('disabled')).toBeUndefined()
+  await resume.trigger('click'); await flushPromises()
+  expect(api.continueJob).toHaveBeenCalledExactlyOnceWith('j1', false, null)
+})
+
 it('saves an image scene as a complete plan without treating it as a legacy text storyboard', async () => {
   const image = { assetId: 'img1', source: '本人拍摄', rights: '自有照片', fit: 'cover' as const, x: .25, y: .75, sha256: 'a'.repeat(64) }
   const current = structuredClone(job)
