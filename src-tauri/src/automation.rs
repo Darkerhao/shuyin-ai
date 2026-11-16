@@ -406,6 +406,12 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                             audio_asset_id: audio.asset_id.ok_or("音频尚未归档。")?,
                             subtitle_asset_id: None,
                             provider_id: run.input.selection.text_provider_id.clone(),
+                            theme: Some(run.input.selection.theme.clone()),
+                            image_provider_id: run
+                                .input
+                                .selection
+                                .detailed_ink
+                                .then(|| run.input.selection.image_provider_id.clone()),
                         },
                         Some(&run.binding(Slot::Video)),
                     )?
@@ -481,12 +487,13 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                 database.set_automation_stage(run, step.cover_stage)?;
             } else if status == "pending" {
                 crate::cover_commands::execute_image_task(
-                    app,
+                    Some(app),
                     &database,
                     &app.state::<SystemCredentials>(),
                     &app.state::<ActiveTasks>(),
                     &id,
                     "cover",
+                    None,
                 )
                 .await
                 .map_err(|e| e.message)?;

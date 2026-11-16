@@ -29,7 +29,7 @@ beforeEach(() => {
   vi.mocked(api.originalCues).mockResolvedValue(job.plan.cues)
   vi.mocked(projects.getProject).mockResolvedValue({ ...emptyProject(), id: 'p1', title: '原书', workspacePath: 'D:/books', createdAt: '', updatedAt: '', archivedAt: null })
   vi.mocked(projects.listAssets).mockResolvedValue([{ id: 'a1', projectId: 'p1', assetType: 'audio', filePath: 'D:/原声.m4a', originalName: '原声.m4a', fileSize: 100, modifiedAt: 1, existsStatus: 'available', createdAt: '' }])
-  vi.mocked(ai.listProviders).mockResolvedValue([{ id: 'm1', modelKind: 'text', name: '文本模型', modelName: 'text', reasoningEffort: null, baseUrl: 'http://localhost', isDefault: true, isEnabled: true, credentialStatus: 'available' }])
+  vi.mocked(ai.listProviders).mockResolvedValue([{ id: 'm1', modelKind: 'text', name: '文本模型', modelName: 'text', reasoningEffort: null, baseUrl: 'http://localhost', isDefault: true, isEnabled: true, credentialStatus: 'available' }, { ...emptyProvider(), id: 'im1', modelKind: 'image', name: '水墨图片模型', modelName: 'ink-model', isEnabled: true, credentialStatus: 'available' }])
   vi.mocked(api.settings).mockResolvedValue({ engineRoot: 'D:/engine', nodePath: 'D:/node.exe', pythonPath: 'D:/python.exe', modelPath: 'D:/model' })
   vi.mocked(api.listJobs).mockResolvedValue([structuredClone(job)])
   vi.mocked(api.subtitles).mockResolvedValue('1\n00:00:00,000 --> 00:00:07,000\n原声字幕\n')
@@ -431,14 +431,49 @@ it('shows the concrete object, action and subtitle trigger and saves label edits
   expect(job.plan.scenes[0]?.beats?.[0]?.label).toBe('一本书')
 })
 
-it('makes a separate hand-drawn version from the completed task audio and saved subtitles', async () => {
+it('makes a separate version from the completed task audio and saved subtitles', async () => {
   vi.mocked(api.listJobs).mockResolvedValue([{ ...job, status: 'succeeded', videoAssetId: 'v1' }])
   vi.mocked(api.startJob).mockResolvedValue({ ...job, id: 'j2', status: 'running', plan: { ...job.plan, cues: [], scenes: [] } })
   const wrapper = await render()
-  const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版手绘'))!
+  const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版'))!
   await remake.trigger('click'); await flushPromises()
-  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null)
+  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'ink', 'im1')
   expect(api.savePlan).not.toHaveBeenCalled()
+})
+
+it('lets a new version use the selected classic theme', async () => {
+  vi.mocked(api.listJobs).mockResolvedValue([{ ...job, status: 'succeeded', videoAssetId: 'v1' }])
+  vi.mocked(api.startJob).mockResolvedValue({ ...job, id: 'j3', status: 'running', plan: { ...job.plan, cues: [], scenes: [] } })
+  const wrapper = await render()
+  await chooseSelect(wrapper, '#video-theme', '书卷手绘')
+  const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版'))!
+  await remake.trigger('click'); await flushPromises()
+  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'classic', null)
+})
+
+it('requires a painting model for a new ink video and explains the per-scene cost', async () => {
+  vi.mocked(api.listJobs).mockResolvedValue([])
+  vi.mocked(ai.listProviders).mockResolvedValue([{ ...emptyProvider(), id: 'm1', modelKind: 'text', name: '文本模型', isEnabled: true, credentialStatus: 'available' }])
+  const wrapper = await render()
+  expect(wrapper.text()).toContain('每镜调用所选图片模型')
+  expect(wrapper.get('.video-primary-action').attributes('disabled')).toBeDefined()
+  await chooseSelect(wrapper, '#video-theme', '书卷手绘')
+  expect(wrapper.get('.video-primary-action').attributes('disabled')).toBeUndefined()
+  expect(api.startJob).not.toHaveBeenCalled()
+})
+
+it('shows unfinished ink directions without treating them as legacy drawings or allowing render', async () => {
+  const current = structuredClone(job)
+  current.plan.theme = 'ink'
+  current.plan.imageProviderId = 'im1'
+  current.plan.scenes[0]!.beats = []
+  current.plan.scenes[0]!.painting = { description: '前景细密描绘江边草堂的书案木纹和书卷纸边，中景阅读者侧影以细笔勾勒，衣袖和翻开的书页细节清楚；远景江岸群山用浓淡层次交代空间，留白与主体形成平衡，也展现人物和环境的连续关系。', motion: 'push_in' }
+  vi.mocked(api.listJobs).mockResolvedValue([current])
+  const wrapper = await render()
+  expect(wrapper.find('[aria-label="第1镜水墨画面描述"]').exists()).toBe(true)
+  expect(wrapper.findAll('button').some(button => button.text() === '继续准备字幕、分镜与水墨画作')).toBe(true)
+  expect(wrapper.findAll('button').find(button => button.text().includes('确认并生成视频'))?.attributes('disabled')).toBeDefined()
+  expect(wrapper.get('[data-test="preview-video"]').attributes('disabled')).toBeDefined()
 })
 
 it('saves an image scene as a complete plan without treating it as a legacy text storyboard', async () => {

@@ -14,7 +14,7 @@ import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
 import type { VideoSceneImage } from '../../types/video'
 
-const props = defineProps<{ projectId: string; chapterId?: string | null; sceneIndex: number; image?: VideoSceneImage; assets: Asset[]; providers: ModelProvider[]; disabled: boolean }>()
+const props = defineProps<{ projectId: string; chapterId?: string | null; sceneIndex: number; image?: VideoSceneImage; assets: Asset[]; providers: ModelProvider[]; disabled: boolean; painting?: boolean }>()
 const emit = defineEmits<{ 'update:image': [image: VideoSceneImage | undefined]; 'refresh-assets': []; working: [value: boolean] }>()
 const { busy, error, message, run } = useOperation()
 const prefix = computed(() => `video-image-${props.sceneIndex}`)
@@ -109,7 +109,7 @@ onBeforeUnmount(() => emit('working', false))
     </CollapsibleTrigger>
     <CollapsibleContent class="scene-image-content">
       <p class="muted">
-        图片替代本镜手绘主体，标题和字幕仍统一排版。只选有权使用的静态图片，不自动找图。
+        图片作为本镜画面主体，标题和字幕仍统一排版。只选有权使用的静态图片，不自动找图。
       </p>
       <OperationFeedback
         :error="error"
@@ -123,11 +123,11 @@ onBeforeUnmount(() => emit('working', false))
           @update:model-value="selectImage"
         >
           <SelectTrigger :id="prefix">
-            <SelectValue>{{ image ? selectedImageName : '使用手绘物体' }}</SelectValue>
+            <SelectValue>{{ image ? selectedImageName : painting ? '等待绘制水墨画' : '使用手绘物体' }}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="none">
-              使用手绘物体
+              {{ painting ? '重新绘制本镜水墨画' : '使用手绘物体' }}
             </SelectItem>
             <SelectItem
               v-for="asset in images"
@@ -230,7 +230,10 @@ onBeforeUnmount(() => emit('working', false))
           />
         </div>
       </template>
-      <Collapsible class="scene-image-generation">
+      <Collapsible
+        v-if="!painting"
+        class="scene-image-generation"
+      >
         <CollapsibleTrigger as-child>
           <Button
             variant="ghost"

@@ -4,7 +4,7 @@ use super::{
     Database,
 };
 use crate::video::{
-    validate_cues, validate_scenes, Cue, Scene, VideoPlan, VideoSettings, VideoWork,
+    validate_cues, validate_scenes, validate_theme, Cue, Scene, VideoPlan, VideoSettings, VideoWork,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,7 @@ use std::{
 };
 
 mod editor;
+pub(super) mod ink;
 mod revision;
 
 #[derive(Debug)]
@@ -80,6 +81,10 @@ pub struct StartVideoInput {
     pub audio_asset_id: String,
     pub subtitle_asset_id: Option<String>,
     pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_provider_id: Option<String>,
 }
 
 fn row(r: &Row<'_>) -> rusqlite::Result<VideoJob> {
@@ -310,7 +315,14 @@ impl Database {
             let provider = super::ai::provider(&tx, &input.provider_id)?;
             if provider.input.model_kind != "text" || !provider.input.is_enabled { return Err("请选择已启用的文本模型生成分镜。".into()); }
             let id = projects::new_id(&tx)?;
-            let mut plan = VideoPlan { title: book.input.title, ..Default::default() };
+            let theme = input.theme.as_deref().unwrap_or("ink");
+            validate_theme(theme)?;
+            if theme == "ink" && input.image_provider_id.is_none() && binding.is_none() { return Err("细致水墨视频需要选择图片模型，将按分镜逐张生成画作。".into()); }
+            if let Some(id) = &input.image_provider_id {
+                let image = super::ai::provider(&tx,id)?;
+                if theme != "ink" || image.input.model_kind != "image" || !image.input.is_enabled { return Err("水墨视频请选择已启用的图片模型。".into()); }
+            }
+            let mut plan = VideoPlan { title: book.input.title, theme: theme.into(), image_provider_id: input.image_provider_id, ..Default::default() };
             if let Some(binding) = binding {
                 plan.audio_sha256 = tx.query_row("SELECT a.output_sha256 FROM automation_runs r JOIN audio_jobs a ON a.id=r.audio_job_id WHERE r.id=?1 AND a.asset_id=?2 AND a.status='succeeded'",params![binding.id,input.audio_asset_id],|row|row.get::<_,String>(0)).map_err(|_|"自动视频缺少对应音频的归档摘要。")?;
                 if plan.audio_sha256.is_empty() { return Err("自动视频缺少音频摘要。".into()); }
@@ -430,7 +442,24 @@ impl Database {
             let mut job = get(c, id)?;
             if matches!(job.status.as_str(), "running" | "succeeded") { return Err("执行中或已完成的视频不能改写。".into()); }
             validate_cues(&cues, job.plan.duration)?;
+            if job.plan.image_provider_id.is_some() && cues != job.plan.cues {
+                scenes.clear();
+            }
             if !scenes.is_empty() { validate_scenes(&scenes, 0, cues.len())?; }
+            if job.plan.image_provider_id.is_some() && scenes.iter().any(|scene|scene.painting.is_none()) { return Err("水墨视频的每一镜都须保留画面描述。".into()); }
+            for scene in &mut scenes {
+                if let Some(painting) = &mut scene.painting {
+                    let original = job.plan.scenes.iter().find(|old|old.first == scene.first && old.last == scene.last);
+                    if original.and_then(|s|s.painting.as_ref()).map(|p|p.description.as_str()) != Some(painting.description.as_str()) {
+                        painting.task_id = None;
+                        scene.image = None;
+                    } else if scene.image.is_none() {
+                        painting.task_id = original.filter(|old|old.image.is_none()).and_then(|old|old.painting.as_ref()).and_then(|p|p.task_id.clone());
+                    } else {
+                        painting.task_id = original.and_then(|s|s.painting.as_ref()).and_then(|p|p.task_id.clone());
+                    }
+                }
+            }
             let mut snapshots = BTreeMap::new();
             for image in scenes.iter_mut().filter_map(|s| s.image.as_mut()) {
                 super::chapters::asset_scope(c, &job.project_id, &image.asset_id, job.chapter_id.as_deref(), true)?;
@@ -532,6 +561,8 @@ pub(crate) mod tests {
                 audio_asset_id: audio,
                 subtitle_asset_id: None,
                 provider_id: "model".into(),
+                theme: Some("classic".into()),
+                image_provider_id: None,
             },
         )
     }
@@ -541,6 +572,39 @@ pub(crate) mod tests {
             c.execute("INSERT INTO model_providers(id,name,provider_type,base_url,model_name,is_default,is_enabled,model_kind,created_at,updated_at) VALUES('replacement','new','openai-compatible','http://127.0.0.1:4321/v1','replacement-model',0,1,'text','now','now'),('disabled','disabled','openai-compatible','http://localhost/v1','disabled-model',0,0,'text','now','now'),('image','image','openai-compatible','http://localhost/v1','image-model',0,1,'image','now','now')", []).unwrap();
             Ok(())
         }).unwrap();
+    }
+
+    #[test]
+    fn new_jobs_default_to_ink_and_accept_the_classic_theme() {
+        let (_dir, db, mut input) = fixture();
+        alternative_models(&db);
+        input.theme = None;
+        input.image_provider_id = Some("image".into());
+        let ink = db.create_video_job(input).unwrap();
+        assert_eq!(ink.plan.theme, "ink");
+        let classic = db
+            .create_video_job(StartVideoInput {
+                project_id: ink.project_id.clone(),
+                chapter_id: None,
+                audio_asset_id: ink.audio_asset_id.clone().unwrap(),
+                subtitle_asset_id: None,
+                provider_id: "model".into(),
+                theme: Some("classic".into()),
+                image_provider_id: None,
+            })
+            .unwrap();
+        assert_eq!(classic.plan.theme, "classic");
+        assert!(db
+            .create_video_job(StartVideoInput {
+                project_id: ink.project_id.clone(),
+                chapter_id: None,
+                audio_asset_id: ink.audio_asset_id.clone().unwrap(),
+                subtitle_asset_id: None,
+                provider_id: "model".into(),
+                theme: Some("watercolor".into()),
+                image_provider_id: None,
+            })
+            .is_err());
     }
 
     #[test]
@@ -644,6 +708,8 @@ pub(crate) mod tests {
             audio_asset_id: input.audio_asset_id.clone(),
             subtitle_asset_id: None,
             provider_id: input.provider_id.clone(),
+            theme: Some("classic".into()),
+            image_provider_id: None,
         };
         let running = db.create_video_job(input).unwrap();
         let waiting = db.create_video_job(second).unwrap();
@@ -814,6 +880,8 @@ pub(crate) mod tests {
             audio_asset_id: "foreign".into(),
             subtitle_asset_id: None,
             provider_id: "model".into(),
+            theme: Some("classic".into()),
+            image_provider_id: None,
         };
         assert!(db.create_video_job(bad).is_err());
         bad = StartVideoInput {
@@ -823,6 +891,8 @@ pub(crate) mod tests {
             audio_asset_id: input.audio_asset_id.clone(),
             subtitle_asset_id: None,
             provider_id: "model".into(),
+            theme: Some("classic".into()),
+            image_provider_id: None,
         };
         let a = db.create_video_job(input).unwrap();
         let b = db.create_video_job(bad).unwrap();

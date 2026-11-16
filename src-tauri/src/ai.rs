@@ -375,4 +375,4 @@ impl OpenAiCompatible<'_> {
 pub struct ActiveTasks(pub Mutex<HashMap<String, watch::Sender<bool>>>);
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

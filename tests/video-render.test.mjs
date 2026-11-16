@@ -95,6 +95,85 @@ test('original audio timing is identical in Node and browser, including silence 
   vm.runInNewContext(result.script, browser);
   assert.equal(browser.window.TIMING.layout(browser.window.SCRIPT.PAGES).duration, layout.duration);
   assert.equal(node.SCRIPT.META.voice, undefined);
+  assert.deepEqual(result.pages.map(page => page.theme), ['classic', 'classic']);
+});
+test('the saved theme reaches every page and unknown themes are rejected', () => {
+  const result = buildEpisode({ ...plan, theme: 'ink' });
+  assert.deepEqual(result.pages.map(page => page.theme), ['ink', 'ink']);
+  const context = { TIMING: {} };
+  vm.runInNewContext(result.script, context);
+  assert.equal(context.SCRIPT.META.theme, 'ink');
+  assert.throws(() => buildEpisode({ ...plan, theme: 'watercolor' }), /Unknown video theme/);
+});
+test('detailed ink scenes keep their original drawing clock in previews and require completed paintings', () => {
+  const sha256 = 'a'.repeat(64);
+  const painting = { description: '近景书页有细密皴擦和纸边纤维，中景阅读人物的侧影与书桌保持清楚，衣袖笔触细腻；远景江岸和山峰以浓淡墨色层层展开，细节丰富并留出呼吸空间。人物手势和书页方向清楚对应叙述。', motion: 'push_in', taskId: 'paint1' };
+  const image = { assetId: 'art', source: 'AI水墨', rights: '生成画作', fit: 'cover', x: .5, y: .5, sha256 };
+  const input = { ...plan, theme: 'ink', imageProviderId: 'image-model', scenes: plan.scenes.map(scene => ({ ...scene, beats: [], painting, image })) };
+  const frozen = { art: { src: `assets/${sha256}.png`, sha256, dataUri: 'data:image/png;base64,Zg==' } };
+  const full = buildEpisode(input, undefined, frozen);
+  const short = buildEpisode(input, { start: 5, end: 8 }, frozen);
+  assert.deepEqual(short.pages[0].painting, full.pages[1].painting);
+  assert.equal(short.pages[0].drawDuration, 7);
+  assert.equal(short.pages[0].image.at, 0);
+  assert.equal(full.pages[0].image.src, 'ink-image:art');
+  assert.equal(full.script.match(/data:image\/png;base64,Zg==/g)?.length, 1, 'Each painting is embedded once under the frozen asset ID.');
+  assert.throws(() => buildEpisode(input, undefined, { art: { src: `assets/${sha256}.png`, sha256 } }), /host-verified/i);
+  assert.throws(() => buildEpisode({ ...input, scenes: input.scenes.map(scene => ({ ...scene, image: undefined })) }), /painting|画作/i);
+  const tooShort = input.scenes.map(scene => ({ ...scene, painting: { ...scene.painting, description: '水墨'.repeat(39) } }));
+  assert.throws(() => buildEpisode({ ...input, scenes: tooShort }, undefined, frozen), /painting|画作/i);
+});
+test('ink reveal and camera values are deterministic when seeking and never speed up a short preview', () => {
+  const window = {};
+  vm.runInNewContext(fs.readFileSync(new URL('../src-tauri/video/ink-painting.js', import.meta.url), 'utf8'), { window });
+  const frame = window.INK_PAINTING.frame;
+  for (const motion of ['static', 'push_in', 'pull_out', 'pan_left', 'pan_right']) {
+    const reference = JSON.stringify(frame(4, .5, 12, motion));
+    for (const time of [9, 1, 11, 0, 7]) frame(time, .5, 12, motion);
+    assert.equal(JSON.stringify(frame(4, .5, 12, motion)), reference);
+    const first = frame(.5, .5, 12, motion), last = frame(12, .5, 12, motion);
+    assert.equal(first.drawing, 0);
+    assert.equal(last.drawing, 1);
+    assert.equal(last.opacity, 1);
+    assert(last.scale >= 1 && last.scale < 1.1);
+  }
+});
+test('ink contour pixels persist across consecutive frames and match a direct seek', async () => {
+  const pixels = new Uint8ClampedArray(960 * 540 * 4);
+  for (let i = 0; i < pixels.length; i += 4) {
+    const tone = (i / 4 % 960) % 16 < 8 ? 70 : 220;
+    pixels.set([tone, tone, tone, 255], i);
+  }
+  function canvas() {
+    const context = {
+      strokes: 0,
+      clearRect() { this.strokes = 0; },
+      drawImage(image) { if (image.context) this.strokes = image.context.strokes; },
+      stroke() { this.strokes++; },
+      getImageData() { return { data: pixels }; },
+      fillRect() {}, save() {}, restore() {}, translate() {}, scale() {}, beginPath() {}, moveTo() {}, lineTo() {},
+    };
+    return { style: {}, context, getContext: () => context };
+  }
+  const window = {}, visible = [], source = { style: {}, naturalWidth: 1920, naturalHeight: 1080, decode: () => Promise.resolve() };
+  const SCRIPT = { INK_IMAGES: { art: 'data:image/png;base64,fixture' } };
+  vm.runInNewContext(fs.readFileSync(new URL('../src-tauri/video/ink-painting.js', import.meta.url), 'utf8'), { window, SCRIPT, document: { createElement: canvas } });
+  let tick;
+  window.INK_PAINTING.mount({
+    page: { title: '水墨', sourceIndex: 0, drawDuration: 12, painting: { motion: 'push_in' }, image: { src: 'ink-image:art', source: 'AI画作', fit: 'cover', x: .5, y: .5, at: 0 } },
+    img: () => ({ el: { style: {}, querySelector: () => source } }),
+    html: { appendChild: element => visible.push(element) }, hud: { text() {} }, tick: callback => { tick = callback; },
+  });
+  await Promise.all(window.INK_PAINTING.ready);
+  tick(4);
+  const direct = visible[0].context.strokes;
+  assert(direct > 0, 'The fixture must reveal actual contour strokes.');
+  tick(4);
+  assert.equal(visible[0].context.strokes, direct, 'Rendering the same frame must retain every visible stroke.');
+  tick(1); tick(3); tick(4);
+  assert.equal(visible[0].context.strokes, direct, 'Sequential capture and direct seek must paint the same contour pixels.');
+  tick(9); tick(4);
+  assert.equal(visible[0].context.strokes, direct, 'Seeking backwards must reconstruct the same contour pixels.');
 });
 test('model text remains data and does not become JavaScript', () => {
   const result = buildEpisode({ ...plan, title: "'; globalThis.pwned=true; //" });
@@ -663,6 +742,7 @@ test('frozen image files use their real digest and changed or missing host input
   const mapping = { 'img-1': { path: file, extension: 'png', sha256 } };
   const images = renderer.freezeImages(source, mapping, directory);
   assert.equal(fs.readFileSync(path.join(directory, images['img-1'].src), 'utf8'), 'frozen bytes');
+  assert.equal(images['img-1'].dataUri, undefined, 'Ordinary static images do not get duplicated as renderer data URLs.');
   assert.equal(buildEpisode(source, undefined, images).pages[0].image.sha256, sha256);
   fs.writeFileSync(file, 'changed bytes');
   assert.throws(() => renderer.freezeImages(source, mapping, directory), /changed/);

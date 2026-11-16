@@ -30,23 +30,25 @@ pub async fn execute_cover_generation(
     id: String,
 ) -> Result<Asset, AiError> {
     execute_image_task(
-        &app,
+        Some(&app),
         database.inner(),
         vault.inner(),
         active.inner(),
         &id,
         "cover",
+        None,
     )
     .await
 }
 
 pub(crate) async fn execute_image_task(
-    app: &tauri::AppHandle,
+    app: Option<&tauri::AppHandle>,
     database: &Database,
     vault: &SystemCredentials,
     active: &ActiveTasks,
     id: &str,
     kind: &str,
+    stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<Asset, AiError> {
     let asset = run_task(database, active, id, |mut receiver| async move {
         let prepared = database.prepare_image_generation(id, kind).map_err(AiError::database)?;
@@ -62,20 +64,23 @@ pub(crate) async fn execute_image_task(
         let bytes = tokio::select! {
             biased;
             _ = receiver.changed() => return Err(AiError::new("cancelled", "生成已取消，已保存内容保留。")),
+            _ = async { match stop { Some(flag) => crate::video_commands::cancelled(flag).await, None => std::future::pending().await } } => return Err(AiError::new("cancelled", "视频制作已停止，已完成画作保留。")),
             response = provider.generate_image(request) => response?,
         };
         database.finish_image_generation(id, &bytes, kind).map_err(AiError::database)
     }).await?;
     use crate::completion::{notify, Completion};
-    notify(
-        app,
-        id,
-        if kind == "cover" {
-            Completion::CoverBackground
-        } else {
-            Completion::Illustration
-        },
-    );
+    if let Some(app) = app {
+        notify(
+            app,
+            id,
+            if kind == "cover" {
+                Completion::CoverBackground
+            } else {
+                Completion::Illustration
+            },
+        );
+    }
     Ok(asset)
 }
 

@@ -38,6 +38,8 @@ fn setup() -> (tempfile::TempDir, Database, StartAutomationInput) {
             image_provider_id: image.id,
             format: "deep_dive".into(),
             request_key: "start-one".into(),
+            theme: "classic".into(),
+            detailed_ink: false,
             collection_name: None,
         },
     )
@@ -1701,7 +1703,18 @@ fn transcript_fixture() -> (tempfile::TempDir, Database, AutomationRun) {
 }
 
 fn transcript_fixture_for(chapter: bool) -> (tempfile::TempDir, Database, AutomationRun) {
+    transcript_fixture_with_theme(chapter, false)
+}
+
+fn transcript_fixture_with_theme(
+    chapter: bool,
+    detailed_ink: bool,
+) -> (tempfile::TempDir, Database, AutomationRun) {
     let (directory, database, mut input) = setup();
+    if detailed_ink {
+        input.theme = "ink".into();
+        input.detailed_ink = true;
+    }
     if chapter {
         let chapter = database
             .save_chapter(
@@ -1751,10 +1764,17 @@ fn transcript_fixture_for(chapter: bool) -> (tempfile::TempDir, Database, Automa
                 audio_asset_id: asset,
                 subtitle_asset_id: None,
                 provider_id: run.input.selection.text_provider_id.clone(),
+                theme: Some(run.input.selection.theme.clone()),
+                image_provider_id: run
+                    .input
+                    .selection
+                    .detailed_ink
+                    .then(|| run.input.selection.image_provider_id.clone()),
             },
             Some(&run.binding(Slot::Video)),
         )
         .unwrap();
+    assert_eq!(video.plan.theme, run.input.selection.theme);
     let run = database.automation_run(&run.id).unwrap();
     let video = database
         .claim_bound_video_job(
@@ -2098,8 +2118,8 @@ fn automatic_schedule_renews_only_before_hand_off_and_preserves_same_task() {
 #[test]
 fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
     use super::automation::COVER_STEPS;
-    for chapter in [false, true] {
-        let (_dir, db, run) = transcript_fixture_for(chapter);
+    for (chapter, detailed_ink) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (_dir, db, run) = transcript_fixture_with_theme(chapter, detailed_ink);
         let check = db.create_content_check_task(&run).unwrap();
         db.prepare_content_check_task(&check).unwrap();
         let warnings = if chapter {
@@ -2217,7 +2237,11 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
             )
             .unwrap();
         let mut plan = job.plan;
-        plan.scenes = vec![serde_json::from_value(serde_json::json!({"first":0,"last":0,"kind":"opening","title":"阅读","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]})).unwrap()];
+        plan.scenes = vec![serde_json::from_value(if detailed_ink {
+            serde_json::json!({"first":0,"last":0,"kind":"opening","title":"阅读","painting":{"description":"近景以细密的毛笔线条刻画书页的边缘和木桌的纹理，中景是安静阅读的人物侧影，以浓淡变化描绘衣褶与手势，远景用淡墨铺开室内空间，留出适当呼吸和层次。画面保持清楚的主体关系，不加入旁白之外的情节。","motion":"push_in"}})
+        } else {
+            serde_json::json!({"first":0,"last":0,"kind":"opening","title":"阅读","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]})
+        }).unwrap()];
         db.save_video_progress(&job.id, job.run_id, &plan, "storyboard")
             .unwrap();
         db.end_video_job(&job.id, job.run_id, "failed", "分镜请求中断")
@@ -2234,6 +2258,26 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
         db.end_video_job(&recovered.id, recovered.run_id, "awaiting_confirmation", "")
             .unwrap();
         let run = db.control_automation(&run.id, "resume").unwrap();
+        if detailed_ink {
+            assert!(db
+                .prepare_automation_render(&run)
+                .unwrap_err()
+                .contains("画作尚未全部完成"));
+            let job = db
+                .claim_bound_video_job(&job.id, crate::video::VideoWork::Prepare, None, Some(&run))
+                .unwrap();
+            let task = db.prepare_video_painting(&job.id, job.run_id, 0).unwrap();
+            let prepared = db.prepare_image_generation(&task, "video_ink").unwrap();
+            assert_eq!(prepared.provider.id, run.input.selection.image_provider_id);
+            assert!(prepared.prompt.contains("实际声音里的句子"));
+            let bytes = crate::ai::images::test_image(image::ImageFormat::Png, 1920, 1080);
+            let asset = db
+                .finish_image_generation(&task, &bytes, "video_ink")
+                .unwrap();
+            assert_eq!(asset.chapter_id, run.chapter_id);
+            db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")
+                .unwrap();
+        }
         assert_eq!(
             db.list_cover_versions(&run.project_id, run.chapter_id.as_deref())
                 .unwrap()

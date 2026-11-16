@@ -55,3 +55,20 @@ subtitle layer. The generated readiness promise rejects image decode failures
 before lint or capture. Missing or changed source images invalidate previews
 and block archiving. Video illustrations use the existing image provider and an
 independent task purpose/Prompt, never auto-adopt. See docs/VIDEO-IMAGES-VERIFICATION.md.
+
+P3 adds the two user-selectable video themes: `classic` keeps the original
+environment/sketch drawings and subtitle surface; `ink` uses a low-saturation
+ink palette, translucent environment and subject washes, a muted paper
+atmosphere, and a warm subtitle plate. Both themes share the source cue clock,
+scene/beat plan, HUD, preview window, audio normalization, and output contract.
+The theme lives in VideoPlan.theme: missing saved plans mean `classic`, while a
+new job without an explicit choice means `ink`. Old ink plans without
+`imageProviderId` continue that renderer without new image calls. Current
+detailed ink jobs save a cue-led `painting` description and frozen `image` per
+scene; the selected image model produces complete paintings before a preview or
+render can start. `ink-painting.js` extracts deterministic local contours,
+accumulates them in an offscreen canvas, and repaints the half-resolution
+overlay with the current camera on the same source clock. Backward seeks reset
+the accumulated strokes; repeated frames preserve them. Frozen image bytes are
+embedded once per asset ID because Chromium blocks pixel reads from file images.
+See docs/INK-VIDEO.md for task recovery, cue invalidation, costs, and evidence.

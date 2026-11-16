@@ -2,6 +2,7 @@
 import VideoImageEditor from './VideoImageEditor.vue'
 import AppIcon from '../../components/AppIcon.vue'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -20,7 +21,7 @@ const emit = defineEmits<{ 'refresh-assets': []; working: [value: boolean]; revi
 const sceneKindLabel = (kind: VideoScene['kind']) => Object.hasOwn(visualCatalog.kinds, kind) ? visualCatalog.kinds[kind as keyof typeof visualCatalog.kinds] : '旧版文字图解'
 function setSceneImage(image: VideoSceneImage | undefined) {
   if (image) { scene.value.image = image; scene.value.beats = [] }
-  else { delete scene.value.image; scene.value.beats = [{ cue: scene.value.first, object: 'book', action: 'draw', label: '书籍' }] }
+  else { delete scene.value.image; scene.value.beats = scene.value.painting ? [] : [{ cue: scene.value.first, object: 'book', action: 'draw', label: '书籍' }] }
 }
 </script>
 
@@ -42,7 +43,7 @@ function setSceneImage(image: VideoSceneImage | undefined) {
       </Button>
       <Button
         variant="outline"
-        :disabled="disabled || revisionDisabled"
+        :disabled="disabled || revisionDisabled || !!scene.painting"
         :aria-label="`重新生成第${sceneIndex + 1}镜`"
         @click="emit('revise')"
       >
@@ -54,7 +55,7 @@ function setSceneImage(image: VideoSceneImage | undefined) {
     </p><Input
       v-model="scene.title"
       class="video-scene-title"
-      :disabled="disabled || (!scene.beats?.length && !scene.image)"
+      :disabled="disabled || (!scene.beats?.length && !scene.image && !scene.painting)"
       :aria-label="`第${sceneIndex + 1}镜标题`"
       maxlength="20"
     />
@@ -134,11 +135,51 @@ function setSceneImage(image: VideoSceneImage | undefined) {
         </Select>
       </div>
     </div>
+    <div
+      v-if="scene.painting"
+      class="video-field"
+    >
+      <label :for="`scene-${sceneIndex}-painting`">水墨画面描述 · {{ scene.image ? '画作已保存' : '等待绘制' }}</label>
+      <Textarea
+        :id="`scene-${sceneIndex}-painting`"
+        v-model="scene.painting.description"
+        :disabled="disabled"
+        :aria-label="`第${sceneIndex + 1}镜水墨画面描述`"
+        maxlength="1200"
+        rows="5"
+      />
+      <p class="muted">
+        修改画面描述后保存，再点击继续准备，只重新绘制发生变化的镜头。单镜手绘调整不适用于水墨画作。
+      </p>
+      <label :for="`scene-${sceneIndex}-motion`">画面运镜</label>
+      <Select
+        v-model="scene.painting.motion"
+        :disabled="disabled"
+      >
+        <SelectTrigger :id="`scene-${sceneIndex}-motion`">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="static">
+            静止欣赏
+          </SelectItem><SelectItem value="push_in">
+            缓慢推近
+          </SelectItem><SelectItem value="pull_out">
+            缓慢拉远
+          </SelectItem><SelectItem value="pan_left">
+            轻移向左
+          </SelectItem><SelectItem value="pan_right">
+            轻移向右
+          </SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
     <VideoImageEditor
       :project-id="projectId"
       :chapter-id="chapterId"
       :scene-index="sceneIndex"
       :image="scene.image"
+      :painting="!!scene.painting"
       :assets="assets"
       :providers="providers"
       :disabled="imageDisabled"
