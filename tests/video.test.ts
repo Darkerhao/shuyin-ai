@@ -47,6 +47,22 @@ async function render(onStoryboardUpdate?: () => void, openSetup = true) {
   }
   return wrapper
 }
+it('accepts detailed pencil scenes as complete plans and keeps their frozen cast in editor previews', async () => {
+  const detailed = structuredClone(job)
+  detailed.plan.theme = 'ink'
+  detailed.plan.pencil = { characters: [], pending: [] }
+  detailed.plan.scenes[0]!.beats = []
+  detailed.plan.scenes[0]!.artwork = { design: '保持人物基准，在同一画面解释观点', layers: [{ cue: 0, name: '书页', mask: [], strokes: [{ p: [[100, 200], [600, 600]], w: 1.2, a: .6 }], shades: [], texts: [] }] }
+  vi.mocked(api.listJobs).mockResolvedValue([detailed])
+  const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+  try {
+    const wrapper = await render()
+    expect(wrapper.find('canvas[aria-label="观点精绘场景预览"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('保留字幕并升级手绘分镜')
+    expect(wrapper.text()).toContain('角色外观沿用本任务的固定画稿')
+    expect(wrapper.text()).not.toContain('保持人物基准，在同一画面解释观点')
+  } finally { context.mockRestore() }
+})
 it('keeps existing tasks foremost and preserves setup choices and editor changes when collapsing settings', async () => {
   const wrapper = await render(undefined, false)
   expect(wrapper.get('.video-setup-trigger').attributes('aria-expanded')).toBe('false')

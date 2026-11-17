@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import VideoImageEditor from './VideoImageEditor.vue'
+import VideoDrawingPreview from './VideoDrawingPreview.vue'
 import AppIcon from '../../components/AppIcon.vue'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -8,18 +9,20 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { visualCatalog, type VideoCue, type VideoScene, type VideoSceneImage } from '../../types/video'
+import { visualCatalog, type VideoCue, type VideoScene, type VideoSceneImage, type PencilCharacter } from '../../types/video'
 
 defineProps<{
   projectId: string; chapterId?: string | null; sceneIndex: number; cues: VideoCue[]
   assets: Asset[]; providers: ModelProvider[]; disabled: boolean; imageDisabled: boolean
   localPencil?: boolean
+  characters?: PencilCharacter[]
   revisionDisabled: boolean
   playing?: boolean; audioAvailable?: boolean
 }>()
 const scene = defineModel<VideoScene>('scene', { required: true })
 const emit = defineEmits<{ 'refresh-assets': []; working: [value: boolean]; revise: []; play: [] }>()
 const sceneKindLabel = (kind: VideoScene['kind']) => Object.hasOwn(visualCatalog.kinds, kind) ? visualCatalog.kinds[kind as keyof typeof visualCatalog.kinds] : '旧版文字图解'
+const objectName = (name: string) => Object.hasOwn(visualCatalog.objects, name) ? visualCatalog.objects[name as keyof typeof visualCatalog.objects] : name
 function setSceneImage(image: VideoSceneImage | undefined) {
   if (image) { scene.value.image = image; scene.value.beats = [] }
   else { delete scene.value.image; scene.value.beats = scene.value.painting ? [] : [{ cue: scene.value.first, object: 'book', action: 'draw', label: '书籍' }] }
@@ -52,16 +55,29 @@ function setSceneImage(image: VideoSceneImage | undefined) {
       </Button>
     </div>
     <p class="muted">
-      第 {{ sceneIndex + 1 }} 镜 · 字幕 {{ scene.first + 1 }}—{{ scene.last + 1 }} · {{ sceneKindLabel(scene.kind) }}
+      第 {{ sceneIndex + 1 }} 镜 · 字幕 {{ scene.first + 1 }}—{{ scene.last + 1 }} · {{ scene.artwork ? '精绘场景' : sceneKindLabel(scene.kind) }}
     </p><Input
       v-model="scene.title"
       class="video-scene-title"
-      :disabled="disabled || (!scene.beats?.length && !scene.image && !scene.painting)"
+      :disabled="disabled || (!scene.beats?.length && !scene.image && !scene.painting && !scene.artwork)"
       :aria-label="`第${sceneIndex + 1}镜标题`"
       maxlength="20"
     />
+    <VideoDrawingPreview
+      :beats="scene.beats ?? []"
+      :title="scene.title"
+      :scene="scene"
+      :cues="cues"
+      :characters="characters"
+    />
+    <p
+      v-if="scene.artwork"
+      class="muted"
+    >
+      角色外观沿用本任务的固定画稿。需要调整画面内容或出场时机时，请重新生成这一镜。
+    </p>
     <div
-      v-if="scene.beats?.length"
+      v-if="scene.beats?.some(beat => !beat.drawing)"
       class="video-scene-controls"
     >
       <div class="video-field video-scene-kind">
@@ -194,23 +210,33 @@ function setSceneImage(image: VideoSceneImage | undefined) {
       :key="i"
       class="video-beat"
     >
-      <label :for="`scene-${sceneIndex}-beat-${i}`">字幕 {{ beat.cue + 1 }} · {{ visualCatalog.objects[beat.object] }} · {{ visualCatalog.actions[beat.action] }}</label>
+      <label :for="`scene-${sceneIndex}-beat-${i}`">字幕 {{ beat.cue + 1 }} · {{ beat.drawing ? beat.object : objectName(beat.object) }} · {{ beat.drawing ? '自由绘制' : visualCatalog.actions[beat.action] }}</label>
       <Input
         :id="`scene-${sceneIndex}-beat-${i}`"
         v-model="beat.label"
         :disabled="disabled"
         :aria-label="`第${sceneIndex + 1}镜物体${i + 1}标签`"
         maxlength="8"
+        :placeholder="beat.drawing ? '标签可留空' : undefined"
       />
       <Collapsible class="video-beat-settings">
         <CollapsibleTrigger class="disclosure-trigger py-1.5">
-          调整物体、动作与字幕锚点
+          {{ beat.drawing ? '调整名称与出场时间' : '调整物体、动作与字幕锚点' }}
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div class="video-beat-controls">
             <div class="video-field">
               <label :for="`scene-${sceneIndex}-object-${i}`">具体物体</label>
+              <Input
+                v-if="beat.drawing"
+                :id="`scene-${sceneIndex}-object-${i}`"
+                v-model="beat.object"
+                :disabled="disabled"
+                maxlength="80"
+                :aria-label="`第${sceneIndex + 1}镜物体${i + 1}名称`"
+              />
               <Select
+                v-else
                 v-model="beat.object"
                 :disabled="disabled"
               >
@@ -231,7 +257,10 @@ function setSceneImage(image: VideoSceneImage | undefined) {
                 </SelectContent>
               </Select>
             </div>
-            <div class="video-field">
+            <div
+              v-if="!beat.drawing"
+              class="video-field"
+            >
               <label :for="`scene-${sceneIndex}-action-${i}`">语义动作</label>
               <Select
                 v-model="beat.action"
@@ -283,7 +312,7 @@ function setSceneImage(image: VideoSceneImage | undefined) {
       </Collapsible>
     </div>
     <p
-      v-if="!scene.beats?.length"
+      v-if="!scene.beats?.length && !scene.artwork && !scene.image && !scene.painting"
       class="muted"
     >
       {{ scene.labels?.join(' · ') }}

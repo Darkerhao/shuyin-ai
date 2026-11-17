@@ -8,7 +8,7 @@ export interface StoryboardNote {
 
 export function inspectStoryboard(plan: VideoPlan): StoryboardNote[] {
   const notes: StoryboardNote[] = []
-  const signatures = plan.scenes.map(s => JSON.stringify([s.kind, s.environment ?? 'plain', s.framing ?? 'reference', s.beats?.map(b => [b.object, b.action, b.label])]))
+  const signatures = plan.scenes.map(s => JSON.stringify([s.kind, s.environment ?? 'plain', s.framing ?? 'reference', s.beats?.map(b => [b.object, b.action, b.label, b.drawing])]))
   plan.scenes.forEach((scene, sceneIndex) => {
     if (!scene.beats?.length) return
     const add = (code: StoryboardNote['code'], message: string) => notes.push({ sceneIndex, code, message })

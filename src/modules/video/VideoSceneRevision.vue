@@ -7,11 +7,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cancelGeneration } from '../../services/ai'
 import { errorMessage } from '../../services/verification'
 import * as api from '../../services/video'
-import { visualCatalog, type VideoScene, type VideoSceneRevisionInput } from '../../types/video'
+import { visualCatalog, type VideoScene, type VideoSceneRevisionInput, type PencilCharacter } from '../../types/video'
 import type { ModelProvider } from '../../types/ai'
 import { subtitleRows } from './subtitles'
+import VideoDrawingPreview from './VideoDrawingPreview.vue'
 
-const props = defineProps<{ input: VideoSceneRevisionInput; providers: ModelProvider[] }>()
+const props = defineProps<{ input: VideoSceneRevisionInput; providers: ModelProvider[]; characters?: PencilCharacter[] }>()
 const emit = defineEmits<{ adopt: [scene: VideoScene]; close: [] }>()
 const providerId = ref(props.input.providerId)
 const instruction = ref('')
@@ -110,7 +111,7 @@ onBeforeUnmount(() => { disposed = true; if (taskId.value) void cancelGeneration
           />
         </div>
         <p class="muted">
-          将发送本镜与相邻字幕、分镜和修改要求，调用一次所选文本模型；不发送音频或图片。单次最多等待5分钟。
+          将发送本镜与相邻字幕、分镜和修改要求，调用一次所选文本模型；不发送音频或图片。{{ original.artwork ? '精绘沿用已保存人物，单次最多等待20分钟。' : '单次最多等待5分钟。' }}
         </p>
         <p
           v-if="error"
@@ -143,7 +144,23 @@ onBeforeUnmount(() => { disposed = true; if (taskId.value) void cancelGeneration
             class="scene-candidate"
           >
             <h3>{{ entry.label }}</h3><strong>{{ entry.scene.title }}</strong>
-            <p class="muted">
+            <VideoDrawingPreview
+              :beats="entry.scene.beats ?? []"
+              :title="entry.scene.title"
+              :scene="entry.scene"
+              :cues="cues.map(c => ({ start: c.start, end: c.end, text: c.text }))"
+              :characters="characters"
+            />
+            <p
+              v-if="entry.scene.artwork"
+              class="muted"
+            >
+              沿用已保存角色外观和本镜字幕范围。
+            </p>
+            <p
+              v-else
+              class="muted"
+            >
               {{ visualCatalog.kinds[entry.scene.kind as keyof typeof visualCatalog.kinds] }} · {{ visualCatalog.environments[entry.scene.environment ?? 'plain'] }} · {{ visualCatalog.framings[entry.scene.framing ?? 'reference'] }}
             </p>
             <p v-if="entry.scene.image">
@@ -157,7 +174,7 @@ onBeforeUnmount(() => { disposed = true; if (taskId.value) void cancelGeneration
                 v-for="(beat, index) in entry.scene.beats"
                 :key="index"
               >
-                <strong>{{ visualCatalog.objects[beat.object] }} · {{ visualCatalog.actions[beat.action] }} · {{ beat.label }}</strong>
+                <strong>{{ beat.drawing ? beat.object : visualCatalog.objects[beat.object as keyof typeof visualCatalog.objects] }} · {{ beat.drawing ? '自由绘制' : visualCatalog.actions[beat.action] }}{{ beat.label ? ` · ${beat.label}` : '' }}</strong>
                 <p class="muted">
                   字幕 {{ beat.cue + 1 }}：{{ cues[beat.cue]?.text }}
                 </p>

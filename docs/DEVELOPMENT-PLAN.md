@@ -1,5 +1,35 @@
 # 书引 AI 开发计划与验收标准
 
+## 固定人物与精绘节奏正式接入（2026-11-17，已完成本地验收）
+
+已接入新素描规划→冻结头像→逐镜画稿→编辑/单镜候选→同源试片与成片；失败与停止使用原任务保存恢复。短镜合并，主要轮廓至少0.08秒、细节排线成组显现。同段真实模型5镜已保存，正式Frametell85秒成片与30秒试片已生成，5组PNG同源一致；Rust343+2原有忽略、Vue63、Node61及lint/类型/构建/fmt/Clippy通过，独立评审问题已修复。无新依赖/SQL迁移，按feat/minor判断，不手工升版。最终结果与限制见[精绘接入验收](PENCIL-INTEGRATION.md)。
+
+
+## 自由场景分镜（2026-11-17，已完成本地验收）
+
+用户批准按内容自由画物体和安排数量。已接入数值笔画协议、整镜坐标、取消名单和3主体限制、旧计划读取、多主体布局、完整场景预览、单镜修改与批次保存恢复。无SQL迁移/新依赖/手工升版，属于兼容功能增强feat/minor。真实模型4镜通过、49秒素描/30秒试片/12秒书卷实渲，3组同源PNG一致；Rust337+2忽略、Vue62、Node55及构建/lint/typecheck/fmt/Clippy通过。未安装、未验整段长片或精细素描画质；详见[自由绘制记录](FREE-DRAWING-VIDEO.md)。
+
+## 分镜校验错误定位（2026-11-17）
+
+将合并的“分镜无效”拆为具体镜头、字段、实际值与允许值/范围。复用原校验、错误持久化和页面展示，属于 fix/patch，无数据库、依赖、版本号或模型超时改动。修改 `src-tauri/src/video.rs`、`src-tauri/src/ai/tests.rs` 和技术设计/本文。
+
+验收要求：非首批与非首镜能准确定位；字幕连续性、16 条上限、目录、3 物体上限、标题/标签及物体锚点错误可区分；超长字段预览截断；HTTP 响应完成但校验失败时，错误在重开数据库后保留，继续任务仍复用原字幕和已完成分镜。
+
+3 项新增 Rust 回归在修改前全部失败，复现原笼统提示；修改后全部通过。其中本地 HTTP 契约测试返回一个非法场景键，验证 Provider 响应完成、业务失败、错误落库/重开以及原任务续作。测试没有调用外部付费模型或写入正式书库。
+
+实际验证（仓库根目录；Rust 先执行 `. ./.tools/env.ps1`；Node 使用 `D:/MyWork/software/shuyin-video-node/v24.22.2/node.exe`）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked storyboard_validation -- --nocapture` | 修改前 3 失败，修改后及最终清理后 3 通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib -- --quiet` | 335 通过、2 项原有忽略 |
+| `node node_modules/vitest/vitest.mjs run tests/video-progress.test.ts tests/video-storyboard.test.ts tests/video-scene-revision.test.ts --maxWorkers=2` | 3 文件、22 项通过 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 首轮发现 6 处多余闭包借用，移除后通过 |
+| `git diff --check` | 通过 |
+
+验收项在单元测试、本地 HTTP/SQLite 契约与现有前端组件测试范围内通过。全量 Rust 测试之后只移除 6 处多余闭包借用，并复跑新增回归与 fmt/Clippy；未做原生桌面人工验收或调用真实模型。源码变化不更新当前安装版；历史失败记录没有原始回复，不能追溯成新的详细错误。下一步在包含此修复的构建中继续原任务，读取真实的新错误后再处理具体分镜问题。
+
 ## 铅笔素描逐笔视频（2026-11-17，当前实施）
 
 用户明确此前“水墨”指铅笔素描。已沿用本地双画风工作流，替换本地毛笔与淡墨为单色铅笔轮廓、内部细节、明暗排线与笔尖；生成前选择铅笔素描或原书卷手绘。手动/自动/单镜规则均从任务 theme 读取，原声时间轴、任务、编辑和恢复共用原实现。新素描视频图片请求为0，封面费用单独计算，schema25与绘图库依赖不变。真实短片、同源试片及适用工程验证见[铅笔素描验收](PENCIL-VIDEO.md)。

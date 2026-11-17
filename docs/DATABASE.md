@@ -1,5 +1,14 @@
 # 书引 AI 数据库设计文档
 
+## 冻结人物与精绘画稿（2026-11-17，仍为v25）
+
+无SQL迁移/新表列。沿用video_jobs.plan_json，新增可选pencil:{characters,pending}、scenes[].artwork；角色头像由数值路径组成，不是图片素材。逐规划/逐镜写回现有run_id门禁，失败/停止/重启保留头像、完成镜头和pending。单镜候选沿用原ai_tasks及编辑草稿，不修改保存基准。字幕修改须显式重建；直接保存不匹配字幕会拒绝并保留画稿，明确重建时清除pencil，防止旧锚点/旧规划误用；保存画面不改角色。旧计划缺字段继续读取；旧应用不能识别新精绘字段，回退须用升级前备份。备份/恢复沿原JSON存储。见[PENCIL-INTEGRATION](PENCIL-INTEGRATION.md)。
+
+
+## 自由场景笔画（2026-11-17，仍为v25）
+
+无SQL表列或迁移变化。`video_jobs.plan_json.scenes[].beats[]` 新增可选 `drawing: { strokes: number[][][] }`，点固定为 `[x,y]`；带笔画的 object 是主体名称，label 可为空。旧 beat 无 drawing 时继续按目录读取，不批量改写任务。新生成必须带笔画，整批通过才保存；自动草稿、单镜快照、继续任务和备份均沿用原JSON存储。新字段需包含本功能的应用版本读取，旧应用不支持回退读取新笔画计划。见[自由场景记录](FREE-DRAWING-VIDEO.md)。
+
 ## 本地铅笔素描（2026-11-17，仍为v25）
 
 无表、列、设置或迁移变更。沿用 `video_jobs.plan_json` 的 `theme=ink/classic` 与原结构化分镜；ink 本地画风现为铅笔素描，不增加第三种 theme 或重复画风状态。新任务拒绝逐镜 `imageProviderId`；旧计划里的图片、`video_ink` 任务和资产保留历史读取。自动任务原图片模型选择只用于封面背景。已有成片文件不自动重写，详见[铅笔素描实现](PENCIL-VIDEO.md)。

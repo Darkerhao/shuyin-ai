@@ -1,14 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::OnceLock};
 
+pub mod drawing;
 pub mod environment;
 pub mod ink;
+pub mod pencil;
 pub mod revision;
 pub mod subtitles;
 
-pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v5.md");
+pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v6.md");
 pub const VIDEO_THEMES: [&str; 2] = ["classic", "ink"];
-pub const BATCH_SIZE: usize = 24;
+pub const BATCH_SIZE: usize = 12;
 pub const MODEL_FAILURE_PREFIX: &str = "模型生成失败：";
 
 pub fn model_failure(message: impl std::fmt::Display) -> String {
@@ -19,9 +21,13 @@ pub fn model_failure(message: impl std::fmt::Display) -> String {
 #[serde(rename_all = "camelCase")]
 struct VisualLimits {
     max_scene_cues: usize,
-    max_beats: usize,
     label_chars: usize,
     title_chars: usize,
+    object_chars: usize,
+    drawing_width: f64,
+    drawing_height: f64,
+    max_drawing_points: usize,
+    max_drawing_strokes: usize,
 }
 
 #[derive(Deserialize)]
@@ -44,31 +50,41 @@ fn visual_catalog() -> &'static VisualCatalog {
 
 pub fn storyboard_prompt(theme: &str) -> String {
     format!(
-        "{PROMPT}\n{}\n可用绘图目录（仅可选用这些键）：\n{}",
+        "{PROMPT}\n{}\n可用构图、动作与绘制边界：\n{}",
         if theme == "ink" {
-            include_str!("../../prompts/video-pencil-style-v1.md")
+            include_str!("../../prompts/video-pencil-style-v2.md")
         } else {
             "本次画风：书卷手绘。保留物体、动作、关系对照和短标签的讲解构图。"
         },
-        include_str!("../video/visual-catalog.json")
+        {
+            let mut catalog: serde_json::Value =
+                serde_json::from_str(include_str!("../video/visual-catalog.json"))
+                    .expect("bundled catalog");
+            catalog.as_object_mut().unwrap().remove("objects");
+            catalog.to_string()
+        }
     )
 }
 
 pub fn parse_storyboard(raw: &str, first: usize, end: usize) -> Result<Vec<Scene>, String> {
     let scenes: Vec<Scene> =
         serde_json::from_str(raw).map_err(|_| "模型分镜不是合法 JSON，已保留字幕和此前分镜。")?;
-    validate_scenes(&scenes, first, end)?;
-    if scenes
-        .iter()
-        .any(|scene| scene.image.is_some() || scene.painting.is_some())
-    {
-        return Err("分镜模型只能选择手绘目录；关键图片须由用户选用并确认来源。".into());
-    }
-    if scenes.iter().any(|scene| scene.beats[0].cue != scene.first) {
-        return Err(
-            "模型分镜的首个物体须从本镜第一条字幕开始。请点击“继续准备字幕与分镜”重试本批，字幕和此前分镜已保留。"
-                .into(),
-        );
+    validate_scenes(&scenes, first, end).map_err(|error| format!("本批分镜校验未通过：{error}"))?;
+    for (index, scene) in scenes.iter().enumerate() {
+        let error =
+            |detail: String| format!("本批分镜校验未通过：{}", scene_error(index, scene, detail));
+        if scene.image.is_some() || scene.painting.is_some() || scene.artwork.is_some() {
+            return Err(error(
+                "image/painting/artwork 非空；此入口须返回物体笔画，精绘场景使用独立的逐镜协议。"
+                    .into(),
+            ));
+        }
+        if scene.beats[0].cue != scene.first {
+            return Err(error(format!(
+                "第 1 个物体的 cue={}，应为 {}；首个物体须从本镜第一条字幕开始。",
+                scene.beats[0].cue, scene.first
+            )));
+        }
     }
     Ok(scenes)
 }
@@ -87,6 +103,22 @@ pub fn storyboard_input(plan: &VideoPlan, first: usize, end: usize) -> String {
         "cues": cues(first, end),
     })
     .to_string()
+}
+
+pub fn require_drawings(scenes: &[Scene]) -> Result<(), String> {
+    for (index, scene) in scenes.iter().enumerate() {
+        if let Some(beat) = scene.beats.iter().position(|beat| beat.drawing.is_none()) {
+            return Err(scene_error(
+                index,
+                scene,
+                format!(
+                    "第 {} 个物体缺少 drawing.strokes；新分镜须给出实际笔画，不能只提供物体名称。",
+                    beat + 1
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn storyboard_batch_end(cues: &[Cue], first: usize) -> usize {
@@ -156,6 +188,8 @@ pub struct Scene {
     pub image: Option<SceneImage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub painting: Option<ink::Painting>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artwork: Option<pencil::Artwork>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +247,8 @@ pub struct Beat {
     pub object: String,
     pub action: String,
     pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing: Option<drawing::Drawing>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +265,8 @@ pub struct VideoPlan {
     pub image_provider_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_review: Option<subtitles::SubtitleReview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pencil: Option<pencil::PencilPlan>,
 }
 
 impl Default for VideoPlan {
@@ -242,6 +280,7 @@ impl Default for VideoPlan {
             theme: classic_theme(),
             image_provider_id: None,
             subtitle_review: None,
+            pencil: None,
         }
     }
 }
@@ -300,6 +339,7 @@ impl VideoWork {
         validate_theme(&plan.theme)?;
         validate_cues(&plan.cues, plan.duration)?;
         validate_scenes(&plan.scenes, 0, plan.cues.len())?;
+        pencil::validate_plan(plan)?;
         if plan.image_provider_id.is_some()
             && plan
                 .scenes
@@ -360,68 +400,183 @@ pub fn validate_cues(cues: &[Cue], duration: f64) -> Result<(), String> {
 
 pub fn validate_scenes(scenes: &[Scene], first: usize, end: usize) -> Result<(), String> {
     let catalog = visual_catalog();
+    if scenes.is_empty() {
+        return Err("分镜数组为空；须返回至少一镜，连续覆盖本次字幕范围。".into());
+    }
     let mut next = first;
-    for scene in scenes {
-        if scene.beats.is_empty() && scene.image.is_none() && scene.painting.is_none() {
-            return Err("旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。".into());
+    for (index, scene) in scenes.iter().enumerate() {
+        let error = |detail| scene_error(index, scene, detail);
+        let mut drawing_points = 0;
+        let mut drawing_strokes = 0;
+        if scene.beats.is_empty()
+            && scene.image.is_none()
+            && scene.painting.is_none()
+            && scene.artwork.is_none()
+        {
+            return Err(error(
+                "beats 物体数为 0，应至少有一个主体；请保留字幕并重新生成分镜。".into(),
+            ));
         }
         if let Some(painting) = &scene.painting {
-            painting.validate()?;
+            painting.validate().map_err(error)?;
             if !scene.beats.is_empty() {
-                return Err("水墨画作与手绘物体不能同时作为主体。".into());
+                return Err(error("水墨画作与手绘物体不能同时作为主体。".into()));
             }
         }
-        if scene.first != next
-            || scene.last < scene.first
-            || scene.last >= end
-            || scene.last - scene.first >= catalog.limits.max_scene_cues
-            || !catalog.kinds.contains_key(&scene.kind)
-            || !catalog.environments.contains_key(&scene.environment)
-            || !catalog.framings.contains_key(&scene.framing)
-            || !scene.labels.is_empty()
-            || scene.beats.len() > catalog.limits.max_beats
-            || !short_text(&scene.title, catalog.limits.title_chars)
-        {
-            return Err(
-                "分镜无效：须连续覆盖字幕，每镜最多16条、1—3个具体物体，使用目录内的构图、场景、景别和短标题。"
-                    .into(),
-            );
+        if scene.first != next {
+            return Err(error(format!(
+                "first={}，应为 {next}；分镜须连续覆盖字幕，不能遗漏或重复。",
+                scene.first
+            )));
+        }
+        if scene.last < scene.first {
+            return Err(error(format!(
+                "last={} 小于 first={}；末项索引不得小于起始索引。",
+                scene.last, scene.first
+            )));
+        }
+        if scene.last >= end {
+            return Err(error(format!(
+                "last={} 越界，应小于 {end}；本次起始字幕索引为 {first}。",
+                scene.last
+            )));
+        }
+        let cue_count = scene.last - scene.first + 1;
+        if cue_count > catalog.limits.max_scene_cues && scene.artwork.is_none() {
+            return Err(error(format!(
+                "first/last 覆盖 {cue_count} 条字幕，每镜最多 {} 条。",
+                catalog.limits.max_scene_cues
+            )));
+        }
+        for (field, value, allowed) in [
+            ("kind", &scene.kind, &catalog.kinds),
+            ("environment", &scene.environment, &catalog.environments),
+            ("framing", &scene.framing, &catalog.framings),
+        ] {
+            validate_catalog_choice(field, value, allowed).map_err(error)?;
+        }
+        if !scene.labels.is_empty() {
+            return Err(error(format!(
+                "旧版 labels 字段有 {} 项，应为空；物体标签须放在 beats 的 label 中。",
+                scene.labels.len()
+            )));
+        }
+        validate_short_text("title", &scene.title, catalog.limits.title_chars).map_err(error)?;
+        if let Some(artwork) = &scene.artwork {
+            if scene.image.is_some() || scene.painting.is_some() || !scene.beats.is_empty() {
+                return Err(error("精绘场景不能与旧物体或图片混用。".into()));
+            }
+            artwork.validate(scene.first, scene.last).map_err(error)?;
         }
         if let Some(image) = &scene.image {
-            image.validate()?;
+            image.validate().map_err(error)?;
             if !scene.beats.is_empty() {
-                return Err("图片与手绘物体请选择一种画面主体。".into());
+                return Err(error("图片与手绘物体请选择一种画面主体。".into()));
             }
         }
         let mut previous = scene.first;
-        for beat in &scene.beats {
-            if beat.cue < previous
-                || beat.cue > scene.last
-                || !catalog.objects.contains_key(&beat.object)
-                || !catalog.actions.contains_key(&beat.action)
-                || !short_text(&beat.label, catalog.limits.label_chars)
-            {
-                return Err(
-                    "物体分镜无效：请选择目录中的物体和动作，按本镜字幕顺序触发，每个标签最多8字。"
-                        .into(),
-                );
+        for (beat_index, beat) in scene.beats.iter().enumerate() {
+            let beat_error = |detail| error(format!("第 {} 个物体：{detail}", beat_index + 1));
+            if beat.cue < scene.first || beat.cue > scene.last {
+                return Err(beat_error(format!(
+                    "cue={} 越界，应在 {}—{} 内。",
+                    beat.cue, scene.first, scene.last
+                )));
+            }
+            if beat.cue < previous {
+                return Err(beat_error(format!(
+                    "cue={} 小于前一物体的 {previous}；物体须按字幕索引顺序触发。",
+                    beat.cue
+                )));
+            }
+            if let Some(drawing) = &beat.drawing {
+                validate_short_text("object", &beat.object, catalog.limits.object_chars)
+                    .map_err(beat_error)?;
+                drawing_points += drawing.validate().map_err(beat_error)?;
+                drawing_strokes += drawing.strokes.len();
+                if drawing_points > catalog.limits.max_drawing_points
+                    || drawing_strokes > catalog.limits.max_drawing_strokes
+                {
+                    return Err(beat_error(format!(
+                        "整镜笔画资源超过上限（{} 点 / {} 笔）；请简化重复线条，保留所需主体。",
+                        catalog.limits.max_drawing_points, catalog.limits.max_drawing_strokes
+                    )));
+                }
+            } else {
+                validate_catalog_choice("object", &beat.object, &catalog.objects)
+                    .map_err(beat_error)?;
+            }
+            validate_catalog_choice("action", &beat.action, &catalog.actions)
+                .map_err(beat_error)?;
+            if !beat.label.is_empty() || beat.drawing.is_none() {
+                validate_short_text("label", &beat.label, catalog.limits.label_chars)
+                    .map_err(beat_error)?;
             }
             previous = beat.cue;
         }
         next = scene.last + 1;
     }
-    if next != end || scenes.is_empty() {
-        return Err("分镜未完整覆盖本段字幕。".into());
+    if next != end {
+        return Err(format!(
+            "第 {} 镜之后缺少字幕索引 {next}—{}（从 0 开始）；分镜须完整覆盖本次字幕范围。",
+            scenes.len(),
+            end - 1
+        ));
     }
     Ok(())
 }
 
-fn short_text(text: &str, max: usize) -> bool {
-    !text.trim().is_empty()
-        && text.chars().count() <= max
-        && !text
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '{' | '}' | '`' | '*'))
+fn scene_error(index: usize, scene: &Scene, detail: impl std::fmt::Display) -> String {
+    format!(
+        "第 {} 镜（字幕索引 {}—{}，从 0 开始）：{detail}",
+        index + 1,
+        scene.first,
+        scene.last
+    )
+}
+
+fn diagnostic_value(value: &str) -> String {
+    let mut chars = value.chars();
+    let mut preview: String = chars.by_ref().take(80).collect();
+    if chars.next().is_some() {
+        preview.push('…');
+    }
+    format!("{preview:?}")
+}
+
+fn validate_catalog_choice(
+    field: &str,
+    value: &str,
+    allowed: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    if !allowed.contains_key(value) {
+        return Err(format!(
+            "{field}={} 不在绘图目录中；允许值：{}。",
+            diagnostic_value(value),
+            allowed
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join("、")
+        ));
+    }
+    Ok(())
+}
+
+fn validate_short_text(field: &str, text: &str, max: usize) -> Result<(), String> {
+    let count = text.chars().count();
+    let reason = if text.trim().is_empty() {
+        format!("为空；应为 1—{max} 字")
+    } else if count > max {
+        format!("共 {count} 字；最多 {max} 字")
+    } else if text.chars().any(char::is_control) {
+        "含控制字符；不得换行或包含控制字符".into()
+    } else if text.chars().any(|c| matches!(c, '{' | '}' | '`' | '*')) {
+        "含格式标记；不得包含 {、}、`、*".into()
+    } else {
+        return Ok(());
+    };
+    Err(format!("{field}={} {reason}。", diagnostic_value(text)))
 }
 
 fn timestamp(text: &str) -> Result<f64, String> {
@@ -498,6 +653,39 @@ pub fn to_srt(cues: &[Cue]) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn free_drawings_accept_arbitrary_subjects_and_many_objects() {
+        let raw = serde_json::json!([{"first":0,"last":0,"kind":"focus","title":"营前对峙","beats":
+            (0..12).map(|i| serde_json::json!({"cue":0,"object":format!("战士与长枪{i}"),"action":"draw","label":"",
+                "drawing":{"strokes":[[[i*70,30],[i*70+30,200]],[[i*70+10,60],[i*70+20,40],[i*70+30,60]]]}})).collect::<Vec<_>>()
+        }]);
+        let scenes = parse_storyboard(&raw.to_string(), 0, 1).unwrap();
+        require_drawings(&scenes).unwrap();
+        assert_eq!(scenes[0].beats.len(), 12);
+        let saved = serde_json::to_string(&scenes).unwrap();
+        assert!(parse_storyboard(&saved, 0, 1).is_ok());
+        for bad in [
+            serde_json::json!([]),
+            serde_json::json!([[[0, 0]]]),
+            serde_json::json!([[[0, 0], [1001, 0]]]),
+            serde_json::json!([[[0, 0], [1, 301]]]),
+            serde_json::json!([[[0, 0], [0, 0]]]),
+        ] {
+            let mut value = raw.clone();
+            value[0]["beats"][0]["drawing"]["strokes"] = bad;
+            assert!(parse_storyboard(&value.to_string(), 0, 1).is_err());
+        }
+        let mut invalid = raw.clone();
+        invalid[0]["beats"][0]["drawing"]["strokes"] =
+            serde_json::json!(vec![vec![[0, 0], [1, 1]]; 2001]);
+        assert!(parse_storyboard(&invalid.to_string(), 0, 1).is_err());
+        let mut legacy = scenes;
+        legacy[0].beats[0].drawing = None;
+        assert!(require_drawings(&legacy)
+            .unwrap_err()
+            .contains("缺少 drawing.strokes"));
+    }
+
+    #[test]
     fn pencil_and_classic_share_the_protocol_but_keep_distinct_drawing_rules() {
         let pencil = storyboard_prompt("ink");
         let classic = storyboard_prompt("classic");
@@ -522,10 +710,10 @@ mod tests {
                 text: "继续讲述".into(),
             })
             .collect::<Vec<_>>();
-        cues[18].text = "第一个完整观点。".into();
-        cues[20].text = "接下来如何选择？".into();
-        assert_eq!(storyboard_batch_end(&cues, 0), 21);
-        assert_eq!(storyboard_batch_end(&cues, 21), 45);
+        cues[6].text = "第一个完整观点。".into();
+        cues[8].text = "接下来如何选择？".into();
+        assert_eq!(storyboard_batch_end(&cues, 0), 9);
+        assert_eq!(storyboard_batch_end(&cues, 9), 21);
         assert_eq!(storyboard_batch_end(&cues, 45), 50);
     }
 
@@ -668,10 +856,147 @@ mod tests {
     }
 
     #[test]
+    fn storyboard_validation_reports_the_scene_field_value_and_constraint() {
+        use serde_json::json;
+        let raw = json!([
+            {"first":24,"last":26,"kind":"focus","title":"原书","beats":[{"cue":24,"object":"book","action":"draw","label":"书"}]},
+            {"first":27,"last":29,"kind":"route","title":"变化","beats":[{"cue":27,"object":"pen","action":"draw","label":"写作"}]}
+        ]);
+        for (field, value, end, expected) in [
+            ("first", json!(28), 30, vec!["first=28", "应为 27", "连续"]),
+            ("first", json!(26), 30, vec!["first=26", "应为 27", "连续"]),
+            ("last", json!(26), 30, vec!["last=26", "first=27"]),
+            (
+                "last",
+                json!(30),
+                30,
+                vec!["last=30", "小于 30", "索引为 24"],
+            ),
+            ("last", json!(43), 44, vec!["17 条字幕", "最多 16 条"]),
+            (
+                "kind",
+                json!("unknown-kind"),
+                30,
+                vec!["kind", "unknown-kind", "允许值", "focus"],
+            ),
+            (
+                "environment",
+                json!("forest"),
+                30,
+                vec!["environment", "forest", "允许值", "courtyard"],
+            ),
+            (
+                "framing",
+                json!("zoom"),
+                30,
+                vec!["framing", "zoom", "允许值", "medium"],
+            ),
+            ("title", json!(""), 30, vec!["title", "为空", "1—20"]),
+            (
+                "title",
+                json!("长".repeat(21)),
+                30,
+                vec!["title", "21 字", "最多 20"],
+            ),
+            ("title", json!("**标题**"), 30, vec!["title", "格式标记"]),
+            ("title", json!("两行\n标题"), 30, vec!["title", "控制字符"]),
+            (
+                "labels",
+                json!(["旧字段"]),
+                30,
+                vec!["labels", "1 项", "为空"],
+            ),
+            (
+                "beats",
+                json!([]),
+                30,
+                vec!["beats", "0", "至少", "重新生成分镜"],
+            ),
+        ] {
+            let mut invalid = raw.clone();
+            invalid[1][field] = value;
+            let error = parse_storyboard(&invalid.to_string(), 24, end).unwrap_err();
+            assert!(error.contains("第 2 镜"), "{field}: {error}");
+            assert!(
+                error.contains("本批") && error.contains("从 0 开始"),
+                "{error}"
+            );
+            for part in expected {
+                assert!(error.contains(part), "missing {part}: {error}");
+            }
+        }
+        assert!(parse_storyboard(&raw.to_string(), 24, 30).is_ok());
+        let error = parse_storyboard(&raw.to_string(), 24, 31).unwrap_err();
+        assert!(error.contains("缺少字幕索引 30—30"), "{error}");
+        assert!(parse_storyboard("[]", 24, 30)
+            .unwrap_err()
+            .contains("分镜数组为空"));
+    }
+
+    #[test]
+    fn storyboard_validation_locates_invalid_beats_and_bounds_value_previews() {
+        use serde_json::json;
+        let raw = json!([{"first":24,"last":27,"kind":"focus","title":"原书","beats":[
+            {"cue":24,"object":"book","action":"draw","label":"原书"},
+            {"cue":26,"object":"pen","action":"draw","label":"写作"}
+        ]}]);
+        for (field, value, expected) in [
+            ("cue", json!(23), vec!["cue=23", "24—27"]),
+            ("cue", json!(28), vec!["cue=28", "24—27"]),
+            (
+                "object",
+                json!("dragon"),
+                vec!["object", "dragon", "允许值", "book"],
+            ),
+            (
+                "action",
+                json!("spin"),
+                vec!["action", "spin", "允许值", "draw"],
+            ),
+            (
+                "label",
+                json!("过长的物体标签九字"),
+                vec!["label", "9 字", "最多 8"],
+            ),
+        ] {
+            let mut invalid = raw.clone();
+            invalid[0]["beats"][1][field] = value;
+            let error = parse_storyboard(&invalid.to_string(), 24, 28).unwrap_err();
+            assert!(
+                error.contains("第 1 镜") && error.contains("第 2 个物体"),
+                "{error}"
+            );
+            for part in expected {
+                assert!(error.contains(part), "missing {part}: {error}");
+            }
+        }
+        let mut invalid = raw.clone();
+        invalid[0]["beats"][0]["cue"] = json!(25);
+        invalid[0]["beats"][1]["cue"] = json!(24);
+        let error = parse_storyboard(&invalid.to_string(), 24, 28).unwrap_err();
+        assert!(
+            error.contains("cue=24") && error.contains("前一物体的 25"),
+            "{error}"
+        );
+        invalid[0]["beats"][1]["cue"] = json!(26);
+        let error = parse_storyboard(&invalid.to_string(), 24, 28).unwrap_err();
+        assert!(
+            error.contains("第 1 镜") && error.contains("cue=25") && error.contains("应为 24"),
+            "{error}"
+        );
+        invalid = raw;
+        invalid[0]["title"] = json!(format!("{}PRIVATE_TAIL", "长".repeat(2000)));
+        let error = parse_storyboard(&invalid.to_string(), 24, 28).unwrap_err();
+        assert!(error.contains("2012 字"), "{error}");
+        assert!(!error.contains("PRIVATE_TAIL") && error.chars().count() < 300);
+    }
+
+    #[test]
     fn storyboard_must_cover_exact_batch_and_use_allowed_components() {
         let mut scenes = vec![Scene {
             image: None,
             painting: None,
+            artwork: None,
             first: 24,
             last: 27,
             kind: "route".into(),
@@ -681,12 +1006,14 @@ mod tests {
             labels: vec![],
             beats: vec![
                 Beat {
+                    drawing: None,
                     cue: 24,
                     object: "book".into(),
                     action: "draw".into(),
                     label: "之前".into(),
                 },
                 Beat {
+                    drawing: None,
                     cue: 27,
                     object: "certificate".into(),
                     action: "check".into(),
@@ -801,7 +1128,7 @@ mod tests {
         assert_eq!(visual_catalog().objects.len(), 93);
         assert_eq!(visual_catalog().environments.len(), 7);
         assert_eq!(visual_catalog().framings.len(), 4);
-        assert!(storyboard_prompt("classic").contains("certificate"));
-        assert!(storyboard_prompt("classic").contains("compass"));
+        assert!(storyboard_prompt("classic").contains("drawing.strokes"));
+        assert!(!storyboard_prompt("classic").contains("\"objects\""));
     }
 }

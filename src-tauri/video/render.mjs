@@ -5,13 +5,14 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { assertNodeRuntime, enginePackage } from './runtime.mjs';
+import './pencil-drawing.js';
 export { assertNodeRuntime } from './runtime.mjs';
 
 const catalog = JSON.parse(fs.readFileSync(new URL('./visual-catalog.json', import.meta.url), 'utf8'));
 const pencilLook = JSON.parse(fs.readFileSync(new URL('./pencil-look.json', import.meta.url), 'utf8'));
-const visuals = ['ink-painting.js', 'pencil-style.js', 'illustrations.js'].map(file => fs.readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n');
+const visuals = ['ink-painting.js', 'pencil-style.js', 'pencil-drawing.js', 'illustrations.js'].map(file => fs.readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n');
 
-// The model selects trusted drawings and subtitle anchors; it never supplies code.
+// Models supply numeric strokes; the host builds paths and never executes model code.
 export function buildEpisode(plan, range, images = {}) {
   const shortText = (value, limit) => typeof value === 'string' && value.trim() && [...value].length <= limit && !/[\p{Cc}{}*`]/u.test(value);
   const theme = plan.theme ?? 'classic';
@@ -19,7 +20,11 @@ export function buildEpisode(plan, range, images = {}) {
   let next = 0;
   for (const scene of plan.scenes) {
     const { environment = 'plain', framing = 'reference' } = scene;
-    if (Object.keys(scene).some(key => !['first', 'last', 'title', 'kind', 'labels', 'beats', 'environment', 'framing', 'image', 'painting'].includes(key))) throw new Error('Unknown scene field.');
+    if (Object.keys(scene).some(key => !['first', 'last', 'title', 'kind', 'labels', 'beats', 'environment', 'framing', 'image', 'painting', 'artwork'].includes(key))) throw new Error('Unknown scene field.');
+    if (scene.artwork) {
+      if (theme !== 'ink' || scene.image || scene.painting || scene.beats?.length) throw new Error('Pencil artwork cannot mix with old images or objects.');
+      globalThis.SHUYIN_PENCIL_DRAWING.validate(scene.artwork, plan.pencil?.characters ?? [], scene.first, scene.last);
+    }
     if (scene.painting) {
       const painting = scene.painting;
       if (theme !== 'ink' || !scene.image || scene.beats?.length
@@ -31,11 +36,10 @@ export function buildEpisode(plan, range, images = {}) {
     if (plan.imageProviderId && !scene.painting) throw new Error('Detailed ink video requires a painting for every scene.');
     if (!Object.hasOwn(catalog.environments, environment)) throw new Error('Unknown scene environment.');
     if (!Object.hasOwn(catalog.framings, framing)) throw new Error('Unknown scene framing.');
-    if (!scene.beats?.length && !scene.image) throw new Error('旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。');
+    if (!scene.beats?.length && !scene.image && !scene.artwork) throw new Error('旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。');
     if (!Object.hasOwn(catalog.kinds, scene.kind)) throw new Error('Unknown scene kind.');
     if (!shortText(scene.title, catalog.limits.titleChars) || scene.labels?.length) throw new Error('Invalid scene title or legacy labels.');
-    if (!Number.isInteger(scene.first) || scene.first !== next || !Number.isInteger(scene.last) || scene.last < scene.first || scene.last >= plan.cues.length || scene.last - scene.first >= catalog.limits.maxSceneCues) throw new Error('Invalid scene cue coverage.');
-    if ((scene.beats?.length ?? 0) > catalog.limits.maxBeats) throw new Error('A scene supports at most three objects.');
+    if (!Number.isInteger(scene.first) || scene.first !== next || !Number.isInteger(scene.last) || scene.last < scene.first || scene.last >= plan.cues.length || (!scene.artwork && scene.last - scene.first >= catalog.limits.maxSceneCues)) throw new Error('Invalid scene cue coverage.');
     if (scene.image) {
       const im = scene.image, frozen = images[im.assetId];
       const text = (v, n) => typeof v === 'string' && v.trim() && [...v].length <= n && !/[\p{Cc}]/u.test(v.replaceAll('\n', ''));
@@ -46,10 +50,23 @@ export function buildEpisode(plan, range, images = {}) {
         || !new RegExp('^assets/' + im.sha256 + '\\.(png|jpg|webp)$').test(frozen.src)) throw new Error('Invalid or missing frozen scene image.');
     }
     let previous = scene.first;
+    let points = 0, strokes = 0;
     for (const beat of scene.beats ?? []) {
-      if (!Object.hasOwn(catalog.objects, beat.object)) throw new Error('Unknown drawing object.');
+      if (Object.keys(beat).some(key => !['cue', 'object', 'action', 'label', 'drawing'].includes(key))) throw new Error('Unknown object field.');
+      if (beat.drawing != null) {
+        const drawing = beat.drawing;
+        if (!shortText(beat.object, catalog.limits.objectChars) || typeof drawing !== 'object' || Object.keys(drawing).some(key => key !== 'strokes') || !Array.isArray(drawing.strokes) || !drawing.strokes.length) throw new Error('Invalid free drawing.');
+        strokes += drawing.strokes.length;
+        for (const stroke of drawing.strokes) {
+          if (!Array.isArray(stroke) || stroke.length < 2) throw new Error('A stroke needs at least two different points.');
+          points += stroke.length;
+          if (points > catalog.limits.maxDrawingPoints || strokes > catalog.limits.maxDrawingStrokes) throw new Error('Scene drawing resource budget exceeded.');
+          if (stroke.some(point => !Array.isArray(point) || point.length !== 2 || point.some(v => !Number.isFinite(v)) || point[0] < 0 || point[0] > catalog.limits.drawingWidth || point[1] < 0 || point[1] > catalog.limits.drawingHeight)) throw new Error('Drawing coordinates exceed the scene canvas.');
+          if (!stroke.some(point => point[0] !== stroke[0][0] || point[1] !== stroke[0][1])) throw new Error('A stroke needs at least two different points.');
+        }
+      } else if (!Object.hasOwn(catalog.objects, beat.object)) throw new Error('Unknown drawing object.');
       if (!Object.hasOwn(catalog.actions, beat.action ?? 'draw')) throw new Error('Unknown drawing action.');
-      if (!shortText(beat.label, catalog.limits.labelChars)) throw new Error('Invalid object label.');
+      if (!(beat.drawing && beat.label === '') && !shortText(beat.label, catalog.limits.labelChars)) throw new Error('Invalid object label.');
       if (!Number.isInteger(beat.cue) || beat.cue < previous || beat.cue > scene.last) throw new Error('Invalid object cue anchor.');
       previous = beat.cue;
     }
@@ -63,6 +80,8 @@ export function buildEpisode(plan, range, images = {}) {
     const end = index + 1 === plan.scenes.length ? plan.duration : plan.cues[plan.scenes[index + 1].first].start;
     return {
       id: `p${String(index + 1).padStart(4, '0')}`, index, title: scene.title, kind: scene.kind, theme,
+      ...(scene.artwork ? { artwork: scene.artwork, characters: plan.pencil?.characters ?? [], first: scene.first, last: scene.last,
+        pencilCues: plan.cues.slice(scene.first, scene.last + 1).map((c, i) => ({ index: scene.first + i, start: c.start - start })) } : {}),
       environment: scene.environment ?? 'plain', framing: scene.framing ?? 'reference', ...(scene.painting ? { painting: scene.painting } : {}),
       // Keep the full drawing clock even when the preview ends before this scene does.
       drawDuration: end - start, ...(scene.image ? { image: { ...scene.image, src: scene.painting ? `ink-image:${scene.image.assetId}` : images[scene.image.assetId].src, at: plan.cues[scene.first].start - start } } : {}), beats: (scene.beats ?? []).map(b => ({ ...b, at: plan.cues[b.cue].start - start })),

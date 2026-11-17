@@ -1,12 +1,12 @@
 use super::{parse_srt, storyboard_prompt, validate_scenes, Cue, Scene};
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "video-scene-revision-v1";
+pub const PROMPT_VERSION: &str = "video-scene-revision-v2";
 pub fn prompt(theme: &str) -> String {
     format!(
         "{}\n{}",
         storyboard_prompt(theme),
-        include_str!("../../../prompts/video-scene-revision-v1.md")
+        include_str!("../../../prompts/video-scene-revision-v2.md")
     )
 }
 
@@ -80,6 +80,9 @@ impl SceneRevisionInput {
             return Err("候选改变了本镜字幕范围，原分镜保留。".into());
         }
         candidate.image = original.image.clone();
+        if candidate.image.is_none() {
+            super::require_drawings(std::slice::from_ref(&candidate))?;
+        }
         validate_scenes(
             std::slice::from_ref(&candidate),
             original.first,
@@ -109,7 +112,7 @@ pub(crate) mod tests {
         })).unwrap()
     }
     pub(crate) fn candidate() -> serde_json::Value {
-        json!([{"first":1,"last":2,"kind":"focus","title":"新的观点","environment":"study","framing":"detail","beats":[{"cue":1,"object":"pen","action":"draw","label":"思考"},{"cue":2,"object":"book","action":"check","label":"结论"}]}])
+        json!([{"first":1,"last":2,"kind":"focus","title":"新的观点","environment":"study","framing":"detail","beats":[{"cue":1,"object":"长枪","action":"draw","label":"思考","drawing":{"strokes":[[[20,20],[60,100]]]}},{"cue":2,"object":"营寨","action":"check","label":"结论","drawing":{"strokes":[[[100,20],[160,100]]]}}]}])
     }
 
     #[test]
@@ -138,7 +141,7 @@ pub(crate) mod tests {
         wrong[0]["beats"][0]["cue"] = json!(2);
         assert!(input.candidate(&wrong.to_string()).is_err());
         let mut wrong = candidate();
-        wrong[0]["beats"][0]["object"] = json!("arbitrary-svg");
+        wrong[0]["beats"][0]["drawing"]["strokes"] = json!([[[0, 0], [1001, 0]]]);
         assert!(input.candidate(&wrong.to_string()).is_err());
         for field in ["image", "cues", "labels", "camera"] {
             let mut wrong = candidate();
