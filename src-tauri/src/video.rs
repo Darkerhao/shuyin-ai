@@ -42,9 +42,14 @@ fn visual_catalog() -> &'static VisualCatalog {
     })
 }
 
-pub fn storyboard_prompt() -> String {
+pub fn storyboard_prompt(theme: &str) -> String {
     format!(
-        "{PROMPT}\n可用绘图目录（仅可选用这些键）：\n{}",
+        "{PROMPT}\n{}\n可用绘图目录（仅可选用这些键）：\n{}",
+        if theme == "ink" {
+            include_str!("../../prompts/video-pencil-style-v1.md")
+        } else {
+            "本次画风：书卷手绘。保留物体、动作、关系对照和短标签的讲解构图。"
+        },
         include_str!("../video/visual-catalog.json")
     )
 }
@@ -73,7 +78,7 @@ pub fn storyboard_input(plan: &VideoPlan, first: usize, end: usize) -> String {
         plan.cues[from..to].iter().enumerate().map(|(offset, c)| serde_json::json!({"index": from + offset, "start": c.start, "end": c.end, "text": c.text})).collect::<Vec<_>>()
     };
     serde_json::json!({
-        "book": plan.title,
+        "book": plan.title, "theme": plan.theme,
         "duration": plan.duration,
         "opening": cues(0, plan.cues.len().min(6)),
         "ending": cues(plan.cues.len().saturating_sub(6), plan.cues.len()),
@@ -253,7 +258,7 @@ pub fn validate_theme(theme: &str) -> Result<(), String> {
     if VIDEO_THEMES.contains(&theme) {
         Ok(())
     } else {
-        Err("视频主题无效，请选择书卷手绘或水墨宣纸。".into())
+        Err("视频主题无效，请选择书卷手绘或铅笔素描。".into())
     }
 }
 
@@ -492,6 +497,22 @@ pub fn to_srt(cues: &[Cue]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pencil_and_classic_share_the_protocol_but_keep_distinct_drawing_rules() {
+        let pencil = storyboard_prompt("ink");
+        let classic = storyboard_prompt("classic");
+        assert!(pencil.contains("铅笔素描"));
+        assert!(pencil.contains("不生成图片"));
+        assert!(pencil.contains("排线"));
+        assert!(classic.contains("书卷手绘"));
+        assert!(!classic.contains("铅笔素描分镜规则"));
+        assert!(revision::prompt("ink").contains("铅笔素描分镜规则"));
+        for prompt in [&pencil, &classic] {
+            assert!(prompt.contains("台词"));
+            assert!(prompt.contains("maxSceneCues"));
+        }
+    }
+
     #[test]
     fn storyboard_batches_prefer_sentence_endings_without_losing_the_hard_limit() {
         let mut cues = (0..50)
@@ -780,7 +801,7 @@ mod tests {
         assert_eq!(visual_catalog().objects.len(), 93);
         assert_eq!(visual_catalog().environments.len(), 7);
         assert_eq!(visual_catalog().framings.len(), 4);
-        assert!(storyboard_prompt().contains("certificate"));
-        assert!(storyboard_prompt().contains("compass"));
+        assert!(storyboard_prompt("classic").contains("certificate"));
+        assert!(storyboard_prompt("classic").contains("compass"));
     }
 }

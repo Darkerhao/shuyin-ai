@@ -21,7 +21,7 @@ const audioPhases: Record<string, string> = { measuring_audio: '分析', normali
 const renderStep = computed(() => progress.value?.phase === 'checking_video' ? renderSteps.length : renderSteps.findIndex(item => item.phase === (audioPhases[progress.value?.phase ?? ''] ? 'muxing_audio' : progress.value?.phase)))
 const steps = computed(() => props.job.plan.imageProviderId
   ? ['原声字幕', '细致水墨画', '确认画面', '合成原声字幕', '成片归档']
-  : ['原声字幕', '动画分镜', '确认分镜', '画面渲染', '成片归档'])
+  : ['原声字幕', props.job.plan.theme === 'ink' ? '素描分镜' : '手绘分镜', '确认分镜', '画面渲染', '成片归档'])
 const step = computed(() => {
   if (props.job.status === 'succeeded') return steps.value.length
   if (props.job.status === 'awaiting_confirmation') return 2
@@ -61,7 +61,7 @@ const copy = computed<[string, string]>(() => {
   if (job.status === 'awaiting_confirmation' && job.preview) return ['试片已就绪，完整视频尚未生成', '请播放片段并检查分镜；修改后重新试片，最后再确认完整视频。']
   if (job.status === 'awaiting_confirmation' && job.plan.imageProviderId) return painted.value === job.plan.scenes.length && painted.value > 0
     ? ['水墨画作已就绪，等你过目', '本次字幕、画面描述与逐镜画作已保存。请检查画面、试听原声并生成试片，再确认成片。']
-    : ['水墨画面需要继续准备', '保存画面修改后，点击继续准备，只绘制尚未完成的镜头。全部画作就绪后可以生成试片或成片。']
+    : ['旧版图片水墨尚未完成', '已保存图片保留，不再补图。请用原字幕制作新的铅笔素描视频。']
   if (job.status === 'awaiting_confirmation') return ['分镜已就绪，等你过目', '字幕与动画分镜已保存。向下校对，确认后再开始制作视频。']
   if (job.status === 'succeeded') return ['你的原声，已有了画面', '成片和字幕已保存，可在下方播放，或选用到发布准备。']
   if (job.status === 'failed') return ['这一步没有完成', `停在「${videoStages[job.stage] || job.stage}」。已保存的字幕与分镜保留，可检查原因后继续。`]
@@ -74,7 +74,7 @@ const copy = computed<[string, string]>(() => {
   if (phase && phaseCopy[phase]) return phaseCopy[phase]
   if (job.stage === 'transcribing') return ['正在准备原声识别', '本地语音模型正在准备，首段字幕返回后会在这里实时显示。']
   if (job.stage === 'storyboard') return ['正在把文字编排成画面', '按批次生成动画分镜，完成的分镜会持续保存。全部就绪后交给你确认。']
-  if (job.stage === 'painting') return ['正在逐镜绘制精细水墨画', '依据实际旁白与画面描述生成完整画作。每完成一张立即保存，失败或停止后可以从未完成的画面继续。']
+  if (job.stage === 'painting') return ['旧版图片水墨任务', '已保存成果保留；请停止后用原字幕制作铅笔素描新版。']
   if (job.stage === 'rendering') return ['正在准备视频画面', '正在启动绘制环境，随后逐镜检查排版、绘制画面并合入原声。']
   if (job.stage === 'validating') return ['正在为成片收尾', '核对视频与字幕，登记到本书素材后即可播放。']
   return ['正在准备这次创作', '检查原声音频与运行环境，随后开始制作。']

@@ -437,7 +437,7 @@ it('makes a separate version from the completed task audio and saved subtitles',
   const wrapper = await render()
   const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版'))!
   await remake.trigger('click'); await flushPromises()
-  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'ink', 'im1')
+  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'ink', null)
   expect(api.savePlan).not.toHaveBeenCalled()
 })
 
@@ -445,21 +445,20 @@ it('lets a new version use the selected classic theme', async () => {
   vi.mocked(api.listJobs).mockResolvedValue([{ ...job, status: 'succeeded', videoAssetId: 'v1' }])
   vi.mocked(api.startJob).mockResolvedValue({ ...job, id: 'j3', status: 'running', plan: { ...job.plan, cues: [], scenes: [] } })
   const wrapper = await render()
-  await chooseSelect(wrapper, '#video-theme', '书卷手绘')
+  await wrapper.get('input[name="video-theme"][value="classic"]').setValue(true)
   const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版'))!
   await remake.trigger('click'); await flushPromises()
   expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'classic', null)
 })
 
-it('requires a painting model for a new ink video and explains the per-scene cost', async () => {
+it('creates an ink video without any enabled image provider', async () => {
   vi.mocked(api.listJobs).mockResolvedValue([])
   vi.mocked(ai.listProviders).mockResolvedValue([{ ...emptyProvider(), id: 'm1', modelKind: 'text', name: '文本模型', isEnabled: true, credentialStatus: 'available' }])
   const wrapper = await render()
-  expect(wrapper.text()).toContain('每镜调用所选图片模型')
-  expect(wrapper.get('.video-primary-action').attributes('disabled')).toBeDefined()
-  await chooseSelect(wrapper, '#video-theme', '书卷手绘')
+  expect(wrapper.text()).toContain('不自动生成图片')
   expect(wrapper.get('.video-primary-action').attributes('disabled')).toBeUndefined()
-  expect(api.startJob).not.toHaveBeenCalled()
+  await wrapper.get('.video-primary-action').trigger('click'); await flushPromises()
+  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', null, null, 'ink', null)
 })
 
 it('shows unfinished ink directions without treating them as legacy drawings or allowing render', async () => {
@@ -471,12 +470,12 @@ it('shows unfinished ink directions without treating them as legacy drawings or 
   vi.mocked(api.listJobs).mockResolvedValue([current])
   const wrapper = await render()
   expect(wrapper.find('[aria-label="第1镜水墨画面描述"]').exists()).toBe(true)
-  expect(wrapper.findAll('button').some(button => button.text() === '继续准备字幕、分镜与水墨画作')).toBe(true)
+  expect(wrapper.findAll('button').some(button => button.text() === '继续准备字幕、分镜与水墨画作')).toBe(false)
   expect(wrapper.findAll('button').find(button => button.text().includes('确认并生成视频'))?.attributes('disabled')).toBeDefined()
   expect(wrapper.get('[data-test="preview-video"]').attributes('disabled')).toBeDefined()
 })
 
-it('continues missing ink paintings without requiring an available text model', async () => {
+it('keeps unfinished old paintings readable without offering paid continuation', async () => {
   const current = structuredClone(job)
   current.status = 'failed'
   current.stage = 'painting'
@@ -489,10 +488,9 @@ it('continues missing ink paintings without requiring an available text model', 
   vi.mocked(api.listJobs).mockResolvedValue([current])
   vi.mocked(api.continueJob).mockResolvedValue({ ...current, status: 'running', stage: 'painting', runId: 2 })
   const wrapper = await render()
-  const resume = wrapper.findAll('button').find(button => button.text() === '继续准备字幕、分镜与水墨画作')!
-  expect(resume.attributes('disabled')).toBeUndefined()
-  await resume.trigger('click'); await flushPromises()
-  expect(api.continueJob).toHaveBeenCalledExactlyOnceWith('j1', false, null)
+  expect(wrapper.text()).toContain('不再补图')
+  expect(wrapper.findAll('button').some(button => button.text() === '继续准备字幕、分镜与水墨画作')).toBe(false)
+  expect(api.continueJob).not.toHaveBeenCalled()
 })
 
 it('saves an image scene as a complete plan without treating it as a legacy text storyboard', async () => {

@@ -13,6 +13,7 @@ import { visualCatalog, type VideoCue, type VideoScene, type VideoSceneImage } f
 defineProps<{
   projectId: string; chapterId?: string | null; sceneIndex: number; cues: VideoCue[]
   assets: Asset[]; providers: ModelProvider[]; disabled: boolean; imageDisabled: boolean
+  localPencil?: boolean
   revisionDisabled: boolean
   playing?: boolean; audioAvailable?: boolean
 }>()
@@ -143,13 +144,13 @@ function setSceneImage(image: VideoSceneImage | undefined) {
       <Textarea
         :id="`scene-${sceneIndex}-painting`"
         v-model="scene.painting.description"
-        :disabled="disabled"
+        disabled
         :aria-label="`第${sceneIndex + 1}镜水墨画面描述`"
         maxlength="1200"
         rows="5"
       />
       <p class="muted">
-        修改画面描述后保存，再点击继续准备，只重新绘制发生变化的镜头。单镜手绘调整不适用于水墨画作。
+        旧版图片描述仅供查看，不再生成或补图。可用原字幕制作新的铅笔素描视频。
       </p>
       <label :for="`scene-${sceneIndex}-motion`">画面运镜</label>
       <Select
@@ -175,6 +176,7 @@ function setSceneImage(image: VideoSceneImage | undefined) {
       </Select>
     </div>
     <VideoImageEditor
+      v-if="!localPencil"
       :project-id="projectId"
       :chapter-id="chapterId"
       :scene-index="sceneIndex"

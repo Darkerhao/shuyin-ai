@@ -2,10 +2,10 @@ use super::{parse_srt, storyboard_prompt, validate_scenes, Cue, Scene};
 use serde::{Deserialize, Serialize};
 
 pub const PROMPT_VERSION: &str = "video-scene-revision-v1";
-pub fn prompt() -> String {
+pub fn prompt(theme: &str) -> String {
     format!(
         "{}\n{}",
-        storyboard_prompt(),
+        storyboard_prompt(theme),
         include_str!("../../../prompts/video-scene-revision-v1.md")
     )
 }

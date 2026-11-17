@@ -1,8 +1,7 @@
 use super::*;
-use crate::{
-    database::image_generation::ImageGenerationInput,
-    video::{ink, SceneImage},
-};
+use crate::video::SceneImage;
+#[cfg(test)]
+use crate::{database::image_generation::ImageGenerationInput, video::ink};
 
 pub(crate) fn bound_job(
     c: &Connection,
@@ -32,6 +31,7 @@ pub(crate) fn bound_job(
 }
 
 impl Database {
+    #[cfg(test)]
     pub(crate) fn prepare_video_painting(
         &self,
         id: &str,
@@ -115,11 +115,12 @@ mod tests {
             Ok(())
         }).unwrap();
         input.theme = Some("ink".into());
-        input.image_provider_id = Some("ink-image".into());
+        input.image_provider_id = None;
         let job = db.create_video_job(input).unwrap();
         let mut job = db
             .claim_video_job(&job.id, VideoWork::Prepare, None)
             .unwrap();
+        job.plan.image_provider_id = Some("ink-image".into());
         job.plan.duration = 8.0;
         job.plan.cues = serde_json::from_value(
             json!([{"start":0,"end":4,"text":"江岸读书"},{"start":4,"end":8,"text":"远山渐隐"}]),

@@ -54,6 +54,8 @@ fn preview_signature(plan: &video::VideoPlan) -> Result<String, String> {
     hash.update(include_bytes!("../video/render.mjs"));
     hash.update(include_bytes!("../video/illustrations.js"));
     hash.update(include_bytes!("../video/ink-painting.js"));
+    hash.update(include_bytes!("../video/pencil-style.js"));
+    hash.update(include_bytes!("../video/pencil-look.json"));
     hash.update(include_bytes!("../video/visual-catalog.json"));
     Ok(hash
         .finalize()
@@ -165,7 +167,7 @@ pub async fn execute_video_scene_revision(
     let id = id.as_str();
     let scene = ai_commands::run_task(database, active.inner(), id, |mut receiver| async move {
         let prepared = database.prepare_video_scene_revision(id).map_err(AiError::database)?;
-        let request = ai_commands::request(prepared.provider, vault, &video::revision::prompt(), prepared.user)?;
+        let request = ai_commands::request(prepared.provider, vault, &video::revision::prompt(&prepared.theme), prepared.user)?;
         let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?.observed(database,Some(id),"video_scene_revision");
         let raw = tokio::select! {
             biased;
@@ -584,6 +586,11 @@ async fn execute(
 ) -> Result<(), String> {
     let db = app.state::<Database>();
     let settings = db.video_settings()?;
+    if matches!(work, VideoWork::Prepare) && job.plan.image_provider_id.is_some() {
+        return Err(
+            "这是旧版图片水墨任务。请使用原字幕制作铅笔素描新版，不再生成或补充图片。".into(),
+        );
+    }
     let audio = db.video_asset_path(
         &job.project_id,
         job.audio_asset_id
@@ -638,6 +645,14 @@ async fn execute(
     process::write_new(
         &directory.join("illustrations.js"),
         include_bytes!("../video/illustrations.js"),
+    )?;
+    process::write_new(
+        &directory.join("pencil-style.js"),
+        include_bytes!("../video/pencil-style.js"),
+    )?;
+    process::write_new(
+        &directory.join("pencil-look.json"),
+        include_bytes!("../video/pencil-look.json"),
     )?;
     process::write_new(
         &directory.join("ink-painting.js"),
@@ -837,64 +852,21 @@ async fn execute(
         let request = ai_commands::request(
             config.clone(),
             app.state::<SystemCredentials>().inner(),
-            &if job.plan.image_provider_id.is_some() {
-                video::ink::prompt()
-            } else {
-                video::storyboard_prompt()
-            },
-            if job.plan.image_provider_id.is_some() {
-                video::ink::input(&job.plan, first, end)
-            } else {
-                user
-            },
+            &video::storyboard_prompt(&job.plan.theme),
+            user,
         )
         .map_err(|error| video::model_failure(error.message))?;
         let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)
             .map_err(|error| video::model_failure(error.message))?
             .observed(&db, Some(&job.id), "storyboard");
         let raw = tokio::select! { biased; _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()), response = provider.generate(request) => response.map_err(|error| video::model_failure(error.message))? };
-        let scenes = if job.plan.image_provider_id.is_some() {
-            video::ink::parse(&raw, first, end)
-        } else {
-            video::parse_storyboard(&raw, first, end)
-        }
-        .map_err(video::model_failure)?;
+        let scenes = video::parse_storyboard(&raw, first, end).map_err(video::model_failure)?;
         job.plan.scenes.extend(scenes);
         db.save_video_progress(&job.id, job.run_id, &job.plan, "storyboard")?;
         first = end;
     }
     if flag.load(Ordering::SeqCst) {
         return Err("视频任务已停止。".into());
-    }
-    if job.plan.image_provider_id.is_some() {
-        for index in 0..job.plan.scenes.len() {
-            if flag.load(Ordering::SeqCst) {
-                return Err("视频任务已停止。".into());
-            }
-            if job.plan.scenes[index].image.is_some() {
-                continue;
-            }
-            let task = db.prepare_video_painting(&job.id, job.run_id, index)?;
-            crate::cover_commands::execute_image_task(
-                None,
-                &db,
-                app.state::<SystemCredentials>().inner(),
-                app.state::<crate::ai::ActiveTasks>().inner(),
-                &task,
-                "video_ink",
-                Some(flag.clone()),
-            )
-            .await
-            .map_err(|e| {
-                format!(
-                    "第{}镜水墨画作生成失败：{} 已完成画作保留，继续时只处理未完成镜头。",
-                    index + 1,
-                    e.message
-                )
-            })?;
-            job = db.video_job(&job.id)?;
-        }
-        db.video_image_snapshots(&job.project_id, &job.plan.scenes, job.chapter_id.as_deref())?;
     }
     db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")?;
     crate::completion::notify(

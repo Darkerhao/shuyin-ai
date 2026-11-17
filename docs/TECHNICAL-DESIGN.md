@@ -1,10 +1,16 @@
 # 书引 AI 技术设计文档
 
+## Frametell 本地铅笔素描（2026-11-17，当前实现）
+
+内部继续使用 `theme=ink/classic`，界面将本地 ink 显示为「铅笔素描」。`render.mjs` 使用 `META.style='study'`；无 `imageProviderId` 的 ink 计划附加单色 `pencil-look.json` 和 `pencil-style.js`。专属书页、书卷、人物、树木与山石轮廓/细节/排线，及其他原目录图形，均通过原 Frametell Builder 构建确定性路径，不读取场景图片；原填色改为铅笔排线，移除前序本地毛笔提按与墨块。
+
+`pencil-style.sequence` 在构建阶段按原动作的真实路径长度分配 `at/dur`，同 cue 主体依次共享下一 cue 或镜尾之前的绘制窗口。`mount` 在原 `P.tick` 中使用正在绘制动作的 `tip()` 与 HUD 逆变换显示笔尖，不新增计时器或像素缓存。试片保留全镜 `drawDuration`，重复帧和跳转使用相同源时钟。后端嵌入、预览签名及 Node 缓存都包含 pencil 文件；单镜与整批 Prompt 使用保存的 `plan.theme`。新视频拒绝逐镜图片模型，旧图片任务仍保留原图读取。无 schema、依赖或外部引擎变更，详见[实现与验证](PENCIL-VIDEO.md)。
+
 ## 音频临时创建路由（2026-11-16）
 
 页面 `isNotebookPath` 和 SQLite 笔记本地址校验都排除 `/notebook/creating`。页面调度在该路由只返回等待；已经记录地址的任务返回明确恢复提示，不继续来源或生成操作。旧任务只有显式 `reopen_browser`、准备阶段及全部提交/下载/素材标记为空时，才清除临时地址并停在 `paused/verify_remote`，原窗口打开首页，再复用原生空白笔记本确认和原任务上传路径。不增加状态、IPC、依赖或迁移，见[创建页修复](IN-APP-AUDIO-VERIFICATION.md#临时创建页误识别修复2026-11-16)。
 
-## 细致水墨视频与双主题（2026-11-16）
+## 细致水墨视频与双主题（2026-11-16，历史实现）
 
 `VideoPlan` 保留可选 `theme`（`classic` / `ink`），并以可选 `imageProviderId` 明确新逐镜水墨任务。只有这个字段存在时才按字幕设计绘画、逐镜调用 `ImageProvider` 和锁定渲染流程；旧 `ink` 计划没有此字段时走原画面，不因升级增加图片费用。自动流程的可选 `selection.detailedInk` 默认关闭，手动创建固定本次图片模型。所有状态和素材复用 `plan_json`、`ai_tasks`、`assets`；schema25无迁移。
 
