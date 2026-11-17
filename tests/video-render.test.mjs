@@ -105,6 +105,22 @@ test('the saved theme reaches every page and unknown themes are rejected', () =>
   assert.equal(context.SCRIPT.META.theme, 'ink');
   assert.throws(() => buildEpisode({ ...plan, theme: 'watercolor' }), /Unknown video theme/);
 });
+test('local pencil uses a monochrome look without scene images and leaves classic and saved paintings on their original style', () => {
+  const context = { TIMING: {} };
+  vm.runInNewContext(buildEpisode({ ...plan, theme: 'ink' }).script, context);
+  assert.equal(context.SCRIPT.META.style, 'study');
+  assert(context.SCRIPT.META.look.line.sw < 2);
+  for (const [name, color] of Object.entries(context.SCRIPT.META.look.palette)) {
+    if (name === 'paper') continue;
+    const channels = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16));
+    assert(Math.max(...channels) - Math.min(...channels) <= 8, `${name} must be a graphite grey`);
+  }
+  assert.equal(Object.keys(context.SCRIPT.INK_IMAGES).length, 0);
+  const classic = { TIMING: {} };
+  vm.runInNewContext(buildEpisode(plan).script, classic);
+  assert.equal(classic.SCRIPT.META.style, 'study');
+  assert.equal(classic.SCRIPT.META.look, undefined);
+});
 test('detailed ink scenes keep their original drawing clock in previews and require completed paintings', () => {
   const sha256 = 'a'.repeat(64);
   const painting = { description: '近景书页有细密皴擦和纸边纤维，中景阅读人物的侧影与书桌保持清楚，衣袖笔触细腻；远景江岸和山峰以浓淡墨色层层展开，细节丰富并留出呼吸空间。人物手势和书页方向清楚对应叙述。', motion: 'push_in', taskId: 'paint1' };
@@ -118,6 +134,9 @@ test('detailed ink scenes keep their original drawing clock in previews and requ
   assert.equal(short.pages[0].image.at, 0);
   assert.equal(full.pages[0].image.src, 'ink-image:art');
   assert.equal(full.script.match(/data:image\/png;base64,Zg==/g)?.length, 1, 'Each painting is embedded once under the frozen asset ID.');
+  const legacy = { TIMING: {} };
+  vm.runInNewContext(full.script, legacy);
+  assert.equal(legacy.SCRIPT.META.look, undefined, 'Saved image paintings must not become pencil drawings.');
   assert.throws(() => buildEpisode(input, undefined, { art: { src: `assets/${sha256}.png`, sha256 } }), /host-verified/i);
   assert.throws(() => buildEpisode({ ...input, scenes: input.scenes.map(scene => ({ ...scene, image: undefined })) }), /painting|画作/i);
   const tooShort = input.scenes.map(scene => ({ ...scene, painting: { ...scene.painting, description: '水墨'.repeat(39) } }));
@@ -218,17 +237,54 @@ function drawing(input, index = 0, range, images) {
   const result = buildEpisode(input, range, images);
   const page = result.pages.find(p => p.sourceIndex === index);
   const calls = [], moves = [], live = [], cameras = [];
+  const sh = { acts: [] };
   let layers = 0;
-  const builder = (layer = 0) => new Proxy({ page, wrap: { style: {} }, c: i => page.cues[i].start - page.start, layer: () => builder(++layers), move: (_, fn) => moves.push(fn), liveRough: fn => live.push(fn), cam: keys => cameras.push(keys) }, {
-    get(target, key) { return key in target ? target[key] : (...args) => { calls.push({ layer, method: key, args }); }; },
+  const builder = (layer = 0) => new Proxy({ page, sh, svg: {}, wrap: { style: {} }, c: i => page.cues[i].start - page.start, layer: () => builder(++layers), move: (_, fn) => moves.push(fn), liveRough: fn => live.push(fn), cam: keys => cameras.push(keys) }, {
+    get(target, key) { return key in target ? target[key] : (...args) => {
+      calls.push({ layer, method: key, args });
+      if (['path', 'line', 'box', 'circle', 'ellipse'].includes(key)) {
+        const options = args.at(-1);
+        sh.acts.push({ layer, kind: 'draw', at: options.at ?? 0, dur: options.dur ?? .9, pen: options.pen !== false, g: { querySelectorAll: () => [{ getTotalLength: () => 100 }] } });
+      }
+    }; },
   });
-  const context = { SCRIPT: { META: { title: input.title } }, PV: { K: (t, at, duration) => Math.max(0, Math.min(1, (t - at) / duration)), col: () => '#FBF8F1' }, window: {}, document: { createElement: () => ({}), head: { appendChild() {} } } };
+  const context = { SCRIPT: { META: { title: input.title } }, PV: { K: (t, at, duration) => Math.max(0, Math.min(1, (t - at) / duration)), col: () => '#FBF8F1', ease: { lin: t => t }, s: () => ({ style: {} }) }, window: {}, document: { createElement: () => ({}), head: { appendChild() {} } } };
   vm.runInNewContext(result.visuals, context);
   const root = builder();
   root.hud = builder(-1);
   context.window.EPISODE.draw(root);
-  return { calls: JSON.parse(JSON.stringify(calls)), cameras: JSON.parse(JSON.stringify(cameras)), at: t => JSON.parse(JSON.stringify([...moves.map(fn => fn(t)), ...live.map(fn => fn(t, { line: (...args) => args }))])) };
+  return { calls: JSON.parse(JSON.stringify(calls)), strokes: sh.acts.map(({ layer, at, dur }) => ({ layer, at, dur })), cameras: JSON.parse(JSON.stringify(cameras)), at: t => JSON.parse(JSON.stringify([...moves.map(fn => fn(t)), ...live.map(fn => fn(t, { line: (...args) => args }))])) };
 }
+
+test('pencil subjects draw one stroke at a time within the real scene window, including ordinary catalog objects', () => {
+  for (const object of ['book', 'scroll', 'person', 'tree', 'mountain', 'crown']) {
+    const input = { ...plan, theme: 'ink', scenes: [{ first: 0, last: 1, kind: 'focus', title: '素描', beats: [{ cue: 0, object, action: 'draw', label: '主体' }] }] };
+    const result = drawing(input);
+    const strokes = result.strokes.filter(stroke => stroke.at >= .5);
+    assert(strokes.length >= 3, object);
+    assert.equal(strokes[0].at, .5, `${object} starts at its subtitle anchor`);
+    for (let i = 1; i < strokes.length; i++) assert(strokes[i].at >= strokes[i - 1].at + strokes[i - 1].dur, `${object} must finish a stroke before the next`);
+    assert(strokes.at(-1).at + strokes.at(-1).dur < input.duration);
+    const filled = result.calls.filter(call => call.args.at(-1)?.fill);
+    assert(filled.every(call => call.args.at(-1).fillStyle === 'hachure'), `${object} uses pencil hatching rather than solid washes`);
+  }
+});
+
+test('same-cue pencil subjects share one drawing interval and future subjects never appear before their subtitle', () => {
+  const input = { ...plan, theme: 'ink', scenes: [{ first: 0, last: 1, kind: 'focus', title: '逐笔成形', beats: [
+    { cue: 0, object: 'book', action: 'draw', label: '书页' },
+    { cue: 0, object: 'person', action: 'draw', label: '读者' },
+    { cue: 1, object: 'tree', action: 'draw', label: '树木' },
+  ] }] };
+  const full = drawing(input), preview = drawing(input, 0, { start: 0, end: 8 });
+  const strokes = full.strokes.filter(stroke => stroke.at >= .5);
+  for (let i = 1; i < strokes.length; i++) assert(strokes[i].at >= strokes[i - 1].at + strokes[i - 1].dur);
+  const treeLayer = full.calls.find(call => call.method === 'path' && call.args[0].startsWith('M-28 148')).layer;
+  assert.equal(strokes.find(stroke => stroke.layer === treeLayer).at, 5);
+  assert.deepEqual(preview.strokes, full.strokes, 'A short preview must not speed up the drawing.');
+  assert.deepEqual(preview.calls, full.calls);
+  assert.deepEqual(full.at(6), preview.at(6));
+});
 
 test('P1 compiles controlled environments and framings while old plans keep plain/reference without being rewritten', () => {
   const original = JSON.stringify(plan);
@@ -441,7 +497,7 @@ test('every catalog object has the reference drawing and every action is finite 
   const normalized = source.replaceAll('\r\n', '\n');
   const geometry = normalized.slice(normalized.indexOf('  function sketch('), normalized.indexOf('  function draw('));
   const reference = geometry.replace(/ {6}\/\/ P1 objects[^\n]*\n[\s\S]*?(?= {6}default: throw)/, '');
-  assert.equal(createHash('sha256').update(reference).digest('hex'), '96a6bc4e09c4440682d68e97f417b1357cf38c7a0a327482084d8f590b36fe9b', 'Keep all 85 reference cases and primitives byte-for-byte, excluding only the appended P1 cases.');
+  assert.equal(createHash('sha256').update(reference).digest('hex'), 'd295019dea5412d8f073ba30b3da1d95f697ffb301c8fe30b5be9716296f41fc', 'Keep the 85 reference cases and their shared theme options fixed, excluding only the appended P1 cases.');
   assert.deepEqual(new Set([...geometry.matchAll(/case '([^']+)'/g)].map(match => match[1])), new Set(Object.keys(catalog.objects)));
   assert.equal(Object.keys(catalog.objects).length, 93);
   for (const object of Object.keys(catalog.objects)) {

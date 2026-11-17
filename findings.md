@@ -1,3 +1,58 @@
+# 铅笔素描逐笔视频（2026-11-17）
+
+- 最终验证通过：原生1920×1080/DPR1，3个同源时间点PNG相同、4组回退相同。笔画20%/50%/80%时dashoffset102.9→64.3→25.7，笔尖误差约0.000028px；Engine/颜色错误0。最终编译脚本与渲染源文件匹配当前源码。
+- 最终素描成片17.90秒/428帧/1920×1080p24/AAC双声道48kHz/-16.6LUFS/-1.9dBTP；试片4.013秒/96帧。FFmpeg10 PASS/1独立软字幕轨WARN/0失败；联系表和局部笔尖帧已查看。浏览器空间7和静态服务24318已关闭。
+
+- 本轮当前验证：相关Vue79通过，Rust332通过/2原有忽略，Node视频与音量53通过，lint/类型/构建/fmt/Clippy通过。素描与书卷完整样片容器17.90秒，素描试片4.01秒；真实引擎layout-check为空，FFmpeg内容检查0失败/1独立软字幕轨WARN。
+- ego-browser空间7已查看真实逐笔帧：笔尖可见，无Engine/颜色错误。默认截图实际为1185×795、系统DPR1.5；首次回退121个边缘像素相差1，但DOM完全一致。使用CDP原生1920×1080、DPR1后四组回退PNG完全一致。
+- 原生试片/成片首次像素比较仍有7581个边缘像素相差最多2，构图/笔画/字幕完全同位；正在用同一浏览器核对默认multiply与normal混合方式，未放宽精确一致性断言或修改产品兜底。
+- 根因已通过浏览器对照验证：试片/成片cam与hud的HTML、笔尖和根opacity完全一致；单独改multiply为normal仍有色差。仅关闭base.css中整页的will-change:opacity,transform后，保留原multiply的两帧PNG完全相同；关闭混合的组合也相同。当前pageMotion=false的素描不需要整页提升，在项目pencil CSS增加.page{will-change:auto}直接消除合成缓存差异，不改外部引擎、不放宽像素断言。
+
+- 用户将画风明确为铅笔素描逐笔成形。当前真实源码已有本地工作流，但 ink-style.js 采用宽度提按、白色飞白、实体淡墨填充；ink-look.json 保留彩色色板，illustrations.js 还会铺主体/环境墨块。这些是效果仍像水墨的实际来源。
+- 现有 Frametell core.js:113—180 支持静态路径按长度逐笔显现和笔尖取样，core.js:191—224 支持单笔轮廓与 hachure 排线；look.js 支持 palette 和 line。无需从图片提取轮廓或引入另一个绘图库。
+- 当前工作区前序修改已备份到 output/pencil-sketch-20261117/before/ 和 before.json。本轮只替换本地画风、文案、Prompt 与必要回归，旧图片 rendering/资产保留。
+- 保留 theme=ink 作为已存储的内部键，将新本地画风显示为“铅笔素描”；替换前序尚未提交的 ink-style/ink-look 为单一 pencil 实现，避免双路径和迁移。
+- ui-ux-pro-max 的 form labels clarity 搜索返回 Form Labels 与 Heading Clarity：沿用现有可见画风标签和同一选项名称，不新增界面或独立设置。
+- 初次批量读取产生过长输出，后续使用有界源码片段。一次搜索不存在的 runtime/styles.js、一次不存在的目录通配路径是只读查找错误，未修改源文件。session-catchup 无额外恢复信息。
+
+# Frametell原生项目水墨实现（2026-11-17）
+
+- 用户本次明确要求基于Frametell实现自己的项目水墨风格，进入实施。先前仅计划的约束由本次实现请求更新；保留原手绘独立选择及水墨零生图要求。
+- 已直接读取官方v0.8.0 styles/ink-wash/style.js和runtime/look.js，以及本机boot/core/look/ink-wash/style实现。原生META.look支持palette/fonts/line；项目extras在core之后、main之前加载，能在同一Builder/时间轴上提供纸纹及笔触扩展。
+- 项目render.mjs:73目前始终META.style=study；illustrations仅在运行时Proxy改色、铺椭圆并滤镜。此处是未真正利用原生风格接口的准确位置。选择project-owned look配置与extras，不修改第三方engine或引入依赖，升级另行验收。
+- 官方ink-wash包提供色调/背景基础，并非自动生成细致场景。项目自己的笔触、书卷/人物/植物/山石细节仍需受信任本地代码；无图片源。
+
+# 本地逐笔水墨视频：当前调查（2026-11-16）
+
+- 用户追加：生成分镜前明确选择水墨画/原书卷手绘，两种画风独立保留；引擎可以升级则评估并纳入计划。截图红框指向第02阶段“细致水墨画”，该步骤应改为实际任务画风对应的分镜阶段；进度条不承担选择器职责。
+- 当前代码已有 VideoPlan.theme=ink/classic 和手动/自动新建主题Select，但手动控件在可折叠制作设置中；VideoJobProgress的第02阶段依据imageProviderId而不是画风。已有图形分镜Prompt和单镜修订Prompt未接收theme参数，方案需要把所选画风传入整批生成与单镜修订，不能只改变渲染配色。
+- 当前应用runtime.mjs只接受Frametell0.7.3，引擎升级必须同时适配真实版本校验、环境提示、缓存与预览签名；只替换外部目录会被拒绝。截图显示安装版0.67.1，本仓库package.json为0.67.0，截图仅作为交互需求依据，不据此推断运行安装版源码。
+- 本次应用ui-ux-pro-max、deps-check和research技能；research明确要求后台研究，已委派唯一研究子任务查询官方版本和源码，仅写output下研究记录，不修改产品/计划文件。
+- 用户截图已查看；现有remake虽可复用源音频/SRT，但按钮仅在succeeded时显示，计划必须扩展未完成且已停止任务的新版入口才能闭环。现有单镜修订PreparedSceneRevision不含theme，需要后端从对应plan带入共同Prompt规则组合入口；不能信任新任务选择器替旧任务决定画风。
+- 已在主计划增加两种画风对照、生成入口附近的并排单选、任务冻结/新版切换、截图第02阶段及0/0张提示的替换、单镜/自动/恢复的theme一致性。VIDEO-THEMES增加明确待实施说明，当前生产事实仍保留。
+- 官方研究已返回：GitHub最新Release为v0.7.4，官方v0.8.0标签固定SHA36b15a8fd4094dc3274a6cd4158c87bd0bdc95c9，但该版本Release与engine npm元数据为404；仅把完整0.8.0源码作为隔离候选，不宣称存在可安装npm最新包。0.7.4对engine只改包版本；Rough.js本机/registry均4.6.6，无需升级。
+- 本机引擎声明0.7.3，但core/live/main等于上游0.8.0，engine/boot/render/project等于0.7.3/0.7.4，属实际内容混合；不推断原因，不原地覆盖。0.8.0无原生毛笔笔压，新增对象编辑/竖屏等不自动提升水墨效果。
+- 精读确认Node render.mjs:296缓存key只含engine路径（不含pkg.version或内容），Rust preview_signature同样不含外部引擎；计划统一引擎快照指纹。精确版本门禁升级后回退必须连同匹配应用适配与路径恢复，不能只改旧目录路径。
+- 研究证据为output/ink-stroke-plan/engine-upgrade-research.md；官方URLs已纳入主计划。产品/引擎/依赖未安装或更改，0.8.0实际渲染尚未执行。
+- 修订收尾检查通过：7份Markdown编码/冲突检查，4份功能文档100个本地链接及源代码引用行号，E0/P0—P3阶段、12项连续验收、新计划尾空白及git diff --check。初版5项绘制测试未重跑，当前计划与升级尚不具备产品验收结果。
+- 2026-11-17已接入 `src-tauri/video/ink-look.json`、`ink-style.js` 和 `prompts/video-ink-style-v1.md`：新theme=ink且无imageProviderId时写入META.style=ink-wash/META.look，脚本INK_IMAGES为空；书卷theme=classic继续study/原几何。
+- 后端新视频拒绝imageProviderId，分镜统一调用theme规则，单镜修订PreparedSceneRevision携带保存theme；旧图片任务仍可读但准备阶段提示用原字幕制作本地新版。自动视频不再把detailedInk绑定为video图片任务，图片Provider保留封面用途。
+- 实际短片输出：`output/shuyin-ink-style-20261117-v2/{ink,classic}/video.mp4`，两份均17.90秒、1920×1080、AAC双声道、constant VFR；layout-check为空，FFmpeg custom检查0失败/字幕轨WARN。ink/classic contact sheet已查看；水墨能看到纸色、淡墨和本地笔画，但细节密度仍属短片原型，不宣称成品画质。
+- 本轮相关Vitest 5文件79通过且无未处理错误；Rust lib 331通过/2忽略，cargo check、fmt、clippy通过；Node video-render 44通过；lint/typecheck通过。npm警告为既有用户配置提示。
+- 用户明确纠正水墨制作方向：应复用已有画线工具，避免逐镜图片生成费用和等待；当前只要求计划。
+- 启动工作区 main/7b555c3，git status --short 为空；当前实现已提交，不能将旧规划里的“尚未提交”视为现状。
+- 当前 docs/INK-VIDEO.md 与 src-tauri/src/video/ink.rs、database/video/ink.rs、video/render.mjs 明确存在 painting / imageProviderId 的逐镜图片分支；src-tauri/video/illustrations.js 仍有逐笔几何绘制与 ink 主题。
+- 原计划、发现及进度文件含大量历史记录。首次读取输出截断，后续改为有界片段；一次 rg 使用不存在的 src/domain 和 PowerShell 未展开通配符产生只读搜索错误，后续使用真实目录及 rg -g 文件过滤。
+- 本轮需要进一步核对 Frametell 0.7.3 实际源码及图形 API，才能确定最小接入边界；不引入新渲染引擎或图片服务作为计划前提。
+- 已确认实际引擎为 D:/MyWork/project/JIAZI-PROJECT/whiteboard-teacher-video/engine，package.json 版本0.7.3；runtime/core.js 的 Builder 提供 layer/path/line/curve、固定seed、笔画按长度显现及水彩填充，runtime/main.js 已有本地SVG纸纹。无需引入另一套图形库；liveRough 每帧清空并重建动态几何，静态细节应预先构建、沿原act/tick时钟显现，避免把细节全部改成每帧重新生成。
+- visual-catalog.json 实际为93种物体、7种环境、13种构图类别、6种动作；原协议限制每镜最多3个叙事主体，不代表最多3条笔画，单一主体可由更多本地受信任笔触构成。现有 mountain/tree 等确实仅少量几何，不能承诺仅关闭图片开关即达到精细水墨效果。
+- 准确收费链：VideoPage.vue:215—216 → database/video.rs:320—325 固定 imageProviderId → video_commands.rs:840—859 切换painting分镜 → :869—895 循环 execute_image_task(kind=video_ink)；ink-painting.js:39—62 从已有图像采样线条、:84—87显现原图。这不是本地引擎必需条件，而是当前新增制作路径。
+- 手动入口强制图片模型；自动入口 AutomationSetup.vue:45/98 新任务按ink生成detailedInk，automation.rs:410—414 传递图片模型。全自动原本的图片模型还用于三比例封面，必须区分视频逐镜图片请求与既有封面用途，不能误称整条发布流程完全无图片调用。
+- 实际基线验证：Node v24.22.2；按名称选择运行 tests/video-render.test.mjs 中5项主题、全部目录、原声时钟、环境和截断试片回归，5通过/0失败。仅验证现有基础，并非新毛笔视觉或真实引擎视频验收。
+- 调查期额外一次 rg 引用了不存在的 src-tauri/src/automation、database/automation 与 src/pages 目录；实际自动流程为 automation.rs、database/automation.rs，视频页面位于 src/modules/video。已改为按真实文件检索。
+- 计划已明确只复用原字幕分镜协议与本地受信任几何，逐镜图片生产路径退出；历史素材只读/缺图旧任务用原字幕制作新版，原封面 selection.imageProviderId 继续独立管理。主要取舍是一次性笔触/素材建设，实际画质与渲染性能以P0样片和连续片段为准。
+- 文档检查实际通过：3份Markdown、91本地链接、P0—P3、8项验收、UTF-8/冲突检查；git diff --check通过。未运行全量lint/build/Rust，也未渲染新水墨样片。
+
 # 章节Git交付核对（2026-11-13）
 
 - 用户已授权完整dev提交推送及main cherry-pick推送；评审先完成且双轴0项剩余。上游当前仅v0.63.0版本字段更新，dev拉取后103份已评审文件摘要全部不变，业务依赖未变化。

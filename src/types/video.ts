@@ -2,7 +2,7 @@ import visualCatalog from '../../src-tauri/video/visual-catalog.json'
 
 export { visualCatalog }
 export type VideoTheme = 'classic' | 'ink'
-export const videoThemes: Record<VideoTheme, string> = { ink: '水墨宣纸', classic: '书卷手绘' }
+export const videoThemes: Record<VideoTheme, string> = { ink: '铅笔素描', classic: '书卷手绘' }
 export interface VideoBeat {
   cue: number
   object: keyof typeof visualCatalog.objects

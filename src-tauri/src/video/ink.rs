@@ -1,7 +1,8 @@
+#[cfg(test)]
 use super::{validate_scenes, Scene, VideoPlan};
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT: &str = include_str!("../../../prompts/video-ink-storyboard-v1.md");
+#[cfg(test)]
 pub const IMAGE_VERSION: &str = "video-ink-painting-v1";
 pub const IMAGE_PROMPT: &str = include_str!("../../../prompts/video-ink-painting-v1.md");
 
@@ -30,6 +31,7 @@ impl Painting {
     }
 }
 
+#[cfg(test)]
 pub fn parse(raw: &str, first: usize, end: usize) -> Result<Vec<Scene>, String> {
     let scenes: Vec<Scene> =
         serde_json::from_str(raw).map_err(|_| "水墨分镜不是合法JSON，原字幕和已完成画面保留。")?;
@@ -46,10 +48,7 @@ pub fn parse(raw: &str, first: usize, end: usize) -> Result<Vec<Scene>, String> 
     Ok(scenes)
 }
 
-pub fn prompt() -> String {
-    format!("{}\n只返回合法JSON数组，不要输出代码围栏。", PROMPT)
-}
-
+#[cfg(test)]
 pub fn input(plan: &VideoPlan, first: usize, end: usize) -> String {
     let cues = |from: usize, to: usize| {
         plan.cues[from..to].iter().enumerate().map(|(offset,cue)|serde_json::json!({"index":from+offset,"start":cue.start,"end":cue.end,"text":cue.text})).collect::<Vec<_>>()
@@ -58,6 +57,7 @@ pub fn input(plan: &VideoPlan, first: usize, end: usize) -> String {
     serde_json::json!({"book":plan.title,"duration":plan.duration,"opening":cues(0,plan.cues.len().min(6)),"ending":cues(plan.cues.len().saturating_sub(6),plan.cues.len()),"previousScenes":scenes,"followingContext":cues(end,(end+3).min(plan.cues.len())),"cues":cues(first,end)}).to_string()
 }
 
+#[cfg(test)]
 pub fn image_description(plan: &VideoPlan, index: usize) -> String {
     let scene = &plan.scenes[index];
     fn direction(scene: &Scene) -> Option<&str> {

@@ -16,6 +16,7 @@ use std::{
 };
 
 mod editor;
+#[allow(dead_code)]
 pub(super) mod ink;
 mod revision;
 
@@ -84,6 +85,7 @@ pub struct StartVideoInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[allow(dead_code)]
     pub image_provider_id: Option<String>,
 }
 
@@ -317,12 +319,8 @@ impl Database {
             let id = projects::new_id(&tx)?;
             let theme = input.theme.as_deref().unwrap_or("ink");
             validate_theme(theme)?;
-            if theme == "ink" && input.image_provider_id.is_none() && binding.is_none() { return Err("细致水墨视频需要选择图片模型，将按分镜逐张生成画作。".into()); }
-            if let Some(id) = &input.image_provider_id {
-                let image = super::ai::provider(&tx,id)?;
-                if theme != "ink" || image.input.model_kind != "image" || !image.input.is_enabled { return Err("水墨视频请选择已启用的图片模型。".into()); }
-            }
-            let mut plan = VideoPlan { title: book.input.title, theme: theme.into(), image_provider_id: input.image_provider_id, ..Default::default() };
+            if input.image_provider_id.is_some() { return Err("新视频使用本地绘制，不接受逐镜图片模型。".into()); }
+            let mut plan = VideoPlan { title: book.input.title, theme: theme.into(), ..Default::default() };
             if let Some(binding) = binding {
                 plan.audio_sha256 = tx.query_row("SELECT a.output_sha256 FROM automation_runs r JOIN audio_jobs a ON a.id=r.audio_job_id WHERE r.id=?1 AND a.asset_id=?2 AND a.status='succeeded'",params![binding.id,input.audio_asset_id],|row|row.get::<_,String>(0)).map_err(|_|"自动视频缺少对应音频的归档摘要。")?;
                 if plan.audio_sha256.is_empty() { return Err("自动视频缺少音频摘要。".into()); }
@@ -579,7 +577,7 @@ pub(crate) mod tests {
         let (_dir, db, mut input) = fixture();
         alternative_models(&db);
         input.theme = None;
-        input.image_provider_id = Some("image".into());
+        input.image_provider_id = None;
         let ink = db.create_video_job(input).unwrap();
         assert_eq!(ink.plan.theme, "ink");
         let classic = db

@@ -8,7 +8,8 @@ import { assertNodeRuntime, enginePackage } from './runtime.mjs';
 export { assertNodeRuntime } from './runtime.mjs';
 
 const catalog = JSON.parse(fs.readFileSync(new URL('./visual-catalog.json', import.meta.url), 'utf8'));
-const visuals = fs.readFileSync(new URL('./ink-painting.js', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('./illustrations.js', import.meta.url), 'utf8');
+const pencilLook = JSON.parse(fs.readFileSync(new URL('./pencil-look.json', import.meta.url), 'utf8'));
+const visuals = ['ink-painting.js', 'pencil-style.js', 'illustrations.js'].map(file => fs.readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n');
 
 // The model selects trusted drawings and subtitle anchors; it never supplies code.
 export function buildEpisode(plan, range, images = {}) {
@@ -70,7 +71,7 @@ export function buildEpisode(plan, range, images = {}) {
     };
   }).filter(p => p.start >= 0 && p.start < to - from).map((p, index) => ({ ...p, sourceIndex: p.index, index }));
   const inkImages = Object.fromEntries(plan.scenes.filter(scene => scene.painting).map(scene => [scene.image.assetId, images[scene.image.assetId].dataUri]).filter(([,uri]) => !!uri));
-  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style: 'study', theme, extras: ['timeline.js', 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, INK_IMAGES: inkImages, duration: to - from };
+  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style: 'study', ...(theme === 'ink' && !plan.imageProviderId ? { look: pencilLook } : {}), theme, extras: ['timeline.js', 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, INK_IMAGES: inkImages, duration: to - from };
   const script = `(function(root) {
 root.SCRIPT = ${JSON.stringify(data)};
 root.applyVideoTimeline = function() {
@@ -293,7 +294,7 @@ async function main(inputFile, outputFile) {
   };
   report('checking_layout');
   if (Math.abs(metadata.duration - plan.duration) > 0.15) throw new Error('The audio duration changed. Create a new video task.');
-  const key = createHash('sha256').update(JSON.stringify({ plan, range })).update(engine).update(fs.readFileSync(fileURLToPath(import.meta.url))).update(visuals).update(JSON.stringify(catalog)).digest('hex').slice(0, 24);
+  const key = createHash('sha256').update(JSON.stringify({ plan, range, pencilLook })).update(engine).update(fs.readFileSync(fileURLToPath(import.meta.url))).update(visuals).update(JSON.stringify(catalog)).digest('hex').slice(0, 24);
   const episode = input.cacheRoot ? path.join(path.resolve(input.cacheRoot), key) : path.join(path.dirname(inputFile), 'episode');
   const fresh = !fs.existsSync(episode);
   if (fresh) fs.mkdirSync(path.join(episode, 'pages'), { recursive: true });

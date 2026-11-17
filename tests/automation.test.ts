@@ -197,7 +197,7 @@ describe('automatic workflow setup', () => {
     const start = wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!
     expect(start.attributes('disabled')).toBeUndefined()
     await start.trigger('click'); await flushPromises()
-    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, imageProviderId: 'image1', textProviderId: 'text1', theme: 'ink', detailedInk: true, collectionName: null }) })
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, imageProviderId: 'image1', textProviderId: 'text1', theme: 'ink', detailedInk: false, collectionName: null }) })
     wrapper.unmount()
   })
 

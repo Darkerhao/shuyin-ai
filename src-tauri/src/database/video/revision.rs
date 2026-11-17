@@ -13,6 +13,7 @@ struct Snapshot {
 }
 
 pub struct PreparedSceneRevision {
+    pub theme: String,
     pub provider: ProviderConfig,
     pub user: String,
 }
@@ -72,7 +73,11 @@ impl Database {
                 params![id, provider.input.model_name],
             )
             .map_err(|e| e.to_string())?;
-            Ok(PreparedSceneRevision { provider, user })
+            Ok(PreparedSceneRevision {
+                theme: job.plan.theme,
+                provider,
+                user,
+            })
         })
     }
 

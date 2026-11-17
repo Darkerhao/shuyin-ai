@@ -46,7 +46,6 @@ const jobs = ref<VideoJob[]>([])
 const selectedId = ref('')
 const audioId = ref('')
 const providerId = ref('')
-const imageProviderId = ref('')
 const subtitleId = ref('auto')
 const theme = ref<VideoTheme>('ink')
 const config = ref<VideoSettings>({ engineRoot: '', nodePath: '', pythonPath: '', modelPath: '' })
@@ -78,7 +77,7 @@ const mediaError = ref('')
 const progressError = ref('')
 const jobPanel = ref<globalThis.HTMLElement>()
 const selected = computed(() => jobs.value.find(job => job.id === selectedId.value))
-const selectedTheme = computed(() => videoThemes[selected.value?.plan.theme ?? 'classic'])
+const selectedTheme = computed(() => selected.value?.plan.imageProviderId ? '旧版水墨画' : videoThemes[selected.value?.plan.theme ?? 'classic'])
 const running = computed(() => jobs.value.some(job => job.status === 'running'))
 const audios = computed(() => assets.value.filter(a => a.assetType === 'audio' && a.existsStatus === 'available'))
 const subtitles = computed(() => assets.value.filter(a => a.assetType === 'subtitle' && /\.srt$/i.test(a.originalName) && a.existsStatus === 'available'))
@@ -90,7 +89,7 @@ const paintingsOnly = computed(() => !!selected.value?.plan.imageProviderId && c
 const storyboardNotes = computed(() => selected.value ? inspectStoryboard({ ...selected.value.plan, scenes: scenes.value }) : [])
 const sceneSnapshot = computed(() => JSON.stringify(scenes.value))
 const editorValue = () => JSON.stringify([subtitleText.value, sceneSnapshot.value])
-const jobLabel = (job: VideoJob) => `${videoStatuses[job.status]} · ${videoThemes[job.plan.theme ?? 'classic']} · ${job.createdAt ? new Date(job.createdAt).toLocaleString() : job.id}`
+const jobLabel = (job: VideoJob) => `${videoStatuses[job.status]} · ${job.plan.imageProviderId ? '旧版水墨画' : videoThemes[job.plan.theme ?? 'classic']} · ${job.createdAt ? new Date(job.createdAt).toLocaleString() : job.id}`
 const dirty = computed(() => loaded.value && !!editable.value && savedEditor.value !== editorValue())
 const draftContent = computed<VideoEditorDraft>(() => ({ subtitles: subtitleText.value, scenes: sceneSnapshot.value, position: position.value }))
 const autosave = useEditorDraft(() => selectedId.value, 'video', draftContent, () => String(selected.value?.runId), dirty, draftReady, canPrepareLeave, true)
@@ -153,7 +152,7 @@ async function adopt(job: VideoJob | undefined, restoreDraft = true) {
   }
   return !!draft
 }
-function put(job: VideoJob) { jobs.value = [job, ...jobs.value.filter(j => j.id !== job.id)]; selectedId.value = job.id }
+function put(job: VideoJob | undefined) { if (!job) return; jobs.value = [job, ...jobs.value.filter(j => j.id !== job.id)]; selectedId.value = job.id }
 const load = () => run(async () => {
   loaded.value = false; draftReady.value = false
   const projectId = props.id
@@ -163,7 +162,6 @@ const load = () => run(async () => {
   if (route.query.audio && !files.some(asset => asset.id === route.query.audio && asset.assetType === 'audio')) throw new Error('音频不属于当前书籍或章节，请选择本章音频。')
   title.value = chapter ? `${book.title} · ${chapter.title}` : book.title; assets.value = files; providers.value = models.filter(p => p.modelKind === 'text' && p.isEnabled)
   imageProviders.value = models.filter(p => p.modelKind === 'image' && p.isEnabled)
-  imageProviderId.value = imageProviders.value.find(p => p.isDefault)?.id ?? imageProviders.value[0]?.id ?? ''
   config.value = settings; savedConfig.value = JSON.stringify(settings)
   jobs.value = history
   const recentDraft = history.filter(j => j.draftUpdatedAt).sort((a, b) => b.draftUpdatedAt!.localeCompare(a.draftUpdatedAt!))[0]
@@ -212,8 +210,7 @@ const choosePath = (key: keyof VideoSettings, directory: boolean) => run(async (
 const saveConfig = () => run(async () => { await api.saveSettings(config.value); savedConfig.value = JSON.stringify(config.value); message.value = '视频运行环境已保存，可点击“一键检查环境”验证。' })
 const begin = (sourceAudio: string, sourceSubtitle: string | null) => run(async () => {
   if (dirty.value || configDirty.value) throw new Error('请先保存或还原字幕、分镜和运行环境修改。')
-  if (theme.value === 'ink' && !imageProviderId.value) throw new Error('请选择图片模型，用于按音频逐镜绘制水墨画作。')
-  const job = await api.startJob(props.id, sourceAudio, providerId.value, sourceSubtitle, chapterId.value, theme.value, theme.value === 'ink' ? imageProviderId.value : null)
+  const job = await api.startJob(props.id, sourceAudio, providerId.value, sourceSubtitle, chapterId.value, theme.value, null)
   put(job); await adopt(job)
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
@@ -222,6 +219,7 @@ const create = () => begin(audioId.value, subtitleId.value === 'auto' ? null : s
 const remake = () => { const job = selected.value; if (job?.audioAssetId && job.subtitleAssetId) return begin(job.audioAssetId, job.subtitleAssetId) }
 const resume = (render: boolean) => run(async () => {
   if (!selected.value) return
+  if (!render && selected.value.plan.imageProviderId) throw new Error('旧版图片水墨不再补图，请用原字幕制作本地绘制新版。')
   if (!render && !providerId.value && !paintingsOnly.value) throw new Error('请选择已启用的文本模型生成分镜。')
   if (configDirty.value) throw new Error('请先保存运行环境配置。')
   if (render) { await persistPlan(scenes.value); selected.value.preview = null }
@@ -415,6 +413,27 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
       v-else
       class="video-workspace"
     >
+      <fieldset
+        class="panel video-style-choice"
+        :disabled="running || busy"
+      >
+        <legend>分镜画风 · 新视频</legend>
+        <label
+          v-for="(name, key) in videoThemes"
+          :key="key"
+        >
+          <input
+            v-model="theme"
+            type="radio"
+            name="video-theme"
+            :value="key"
+          >
+          <span>{{ name }}{{ key === 'classic' ? '（原风格）' : '' }}</span>
+        </label>
+        <p class="muted">
+          生成前选择；当前任务画风保持不变。要切换风格，可用原字幕制作独立新版。
+        </p>
+      </fieldset>
       <Collapsible
         v-slot="{ open: setupOpen }"
         class="panel video-setup"
@@ -432,7 +451,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
         </CollapsibleTrigger>
         <CollapsibleContent class="video-inputs">
           <p class="muted">
-            横屏 1920 × 1080 · 24 fps · 水墨主题按实际旁白逐镜绘制精细画作，配合细线显影、墨色晕染与轻运镜；书卷主题保留逐笔手绘。全程使用原声音频与字幕时间轴。
+            横屏 1920 × 1080 · 24 fps · 铅笔素描在白纸上逐笔勾出轮廓、细节与明暗排线，笔尖跟随线条绘制；书卷手绘保留原配色和讲解构图。两种画风均按原声字幕绘制，不自动生成图片。
           </p>
           <div class="video-form-grid">
             <div class="video-field">
@@ -476,55 +495,6 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   </SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-            <div class="video-field">
-              <label for="video-theme">新视频主题</label><Select
-                v-model="theme"
-                :disabled="running || busy"
-              >
-                <SelectTrigger
-                  id="video-theme"
-                  class="w-full min-w-0"
-                >
-                  <SelectValue />
-                </SelectTrigger><SelectContent>
-                  <SelectItem
-                    v-for="(name, key) in videoThemes"
-                    :key="key"
-                    :value="key"
-                  >
-                    {{ name }}
-                  </SelectItem>
-                </SelectContent>
-              </Select><p class="muted">
-                主题在创建任务时固定；要更换成另一种风格，请用原字幕重新制作新版。
-              </p>
-            </div>
-            <div
-              v-if="theme === 'ink'"
-              class="video-field"
-            >
-              <label for="video-image-provider">水墨画作模型</label>
-              <Select
-                v-model="imageProviderId"
-                :disabled="running || busy"
-              >
-                <SelectTrigger id="video-image-provider">
-                  <SelectValue placeholder="选择已启用的图片模型" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem
-                    v-for="provider in imageProviders"
-                    :key="provider.id"
-                    :value="provider.id"
-                  >
-                    {{ provider.name }} / {{ provider.modelName }}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <p class="muted">
-                开始后将根据实际字幕编排画面，每镜调用所选图片模型生成一张精细水墨画，张数取决于分镜，会产生额外费用；已完成画作会保留，继续时只生成缺少的画面。
-              </p>
             </div>
             <div class="video-field video-subtitle-source">
               <label for="video-subtitle-source">字幕来源</label><Select
@@ -573,18 +543,12 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           >
             请先在模型设置中配置可用的文本模型，用于字幕校对和生成分镜。
           </p>
-          <p
-            v-if="theme === 'ink' && !imageProviders.length"
-            class="notice"
-          >
-            细致水墨逐镜画作需要已启用的图片模型；可切换书卷手绘继续制作。
-          </p>
           <Button
             class="video-primary-action"
-            :disabled="running || busy || !audioId || !providerId || (theme === 'ink' && !imageProviderId) || !config.engineRoot || !config.nodePath"
+            :disabled="running || busy || !audioId || !providerId || !config.engineRoot || !config.nodePath"
             @click="create"
           >
-            <AppIcon name="bolt" />{{ theme === 'ink' ? '生成字幕、分镜与水墨画' : '生成字幕与分镜' }}
+            <AppIcon name="bolt" />生成字幕与{{ theme === 'ink' ? '素描' : '手绘' }}分镜
           </Button>
           <Collapsible
             class="panel video-runtime"
@@ -678,7 +642,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                 v-if="selected?.plan.imageProviderId"
                 class="muted"
               >
-                本任务画作模型：{{ imageProviders.find(provider => provider.id === selected?.plan.imageProviderId)?.name ?? '原模型已停用或移除' }} · 已保存 {{ selected.plan.scenes.filter(scene => scene.image).length }} / {{ selected.plan.scenes.length }} 张
+                旧版图片水墨 · 已保存 {{ selected.plan.scenes.filter(scene => scene.image).length }} / {{ selected.plan.scenes.length }} 张；不再补图，可用原字幕制作本地新版。
               </p>
             </div><Select
               :model-value="selectedId"
@@ -698,6 +662,12 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
               </SelectContent>
             </Select>
           </div>
+          <p
+            v-if="selected && !selected.plan.imageProviderId"
+            class="muted"
+          >
+            本次画风：{{ selectedTheme }} · Frametell 本地逐笔绘制
+          </p>
           <VideoJobProgress
             v-if="selected"
             :job="selected"
@@ -723,16 +693,16 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   停止当前任务
                 </Button>
                 <Button
-                  v-if="['draft', 'failed', 'cancelled'].includes(selected.status) || (selected.status === 'awaiting_confirmation' && !paintingsReady)"
+                  v-if="!selected.plan.imageProviderId && ['draft', 'failed', 'cancelled'].includes(selected.status)"
                   :disabled="busy || running || legacyPlan || (!providerId && !paintingsOnly)"
                   @click="resume(false)"
                 >
-                  {{ selected.plan.imageProviderId ? '继续准备字幕、分镜与水墨画作' : '继续准备字幕与分镜' }}
+                  继续准备字幕与分镜
                 </Button>
                 <Button
-                  v-if="selected.status === 'succeeded' && selected.audioAssetId && selected.subtitleAssetId"
+                  v-if="selected.status !== 'running' && selected.audioAssetId && selected.subtitleAssetId"
                   variant="outline"
-                  :disabled="busy || running || !providerId || (theme === 'ink' && !imageProviderId)"
+                  :disabled="busy || running || !providerId"
                   @click="remake"
                 >
                   用原字幕制作新版 · {{ videoThemes[theme] }}
@@ -940,6 +910,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   :providers="imageProviders"
                   :disabled="busy"
                   :image-disabled="busy || running || !completePlan"
+                  :local-pencil="selected.plan.theme === 'ink' && !selected.plan.imageProviderId"
                   :revision-disabled="running || !completePlan || !providerId"
                   :playing="playbackScene === index"
                   :audio-available="!!subtitleEditor?.audio"
@@ -1144,6 +1115,11 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-workspace :deep(label) { margin: 0; }
 .video-workspace :deep([data-slot='select-trigger']) { background: var(--input-surface); }
 .video-section-title { display: flex; align-items: center; margin: 0; padding-left: 12px; border-left: 3px solid var(--video-accent); color: var(--foreground); font-size: 16px; line-height: 24px; font-weight: 650; }
+.video-style-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 28px; padding: 16px 22px; }
+.video-style-choice legend { padding: 0 6px; font-weight: 600; }
+.video-style-choice label { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.video-style-choice input { accent-color: var(--primary); width: 18px; height: 18px; }
+.video-style-choice p { flex-basis: 100%; margin: 0; }
 .video-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 16px; }
 .video-field { display: grid; align-content: start; gap: 6px; min-width: 0; }
 .video-field label { color: var(--text-secondary); font: 500 13px/20px var(--font-sans); }

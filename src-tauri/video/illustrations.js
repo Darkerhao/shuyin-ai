@@ -2,80 +2,16 @@
 (function () {
   const { K } = PV;
   const ROUTE_PATH = 'M230 751 Q579 775 820 650 T1280 601 T1680 589';
-  const INK_PALETTE = {
-    ink: '#2b241d', soft: '#51473d', muted: '#807367', faint: '#c9c0b2',
-    paper: '#f1eadc', inkF: '#cfc5b6', softF: '#d8cec0', mutedF: '#ded5c7', faintF: '#e8e1d5',
-    blue: '#4f5d57', blueF: '#c4ccc5', orange: '#6f4f35', orangeF: '#d6c5ae',
-    red: '#8d3f34', redF: '#d9bdb5', green: '#475447', greenF: '#bdc7b9',
-    purple: '#5d525a', purpleF: '#cfc6cc', yellow: '#a88445', yellowF: '#d8ceb2',
-  };
   let pageTheme = 'classic';
-  const ink = () => pageTheme === 'ink';
-  const tint = value => ink() && value ? INK_PALETTE[value] ?? value : value;
-  const paint = (options = {}) => ink()
-    ? { ...options, color: tint(options.color), fill: tint(options.fill), rough: options.rough ?? 1.32, bow: options.bow ?? 1.02 }
+  const pencil = () => pageTheme === 'ink';
+  const paint = (options = {}) => pencil()
+    ? { ...options, sw: Math.min(options.sw ?? 1.6, 1.8), rough: .7, bow: .35, single: true, fillStyle: 'hachure', gap: 7, fw: .55, fillAt: .62, texture: false }
     : options;
-
-  function themed(P) {
-    if (!ink()) return P;
-    const wrap = target => new Proxy(target, {
-      get(object, key) {
-        if (key === 'layer') return () => wrap(object.layer());
-        const value = object[key];
-        if (typeof value !== 'function') return value;
-        return (...args) => {
-          const last = args.at(-1);
-          if (last && typeof last === 'object' && !Array.isArray(last) && !last.nodeType) args[args.length - 1] = paint(last);
-          return value.apply(object, args);
-        };
-      },
-    });
-    return wrap(P);
-  }
-
-  function inkObjectWash(P, places, times) {
-    const wash = P.layer();
-    wash.wrap.style.opacity = '.6';
-    for (let i = 0; i < Math.min(places.length, times.length); i++) {
-      const place = places[i], at = times[i];
-      wash.ellipse(place.x, place.y + 34 * place.s, 330 * place.s, 210 * place.s, {
-        color: 'none', fill: tint('inkF'), at: at + .05, dur: 1.4, rough: 1.7, bow: 1.15, sw: .1,
-      });
-    }
-  }
-
-  function inkEnvironmentWash(P, name) {
-    if (name === 'plain') return;
-    const wash = P.layer();
-    wash.wrap.style.opacity = '.36';
-    const fill = { color: 'none', fill: tint('inkF'), at: -1.25, dur: 2, rough: 1.7, bow: 1.1, sw: .1 };
-    switch (name) {
-      case 'study':
-        wash.path('M240 300 H1680 V650 H240 Z', fill);
-        wash.path('M260 683 H1660 L1540 746 H340 Z', fill);
-        break;
-      case 'courtyard':
-        wash.path('M250 392 H1670 V742 H250 Z', fill);
-        break;
-      case 'street':
-        wash.path('M250 360 H1670 V720 H250 Z', fill);
-        break;
-      case 'riverbank':
-        wash.path('M240 460 L416 331 L574 439 L774 355 L960 457 L1175 334 L1357 420 L1500 367 L1680 459 V700 H240 Z', fill);
-        break;
-      case 'window':
-        wash.path('M669 479 L1580 746 L1460 790 L669 645 Z M286 332 H648 V626 H286 Z', fill);
-        break;
-      case 'path':
-        wash.path('M240 440 Q600 350 960 430 T1680 440 V720 H240 Z', fill);
-        break;
-    }
-  }
 
   function sketch(P, name, at, tone = 'ink') {
     const Q = P.layer();
     let n = 0;
-    const opt = (extra = {}) => ({ color: tone, sw: 3, at: at + n++ * .065, dur: .65, ...extra });
+    const opt = (extra = {}) => paint({ color: tone, sw: 3, at: at + n++ * .065, dur: .65, ...extra });
     const path = (d, o) => Q.path(d, opt(o));
     const line = (a, b, c, d, o) => Q.line(a, b, c, d, opt(o));
     const box = (a, b, c, d, o) => Q.box(a, b, c, d, opt({ r: 4, ...o }));
@@ -407,15 +343,9 @@
     if (P.page.painting) { window.INK_PAINTING.mount(P); return; }
     const pg = P.page, span = pg.drawDuration, H = P.hud, reference = pg.framing === 'reference';
     pageTheme = pg.theme === 'ink' ? 'ink' : 'classic';
-    const V = themed(P);
+    const V = P;
     const times = pg.beats.map(b => b.at);
-    if (ink()) {
-      P.html.style.filter = 'saturate(.58) contrast(1.08)';
-      P.html.style.boxShadow = 'inset 0 0 150px rgba(74,60,44,.13)';
-    }
-    if (ink() && !pg.image) inkEnvironmentWash(P, pg.environment);
     environment(V, pg.image ? 'plain' : pg.environment);
-    if (ink() && P.html.lastElementChild) P.html.lastElementChild.style.opacity = '.66';
     H.text('读懂一本书', { x: 180, y: 77, size: 28, color: 'muted', at: -1, cps: 40, pen: false });
     const bookTitle = Array.from(SCRIPT.META.title);
     H.text(bookTitle.length > 11 ? bookTitle.slice(0, 10).join('') + '…' : SCRIPT.META.title, { x: 1740, y: 77, w: 340, align: 'r', size: 28, color: 'muted', at: -1, cps: 40, pen: false });
@@ -461,10 +391,15 @@
     }
     if (pg.kind === 'locked') V.path('M211 778 H1709', { color: 'red', sw: 2, at: -.3, dur: 2 });
 
-    if (ink() && !pg.image) inkObjectWash(P, places, times);
     pg.beats.forEach((b, i) => {
       const pos = places[i], at = times[i];
-      const Q = sketch(V, b.object, at, b.object === 'pen' ? 'orange' : 'ink');
+      const first = pencil() ? P.sh.acts.length : 0;
+      const Q = (pencil() && window.SHUYIN_PENCIL.sketch(V, b.object)) || sketch(V, b.object, at, b.object === 'pen' ? 'orange' : 'ink');
+      if (pencil()) {
+        const end = times.find(time => time > at) ?? span;
+        const duration = (end - at) * .88 / times.filter(time => time === at).length;
+        window.SHUYIN_PENCIL.sequence(P, first, at + (i - times.indexOf(at)) * duration, duration);
+      }
       P.move(Q, t => {
         const u = K(t, at, 1.8);
         let dx = 0, dy = 0, rot = 0;
@@ -486,15 +421,16 @@
       if (b.action === 'cross') Q.cross(0, 0, 140, paint({ color: 'red', at, dur: .9 }));
     });
     }
-    H.line(180, 873, 1630, 873, { color: tint('faint'), sw: 2, at: -1, dur: .1 });
-    H.liveRough((t, rough) => [rough.line(180, 873, 180 + 1450 * Math.max(0, Math.min(1, t / span)), 873, { color: tint('orange'), sw: 2.5 })]);
+    H.line(180, 873, 1630, 873, { color: 'faint', sw: 2, at: -1, dur: .1 });
+    H.liveRough((t, rough) => [rough.line(180, 873, 180 + 1450 * Math.max(0, Math.min(1, t / span)), 873, { color: 'orange', sw: 2.5 })]);
+    if (pencil() && !pg.image) window.SHUYIN_PENCIL.mount(P);
   }
 
   function environment(P, name) {
     if (name === 'plain') return;
     const E = P.layer();
     E.wrap.style.opacity = '.38';
-    const o = { color: 'muted', sw: 2, at: -1, dur: .6, pen: false };
+    const o = paint({ color: 'muted', sw: 2, at: -1, dur: .6, pen: false });
     switch (name) {
       case 'study':
         E.path('M260 683 H1660 L1540 746 H340 Z M350 749 V807 M1530 749 V807', { ...o, fill: 'faint' });
@@ -532,7 +468,7 @@
   const style = document.createElement('style');
   const inkTheme = (SCRIPT.PAGES?.[0]?.theme ?? SCRIPT.META?.theme) === 'ink';
   style.textContent = inkTheme
-    ? `.chrome{display:none!important}.subs{bottom:42px!important}.subs span{font-size:44px!important;line-height:1.35!important;color:var(--ink)!important;background:rgba(243,237,225,.94)!important;border-radius:2px!important;box-shadow:0 1px 0 rgba(80,65,45,.16)!important;padding:8px 28px!important}`
+    ? `.chrome{display:none!important}.subs{bottom:42px!important}.subs span{font-size:44px!important;line-height:1.35!important;color:var(--ink)!important;background:${SCRIPT.META.look ? 'rgba(251,250,247,.95)' : 'rgba(243,237,225,.94)'}!important;border-radius:2px!important;box-shadow:none!important;padding:8px 28px!important}`
     : `.chrome{display:none!important}.subs{bottom:42px!important}.subs span{font-size:44px!important;line-height:1.35!important;color:var(--ink)!important;background:${PV.col('paper')}!important;border-radius:4px!important;box-shadow:none!important;padding:8px 28px!important}`;
   document.head.appendChild(style);
 })();
