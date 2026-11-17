@@ -55,6 +55,7 @@ fn preview_signature(plan: &video::VideoPlan) -> Result<String, String> {
     hash.update(include_bytes!("../video/illustrations.js"));
     hash.update(include_bytes!("../video/ink-painting.js"));
     hash.update(include_bytes!("../video/pencil-style.js"));
+    hash.update(include_bytes!("../video/pencil-drawing.js"));
     hash.update(include_bytes!("../video/pencil-look.json"));
     hash.update(include_bytes!("../video/visual-catalog.json"));
     Ok(hash
@@ -167,8 +168,9 @@ pub async fn execute_video_scene_revision(
     let id = id.as_str();
     let scene = ai_commands::run_task(database, active.inner(), id, |mut receiver| async move {
         let prepared = database.prepare_video_scene_revision(id).map_err(AiError::database)?;
-        let request = ai_commands::request(prepared.provider, vault, &video::revision::prompt(&prepared.theme), prepared.user)?;
-        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?.observed(database,Some(id),"video_scene_revision");
+        let prompt = if prepared.pencil { video::pencil::DRAW_PROMPT.to_string() } else { video::revision::prompt(&prepared.theme) };
+        let request = ai_commands::request(prepared.provider, vault, &prompt, prepared.user)?;
+        let provider = OpenAiCompatible::new(if prepared.pencil { video::pencil::TIMEOUT } else { TIMEOUT }, &request.base_url)?.observed(database,Some(id),"video_scene_revision");
         let raw = tokio::select! {
             biased;
             _ = receiver.changed() => return Err(AiError::new("cancelled", "单镜生成已停止，原字幕和分镜保留。")),
@@ -651,6 +653,10 @@ async fn execute(
         include_bytes!("../video/pencil-style.js"),
     )?;
     process::write_new(
+        &directory.join("pencil-drawing.js"),
+        include_bytes!("../video/pencil-drawing.js"),
+    )?;
+    process::write_new(
         &directory.join("pencil-look.json"),
         include_bytes!("../video/pencil-look.json"),
     )?;
@@ -842,6 +848,30 @@ async fn execute(
         db.finish_video_transcript(&job.id, job.run_id)?;
         return Ok(());
     }
+    if job.plan.theme == "ink"
+        && job.plan.image_provider_id.is_none()
+        && (job.plan.pencil.is_some() || job.plan.scenes.is_empty())
+        && first < job.plan.cues.len()
+    {
+        let config = config.as_ref().ok_or("分镜模型已被移除，请新建任务。")?;
+        let request = ai_commands::request(
+            config.clone(),
+            app.state::<SystemCredentials>().inner(),
+            "",
+            String::new(),
+        )
+        .map_err(|error| video::model_failure(error.message))?;
+        let provider = OpenAiCompatible::new(video::pencil::TIMEOUT, &request.base_url)
+            .map_err(|error| video::model_failure(error.message))?
+            .observed(&db, Some(&job.id), "storyboard");
+        let id = job.id.clone();
+        let run_id = job.run_id;
+        tokio::select! { biased;
+            _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()),
+            response = video::pencil::generate(&mut job.plan, &provider, &request, |plan| db.save_video_progress(&id,run_id,plan,"storyboard")) => response?,
+        }
+        first = job.plan.cues.len();
+    }
     while first < job.plan.cues.len() {
         let config = config.as_ref().ok_or("分镜模型已被移除，请新建任务。")?;
         if flag.load(Ordering::SeqCst) {
@@ -861,6 +891,7 @@ async fn execute(
             .observed(&db, Some(&job.id), "storyboard");
         let raw = tokio::select! { biased; _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()), response = provider.generate(request) => response.map_err(|error| video::model_failure(error.message))? };
         let scenes = video::parse_storyboard(&raw, first, end).map_err(video::model_failure)?;
+        video::require_drawings(&scenes).map_err(video::model_failure)?;
         job.plan.scenes.extend(scenes);
         db.save_video_progress(&job.id, job.run_id, &job.plan, "storyboard")?;
         first = end;

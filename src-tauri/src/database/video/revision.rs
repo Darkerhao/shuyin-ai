@@ -16,6 +16,7 @@ pub struct PreparedSceneRevision {
     pub theme: String,
     pub provider: ProviderConfig,
     pub user: String,
+    pub pencil: bool,
 }
 
 fn source(job: &VideoJob) -> Result<Vec<u8>, String> {
@@ -67,7 +68,33 @@ impl Database {
             if !provider.input.is_enabled || provider.input.model_kind != "text" {
                 return Err("请选择已启用的文本模型。".into());
             }
-            let user = snapshot.input.user(&job.plan.title, &cues);
+            let pencil = snapshot.input.scenes[snapshot.input.scene_index]
+                .artwork
+                .is_some();
+            let user = if pencil {
+                let scene = &snapshot.input.scenes[snapshot.input.scene_index];
+                let planned = crate::video::pencil::PlannedScene {
+                    first: scene.first,
+                    last: scene.last,
+                    title: scene.title.clone(),
+                    description: format!(
+                        "{}\n本次修改：{}",
+                        scene.artwork.as_ref().unwrap().design,
+                        snapshot.input.instruction
+                    ),
+                    characters: job
+                        .plan
+                        .pencil
+                        .as_ref()
+                        .map(|p| p.characters.iter().map(|c| c.id.clone()).collect())
+                        .unwrap_or_default(),
+                };
+                let mut edited = job.plan.clone();
+                edited.cues = cues.clone();
+                crate::video::pencil::drawing_input(&edited, &planned)
+            } else {
+                snapshot.input.user(&job.plan.title, &cues)
+            };
             c.execute(
                 "UPDATE ai_tasks SET status='running',model_name=?2 WHERE id=?1",
                 params![id, provider.input.model_name],
@@ -77,6 +104,7 @@ impl Database {
                 theme: job.plan.theme,
                 provider,
                 user,
+                pencil,
             })
         })
     }
@@ -95,7 +123,35 @@ impl Database {
             if source(&job)? != snapshot.source {
                 return Err("正式分镜已变化，候选已过期。".into());
             }
-            let candidate = snapshot.input.candidate(raw)?;
+            let candidate = if snapshot.input.scenes[snapshot.input.scene_index]
+                .artwork
+                .is_some()
+            {
+                let mut scene = snapshot.input.scenes[snapshot.input.scene_index].clone();
+                let artwork = crate::video::pencil::parse_artwork(
+                    raw,
+                    scene.first,
+                    scene.last,
+                    &job.plan
+                        .pencil
+                        .as_ref()
+                        .ok_or("任务缺少冻结人物设定。")?
+                        .characters,
+                )?;
+                let original_cast = scene
+                    .artwork
+                    .as_ref()
+                    .unwrap()
+                    .layers
+                    .iter()
+                    .filter_map(|l| l.portrait.as_ref().map(|p| p.character_id.clone()))
+                    .collect::<Vec<_>>();
+                artwork.validate_cast(&original_cast)?;
+                scene.artwork = Some(artwork);
+                scene
+            } else {
+                snapshot.input.candidate(raw)?
+            };
             c.execute(
                 &format!("UPDATE ai_tasks SET status='succeeded',completed_at={NOW} WHERE id=?1"),
                 [id],
@@ -111,6 +167,61 @@ impl Database {
 mod tests {
     use super::*;
     use crate::video::revision::tests::{candidate, input};
+
+    #[test]
+    fn pencil_revision_keeps_frozen_heads_and_candidate_does_not_change_saved_artwork() {
+        use crate::video::pencil::{Artwork, Character, PencilPlan};
+        let (_dir, db, mut input) = fixture();
+        let mut running = db
+            .claim_video_job(&input.job_id, VideoWork::Prepare, None)
+            .unwrap();
+        let head = serde_json::json!({"mask":[],"strokes":[{"p":[[20,20],[80,80]],"w":1.2,"a":0.6}],"shades":[]});
+        let character:Character=serde_json::from_value(serde_json::json!({"id":"reader","name":"读者","description":"方巾长脸","heads":{"front":head,"side":head}})).unwrap();
+        let artwork:Artwork=serde_json::from_value(serde_json::json!({"design":"原画稿","layers":[{"cue":1,"name":"人物","mask":[],"strokes":[{"p":[[100,300],[150,500]],"w":1.2,"a":0.6}],"shades":[],"texts":[],"portrait":{"characterId":"reader","view":"side","x":150,"y":120,"scale":0.8,"flip":false}}]})).unwrap();
+        running.plan.pencil = Some(PencilPlan {
+            characters: vec![character],
+            pending: vec![],
+        });
+        running.plan.scenes[1].beats.clear();
+        running.plan.scenes[1].artwork = Some(artwork.clone());
+        input.scenes = running.plan.scenes.clone();
+        input.run_id = running.run_id;
+        db.save_video_progress(&input.job_id, input.run_id, &running.plan, "storyboard")
+            .unwrap();
+        db.end_video_job(&input.job_id, input.run_id, "awaiting_confirmation", "")
+            .unwrap();
+        let id = db.start_video_scene_revision(input.clone()).unwrap();
+        let prepared = db.prepare_video_scene_revision(&id).unwrap();
+        assert!(prepared.pencil);
+        assert!(prepared.user.contains("方巾长脸"));
+        assert!(!prepared.user.contains("\"heads\""));
+        let mut revised = artwork;
+        revised.design = "新画稿".into();
+        let candidate = db
+            .finish_video_scene_revision(&id, &serde_json::to_string(&revised).unwrap())
+            .unwrap();
+        assert_eq!(candidate.artwork.unwrap().design, "新画稿");
+        let saved = db.video_job(&input.job_id).unwrap();
+        assert_eq!(
+            saved.plan.scenes[1].artwork.as_ref().unwrap().design,
+            "原画稿"
+        );
+        assert_eq!(
+            serde_json::to_value(&saved.plan.pencil).unwrap(),
+            serde_json::to_value(running.plan.pencil).unwrap()
+        );
+        let mut changed = saved.plan.cues.clone();
+        changed[0].text = "校正台词".into();
+        assert!(db
+            .edit_video_plan(&input.job_id, changed.clone(), saved.plan.scenes.clone())
+            .unwrap_err()
+            .contains("已有画稿保留"));
+        assert!(db.video_job(&input.job_id).unwrap().plan.pencil.is_some());
+        db.edit_video_plan(&input.job_id, changed, vec![]).unwrap();
+        let rebuilt = db.video_job(&input.job_id).unwrap();
+        assert!(rebuilt.plan.scenes.is_empty());
+        assert!(rebuilt.plan.pencil.is_none());
+    }
 
     fn fixture() -> (tempfile::TempDir, Database, SceneRevisionInput) {
         fixture_for(false)

@@ -5,10 +5,22 @@ export type VideoTheme = 'classic' | 'ink'
 export const videoThemes: Record<VideoTheme, string> = { ink: '铅笔素描', classic: '书卷手绘' }
 export interface VideoBeat {
   cue: number
-  object: keyof typeof visualCatalog.objects
+  object: string
   action: keyof typeof visualCatalog.actions
   label: string
+  drawing?: { strokes: [number, number][][] }
 }
+export type PencilPath = number[][]
+export interface PencilStroke { p: PencilPath; w: number; a: number }
+export interface PencilShade extends PencilStroke { angle: number; gap: number }
+export interface PencilText { x: number; y: number; text: string; size: number; a: number }
+export interface PencilHead { mask: PencilPath[]; strokes: PencilStroke[]; shades: PencilShade[] }
+export interface PencilCharacter { id: string; name: string; description: string; heads: { front: PencilHead; side: PencilHead } }
+export interface PencilLayer extends PencilHead {
+  cue: number; name: string; texts: PencilText[]
+  portrait?: { characterId: string; view: 'front' | 'side'; x: number; y: number; scale: number; flip: boolean }
+}
+export interface PencilArtwork { design: string; layers: PencilLayer[] }
 export interface VideoSettings { engineRoot: string; nodePath: string; pythonPath: string; modelPath: string }
 export interface VideoEnvironmentItem { id: 'node' | 'engine' | 'ffmpeg' | 'browser' | 'fonts' | 'python' | 'model'; status: 'ok' | 'error' | 'skipped'; version: string; path: string; detail: string }
 export interface VideoEnvironmentReport { settings: VideoSettings; items: VideoEnvironmentItem[] }
@@ -26,12 +38,13 @@ export interface VideoScene {
   labels?: string[]
   image?: VideoSceneImage
   painting?: { description: string; motion: 'static' | 'push_in' | 'pull_out' | 'pan_left' | 'pan_right'; taskId?: string }
+  artwork?: PencilArtwork
 }
 export interface VideoSubtitleReview {
   promptVersion: string; completed: number
   reference: { book: string; author: string; opening: string; ending: string }
 }
-export interface VideoPlan { title: string; audioSha256: string; duration: number; cues: VideoCue[]; scenes: VideoScene[]; theme?: VideoTheme; imageProviderId?: string; subtitleReview?: VideoSubtitleReview }
+export interface VideoPlan { title: string; audioSha256: string; duration: number; cues: VideoCue[]; scenes: VideoScene[]; theme?: VideoTheme; imageProviderId?: string; subtitleReview?: VideoSubtitleReview; pencil?: { characters: PencilCharacter[]; pending: { first: number; last: number; title: string; description: string; characters: string[] }[] } }
 export interface VideoProgress {
   startedAt: number; stage: string; phase: string; completed: number; total: number
   cueCount: number; preview: VideoCue[]

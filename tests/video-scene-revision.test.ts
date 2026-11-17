@@ -48,6 +48,15 @@ it('discards candidates without changing input or emitting adoption', async () =
   expect(wrapper.emitted('adopt')).toBeUndefined()
   expect(wrapper.props()).toHaveProperty('input', input)
 })
+it('previews and adopts the full multi-object drawing without replacing it with catalog symbols', async () => {
+  const free: VideoScene = { ...candidate, beats: Array.from({ length: 6 }, (_, i) => ({ cue: 0, object: `长枪${i}`, action: 'draw', label: '', drawing: { strokes: [[[i * 100, 10], [i * 100 + 20, 200]]] } })) }
+  vi.mocked(api.executeSceneRevision).mockResolvedValue(free)
+  await render(); await generate()
+  expect(dialog().get('[aria-label="候选分镜"]').findAll('polyline')).toHaveLength(6)
+  expect(dialog().get('[aria-label="候选分镜"]').text()).toContain('长枪5')
+  await dialog().findAll('button').find(b => b.text() === '采用这一镜')!.trigger('click')
+  expect(wrapper.emitted('adopt')![0]).toEqual([free])
+})
 it('preserves original content after a model failure and allows an explicit retry', async () => {
   vi.mocked(api.executeSceneRevision).mockRejectedValueOnce({ message: '模型返回了两镜，已拒绝' })
   await render(); await generate()

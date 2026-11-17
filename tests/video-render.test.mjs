@@ -256,6 +256,38 @@ function drawing(input, index = 0, range, images) {
   return { calls: JSON.parse(JSON.stringify(calls)), strokes: sh.acts.map(({ layer, at, dur }) => ({ layer, at, dur })), cameras: JSON.parse(JSON.stringify(cameras)), at: t => JSON.parse(JSON.stringify([...moves.map(fn => fn(t)), ...live.map(fn => fn(t, { line: (...args) => args }))])) };
 }
 
+test('free scene drawings support new subjects, many objects, exact positions and source-time previews', () => {
+  const beats = Array.from({ length: 7 }, (_, i) => ({ cue: i < 4 ? 0 : 1, object: `长枪与营寨${i}`, action: 'draw', label: '', drawing: { strokes: [[[50 + i * 120, 30], [65 + i * 120, 220]], [[50 + i * 120, 30], [60 + i * 120, 10], [65 + i * 120, 35]]] } }));
+  const input = { ...plan, theme: 'ink', scenes: [{ first: 0, last: 1, kind: 'focus', title: '营前', beats }] };
+  const full = drawing(input), preview = drawing(input, 0, { start: 0, end: 4 });
+  const classic = drawing({ ...input, theme: 'classic' });
+  assert.equal(classic.calls.filter(c => c.method === 'path' && c.layer > 0).length, 14);
+  assert.deepEqual(full.strokes, preview.strokes);
+  const paths = full.calls.filter(c => c.method === 'path' && c.layer > 0);
+  assert.equal(paths.length, 14);
+  assert.equal(paths[0].args[0], 'M258 336.8 L281.4 633.2');
+  assert.equal(full.strokes.filter(s => s.layer > 0).length, 14);
+  const later = full.strokes.filter(s => s.layer >= 5);
+  assert(later.every(s => s.at >= 5 && s.at + s.dur <= 12));
+  assert(full.at(6).every(p => p.x == null)); // No object positioning overwrites the drawn scene.
+  for (const bad of [[], [[[0, 0]]], [[[0, 0], [1001, 5]]], [[[0, 0], [0, 301]]], [[[0, 0], [0, 0]]]]) {
+    const invalid = globalThis.structuredClone(input); invalid.scenes[0].beats[0].drawing.strokes = bad;
+    assert.throws(() => buildEpisode(invalid));
+  }
+  const tooLarge = globalThis.structuredClone(input);
+  tooLarge.scenes[0].beats[0].drawing.strokes = Array.from({ length: 2001 }, () => [[0, 0], [1, 1]]);
+  assert.throws(() => buildEpisode(tooLarge), /resource/);
+});
+
+test('catalog scenes with more than three objects receive finite positions', () => {
+  for (const kind of ['focus', 'route', 'compare', 'wall']) {
+    const input = { ...plan, scenes: [{ first: 0, last: 1, kind, title: '多人', beats: Array.from({ length: 8 }, () => ({ cue: 0, object: 'person', action: 'draw', label: '人' })) }] };
+    const positions = drawing(input).at(8).filter(p => p.x != null);
+    assert.equal(positions.length, 8);
+    assert(positions.every(p => Number.isFinite(p.x) && Number.isFinite(p.y) && p.s > 0));
+  }
+});
+
 test('pencil subjects draw one stroke at a time within the real scene window, including ordinary catalog objects', () => {
   for (const object of ['book', 'scroll', 'person', 'tree', 'mountain', 'crown']) {
     const input = { ...plan, theme: 'ink', scenes: [{ first: 0, last: 1, kind: 'focus', title: '素描', beats: [{ cue: 0, object, action: 'draw', label: '主体' }] }] };

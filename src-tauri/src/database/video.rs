@@ -440,6 +440,9 @@ impl Database {
             let mut job = get(c, id)?;
             if matches!(job.status.as_str(), "running" | "succeeded") { return Err("执行中或已完成的视频不能改写。".into()); }
             validate_cues(&cues, job.plan.duration)?;
+            if job.plan.pencil.is_some() && cues != job.plan.cues && !scenes.is_empty() {
+                return Err("精绘字幕已改变，请使用“保存字幕并重新生成分镜”；已有画稿保留。".into());
+            }
             if job.plan.image_provider_id.is_some() && cues != job.plan.cues {
                 scenes.clear();
             }
@@ -467,7 +470,9 @@ impl Database {
                 image.sha256.clone_from(&snapshots[&image.asset_id].sha256);
             }
             if cues != job.plan.cues || scenes.is_empty() { job.plan.subtitle_review = None; }
+            if cues != job.plan.cues || scenes.is_empty() { job.plan.pencil = None; }
             job.plan.cues = cues; job.plan.scenes = scenes;
+            crate::video::pencil::validate_plan(&job.plan)?;
             c.execute(&format!("UPDATE video_jobs SET plan_json=?1,editor_draft_json=NULL,status='awaiting_confirmation',stage='storyboard',updated_at={NOW} WHERE id=?2"), params![serde_json::to_string(&job.plan).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
             Ok(())
         })
@@ -637,6 +642,45 @@ pub(crate) mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn free_drawing_plans_survive_save_reopen_and_resume_without_subject_loss() {
+        let (dir, db, input) = fixture();
+        let job = db.create_video_job(input).unwrap();
+        let running = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        let mut plan = running.plan.clone();
+        plan.duration = 10.0;
+        plan.cues = vec![
+            Cue {
+                start: 0.0,
+                end: 4.0,
+                text: "营前有人持枪".into(),
+            },
+            Cue {
+                start: 4.0,
+                end: 9.0,
+                text: "旗帜立在营寨旁".into(),
+            },
+        ];
+        plan.scenes=serde_json::from_value(serde_json::json!([{"first":0,"last":0,"kind":"focus","title":"营前","beats":(0..6).map(|i|serde_json::json!({"cue":0,"object":format!("长枪{i}"),"action":"draw","label":"","drawing":{"strokes":[[[i*100,20],[i*100+10,230]]]}})).collect::<Vec<_>>()}])).unwrap();
+        db.save_video_progress(&job.id, running.run_id, &plan, "storyboard")
+            .unwrap();
+        db.end_video_job(&job.id, running.run_id, "failed", "后续分镜未完成")
+            .unwrap();
+        drop(db);
+        let db = Database::open(dir.path().join("data.sqlite3"));
+        let resumed = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&resumed.plan).unwrap(),
+            serde_json::to_value(&plan).unwrap()
+        );
+        assert_eq!(resumed.plan.scenes[0].beats.len(), 6);
+        assert_eq!(resumed.plan.scenes.last().unwrap().last + 1, 1);
     }
 
     #[test]

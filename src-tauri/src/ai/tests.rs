@@ -112,6 +112,64 @@ async fn call_diagnostics_record_returned_usage_timing_errors_and_cancellation_w
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn storyboard_validation_keeps_completed_response_and_saved_work_distinct() {
+    use crate::video::{model_failure, parse_storyboard, VideoPlan, VideoWork};
+    let (dir, db, input) = crate::database::video::tests::fixture();
+    let job = db.create_video_job(input).unwrap();
+    let job = db
+        .claim_video_job(&job.id, VideoWork::Prepare, None)
+        .unwrap();
+    let plan: VideoPlan = serde_json::from_value(serde_json::json!({
+        "title":"原书", "audioSha256":"original-audio", "duration":8,
+        "cues":[{"start":0,"end":3,"text":"已保存字幕"},{"start":4,"end":7,"text":"待编排字幕"}],
+        "scenes":[{"first":0,"last":0,"kind":"focus","title":"已完成的分镜","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]}]
+    })).unwrap();
+    db.save_video_progress(&job.id, job.run_id, &plan, "storyboard")
+        .unwrap();
+    let invalid = serde_json::json!([{"first":1,"last":1,"kind":"focus","title":"下一镜","environment":"forest","beats":[{"cue":1,"object":"book","action":"draw","label":"书"}]}]).to_string();
+    let body =
+        serde_json::json!({"choices":[{"finish_reason":"stop","message":{"content":invalid}}]})
+            .to_string();
+    let (url, handle) = server(200, &body, Duration::ZERO);
+    let raw = OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .observed(&db, Some(&job.id), "storyboard")
+        .generate(request(url))
+        .await
+        .unwrap();
+    handle.join().unwrap();
+    let error = model_failure(parse_storyboard(&raw, 1, 2).unwrap_err());
+    db.end_video_job(&job.id, job.run_id, "failed", &error)
+        .unwrap();
+    drop(db);
+    let db = crate::database::Database::open(dir.path().join("data.sqlite3"));
+    let failed = db.video_job(&job.id).unwrap();
+    assert_eq!(failed.status, "failed");
+    assert_eq!(failed.stage, "storyboard");
+    assert_eq!(failed.error, error);
+    for detail in ["第 1 镜", "environment", "forest", "允许值"] {
+        assert!(failed.error.contains(detail), "{}", failed.error);
+    }
+    let calls = serde_json::to_value(db.list_model_calls(1, 20).unwrap().rows).unwrap();
+    assert_eq!(calls.as_array().unwrap().len(), 1);
+    assert_eq!(calls[0]["status"], "succeeded");
+    assert!(calls[0]["errorCode"].is_null());
+    assert!(!calls.to_string().contains("forest"));
+    assert_eq!(
+        serde_json::to_value(&failed.plan).unwrap(),
+        serde_json::to_value(&plan).unwrap()
+    );
+    let resumed = db
+        .claim_video_job(&job.id, VideoWork::Prepare, None)
+        .unwrap();
+    assert!(resumed.error.is_empty());
+    assert_eq!(
+        serde_json::to_value(resumed.plan).unwrap(),
+        serde_json::to_value(plan).unwrap()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn image_contract_requests_exact_target_dimensions_and_preserves_image_bytes() {
     for (width, height, format) in [
         (1440, 1080, image::ImageFormat::Png),

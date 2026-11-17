@@ -26,7 +26,7 @@ import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { visualCatalog, videoStatuses, videoThemes, type VideoCue, type VideoJob, type VideoScene, type VideoSceneRevisionInput, type VideoSettings, type VideoTheme } from '../../types/video'
+import { videoStatuses, videoThemes, type VideoCue, type VideoJob, type VideoScene, type VideoSceneRevisionInput, type VideoSettings, type VideoTheme } from '../../types/video'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -82,7 +82,7 @@ const running = computed(() => jobs.value.some(job => job.status === 'running'))
 const audios = computed(() => assets.value.filter(a => a.assetType === 'audio' && a.existsStatus === 'available'))
 const subtitles = computed(() => assets.value.filter(a => a.assetType === 'subtitle' && /\.srt$/i.test(a.originalName) && a.existsStatus === 'available'))
 const editable = computed(() => selected.value && editorJobId.value === selected.value.id && !['running', 'succeeded'].includes(selected.value.status))
-const legacyPlan = computed(() => scenes.value.some(scene => !scene.beats?.length && !scene.image && !scene.painting))
+const legacyPlan = computed(() => scenes.value.some(scene => !scene.beats?.length && !scene.image && !scene.painting && !scene.artwork))
 const paintingsReady = computed(() => !selected.value?.plan.imageProviderId || (scenes.value.length > 0 && scenes.value.every((scene, i) => !!scene.painting && !!scene.image && scene.painting.description === selected.value?.plan.scenes[i]?.painting?.description)))
 const completePlan = computed(() => scenes.value.length > 0 && !legacyPlan.value && scenes.value.at(-1)!.last + 1 === selected.value?.plan.cues.length)
 const paintingsOnly = computed(() => !!selected.value?.plan.imageProviderId && completePlan.value && scenes.value.every(scene => !!scene.painting))
@@ -393,6 +393,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
       v-if="sceneRevision"
       :input="sceneRevision"
       :providers="providers"
+      :characters="selected?.plan.pencil?.characters"
       @adopt="adoptScene"
       @close="sceneRevision = undefined"
     />
@@ -906,6 +907,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   :scene-index="index"
                   :scene="scene"
                   :cues="selected.plan.cues"
+                  :characters="selected.plan.pencil?.characters"
                   :assets="assets"
                   :providers="imageProviders"
                   :disabled="busy"
@@ -926,7 +928,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                 v-if="!selected.plan.imageProviderId"
                 class="muted"
               >
-                共{{ Object.keys(visualCatalog.objects).length }}种手绘物体，每镜最多3个主体。场景只作环境示意，特写突出首个主体，对照保持等权；“重点物体＋特写”在时长允许时轻推近一次。
+                {{ selected.plan.pencil ? '角色沿用固定外观，画面随讲述逐步增补。画面和出场时机用“重新生成这一镜”调整；修改字幕后，请保存字幕并重新生成分镜。' : '物体与数量按讲述内容安排，在同一场景中逐笔出现。可查看笔画位置、调整标签和出场字幕；画面内容与布局通过“重新生成这一镜”修改。' }}
               </p>
             </section>
             <section
