@@ -46,6 +46,30 @@
 
 同一48条字幕批次用修正后的提示词重新调用，输出15450字节，7个角色、10镜覆盖0—47；正式`parse_manifest`、角色几何和字幕覆盖校验通过。原始输出与调用记录保存在本地忽略目录`output/model-network-20261118/`。安装版更新与桌面端续做验收不在本轮。
 
+### 2026-11-18 区域闭合与人物完整性修正
+
+同一《三国演义》任务已保存369条字幕和第1镜，第2镜（字幕11—24）在模型请求成功结束后因“精绘遮挡与阴影区域必须闭合”失败。该错误由mask/shade路径末项终点不等于起点触发。模型诊断不保存原回复，不能还原当次具体图层；回归用省略闭合边的有效多边形与贝塞尔区域稳定复现相同错误。另两次相同输入重放中，区域校验通过，但均漏掉刘封、孟达两个规划人物，人物集合校验拒绝。
+
+区域本身包含末点到起点的边，模型入口统一将省略的边写成明确路径命令，再运行原校验。只处理规划中新头像及新画稿的mask/shades；开放笔画、已有闭合曲线和已冻结头像不修改。不闭合的退化直线、零长度、越界或非法数值仍拒绝；新增命令计入原路径预算，保存和JS编译器仍要求明确闭合。整批、恢复队列和单镜候选共用原解析入口，没有新增重试、SQL迁移、依赖或状态。
+
+`video-pencil-draw-v2`提供mask与shade的实际数组样例，并明确scene.characters中每个人物都须恰好引用一次，远景或后段出场人物也不能遗漏；不通过删除规划人物来接受不完整画稿。回归覆盖头像区域闭合、贝塞尔/开放笔画保持原样、退化和非法区域拒绝、闭合命令资源计数，以及失败保留第1镜/字幕/头像并从待办镜继续。重放素材只保存在忽略目录`output/pencil-region-20261118/`，正式任务未修改。
+
+新提示词的同输入真实重放输出8471字节，22层，6个规划人物完整引用，正式`parse_artwork`及`validate_cast`通过。再从该输出中有意移除13条明确闭合边，正式解析补齐后与原始有效画稿完全相同；JS严格编译器拒绝未闭合输入，接受规范化画稿，展开525笔，与原画稿编译结果相同。已保存第1镜与新第2镜组成的隔离片段可通过`buildEpisode`，第1镜数据保持原样。这些是数值协议和编译验证，未渲染本次长片或验收安装版画面。
+
+实际验证（Rust先加载`. ./.tools/env.ps1`，Node使用`D:/MyWork/software/shuyin-video-node/v24.22.2/node.exe`）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib pencil_artwork_closes_valid_regions -- --nocapture` | 修复前稳定复现“区域必须闭合”；修复后通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib -- --quiet` | 348通过、3项原有忽略 |
+| `npm run check:rust` | fmt、Clippy所有target及警告检查通过 |
+| `cargo build --manifest-path src-tauri/Cargo.toml --locked` | 通过 |
+| `node --test tests/pencil-drawing.test.mjs` | 6通过 |
+| `node output/pencil-region-20261118/verify-renderer.mjs` | 实际第二镜规范化与原稿编译一致，两镜片段通过 |
+| `git diff --check` | 通过 |
+
+付费重放与本地捕获回放使用临时`pencil_region_live_replay`、`pencil_region_captured_replay`测试，已移除源码接入；诊断脚本及原始输出留在忽略目录，常规测试不会调用真实模型。诊断阶段未替换安装程序；本次为fix/patch，发布版本由原流水线处理。
+
 ## 验证与评审
 
 新增回归覆盖冻结几何复用、短时间窗可见轮廓与成组细节、拒绝超预算/错误角色/非法路径、49与61条短尾批次、队列保存后重开继续不重规划、单镜候选保留头像与保存原稿、精绘前端完整状态及预览全时钟。

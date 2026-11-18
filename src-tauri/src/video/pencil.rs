@@ -6,7 +6,7 @@ use std::{collections::BTreeSet, time::Duration};
 
 pub const TIMEOUT: Duration = Duration::from_secs(1200);
 pub const PLAN_PROMPT: &str = include_str!("../../../prompts/video-pencil-plan-v2.md");
-pub const DRAW_PROMPT: &str = include_str!("../../../prompts/video-pencil-draw-v1.md");
+pub const DRAW_PROMPT: &str = include_str!("../../../prompts/video-pencil-draw-v2.md");
 pub type Path = Vec<Vec<f64>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +165,29 @@ fn geometry(
         commands += path(&s.p, w, h, true)?;
     }
     Ok(commands)
+}
+/// Regions include the edge back to their start. Canonicalize model input once;
+/// stored artwork and the renderer still require explicitly closed paths.
+fn close_regions(
+    mask: &mut [Path],
+    shades: &mut [Shade],
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    for p in mask.iter_mut().chain(shades.iter_mut().map(|s| &mut s.p)) {
+        path(p, width, height, false)?;
+        if p.last().unwrap()[p.last().unwrap().len() - 2..] == p[0] {
+            continue;
+        }
+        let mut points = p.iter().flat_map(|c| c.chunks(2));
+        let a = points.next().unwrap();
+        let b = points.find(|p| *p != a).unwrap();
+        if points.all(|c| (b[0] - a[0]) * (c[1] - a[1]) == (b[1] - a[1]) * (c[0] - a[0])) {
+            return Err("精绘遮挡与阴影区域不能退化为直线。".into());
+        }
+        p.push(p[0].clone());
+    }
+    Ok(())
 }
 fn sampled(commands: &Path) -> Vec<[f64; 2]> {
     let mut a = [commands[0][0], commands[0][1]];
@@ -443,7 +466,10 @@ fn parse_manifest(
     let mut manifest: Manifest = serde_json::from_str(&close_character_objects(raw))
         .map_err(|e| format!("精绘规划JSON结构无效（{e}），已保留原任务。"))?;
     let mut result = plan.pencil.clone().unwrap_or_default();
-    for c in manifest.characters {
+    for mut c in manifest.characters {
+        for head in [&mut c.heads.front, &mut c.heads.side] {
+            close_regions(&mut head.mask, &mut head.shades, 200.0, 240.0)?;
+        }
         c.validate()?;
         if result.characters.iter().any(|old| old.id == c.id) {
             return Err("规划不能重定义已经冻结的人物。".into());
@@ -536,8 +562,11 @@ pub fn parse_artwork(
     last: usize,
     cast: &[Character],
 ) -> Result<Artwork, String> {
-    let artwork: Artwork =
+    let mut artwork: Artwork =
         serde_json::from_str(raw).map_err(|_| "精绘画稿不是合法JSON，已保留原任务。")?;
+    for layer in &mut artwork.layers {
+        close_regions(&mut layer.mask, &mut layer.shades, 1600.0, 900.0)?;
+    }
     artwork.validate(first, last)?;
     artwork.validate_characters(cast)?;
     Ok(artwork)
