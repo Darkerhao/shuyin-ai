@@ -52,6 +52,43 @@ fn pencil_short_scenes_merge_preserving_cue_coverage_and_all_content() {
     assert!(scenes[0].description.contains("公文"));
     assert_eq!(scenes[0].characters, vec!["reader"]);
 }
+
+#[test]
+fn pencil_manifest_closes_character_objects_missing_their_final_brace() {
+    let head = r#"{"mask":[],"strokes":[{"p":[[20,20],[80,80]],"w":1.2,"a":0.6}],"shades":[]}"#;
+    let character = |id: &str, closed: bool| {
+        format!(
+            r#"{{"id":"{id}","name":"{id}","description":"{id}","heads":{{"front":{head},"side":{head}}}{}"#,
+            if closed { "}" } else { "" }
+        )
+    };
+    let scene = r#"{"first":0,"last":0,"title":"开场","description":"画面","characters":["a"]}"#;
+    let valid = format!(
+        r#"{{"characters":[{}],"scenes":[{scene}]}}"#,
+        character("a", true)
+    );
+    let malformed = format!(
+        r#"{{"characters":[{},{}],"scenes":[{scene}]}}"#,
+        character("a", false),
+        character("b", false)
+    );
+    assert_eq!(close_character_objects(&valid), valid);
+    assert_eq!(
+        parse_manifest(&valid, &plan(), 0, 1)
+            .unwrap()
+            .characters
+            .len(),
+        1
+    );
+    assert_eq!(
+        parse_manifest(&malformed, &plan(), 0, 1)
+            .unwrap()
+            .characters
+            .len(),
+        2
+    );
+}
+
 #[test]
 fn pencil_geometry_rejects_foreign_character_and_unclosed_regions() {
     let a = parse_artwork(&artwork().to_string(), 0, 3, &[character()]).unwrap();
