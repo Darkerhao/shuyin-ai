@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, time::Duration};
 
 pub const TIMEOUT: Duration = Duration::from_secs(1200);
-pub const PLAN_PROMPT: &str = include_str!("../../../prompts/video-pencil-plan-v1.md");
+pub const PLAN_PROMPT: &str = include_str!("../../../prompts/video-pencil-plan-v2.md");
 pub const DRAW_PROMPT: &str = include_str!("../../../prompts/video-pencil-draw-v1.md");
 pub type Path = Vec<Vec<f64>>;
 
@@ -440,13 +440,8 @@ fn parse_manifest(
     first: usize,
     end: usize,
 ) -> Result<PencilPlan, String> {
-    let mut manifest: Manifest = serde_json::from_str(raw).map_err(|e| {
-        format!(
-            "精绘规划JSON结构无效（第{}行第{}列），已保留原任务。",
-            e.line(),
-            e.column()
-        )
-    })?;
+    let mut manifest: Manifest = serde_json::from_str(&close_character_objects(raw))
+        .map_err(|e| format!("精绘规划JSON结构无效（{e}），已保留原任务。"))?;
     let mut result = plan.pencil.clone().unwrap_or_default();
     for c in manifest.characters {
         c.validate()?;
@@ -480,6 +475,48 @@ fn parse_manifest(
     merge_short(&mut manifest.scenes, &plan.cues, batch_end);
     result.pending = manifest.scenes;
     Ok(result)
+}
+
+/// Models consistently omit the brace closing a character object after `heads`.
+/// Restore it only at the unambiguous boundary between sibling characters or
+/// before the end of the characters array; valid JSON is unchanged.
+fn close_character_objects(raw: &str) -> String {
+    let mut output = String::with_capacity(raw.len() + 8);
+    let mut stack = Vec::new();
+    let mut string = false;
+    let mut escaped = false;
+    for (index, ch) in raw.char_indices() {
+        if string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            string = true;
+        } else if ch == '{' || ch == '[' {
+            stack.push(ch);
+        } else if ch == '}' || ch == ']' {
+            if ch == ']' && matches!(stack.as_slice(), [.., '[', '{']) {
+                output.push('}');
+                stack.pop();
+            }
+            stack.pop();
+        } else if ch == ','
+            && matches!(stack.as_slice(), [.., '[', '{'])
+            && raw[index..].starts_with(",{\"id\":\"")
+        {
+            output.push('}');
+            stack.pop();
+        }
+        output.push(ch);
+    }
+    output
 }
 pub fn drawing_input(plan: &VideoPlan, scene: &PlannedScene) -> String {
     let cast = &plan.pencil.as_ref().unwrap().characters;

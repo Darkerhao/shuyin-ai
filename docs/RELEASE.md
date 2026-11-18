@@ -95,6 +95,7 @@ main 与 dev 的版本一致，但提交 SHA 不同，dev 未发布的业务改�
 - 分支与标签保护必须允许工作流身份写入。`GITHUB_TOKEN` 不会自动绕过保护；如果组织规定必须使用具有绕过权限的 GitHub App，需要先配置该身份，再调整 checkout 的 token。不要为运行流水线关闭整个仓库的保护。
 - 将包含本工作流的提交推送到 main 即可触发，不需要额外创建 PR 或标签。仅保存在本地不会执行，旧推送不会自动补跑；工作流没有手动触发入口。
 - 构建或产物上传失败：远端版本未递增，可选择 **Re-run failed jobs** 复用原版本与成功平台产物；如果 main 已前进，选择 **Re-run all jobs** 或等待下一次合并，以构建最新代码。
+- macOS ARM64 提示 `The job was not acquired by Runner of type hosted even after multiple attempts`，并伴随 `Due to capacity constraints`：失败发生在 GitHub 托管 Runner 分配阶段，尚未执行构建。[第118次运行](https://github.com/Darkerhao/shuyin-ai/actions/runs/44100104638) 的该任务 `runner_id=0`、构建步骤为空，另外三个平台打包成功；`macos-15` 仍在 [GitHub 官方支持列表](https://github.com/actions/runner-images/blob/main/README.md) 中，第117次相同配置已成功。确认 main 未前进且 artifacts 未过期后，选择 **Re-run failed jobs**；若有限重跑仍无法获得 Runner，保留已有产物并等待托管资源恢复。四个平台齐备后才会继续版本同步和发布。
 - 如果修复涉及工作流或脚本代码，必须把修复提交推送到 main，启动新运行；重跑旧运行仍使用旧代码。Windows 的 Git Bash 中，GNU tar 会把绝对归档路径中的 `C:` 解释为远程主机并报 `Cannot connect to C: resolve failed`；归档脚本及测试统一通过工作目录和相对归档文件名执行，NSIS 打包不受此调整影响。
 - macOS 出现 `bundle_dmg.sh` / `hdiutil: couldn't eject ... Resource busy`：应用编译与 APP 签名可能已完成，失败发生在临时镜像卸载阶段。2026-10-29 的修复移除了 CI 中显式挂载、修改、卸载镜像的流程。Tauri CLI 2.12.4 的内置脚本对此错误最多尝试三次；`CI=true` 仅跳过 Finder AppleScript，仍会挂载和卸载镜像，因此重复设置 CI 或增加同样的重试不能移除此失败点。日志未表明具体占用进程；缺少 Apple 公证变量的警告不是本次退出原因。修复需要合入 main 后的新运行验证，Windows 上的命令替身测试不等同于真实 DMG 构建。
 - main 前进或远端拒绝写入：main/dev/标签均不由本次更新，重新运行会重新读取当前版本。已上传 artifact 是失败运行的候选产物，以**整个任务成功并存在对应标签**作为交付依据。
