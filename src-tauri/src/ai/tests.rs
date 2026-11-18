@@ -4,6 +4,31 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "Temporary remote network probe; uses no credentials or user content"]
+async fn debug_model_network_20261118() {
+    let url = std::env::var("SHUYIN_NETWORK_PROBE_URL").unwrap();
+    let provider = OpenAiCompatible::new(Duration::from_secs(12), &url).unwrap();
+    let mut req = request(url.clone());
+    req.key = None;
+    req.system = "Reply with OK only.".into();
+    req.user = "Connection test".into();
+    let error = provider.generate(req).await.unwrap_err();
+    eprintln!("[DEBUG-model-network-20261118] {error:?}");
+    if error.code == "network" || error.code == "timeout" {
+        let result = provider
+            .client
+            .post(format!("{url}/chat/completions"))
+            .json(&serde_json::json!({}))
+            .send()
+            .await;
+        if let Err(error) = result {
+            eprintln!("[DEBUG-model-network-20261118] {error:?}");
+        }
+    }
+    assert_eq!(error.code, "authentication");
+}
+
 fn image_request(base_url: String) -> ImageRequest {
     ImageRequest {
         base_url,
