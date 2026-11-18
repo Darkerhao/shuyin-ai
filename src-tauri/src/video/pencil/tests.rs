@@ -90,7 +90,7 @@ fn pencil_manifest_closes_character_objects_missing_their_final_brace() {
 }
 
 #[test]
-fn pencil_geometry_rejects_foreign_character_and_unclosed_regions() {
+fn pencil_geometry_rejects_foreign_character_and_degenerate_regions() {
     let a = parse_artwork(&artwork().to_string(), 0, 3, &[character()]).unwrap();
     assert_eq!(
         a.layers[0].portrait.as_ref().unwrap().character_id,
@@ -103,6 +103,78 @@ fn pencil_geometry_rejects_foreign_character_and_unclosed_regions() {
     let mut value = artwork();
     value["characters"] = json!([]);
     assert!(parse_artwork(&value.to_string(), 0, 3, &[character()]).is_err());
+}
+
+#[test]
+fn pencil_artwork_closes_valid_regions_and_preserves_strokes_and_closed_curves() {
+    let mut value = artwork();
+    let closed = json!([[20, 20], [80, 20], [80, 80, 20, 80, 20, 20]]);
+    value["layers"][0]["mask"] = json!([[[20, 20], [80, 20], [80, 80]], closed]);
+    value["layers"][0]["shades"] =
+        json!([{"p":[[20,20],[80,20,80,80]],"angle":65,"gap":5,"w":0.7,"a":0.2}]);
+    let unnormalized: Artwork = serde_json::from_value(value.clone()).unwrap();
+    assert!(unnormalized.validate(0, 3).unwrap_err().contains("闭合"));
+    let parsed = parse_artwork(&value.to_string(), 0, 3, &[character()]).unwrap();
+    let mut expected = value;
+    expected["layers"][0]["mask"][0]
+        .as_array_mut()
+        .unwrap()
+        .push(json!([20, 20]));
+    expected["layers"][0]["shades"][0]["p"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!([20, 20]));
+    let expected =
+        serde_json::to_value(serde_json::from_value::<Artwork>(expected).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), expected);
+    let saved = serde_json::to_string(&parsed).unwrap();
+    assert_eq!(
+        serde_json::to_value(parse_artwork(&saved, 0, 3, &[character()]).unwrap()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn pencil_manifest_closes_head_regions_before_freezing() {
+    let mut cast = serde_json::to_value(character()).unwrap();
+    for view in ["front", "side"] {
+        cast["heads"][view]["mask"] = json!([[[20, 20], [80, 20], [80, 80]]]);
+        cast["heads"][view]["shades"] =
+            json!([{"p":[[20,20],[80,20],[80,80]],"angle":65,"gap":5,"w":0.7,"a":0.2}]);
+    }
+    let manifest = json!({"characters":[cast],"scenes":[{"first":0,"last":3,"title":"阅读","description":"查阅账簿","characters":["reader"]}]});
+    let parsed = parse_manifest(&manifest.to_string(), &plan(), 0, 4).unwrap();
+    for head in [
+        &parsed.characters[0].heads.front,
+        &parsed.characters[0].heads.side,
+    ] {
+        assert_eq!(head.mask[0].last().unwrap(), &head.mask[0][0]);
+        assert_eq!(head.shades[0].p.last().unwrap(), &head.shades[0].p[0]);
+    }
+    parsed.characters[0].validate().unwrap();
+}
+
+#[test]
+fn pencil_region_closure_rejects_invalid_geometry_and_counts_added_commands() {
+    for p in [
+        json!([]),
+        json!([[0, 0], [100, 100]]),
+        json!([[0, 0], [50, 50], [100, 100]]),
+        json!([[0, 0], [0, 0], [0, 0]]),
+        json!([[0, 0], [1700, 0], [100, 100]]),
+        json!([[0, 0], [100, 0], [100, 100, 0]]),
+    ] {
+        let mut value = artwork();
+        value["layers"][0]["mask"] = json!([p]);
+        assert!(parse_artwork(&value.to_string(), 0, 3, &[character()]).is_err());
+    }
+    let mut value = artwork();
+    value["layers"][0]["mask"] = json!([[[20, 20], [80, 20], [80, 80]]]);
+    value["layers"][0]["strokes"][0]["p"] =
+        json!((0..6497).map(|i| [20 + i % 2, 20]).collect::<Vec<_>>());
+    assert!(parse_artwork(&value.to_string(), 0, 3, &[character()])
+        .unwrap_err()
+        .contains("预算"));
 }
 #[test]
 fn pencil_required_cast_and_expanded_budget_are_checked_before_adoption() {
@@ -164,6 +236,74 @@ impl TextProvider for Responses {
             }
         })
     }
+}
+#[tokio::test]
+async fn pencil_resume_preserves_saved_scene_and_only_closes_pending_regions() {
+    let mut p = plan();
+    p.scenes.push(Scene {
+        first: 0,
+        last: 1,
+        kind: "focus".into(),
+        title: "已完成".into(),
+        environment: "plain".into(),
+        framing: "reference".into(),
+        labels: vec![],
+        beats: vec![],
+        image: None,
+        painting: None,
+        artwork: Some(parse_artwork(&artwork().to_string(), 0, 1, &[character()]).unwrap()),
+    });
+    p.pencil = Some(PencilPlan {
+        characters: vec![character()],
+        pending: vec![PlannedScene {
+            first: 2,
+            last: 3,
+            title: "继续阅读".into(),
+            description: "增补账簿".into(),
+            characters: vec!["reader".into()],
+        }],
+    });
+    let original = serde_json::to_value(&p).unwrap();
+    let request = TextRequest {
+        base_url: "http://localhost".into(),
+        model: "test".into(),
+        reasoning_effort: None,
+        key: None,
+        system: String::new(),
+        user: String::new(),
+    };
+    let mut value = artwork();
+    value["layers"][0]["cue"] = json!(2);
+    value["layers"][0]["mask"] = json!([[[20, 20], [80, 20]]]);
+    let provider = Responses(Mutex::new(vec![value.to_string()]));
+    assert!(generate(&mut p, &provider, &request, |_| panic!(
+        "invalid artwork must not be saved"
+    ))
+    .await
+    .is_err());
+    assert_eq!(serde_json::to_value(&p).unwrap(), original);
+
+    value["layers"][0]["mask"] = json!([[[20, 20], [80, 20], [80, 80]]]);
+    let provider = Responses(Mutex::new(vec![value.to_string()]));
+    let mut snapshots = vec![];
+    generate(&mut p, &provider, &request, |p| {
+        snapshots.push(serde_json::to_string(p).unwrap());
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(snapshots.len(), 1);
+    let reopened: VideoPlan = serde_json::from_str(&snapshots[0]).unwrap();
+    let saved = serde_json::to_value(&reopened).unwrap();
+    assert_eq!(saved["cues"], original["cues"]);
+    assert_eq!(saved["scenes"][0], original["scenes"][0]);
+    assert_eq!(
+        saved["pencil"]["characters"],
+        original["pencil"]["characters"]
+    );
+    assert_eq!(reopened.scenes.len(), 2);
+    assert!(reopened.pencil.as_ref().unwrap().pending.is_empty());
+    validate_plan(&reopened).unwrap();
 }
 #[tokio::test]
 async fn pencil_resume_uses_persisted_queue_and_frozen_heads_without_replanning() {
