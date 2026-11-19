@@ -584,7 +584,7 @@ impl Database {
                     ).map_err(|_| "所选原书文件不属于本次整书来源。")?;
                     if kind != "document" { return Err("原书来源必须是已登记的文档素材。".into()); }
                     let path = fs::canonicalize(path).map_err(|error| format!("原书文件不可用：{error}"))?;
-                    if !supported_source_name(&path) { return Err("原书来源只支持 PDF、EPUB、TXT 或 Markdown 文件。".into()); }
+                    if !supported_source_name(&path) { return Err("原书来源只支持 PDF、EPUB、TXT、Markdown 或 DOCX 文件。".into()); }
                     PreparedSource { frozen:FrozenSource::Asset {
  asset_id:asset_id.clone(),name,size:0,sha256:String::new() },path:Some(path) }
                 }

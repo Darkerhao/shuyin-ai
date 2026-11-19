@@ -618,3 +618,17 @@ P0必须拿到的证据：实际开发者主体/应用类别和能力审批结�
 - Chromium对file图片Canvas读取像素真实抛SecurityError，故继续采用宿主冻结/摘要校验的按资产ID一次嵌入，不关闭跨源保护；长片多图内存尚需实际测试。
 - 画面描述变化解除当前镜图片与任务引用；改运镜不应重新创建失败图片任务，现保存逻辑保留原任务ID。字幕内容或时间码变动清空依赖水墨scenes，经典和旧水墨不被自动转换。
 - 浏览器验收假IPC若直接保存Vue Proxy，随后structuredClone会失败；真实Tauri IPC有参数序列化。只修隔离夹具的JSON边界后，局部改画与原任务继续通过；没有添加产品兼容分支。
+
+## 项目体检修复记录（2026-11-19）
+
+- 审计基线为 `dev` / `18f5943` / v0.69.2，业务工作区初始干净；`output/project-audit-20261119/` 属于忽略目录，保留为只读证据。
+- `delete_project` 当前在 `with_connection` 中仅检查 `video_jobs.status='running'`，可在同一 SQLite 连接内增加 `audio_jobs`、未结束 `automation_runs` 和 `ai_tasks` 检查；活动记录的状态值按现有恢复/取消逻辑判断，不删除或伪造取消。
+- `video_jobs` 的列表 SQL 当前直接选择完整 `plan_json`，`VideoPage` 初次加载和轮询都调用同一接口。最小优化是增加摘要列表命令/服务：轮询只返回任务元数据、状态、进度和预览；显式选中历史时通过已有单任务接口读取完整计划，再执行 `adopt`。
+- 原声深链接目前只影响 `audioId`，任务选择仍按 `job`/草稿/最新历史优先；制作设置 `default-open` 只按 `!jobs.length`。应使用有效 `route.query.audio` 作为新制作入口标志，默认不聚焦旧任务并展开设置，同时保留显式 `job` 续作行为。
+- 精绘 `VideoDrawingPreview` 已使用 `SHUYIN_PENCIL_DRAWING.compile/render` 的终点静帧；播放、暂停和拖动可直接复用同一 drawing 与 `render(..., elapsed, false)`，无需持久化新状态，并在 `prefers-reduced-motion` 下保持终点静帧。
+- 路由页面均为同步静态导入，改用 Vue Router 支持的动态 `import()` 不改变路径或 props。
+- DOCX 已被书籍表单、拖放和素材识别支持，但 `ProjectPage.vue` 自动制作错误和 `database/audio.rs` 的来源校验提示仍遗漏 DOCX；文案需统一。自动 Notebook 音频流程的当前支持范围仍由 `docs/AUTOMATION-VERIFICATION.md` 约束，不能只因书籍绑定支持 DOCX 就宣称自动音频已支持。
+- 完成：删除门禁将四类阻断任务列出具体 ID/阶段/状态，拒绝期间不变更数据库或文件；所有任务终态后保留原级联删除能力，无迁移。
+- 完成：视频工作台首载/轮询只取得普通列摘要，不加载历史 plan/editor JSON；最近暂存 ID 独立读取，按 ID 读取单任务完整计划；原声深链展开新制作设置，历史保持未选中；更换该入口的原声需要确认。
+- 完成：精绘预览复用正式 `compile/render` 时钟实现播放、暂停、seek 和减少动态效果静帧；页面路由改为动态 import；DOCX 能力提示及 Windows 专项能力边界已同步到产品/技术/数据/用户文档。
+- 实际验证结果和未做的桌面、真实模型/平台验收见 `docs/DEVELOPMENT-PLAN.md`“项目体检问题修复（2026-11-19）”。

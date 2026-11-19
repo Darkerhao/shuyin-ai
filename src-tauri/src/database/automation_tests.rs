@@ -53,6 +53,20 @@ fn account() -> Account {
 }
 
 #[test]
+fn automatic_creation_accepts_docx_source() {
+    let (directory, database, mut input) = setup();
+    let source = directory.path().join("自动制作来源.docx");
+    fs::write(&source, "DOCX 原书测试资料。").unwrap();
+    let asset_id = database
+        .link_asset(&input.project_id, source.to_str().unwrap(), None, None)
+        .unwrap();
+    input.source = audio::AudioSourceInput::Asset { asset_id };
+
+    let run = database.create_automation(input, account()).unwrap();
+    assert_eq!(run.status, "running");
+}
+
+#[test]
 fn automation_account_reuse_is_enabled_by_default_and_survives_restart_and_backup() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.sqlite3");

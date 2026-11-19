@@ -118,6 +118,110 @@ fn bound_documents_roll_back_new_and_existing_books_on_invalid_or_duplicate_sour
     assert_eq!(fs::read(source).unwrap(), b"original");
 }
 
+#[test]
+fn project_delete_is_blocked_by_unfinished_jobs_until_each_job_is_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("data.sqlite3"));
+    let source = dir.path().join("原书.txt");
+    fs::write(&source, b"source book").unwrap();
+    let book = db
+        .save_project_with_documents(
+            None,
+            input("有活动任务的书"),
+            &[source.to_string_lossy().into_owned()],
+        )
+        .unwrap();
+    let assert_preserved = |expected: &str| {
+        let error = db.delete_project(&book.id).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(
+            db.get_project(&book.id).unwrap().input.title,
+            "有活动任务的书"
+        );
+        assert_eq!(db.list_assets(&book.id, None).unwrap().len(), 1);
+        assert_eq!(fs::read(&source).unwrap(), b"source book");
+    };
+
+    db.with_connection(|connection| {
+        connection.execute(
+            "INSERT INTO audio_jobs(id,project_id,input_json,status,stage,run_id,created_at,updated_at) VALUES('audio-active',?1,'{}','generating','generating',1,'now','now')",
+            [&book.id],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    assert_preserved("音频");
+    db.with_connection(|connection| {
+        connection.execute("UPDATE audio_jobs SET status='paused',stage='verify_remote' WHERE id='audio-active'", []).map_err(|error| error.to_string())?;
+        Ok(())
+    }).unwrap();
+    assert_preserved("音频");
+    db.with_connection(|connection| {
+        connection.execute("UPDATE audio_jobs SET status='succeeded' WHERE id='audio-active'", []).map_err(|error| error.to_string())?;
+        connection.execute(
+            "INSERT INTO automation_runs(id,request_key,project_id,input_json,status,stage,created_at,updated_at) VALUES('automation-active','request-active',?1,'{}','running','writing','now','now')",
+            [&book.id],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    assert_preserved("自动流程");
+    db.with_connection(|connection| {
+        connection
+            .execute(
+                "UPDATE automation_runs SET status='paused' WHERE id='automation-active'",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    assert_preserved("自动流程");
+    db.with_connection(|connection| {
+        connection.execute("UPDATE automation_runs SET status='completed' WHERE id='automation-active'", []).map_err(|error| error.to_string())?;
+        connection.execute(
+            "INSERT INTO ai_tasks(id,project_id,kind,model_name,prompt_version,status,input_json,created_at) VALUES('ai-pending',?1,'storyboard','local-test','test','pending','{}','now')",
+            [&book.id],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    assert_preserved("AI 生成");
+    db.with_connection(|connection| {
+        connection.execute("UPDATE ai_tasks SET status='cancelled' WHERE id='ai-pending'", []).map_err(|error| error.to_string())?;
+        connection.execute(
+            "INSERT INTO ai_tasks(id,project_id,kind,model_name,prompt_version,status,input_json,created_at) VALUES('ai-running',?1,'storyboard','local-test','test','running','{}','now')",
+            [&book.id],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    assert_preserved("AI 生成");
+    db.with_connection(|connection| {
+        connection.execute("UPDATE ai_tasks SET status='cancelled' WHERE id='ai-running'", []).map_err(|error| error.to_string())?;
+        connection.execute(
+            "INSERT INTO video_jobs(id,project_id,status,stage,plan_json,created_at,updated_at) VALUES('video-active',?1,'running','rendering','{}','now','now')",
+            [&book.id],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    assert_preserved("视频");
+
+    db.with_connection(|connection| {
+        connection
+            .execute(
+                "UPDATE video_jobs SET status='failed' WHERE id='video-active'",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    db.delete_project(&book.id).unwrap();
+    assert_eq!(fs::read(&source).unwrap(), b"source book");
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn bound_documents_roll_back_when_source_access_is_denied() {

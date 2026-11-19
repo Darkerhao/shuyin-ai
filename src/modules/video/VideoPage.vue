@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { chapterIdFromQuery, chapterQuery } from '../../types/chapter'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute, useRouter } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
 import AudioPlayer from '../../components/AudioPlayer.vue'
 import ProjectNavigation from '../../components/ProjectNavigation.vue'
 import OperationFeedback from '../../components/OperationFeedback.vue'
+import ConfirmAction from '../../components/ConfirmAction.vue'
 import VideoJobProgress from './VideoJobProgress.vue'
 import VideoSceneEditor from './VideoSceneEditor.vue'
 import VideoSubtitleEditor from './VideoSubtitleEditor.vue'
@@ -26,11 +27,14 @@ import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { videoStatuses, videoThemes, type VideoCue, type VideoJob, type VideoScene, type VideoSceneRevisionInput, type VideoSettings, type VideoTheme } from '../../types/video'
+import { videoStatuses, videoThemes, type VideoCue, type VideoJob, type VideoJobSummary, type VideoScene, type VideoSceneRevisionInput, type VideoSettings, type VideoTheme } from '../../types/video'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
+const router = useRouter()
 const chapterId = computed(() => chapterIdFromQuery(route.query.chapter))
+const requestedAudioId = computed(() => typeof route.query.audio === 'string' ? route.query.audio : '')
+const newAudioEntry = computed(() => !!requestedAudioId.value && !route.query.job)
 const desktop = isDesktop()
 const { busy: operationBusy, error, message, run } = useOperation()
 const imageWorking = ref(false)
@@ -43,6 +47,7 @@ const assets = ref<Asset[]>([])
 const providers = ref<ModelProvider[]>([])
 const imageProviders = ref<ModelProvider[]>([])
 const jobs = ref<VideoJob[]>([])
+const jobSummaries = ref<VideoJobSummary[]>([])
 const selectedId = ref('')
 const audioId = ref('')
 const providerId = ref('')
@@ -76,6 +81,7 @@ const previewSeconds = ref('30')
 const mediaError = ref('')
 const progressError = ref('')
 const jobPanel = ref<globalThis.HTMLElement>()
+const confirmAudioChange = ref(false)
 const selected = computed(() => jobs.value.find(job => job.id === selectedId.value))
 const selectedTheme = computed(() => selected.value?.plan.imageProviderId ? '旧版水墨画' : videoThemes[selected.value?.plan.theme ?? 'classic'])
 const running = computed(() => jobs.value.some(job => job.status === 'running'))
@@ -90,7 +96,7 @@ const storyboardNotes = computed(() => selected.value ? inspectStoryboard({ ...s
 const sceneEdits = computed(() => scenes.value.flatMap((scene, index) => JSON.stringify(scene) === savedEditor.value.scenes[index] ? [] : [{ index, scene }]))
 const subtitlesChanged = computed(() => subtitleText.value !== savedEditor.value.subtitles)
 function markSavedEditor() { savedEditor.value = { subtitles: subtitleText.value, scenes: scenes.value.map(scene => JSON.stringify(scene)) } }
-const jobLabel = (job: VideoJob) => `${videoStatuses[job.status]} · ${job.plan.imageProviderId ? '旧版水墨画' : videoThemes[job.plan.theme ?? 'classic']} · ${job.createdAt ? new Date(job.createdAt).toLocaleString() : job.id}`
+const jobLabel = (job: VideoJob | VideoJobSummary) => `${videoStatuses[job.status]} · ${job.createdAt ? `${new Date(job.createdAt).toLocaleString()} · ` : ''}${job.id.slice(0, 8)}`
 const dirty = computed(() => loaded.value && !!editable.value && (subtitlesChanged.value || sceneEdits.value.length > 0))
 const draftContent = computed<VideoEditorDraft>(() => ({ ...(subtitlesChanged.value ? { subtitles: subtitleText.value } : {}), sceneEdits: sceneEdits.value, position: position.value }))
 const autosave = useEditorDraft(() => selectedId.value, 'video', draftContent, () => String(selected.value?.runId), dirty, draftReady, canPrepareLeave, true)
@@ -104,6 +110,7 @@ const runtimeFields: { key: keyof VideoSettings; label: string; directory: boole
 ]
 let disposed = false
 let polling = false
+let switchingJob = false
 let timer: ReturnType<typeof globalThis.setInterval> | undefined
 
 function canPrepareLeave() {
@@ -115,7 +122,7 @@ async function canLeave() {
   try { await autosave.flush(); return true } catch { return false }
 }
 onBeforeRouteLeave(canLeave)
-onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.job === from.query.job && to.query.chapter === from.query.chapter) || canLeave())
+onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id && to.query.job === from.query.job && to.query.chapter === from.query.chapter && to.query.audio === from.query.audio) || canLeave())
 
 async function adopt(job: VideoJob | undefined, restoreDraft = true) {
   draftReady.value = false
@@ -154,23 +161,56 @@ async function adopt(job: VideoJob | undefined, restoreDraft = true) {
   }
   return !!draft
 }
-function put(job: VideoJob | undefined) { if (!job) return; jobs.value = [job, ...jobs.value.filter(j => j.id !== job.id)]; selectedId.value = job.id }
+function put(job: VideoJob | undefined) {
+  if (!job) return
+  jobs.value = [job, ...jobs.value.filter(j => j.id !== job.id)]
+  jobSummaries.value = [summaryFromJob(job), ...jobSummaries.value.filter(j => j.id !== job.id)]
+  selectedId.value = job.id
+}
+function summaryFromJob(job: VideoJob): VideoJobSummary {
+  return {
+    id: job.id,
+    chapterId: job.chapterId,
+    projectId: job.projectId,
+    audioAssetId: job.audioAssetId,
+    sourceSubtitleId: job.sourceSubtitleId,
+    providerId: job.providerId,
+    status: job.status,
+    stage: job.stage,
+    runId: job.runId,
+    error: job.error,
+    subtitleAssetId: job.subtitleAssetId,
+    videoAssetId: job.videoAssetId,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  }
+}
+function jobFromSummary(summary: VideoJobSummary): VideoJob {
+  return {
+    ...summary,
+    plan: { title: '', audioSha256: '', duration: 0, cues: [], scenes: [] },
+    preview: null,
+  }
+}
 const load = () => run(async () => {
   loaded.value = false; draftReady.value = false
   const projectId = props.id
-  const [book, files, models, settings, history, chapter] = await Promise.all([getProject(props.id), listAssets(props.id, chapterId.value), listProviders(), api.settings(), api.listJobs(props.id, chapterId.value), chapterId.value ? getChapter(props.id, chapterId.value) : null])
+  const [book, files, models, settings, history, recentDraftId, chapter] = await Promise.all([getProject(props.id), listAssets(props.id, chapterId.value), listProviders(), api.settings(), api.listJobSummaries(props.id, chapterId.value), newAudioEntry.value ? null : api.latestDraftJobId(props.id, chapterId.value), chapterId.value ? getChapter(props.id, chapterId.value) : null])
   if (disposed || projectId !== props.id) return
   if (route.query.job && !history.some(job => job.id === route.query.job)) throw new Error('视频任务不属于当前书籍或章节，请从对应成果入口打开。')
-  if (route.query.audio && !files.some(asset => asset.id === route.query.audio && asset.assetType === 'audio')) throw new Error('音频不属于当前书籍或章节，请选择本章音频。')
+  if (requestedAudioId.value && !files.some(asset => asset.id === requestedAudioId.value && asset.assetType === 'audio')) throw new Error('音频不属于当前书籍或章节，请选择本章音频。')
   title.value = chapter ? `${book.title} · ${chapter.title}` : book.title; assets.value = files; providers.value = models.filter(p => p.modelKind === 'text' && p.isEnabled)
   imageProviders.value = models.filter(p => p.modelKind === 'image' && p.isEnabled)
   config.value = settings; savedConfig.value = JSON.stringify(settings)
-  jobs.value = history
-  const recentDraft = history.filter(j => j.draftUpdatedAt).sort((a, b) => b.draftUpdatedAt!.localeCompare(a.draftUpdatedAt!))[0]
-  selectedId.value = history.find(j => j.id === route.query.job)?.id ?? recentDraft?.id ?? history[0]?.id ?? ''
-  audioId.value = audios.value.find(a => a.id === route.query.audio)?.id ?? audios.value[0]?.id ?? ''
-  restoreProvider(selected.value)
-  const restored = await adopt(selected.value)
+  jobSummaries.value = history
+  jobs.value = history.map(jobFromSummary)
+  selectedId.value = history.find(j => j.id === route.query.job)?.id ?? (newAudioEntry.value ? '' : history.find(job => job.id === recentDraftId)?.id ?? history[0]?.id ?? '')
+  audioId.value = audios.value.find(a => a.id === requestedAudioId.value)?.id ?? audios.value[0]?.id ?? ''
+  const current = selectedId.value ? await api.getJob(selectedId.value) : undefined
+  if (disposed || projectId !== props.id) return
+  if (current) jobs.value = [current, ...jobs.value.filter(job => job.id !== current.id)]
+  restoreProvider(current)
+  const restored = await adopt(current)
   loaded.value = true
   await nextTick()
   if (restored) {
@@ -183,19 +223,38 @@ async function poll() {
   const projectId = props.id
   polling = true
   try {
-    const previous = selected.value
-    const history = await api.listJobs(projectId, chapterId.value)
+    const previous = selected.value && { status: selected.value.status, runId: selected.value.runId, providerId: selected.value.providerId }
+    const previousJobs = jobs.value
+    const history = await api.listJobSummaries(projectId, chapterId.value)
     if (disposed || projectId !== props.id) return
     progressError.value = ''
-    jobs.value = history
+    jobSummaries.value = history
+    jobs.value = history.map(summary => {
+      const existing = previousJobs.find(job => job.id === summary.id)
+      if (!existing) return jobFromSummary(summary)
+      existing.status = summary.status
+      existing.stage = summary.stage
+      existing.runId = summary.runId
+      existing.error = summary.error
+      existing.providerId = summary.providerId
+      existing.audioAssetId = summary.audioAssetId
+      existing.subtitleAssetId = summary.subtitleAssetId
+      existing.videoAssetId = summary.videoAssetId
+      existing.createdAt = summary.createdAt
+      existing.updatedAt = summary.updatedAt
+      existing.progress = summary.progress
+      return existing
+    })
     if (previous?.providerId !== selected.value?.providerId) restoreProvider(selected.value)
-    if (previous && (previous.status !== selected.value?.status || previous.runId !== selected.value?.runId)) {
+    if (previous && selected.value && (previous.status !== selected.value.status || previous.runId !== selected.value.runId)) {
+      const detail = await api.getJob(selected.value.id)
+      jobs.value = [detail, ...jobs.value.filter(job => job.id !== detail.id)]
       if (selected.value?.status === 'running') {
         draftReady.value = false
         autosave.reset()
         return
       }
-      await adopt(selected.value)
+      await adopt(detail)
       const files = await listAssets(projectId, chapterId.value)
       if (disposed || projectId !== props.id) return
       assets.value = files
@@ -210,14 +269,34 @@ const choosePath = (key: keyof VideoSettings, directory: boolean) => run(async (
   if (typeof path === 'string') config.value[key] = path
 })
 const saveConfig = () => run(async () => { await api.saveSettings(config.value); savedConfig.value = JSON.stringify(config.value); message.value = '视频运行环境已保存，可点击“一键检查环境”验证。' })
-const begin = (sourceAudio: string, sourceSubtitle: string | null) => run(async () => {
-  if (dirty.value || configDirty.value) throw new Error('请先保存或还原字幕、分镜和运行环境修改。')
-  const job = await api.startJob(props.id, sourceAudio, providerId.value, sourceSubtitle, chapterId.value, theme.value, null)
-  put(job); await adopt(job)
-  await nextTick()
-  jobPanel.value?.scrollIntoView({ block: 'start' })
-})
-const create = () => begin(audioId.value, subtitleId.value === 'auto' ? null : subtitleId.value)
+const begin = async (sourceAudio: string, sourceSubtitle: string | null) => {
+  let startedJobId = ''
+  await run(async () => {
+    if (dirty.value || configDirty.value) throw new Error('请先保存或还原字幕、分镜和运行环境修改。')
+    const job = await api.startJob(props.id, sourceAudio, providerId.value, sourceSubtitle, chapterId.value, theme.value, null)
+    startedJobId = job.id
+    put(job); await adopt(job)
+    await nextTick()
+    jobPanel.value?.scrollIntoView({ block: 'start' })
+  })
+  if (startedJobId) {
+    switchingJob = true
+    await router.replace({ query: { ...route.query, job: startedJobId, audio: undefined } })
+    await nextTick()
+    switchingJob = false
+  }
+}
+const create = () => {
+  if (newAudioEntry.value && requestedAudioId.value && audioId.value !== requestedAudioId.value) {
+    confirmAudioChange.value = true
+    return
+  }
+  return begin(audioId.value, subtitleId.value === 'auto' ? null : subtitleId.value)
+}
+const confirmCreateWithChangedAudio = () => {
+  confirmAudioChange.value = false
+  return begin(audioId.value, subtitleId.value === 'auto' ? null : subtitleId.value)
+}
 const remake = () => { const job = selected.value; if (job?.audioAssetId && job.subtitleAssetId) return begin(job.audioAssetId, job.subtitleAssetId) }
 const resume = (render: boolean) => run(async () => {
   if (!selected.value) return
@@ -288,7 +367,23 @@ function restoreProvider(job: VideoJob | undefined) {
     ? providers.value.find(provider => provider.id === job.providerId)?.id ?? ''
     : providers.value.find(provider => provider.isDefault)?.id ?? providers.value[0]?.id ?? ''
 }
-const switchJob = (id: unknown) => run(async () => { await autosave.flush(); selectedId.value = String(id); restoreProvider(selected.value); await adopt(selected.value) })
+const switchJob = async (id: unknown) => {
+  let switched = false
+  await run(async () => {
+    await autosave.flush()
+    const job = await api.getJob(String(id))
+    put(job)
+    restoreProvider(job)
+    await adopt(job)
+    switched = true
+  })
+  if (switched) {
+    switchingJob = true
+    await router.replace({ query: { ...route.query, job: String(id), audio: undefined } })
+    await nextTick()
+    switchingJob = false
+  }
+}
 function suspendDraft() {
   draftReady.value = false
   // Drain any write already in flight. An explicit save or discard does not require a new draft.
@@ -317,15 +412,17 @@ const saveEditor = () => run(async () => {
   if (!selected.value) return
   await persistPlan(scenes.value)
   selected.value.preview = null
-  jobs.value = await api.listJobs(props.id, chapterId.value)
-  await adopt(selected.value, false)
+  const refreshed = await api.getJob(selected.value.id)
+  put(refreshed)
+  await adopt(refreshed, false)
   await autosave.flush()
   message.value = '字幕和分镜校对已保存，尚未启动渲染。'
 })
 const exportSrt = () => run(async () => {
   if (!selected.value || dirty.value) throw new Error('请先保存字幕校对。')
   const id = await api.exportSubtitles(selected.value.id)
-  jobs.value = await api.listJobs(props.id, chapterId.value)
+  const refreshed = await api.getJob(selected.value.id)
+  put(refreshed)
   assets.value = await listAssets(props.id, chapterId.value)
   await openAsset(id, true)
   message.value = '已将当前保存的字幕导出为独立 SRT。'
@@ -354,7 +451,7 @@ watch(previewKey, async (key, _previous, onCleanup) => {
     if (current && !disposed) { previewUrl.value = url; previewFrames.value = frames }
   } catch (cause) { if (current && !disposed) mediaError.value = `试片无法读取，请重新生成：${String(cause)}` }
 })
-watch(() => [props.id, route.query.job], () => { if (desktop) void load() })
+watch(() => [props.id, route.query.job, route.query.audio], () => { if (desktop && !switchingJob) void load() })
 onMounted(() => { if (desktop) { void load(); timer = globalThis.setInterval(() => { void poll() }, 1500) } })
 onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(timer) })
 </script>
@@ -448,7 +545,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
       <Collapsible
         v-slot="{ open: setupOpen }"
         class="panel video-setup"
-        :default-open="!jobs.length"
+        :default-open="!jobs.length || newAudioEntry"
         :disabled="busy"
         :unmount-on-hide="false"
       >
@@ -461,6 +558,12 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           <AppIcon name="chevron" />
         </CollapsibleTrigger>
         <CollapsibleContent class="video-inputs">
+          <p
+            v-if="newAudioEntry && audioId"
+            class="video-entry-context"
+          >
+            已从原声入口选中「{{ audios.find(asset => asset.id === audioId)?.originalName }}」。下面的设置用于制作新视频，历史任务仅供查看。
+          </p>
           <p class="muted">
             横屏 1920 × 1080 · 24 fps · 铅笔素描在白纸上逐笔勾出轮廓、细节与明暗排线，笔尖跟随线条绘制；书卷手绘保留原配色和讲解构图。两种画风均按原声字幕绘制，不自动生成图片。
           </p>
@@ -644,10 +747,10 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           <div class="video-job-heading">
             <div>
               <h2 class="video-section-title">
-                当前制作任务
+                {{ selected ? '当前制作任务' : '历史制作任务' }}
               </h2>
               <p class="muted">
-                进度与成果随任务更新，可切换查看历史制作。
+                {{ selected ? '进度与成果随任务更新，可切换查看历史制作。' : '已选原声将用于新视频；选择历史任务可查看其进度和成果。' }}
               </p>
               <p
                 v-if="selected?.plan.imageProviderId"
@@ -664,11 +767,11 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                 <SelectValue>{{ selected ? jobLabel(selected) : '选择视频任务' }}</SelectValue>
               </SelectTrigger><SelectContent>
                 <SelectItem
-                  v-for="job in jobs"
-                  :key="job.id"
-                  :value="job.id"
+                  v-for="summary in jobSummaries"
+                  :key="summary.id"
+                  :value="summary.id"
                 >
-                  {{ jobLabel(job) }}
+                  {{ jobLabel(summary) }}
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -1093,6 +1196,15 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
       </section>
     </div>
   </div>
+  <ConfirmAction
+    v-if="confirmAudioChange"
+    title="确认更换本次原声？"
+    confirm-label="使用新原声"
+    @confirm="confirmCreateWithChangedAudio"
+    @cancel="confirmAudioChange = false"
+  >
+    <p>本次入口原先选择「{{ audios.find(asset => asset.id === requestedAudioId)?.originalName }}」。确认后将使用「{{ audios.find(asset => asset.id === audioId)?.originalName }}」制作新视频。</p>
+  </ConfirmAction>
 </template>
 
 <style scoped>
@@ -1120,6 +1232,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
 .video-setup-trigger .video-section-title { border: 0; padding: 0; }
 .video-setup .video-inputs { border-top: 1px solid var(--border); }
 .video-setup .video-inputs[data-state='closed'] { padding: 0; border: 0; }
+.video-entry-context { margin: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--video-accent) 35%, var(--border)); border-radius: 8px; color: var(--video-accent); background: color-mix(in srgb, var(--video-accent) 7%, transparent); }
 .video-workspace .panel { margin: 0; background: var(--panel-surface); box-shadow: var(--panel-shadow); }
 .video-workspace .muted { margin: 0; font: 400 12px/1.75 var(--font-sans); }
 .video-inputs > .muted { line-height: 16px; }
