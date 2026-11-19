@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { chapterIdFromQuery, chapterQuery } from '../../types/chapter'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
 import AudioPlayer from '../../components/AudioPlayer.vue'
@@ -12,7 +12,7 @@ import VideoSubtitleEditor from './VideoSubtitleEditor.vue'
 import { revealInScroller } from '../../lib/scroll'
 import VideoEnvironmentCheck from './VideoEnvironmentCheck.vue'
 import VideoSceneRevision from './VideoSceneRevision.vue'
-import { initialPosition, type VideoEditorDraft } from './subtitles'
+import { initialPosition, type SavedVideoEditorDraft, type VideoEditorDraft } from './subtitles'
 import { inspectStoryboard } from './storyboard'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -52,7 +52,7 @@ const config = ref<VideoSettings>({ engineRoot: '', nodePath: '', pythonPath: ''
 const savedConfig = ref('')
 const subtitleText = ref('')
 const scenes = ref<VideoScene[]>([])
-const savedEditor = ref('')
+const savedEditor = shallowRef<{ subtitles: string; scenes: string[] }>({ subtitles: '', scenes: [] })
 const editorJobId = ref('')
 const draftReady = ref(false)
 const position = ref(initialPosition())
@@ -87,11 +87,12 @@ const paintingsReady = computed(() => !selected.value?.plan.imageProviderId || (
 const completePlan = computed(() => scenes.value.length > 0 && !legacyPlan.value && scenes.value.at(-1)!.last + 1 === selected.value?.plan.cues.length)
 const paintingsOnly = computed(() => !!selected.value?.plan.imageProviderId && completePlan.value && scenes.value.every(scene => !!scene.painting))
 const storyboardNotes = computed(() => selected.value ? inspectStoryboard({ ...selected.value.plan, scenes: scenes.value }) : [])
-const sceneSnapshot = computed(() => JSON.stringify(scenes.value))
-const editorValue = () => JSON.stringify([subtitleText.value, sceneSnapshot.value])
+const sceneEdits = computed(() => scenes.value.flatMap((scene, index) => JSON.stringify(scene) === savedEditor.value.scenes[index] ? [] : [{ index, scene }]))
+const subtitlesChanged = computed(() => subtitleText.value !== savedEditor.value.subtitles)
+function markSavedEditor() { savedEditor.value = { subtitles: subtitleText.value, scenes: scenes.value.map(scene => JSON.stringify(scene)) } }
 const jobLabel = (job: VideoJob) => `${videoStatuses[job.status]} · ${job.plan.imageProviderId ? '旧版水墨画' : videoThemes[job.plan.theme ?? 'classic']} · ${job.createdAt ? new Date(job.createdAt).toLocaleString() : job.id}`
-const dirty = computed(() => loaded.value && !!editable.value && savedEditor.value !== editorValue())
-const draftContent = computed<VideoEditorDraft>(() => ({ subtitles: subtitleText.value, scenes: sceneSnapshot.value, position: position.value }))
+const dirty = computed(() => loaded.value && !!editable.value && (subtitlesChanged.value || sceneEdits.value.length > 0))
+const draftContent = computed<VideoEditorDraft>(() => ({ ...(subtitlesChanged.value ? { subtitles: subtitleText.value } : {}), sceneEdits: sceneEdits.value, position: position.value }))
 const autosave = useEditorDraft(() => selectedId.value, 'video', draftContent, () => String(selected.value?.runId), dirty, draftReady, canPrepareLeave, true)
 const configDirty = computed(() => loaded.value && savedConfig.value !== JSON.stringify(config.value))
 const previewKey = computed(() => selected.value?.preview && !dirty.value ? `${props.id}:${selected.value.id}:${selected.value.runId}:${selected.value.preview.signature}` : '')
@@ -121,16 +122,17 @@ async function adopt(job: VideoJob | undefined, restoreDraft = true) {
   editorJobId.value = ''
   autosave.reset()
   position.value = initialPosition(); originalCues.value = []; originalError.value = ''
-  if (!job) { subtitleText.value = ''; scenes.value = []; savedEditor.value = editorValue(); return }
+  if (!job) { subtitleText.value = ''; scenes.value = []; markSavedEditor(); return }
   const projectId = props.id
-  const [text, draft] = await Promise.all([api.subtitles(job.id), restoreDraft && !['running', 'succeeded'].includes(job.status) ? readDraft<VideoEditorDraft>(job.id, 'video') : null])
+  const [text, draft] = await Promise.all([api.subtitles(job.id), restoreDraft && !['running', 'succeeded'].includes(job.status) ? readDraft<SavedVideoEditorDraft>(job.id, 'video') : null])
   if (disposed || selectedId.value !== job.id || projectId !== props.id) return
   subtitleText.value = text
   scenes.value = JSON.parse(JSON.stringify(job.plan.scenes))
-  savedEditor.value = editorValue()
+  markSavedEditor()
   if (draft && draft.basedOn === String(job.runId)) {
-    subtitleText.value = draft.content.subtitles
-    scenes.value = JSON.parse(draft.content.scenes)
+    subtitleText.value = draft.content.subtitles ?? text
+    if ('scenes' in draft.content) scenes.value = JSON.parse(draft.content.scenes)
+    else for (const { index, scene } of draft.content.sceneEdits) if (scenes.value[index]) scenes.value[index] = scene
     position.value = draft.content.position
     autosave.status.value = '已恢复上次暂存的编辑位置和内容'
   }
@@ -238,16 +240,21 @@ const preview = () => run(async () => {
   jobPanel.value?.scrollIntoView({ block: 'start' })
 })
 async function refreshImages() { assets.value = await listAssets(props.id, chapterId.value) }
+function revisionScenes(index: number) {
+  const scene = scenes.value[index]!
+  return { scene, previousScene: scene.artwork ? undefined : scenes.value[index - 1], nextScene: scene.artwork ? undefined : scenes.value[index + 1] }
+}
 const reviseScene = (sceneIndex: number) => run(async () => {
   if (!selected.value || !editable.value || !completePlan.value || running.value || !providerId.value) return
   await autosave.flush()
   position.value = { ...position.value, section: 'scene', index: sceneIndex }
-  sceneRevision.value = { jobId: selected.value.id, runId: selected.value.runId, providerId: providerId.value, sceneIndex, subtitles: subtitleText.value, scenes: JSON.parse(sceneSnapshot.value), instruction: '' }
+  sceneRevision.value = JSON.parse(JSON.stringify({ jobId: selected.value.id, runId: selected.value.runId, providerId: providerId.value, sceneIndex, subtitles: subtitleText.value, ...revisionScenes(sceneIndex), instruction: '' }))
 })
 function adoptScene(candidate: VideoScene) {
   const snapshot = sceneRevision.value
   if (!snapshot) return
-  if (!editable.value || selected.value?.id !== snapshot.jobId || selected.value.runId !== snapshot.runId || subtitleText.value !== snapshot.subtitles || sceneSnapshot.value !== JSON.stringify(snapshot.scenes)) {
+  const { scene, previousScene, nextScene } = snapshot
+  if (!editable.value || selected.value?.id !== snapshot.jobId || selected.value.runId !== snapshot.runId || subtitleText.value !== snapshot.subtitles || JSON.stringify(revisionScenes(snapshot.sceneIndex)) !== JSON.stringify({ scene, previousScene, nextScene })) {
     error.value = '编辑内容或任务已变化，候选已过期，请重新生成这一镜。'
     sceneRevision.value = undefined
     return
@@ -282,24 +289,27 @@ function restoreProvider(job: VideoJob | undefined) {
     : providers.value.find(provider => provider.isDefault)?.id ?? providers.value[0]?.id ?? ''
 }
 const switchJob = (id: unknown) => run(async () => { await autosave.flush(); selectedId.value = String(id); restoreProvider(selected.value); await adopt(selected.value) })
-const resetEditor = () => run(async () => {
-  await autosave.flush()
+function suspendDraft() {
   draftReady.value = false
+  // Drain any write already in flight. An explicit save or discard does not require a new draft.
+  return autosave.flush().catch(() => {})
+}
+const resetEditor = () => run(async () => {
+  await suspendDraft()
   try { await saveDraft(selectedId.value, 'video', null); await adopt(selected.value, false) }
   finally { draftReady.value = !!editable.value }
 })
 async function persistPlan(nextScenes: VideoScene[]) {
-  await autosave.flush()
-  draftReady.value = false
+  await suspendDraft()
   try {
     await api.savePlan(selectedId.value, subtitleText.value, nextScenes)
     scenes.value = nextScenes
-    savedEditor.value = editorValue()
+    markSavedEditor()
+    autosave.reset()
   } finally { await nextTick(); draftReady.value = !!editable.value }
 }
 async function startSavedWork(start: () => Promise<VideoJob>) {
-  await autosave.flush()
-  draftReady.value = false
+  await suspendDraft()
   try { put(await start()) }
   finally { await nextTick(); draftReady.value = !!editable.value }
 }

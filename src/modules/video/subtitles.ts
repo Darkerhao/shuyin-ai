@@ -1,8 +1,9 @@
-import type { VideoCue } from '../../types/video'
+import type { VideoCue, VideoScene } from '../../types/video'
 
 export interface SubtitleRow extends VideoCue { index: number; textStart: number; textEnd: number }
 export interface VideoEditorPosition { section: 'subtitles' | 'scene' | 'srt'; index: number; onlyChanges: boolean; cursor: number }
-export interface VideoEditorDraft { subtitles: string; scenes: string; position: VideoEditorPosition }
+export interface VideoEditorDraft { subtitles?: string; sceneEdits: { index: number; scene: VideoScene }[]; position: VideoEditorPosition }
+export type SavedVideoEditorDraft = VideoEditorDraft | { subtitles: string; scenes: string; position: VideoEditorPosition }
 export const initialPosition = (): VideoEditorPosition => ({ section: 'subtitles', index: 0, onlyChanges: false, cursor: 0 })
 
 // Offsets let sentence edits replace only the text, preserving the user's SRT formatting/timecodes.
@@ -14,7 +15,7 @@ export function subtitleRows(srt: string): SubtitleRow[] {
     const textStart = match.index + match[0].length - match[4]!.length
     const time = (value: string) => {
       const [h, m, s, ms] = value.split(/[:,]/).map(Number)
-      return m! < 60 && s! < 60 ? h! * 3600 + m! * 60 + s! + ms! / 1000 : NaN
+      return m! < 60 && s! < 60 ? ((h! * 3600 + m! * 60 + s!) * 1000 + ms!) / 1000 : NaN
     }
     const start = time(match[2]!); const end = time(match[3]!)
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || Number(match[1]) !== rows.length + 1) return []

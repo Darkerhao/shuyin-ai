@@ -1,5 +1,7 @@
 # 固定人物与精绘节奏：正式接入
 
+2026-11-18更新：精绘画稿及单镜修订使用v3 Prompt和同一份严格JSON Schema，防止额外审阅字段及未闭合JSON；无头像图层返回null，仍经原可空字段和几何校验后保存。已验证同模型第12镜及隔离数据库保留原11镜续作，详见[JSON生成修复与运行边界](PENCIL-JSON-OUTPUT.md)。
+
 日期：2026-11-17。用户批准先修正同段人物外观和短镜绘制节奏，再接入正式流程。本轮在此前自由折线功能的未提交工作上增量实施。
 
 ## 能力与取舍
@@ -69,6 +71,43 @@
 | `git diff --check` | 通过 |
 
 付费重放与本地捕获回放使用临时`pencil_region_live_replay`、`pencil_region_captured_replay`测试，已移除源码接入；诊断脚本及原始输出留在忽略目录，常规测试不会调用真实模型。诊断阶段未替换安装程序；本次为fix/patch，发布版本由原流水线处理。
+
+### 2026-11-18 人物一致性报错与运行版本核对
+
+正式任务`ddb60a65e189cb3ce05b747ed99620a2`在第2镜（字幕11—24）报“画稿人物与本镜规划不一致”，仍保留369条字幕、第1镜和冻结人物。最新调用于02:47:01 UTC开始，145670ms后完整返回7054个输出tokens，随后人物集合校验失败。诊断没有原始回复，不能还原该次具体缺失或新增的人物。
+
+核对实际运行的`D:/书引 AI/shuyin-ai.exe`：文件版本0.69.0，2026-11-18 09:45:58本地时间构建，包含旧`video-pencil-draw-v1`的“每个重复角色每镜只出现一次”规则，不包含当前v2“本镜六个角色全部引用”的规则及区域闭合入口说明。当前源码已有修复，运行程序尚未包含该修复；本次不新增重复业务补丁或放宽人物校验。
+
+同输入历史回复通过正式`parse_artwork`后只有诸葛亮、黄忠、法正、赵云四个头像，缺刘封、孟达，`validate_cast`稳定复现原错误。当前v2提示词再做一次真实模型重放，未经人工改坐标或补人物，输出16978字节、17个图层，六个规划人物全部且唯一引用；正式解析、区域、人物集合和资源预算校验通过。JS严格绘制器接受原始输出，编译为23个图层、522笔；与已保存第1镜组成的隔离两镜片段通过`buildEpisode`，第1镜及冻结头像保持原样。
+
+本次诊断只读取正式任务并保存本地快照，完整性检查为`ok`；真实重放不写回正式任务。捕获回复、快照与绘制验证位于忽略目录`output/pencil-cast-20261118/`，临时Rust重放入口已移除。实际Rust库测试348通过、3项既有忽略，绘制器测试6通过。首次全量Rust测试与正在执行的诊断测试占用了同一Windows测试EXE，链接失败；诊断结束后重跑通过。
+
+已构建本地0.69.1修复安装包`output/pencil-cast-20261118/书引AI-素描分镜修复-0.69.1-setup.exe`（8919856字节，SHA256为`145478a331ce1e76426db405f7744542c78ee91bc53c1467a60ae8d10226a486`）。新EXE实际嵌入v2完整人物规则及区域闭合说明，仍使用原`com.shuyin.desktop`标识，没有手动升版或修改正式安装。首次打包下载NSIS插件遭遇传输截断，直连官方地址下载并通过Tauri源码中的SHA1校验后，复用已构建EXE打包成功。第二次打包提示无法重复写入bundle类型；核对已构建EXE的未知标记已替换为NSIS标记，首次补丁已生效。
+
+实际命令（Rust先加载`. ./.tools/env.ps1`）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib pencil_cast_captured_repro -- --nocapture` | 临时诊断稳定复现缺刘封、孟达的原错误 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib pencil_cast_live_replay -- --ignored --nocapture` | 临时真实模型重放通过，耗时153.76秒 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib -- --quiet` | 清除诊断入口后348通过、3项既有忽略 |
+| `node output/pencil-cast-20261118/verify-renderer.mjs` | 严格编译通过，六头像、522笔、两镜片段及已保存数据保持验证通过 |
+| `node --test tests/pencil-drawing.test.mjs` | 6通过 |
+| `npm run tauri -- build --bundles nsis --config output/pencil-cast-20261118/local-build.json` | TypeScript、前端及release EXE通过，首次NSIS插件下载失败；保留原有大分块和npm配置提示 |
+| `npm run tauri -- bundle --bundles nsis --config output/pencil-cast-20261118/local-build.json` | 补齐且校验NSIS插件后安装包构建通过 |
+| `git diff --check` | 通过 |
+
+工作期间，实际安装版已更新为0.69.2并于本地11:15:35重新启动，二进制已包含最新人物完整性及区域闭合规则。本次没有替换正式EXE。只读回查正式任务run7，第2镜已完整保存六个人物，369条字幕、第1镜和原冻结头像与此前数据完全相同。因此本地0.69.1包仅保留为诊断构建，不应再覆盖当前0.69.2。
+
+第3镜（字幕25—39）随后在武昌鱼/gpt-6-astra的流式响应中收到服务端`error`字段，调用于03:18:33 UTC开始，92122ms后失败，诊断类别`http`；该错误由`ai/stream.rs`在画稿解析之前返回，不能归因于人物或区域校验，也不能从脱敏记录判断具体限额或供应商故障原因。原两镜和pending保留，可在原任务选择其他已启用文本模型继续。第2镜正式续作已核对；第3镜服务恢复、整段长片及画质仍未完成，不能将本次人物错误修复表述为整片完成。
+
+备用斑马AI/gpt-6-astra同输入两次隔离重放也失败，耗时117.25秒和164.07秒。临时诊断仅核对错误值类型，确认`error`为非空对象，排除空字段误判；错误码未命中已知类别，未输出或保存供应商错误正文，不能断言是限额或超时。临时诊断打印和Rust重放入口均已移除，原流式解析实现保持。
+
+最后用当前已启用的万川智能/gpt-6.1-sol（medium）重放同一第3镜，188.52秒后完整返回11785字节、15层，曹操、黄忠、法正、刘封、孟达五个人物完整且唯一引用，正式`parse_artwork`及`validate_cast`通过。JS严格编译为20层、1766笔，与已保存前两镜组成的隔离三镜片段通过`buildEpisode`。原始画稿无需人工补人物、改坐标或闭合区域。可在视频页选择万川智能/gpt-6.1-sol并点击原任务“继续准备字幕与分镜”，从第3镜继续；本次没有更改正式任务的模型选择，也没有将隔离候选写回正式任务。一次成功不保证后续供应商可用性或整片画质。
+
+补充实际命令：`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib pencil_cast_service_replay -- --ignored --nocapture`两次失败；`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib pencil_cast_sol_replay -- --ignored --nocapture`通过；`node output/pencil-cast-20261118/verify-third-renderer.mjs`通过。`service-verification.json`、`third-sol-input.json`、`third-sol-raw.json`和`third-renderer-verification.json`均位于上述忽略目录。真实模型测试仅临时接入，正常测试不会调用这些收费服务。
+
+最终只读复查，正式任务已由用户续作到run8，原模型仍为武昌鱼/gpt-6-astra；第3镜也已保存，现有3镜覆盖字幕0—39，第4镜（40—47）再次停于同类供应商流式错误。换模型后的续作入口将从当前第4镜处理，不应照旧记录重做第2或第3镜。万川智能/gpt-6.1-sol的验证范围为同输入第3镜，并未宣称已生成正式第4镜或后续长片。
 
 ## 验证与评审
 

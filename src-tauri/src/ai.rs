@@ -154,6 +154,7 @@ pub struct TextRequest {
     pub base_url: String,
     pub model: String,
     pub reasoning_effort: Option<String>,
+    pub response_format: Option<serde_json::Value>,
     pub key: Option<String>,
     pub system: String,
     pub user: String,
@@ -237,6 +238,9 @@ impl TextProvider for OpenAiCompatible<'_> {
             ],"stream":true,"stream_options":{"include_usage":true}});
                 if let Some(effort) = request.reasoning_effort {
                     body["reasoning_effort"] = effort.into();
+                }
+                if let Some(format) = request.response_format {
+                    body["response_format"] = format;
                 }
                 let response = self
                     .post_response(

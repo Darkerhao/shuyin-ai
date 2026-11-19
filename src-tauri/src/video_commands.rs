@@ -41,8 +41,8 @@ pub struct VideoJobView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoPreview {
-    start: f64,
-    end: f64,
+    #[serde(flatten)]
+    window: video::PreviewWindow,
     signature: String,
     scenes: Vec<usize>,
 }
@@ -95,12 +95,7 @@ fn cached_preview(database: &Database, job: &VideoJob) -> Option<VideoPreview> {
         .video_image_snapshots(&job.project_id, &job.plan.scenes, job.chapter_id.as_deref())
         .is_err()
         || preview.signature != preview_signature(&job.plan).ok()?
-        || !preview.start.is_finite()
-        || !preview.end.is_finite()
-        || preview.start < 0.0
-        || preview.end > job.plan.duration
-        || preview.end <= preview.start
-        || preview.end - preview.start > 60.0
+        || !preview.window.is_valid(job.plan.duration)
         || preview.scenes.len() > 12
         || !directory.join("video.mp4").is_file()
         || preview.scenes.iter().any(|i| {
@@ -169,7 +164,10 @@ pub async fn execute_video_scene_revision(
     let scene = ai_commands::run_task(database, active.inner(), id, |mut receiver| async move {
         let prepared = database.prepare_video_scene_revision(id).map_err(AiError::database)?;
         let prompt = if prepared.pencil { video::pencil::DRAW_PROMPT.to_string() } else { video::revision::prompt(&prepared.theme) };
-        let request = ai_commands::request(prepared.provider, vault, &prompt, prepared.user)?;
+        let mut request = ai_commands::request(prepared.provider, vault, &prompt, prepared.user)?;
+        if prepared.pencil {
+            request.response_format = Some(video::pencil::drawing_response_format());
+        }
         let provider = OpenAiCompatible::new(if prepared.pencil { video::pencil::TIMEOUT } else { TIMEOUT }, &request.base_url)?.observed(database,Some(id),"video_scene_revision");
         let raw = tokio::select! {
             biased;
@@ -1003,6 +1001,7 @@ mod tests {
             base_url: "http://localhost/v1".into(),
             model: "selected-model".into(),
             reasoning_effort: Some("high".into()),
+            response_format: None,
             key: None,
             system: String::new(),
             user: String::new(),
@@ -1147,6 +1146,47 @@ mod tests {
         job.id = "job".into();
         job.status = "cancelled".into();
         assert!(active_progress(&active, &job).is_none());
+    }
+
+    #[test]
+    fn cached_preview_accepts_a_sixty_second_window_from_a_fractional_scene_boundary() {
+        let (_dir, db, input) = crate::database::video::tests::fixture();
+        let job = db.create_video_job(input).unwrap();
+        let running = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        let plan = serde_json::from_value(serde_json::json!({
+            "title":"计时", "audioSha256":"hash", "duration":70,
+            "cues":[{"start":0,"end":2,"text":"第一句"},{"start":4.01,"end":6,"text":"第二句"}],
+            "scenes":[
+                {"first":0,"last":0,"kind":"opening","title":"开场","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]},
+                {"first":1,"last":1,"kind":"focus","title":"正文","beats":[{"cue":1,"object":"pen","action":"draw","label":"笔"}]}
+            ]
+        })).unwrap();
+        db.save_video_progress(&job.id, running.run_id, &plan, "storyboard")
+            .unwrap();
+        db.end_video_job(&job.id, running.run_id, "awaiting_confirmation", "")
+            .unwrap();
+        let work = VideoWork::Preview(PreviewRequest {
+            first_scene: 1,
+            seconds: 60,
+        });
+        let running = db.claim_video_job(&job.id, work, None).unwrap();
+        let window = work.window(&running.plan).unwrap().unwrap();
+        assert!(window.end - window.start > 60.0);
+        db.end_video_job(&job.id, running.run_id, "awaiting_confirmation", "")
+            .unwrap();
+        let job = db.video_job(&job.id).unwrap();
+        let directory = preview_directory(&db, &job).unwrap();
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("video.mp4"), b"fixture").unwrap();
+        let mut preview = serde_json::json!({"preview": {"start":window.start,"end":window.end,"signature":preview_signature(&job.plan).unwrap(),"scenes":[]}});
+        let output = directory.join("render-output.json");
+        std::fs::write(&output, preview.to_string()).unwrap();
+        assert!(cached_preview(&db, &job).is_some());
+        preview["preview"]["end"] = serde_json::json!(window.end + 0.001);
+        std::fs::write(&output, preview.to_string()).unwrap();
+        assert!(cached_preview(&db, &job).is_none());
     }
 
     #[test]

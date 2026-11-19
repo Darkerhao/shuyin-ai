@@ -4,7 +4,8 @@ use super::{
     Database,
 };
 use crate::video::{
-    validate_cues, validate_scenes, validate_theme, Cue, Scene, VideoPlan, VideoSettings, VideoWork,
+    milliseconds, validate_cues, validate_scenes, validate_theme, Cue, Scene, VideoPlan,
+    VideoSettings, VideoWork,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -440,10 +441,16 @@ impl Database {
             let mut job = get(c, id)?;
             if matches!(job.status.as_str(), "running" | "succeeded") { return Err("执行中或已完成的视频不能改写。".into()); }
             validate_cues(&cues, job.plan.duration)?;
-            if job.plan.pencil.is_some() && cues != job.plan.cues && !scenes.is_empty() {
+            // The editor round-trips through SRT, whose timeline has millisecond precision.
+            let cues_changed = cues.len() != job.plan.cues.len() || cues.iter().zip(&job.plan.cues).any(|(edited, saved)| {
+                milliseconds(edited.start) != milliseconds(saved.start)
+                    || milliseconds(edited.end) != milliseconds(saved.end)
+                    || edited.text.trim() != saved.text.trim()
+            });
+            if job.plan.pencil.is_some() && cues_changed && !scenes.is_empty() {
                 return Err("精绘字幕已改变，请使用“保存字幕并重新生成分镜”；已有画稿保留。".into());
             }
-            if job.plan.image_provider_id.is_some() && cues != job.plan.cues {
+            if job.plan.image_provider_id.is_some() && cues_changed {
                 scenes.clear();
             }
             if !scenes.is_empty() { validate_scenes(&scenes, 0, cues.len())?; }
@@ -469,9 +476,9 @@ impl Database {
                 }
                 image.sha256.clone_from(&snapshots[&image.asset_id].sha256);
             }
-            if cues != job.plan.cues || scenes.is_empty() { job.plan.subtitle_review = None; }
-            if cues != job.plan.cues || scenes.is_empty() { job.plan.pencil = None; }
-            job.plan.cues = cues; job.plan.scenes = scenes;
+            if cues_changed || scenes.is_empty() { job.plan.subtitle_review = None; job.plan.pencil = None; }
+            if cues_changed { job.plan.cues = cues; }
+            job.plan.scenes = scenes;
             crate::video::pencil::validate_plan(&job.plan)?;
             c.execute(&format!("UPDATE video_jobs SET plan_json=?1,editor_draft_json=NULL,status='awaiting_confirmation',stage='storyboard',updated_at={NOW} WHERE id=?2"), params![serde_json::to_string(&job.plan).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
             Ok(())

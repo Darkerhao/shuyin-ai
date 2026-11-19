@@ -73,7 +73,7 @@ export function buildEpisode(plan, range, images = {}) {
     next = scene.last + 1;
   }
   if (!plan.scenes.length || next !== plan.cues.length) throw new Error('Incomplete scene cue coverage.');
-  if (range && (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.start < 0 || range.end <= range.start || range.end > plan.duration || range.end - range.start > 60 || !plan.scenes.some((s, i) => (i === 0 ? 0 : plan.cues[s.first].start) === range.start))) throw new Error('Invalid preview window: choose a scene boundary and at most 60 seconds.');
+  if (range && (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.start < 0 || range.end <= range.start || range.end > plan.duration || Math.round((range.end - range.start) * 1000) > 60_000 || !plan.scenes.some((s, i) => (i === 0 ? 0 : plan.cues[s.first].start) === range.start))) throw new Error('Invalid preview window: choose a scene boundary and at most 60 seconds.');
   const from = range?.start ?? 0, to = range?.end ?? plan.duration;
   const pages = plan.scenes.map((scene, index) => {
     const start = index === 0 ? 0 : plan.cues[scene.first].start;
@@ -315,18 +315,21 @@ async function main(inputFile, outputFile) {
   if (Math.abs(metadata.duration - plan.duration) > 0.15) throw new Error('The audio duration changed. Create a new video task.');
   const key = createHash('sha256').update(JSON.stringify({ plan, range, pencilLook })).update(engine).update(fs.readFileSync(fileURLToPath(import.meta.url))).update(visuals).update(JSON.stringify(catalog)).digest('hex').slice(0, 24);
   const episode = input.cacheRoot ? path.join(path.resolve(input.cacheRoot), key) : path.join(path.dirname(inputFile), 'episode');
-  const fresh = !fs.existsSync(episode);
-  if (fresh) fs.mkdirSync(path.join(episode, 'pages'), { recursive: true });
-  const { linkProject } = await import(pathToFileURL(path.join(engine, 'tools/project.mjs')));
-  if (fresh) linkProject(episode);
-  else if (fs.realpathSync(path.join(episode, 'engine')) !== fs.realpathSync(engine)) throw new Error('The render cache belongs to a different engine.');
+  const engineLink = path.join(episode, 'engine');
+  const modulesLink = path.join(episode, 'engine_modules');
+  if (fs.existsSync(engineLink) && fs.realpathSync(engineLink) !== fs.realpathSync(engine)) throw new Error('The render cache belongs to a different engine.');
+  fs.mkdirSync(path.join(episode, 'pages'), { recursive: true });
+  if (!fs.existsSync(engineLink) || !fs.existsSync(modulesLink)) {
+    const { linkProject } = await import(pathToFileURL(path.join(engine, 'tools/project.mjs')));
+    linkProject(episode);
+  }
   const images = freezeImages(plan, input.images, episode);
   const result = buildEpisode(plan, range, images);
   fs.writeFileSync(path.join(episode, 'script.js'), result.script);
   fs.writeFileSync(path.join(episode, 'timeline.js'), 'window.applyVideoTimeline();');
   fs.writeFileSync(path.join(episode, 'illustrations.js'), result.visuals);
   // Chromium cannot read some Windows file URLs through deeply nested junctions.
-  const modulesUrl = pathToFileURL(fs.realpathSync(path.join(episode, 'engine_modules')) + path.sep).href.replaceAll('&', '&amp;');
+  const modulesUrl = pathToFileURL(fs.realpathSync(modulesLink) + path.sep).href.replaceAll('&', '&amp;');
   const bootUrl = pathToFileURL(path.join(engine, 'boot.js')).href.replaceAll('&', '&amp;');
   // Engine readiness covers DOM/fonts, not paint. All capture workers must await the initial paint too.
   fs.writeFileSync(path.join(episode, 'index.html'), `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="engine-modules" content="${modulesUrl}"><script src="script.js"></script><script src="${bootUrl}"></script>
@@ -377,12 +380,26 @@ async function main(inputFile, outputFile) {
     else console.log(line);
   });
   const { segments } = JSON.parse(planJson);
+  if (!segments.length) throw new Error('The video has no frames to render.');
+  const chunkDirectory = path.join(episode, 'out/chunks');
   const startedAt = Date.now();
-  const updateFrames = () => report('rendering_frames', { ...measureRenderProgress(segments, path.join(episode, 'out/chunks'), startedAt), unit: 'frames' });
+  const updateFrames = () => report('rendering_frames', { ...measureRenderProgress(segments, chunkDirectory, startedAt), unit: 'frames' });
   updateFrames();
   const clock = setInterval(updateFrames, 1000);
-  try { await run(process.execPath, [...renderArgs, '--skip-subs'], episode); }
-  finally { clearInterval(clock); }
+  try {
+    // Frametell draws and caches the segments. Join them here with relative filenames
+    // so the workspace path never enters FFmpeg's quoted concat file syntax.
+    // Bound the selection passed to each Windows command line for long films.
+    for (let i = 0; i < segments.length; i += 3000) {
+      const ids = segments.slice(i, i + 3000).map(segment => segment.i).join(',');
+      await run(process.execPath, [...renderArgs, '--segments', ids, '--skip-subs'], episode);
+    }
+    updateFrames();
+  } finally { clearInterval(clock); }
+  const pictureList = path.join(chunkDirectory, 'list.txt');
+  const picture = path.join(episode, 'out/film-无字幕.mp4');
+  fs.writeFileSync(pictureList, segments.map(segment => `file '${segment.file}'`).join('\n'));
+  await run(FFMPEG, ['-nostdin', '-y', '-loglevel', 'error', '-f', 'concat', '-i', pictureList, '-c', 'copy', '-movflags', '+faststart', picture], episode);
   const subtitleDirectory = path.join(episode, 'out/subs');
   const cueCount = result.pages.reduce((total, page) => total + page.cues.length, 0);
   const subtitleStartedAt = Date.now();
@@ -391,8 +408,10 @@ async function main(inputFile, outputFile) {
   // Reuse the engine's exact subtitle images; own the encode invocation to read FFmpeg's progress stream.
   try { await run(process.execPath, [path.join(engine, 'tools/subs.mjs'), '0', String(duration)], episode); }
   finally { clearInterval(subtitleClock); }
+  const subtitleList = path.join(subtitleDirectory, 'list.txt');
+  fs.writeFileSync(subtitleList, fs.readFileSync(subtitleList, 'utf8').replace(/^file '(.*)'$/gm, (_, file) => `file '${path.basename(file)}'`));
   const subtitled = path.join(episode, 'out/film-有字幕.mp4');
-  await encode('rendering_subtitles', ['-nostdin', '-y', '-loglevel', 'error', '-i', path.join(episode, 'out/film-无字幕.mp4'), '-f', 'concat', '-safe', '0', '-i', path.join(subtitleDirectory, 'list.txt'),
+  await encode('rendering_subtitles', ['-nostdin', '-y', '-loglevel', 'error', '-i', picture, '-f', 'concat', '-i', subtitleList,
     '-filter_complex', '[1:v]fps=24,format=rgba[s];[0:v][s]overlay=0:0:format=auto:shortest=1,format=yuv420p[v]',
     '-map', '[v]', '-map', '0:a?', '-c:a', 'copy', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-r', '24', '-movflags', '+faststart', subtitled]);
   const video = path.join(path.dirname(inputFile), 'video.mp4');

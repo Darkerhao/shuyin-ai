@@ -6,7 +6,14 @@ use std::{collections::BTreeSet, time::Duration};
 
 pub const TIMEOUT: Duration = Duration::from_secs(1200);
 pub const PLAN_PROMPT: &str = include_str!("../../../prompts/video-pencil-plan-v2.md");
-pub const DRAW_PROMPT: &str = include_str!("../../../prompts/video-pencil-draw-v2.md");
+pub const DRAW_PROMPT: &str = include_str!("../../../prompts/video-pencil-draw-v3.md");
+
+pub fn drawing_response_format() -> serde_json::Value {
+    serde_json::from_str(include_str!(
+        "../../../prompts/video-pencil-draw-v3.schema.json"
+    ))
+    .expect("bundled pencil artwork schema must be valid JSON")
+}
 pub type Path = Vec<Vec<f64>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,12 +372,14 @@ impl Artwork {
         }
         Ok(())
     }
-    pub fn validate_cast(&self, expected: &[String]) -> Result<(), String> {
-        let actual: BTreeSet<_> = self
-            .layers
+    pub fn character_ids(&self) -> impl Iterator<Item = &str> {
+        self.layers
             .iter()
             .filter_map(|l| l.portrait.as_ref().map(|p| p.character_id.as_str()))
-            .collect();
+    }
+
+    pub fn validate_cast(&self, expected: &[String]) -> Result<(), String> {
+        let actual: BTreeSet<_> = self.character_ids().collect();
         let expected: BTreeSet<_> = expected.iter().map(String::as_str).collect();
         if actual != expected {
             return Err(
@@ -544,15 +553,15 @@ fn close_character_objects(raw: &str) -> String {
     }
     output
 }
-pub fn drawing_input(plan: &VideoPlan, scene: &PlannedScene) -> String {
-    let cast = &plan.pencil.as_ref().unwrap().characters;
-    let start = plan.cues[scene.first].start;
-    let end = plan
-        .cues
-        .get(scene.last + 1)
-        .map_or(plan.duration, |c| c.start);
+pub fn drawing_input(plan: &VideoPlan, cues: &[Cue], scene: &PlannedScene) -> String {
+    let cast = plan
+        .pencil
+        .as_ref()
+        .map_or(&[][..], |p| p.characters.as_slice());
+    let start = cues[scene.first].start;
+    let end = cues.get(scene.last + 1).map_or(plan.duration, |c| c.start);
     serde_json::json!({"book":plan.title,"scene":scene,"duration":end-start,
-        "cues":(scene.first..=scene.last).map(|i|serde_json::json!({"index":i,"start":plan.cues[i].start,"end":plan.cues[i].end,"text":plan.cues[i].text})).collect::<Vec<_>>(),
+        "cues":(scene.first..=scene.last).map(|i|serde_json::json!({"index":i,"start":cues[i].start,"end":cues[i].end,"text":cues[i].text})).collect::<Vec<_>>(),
         "characters":cast.iter().filter(|c|scene.characters.contains(&c.id)).map(|c|serde_json::json!({"id":c.id,"name":c.name,"description":c.description,"headCanvas":[200,240],"views":["front","side"],"neckAnchor":[100,235]})).collect::<Vec<_>>()
     }).to_string()
 }
@@ -562,8 +571,8 @@ pub fn parse_artwork(
     last: usize,
     cast: &[Character],
 ) -> Result<Artwork, String> {
-    let mut artwork: Artwork =
-        serde_json::from_str(raw).map_err(|_| "精绘画稿不是合法JSON，已保留原任务。")?;
+    let mut artwork: Artwork = serde_json::from_str(raw)
+        .map_err(|e| format!("精绘画稿JSON结构无效（{e}），已保留原任务。"))?;
     for layer in &mut artwork.layers {
         close_regions(&mut layer.mask, &mut layer.shades, 1600.0, 900.0)?;
     }
@@ -604,7 +613,8 @@ pub async fn generate(
         }
         let mut req = request.clone();
         req.system = DRAW_PROMPT.into();
-        req.user = drawing_input(plan, &scene);
+        req.user = drawing_input(plan, &plan.cues, &scene);
+        req.response_format = Some(drawing_response_format());
         let raw = provider
             .generate(req)
             .await

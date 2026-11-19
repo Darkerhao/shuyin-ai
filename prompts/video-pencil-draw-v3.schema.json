@@ -1,0 +1,83 @@
+{
+  "type": "json_schema",
+  "json_schema": {
+    "name": "pencil_artwork",
+    "strict": true,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["design", "layers"],
+      "properties": {
+        "design": { "type": "string" },
+        "layers": { "type": "array", "items": { "$ref": "#/$defs/layer" } }
+      },
+      "$defs": {
+        "path": {
+          "type": "array",
+          "items": { "type": "array", "items": { "type": "number" } }
+        },
+        "stroke": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p", "w", "a"],
+          "properties": {
+            "p": { "$ref": "#/$defs/path" },
+            "w": { "type": "number" },
+            "a": { "type": "number" }
+          }
+        },
+        "shade": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p", "angle", "gap", "w", "a"],
+          "properties": {
+            "p": { "$ref": "#/$defs/path" },
+            "angle": { "type": "number" },
+            "gap": { "type": "number" },
+            "w": { "type": "number" },
+            "a": { "type": "number" }
+          }
+        },
+        "text": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y", "text", "size", "a"],
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "text": { "type": "string" },
+            "size": { "type": "number" },
+            "a": { "type": "number" }
+          }
+        },
+        "portrait": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["characterId", "view", "x", "y", "scale", "flip"],
+          "properties": {
+            "characterId": { "type": "string" },
+            "view": { "type": "string", "enum": ["front", "side"] },
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "scale": { "type": "number" },
+            "flip": { "type": "boolean" }
+          }
+        },
+        "layer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cue", "name", "mask", "strokes", "shades", "texts", "portrait"],
+          "properties": {
+            "cue": { "type": "integer" },
+            "name": { "type": "string" },
+            "mask": { "type": "array", "items": { "$ref": "#/$defs/path" } },
+            "strokes": { "type": "array", "items": { "$ref": "#/$defs/stroke" } },
+            "shades": { "type": "array", "items": { "$ref": "#/$defs/shade" } },
+            "texts": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+            "portrait": { "anyOf": [{ "$ref": "#/$defs/portrait" }, { "type": "null" }] }
+          }
+        }
+      }
+    }
+  }
+}
