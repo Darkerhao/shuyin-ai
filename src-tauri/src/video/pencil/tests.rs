@@ -106,6 +106,18 @@ fn pencil_geometry_rejects_foreign_character_and_degenerate_regions() {
 }
 
 #[test]
+fn pencil_artwork_reports_rejected_review_fields_and_json_positions() {
+    let raw = artwork().to_string();
+    let reviewed = format!(r#"{},"z_end_turn_review":""#, &raw[..raw.len() - 1]);
+    let error = parse_artwork(&reviewed, 0, 3, &[character()]).unwrap_err();
+    assert!(error.contains("z_end_turn_review"), "{error}");
+    assert!(error.contains("line 1 column"), "{error}");
+    let error = parse_artwork(r#"{"design":"unterminated"#, 0, 3, &[character()]).unwrap_err();
+    assert!(error.contains("EOF"), "{error}");
+    assert!(error.contains("line 1 column"), "{error}");
+}
+
+#[test]
 fn pencil_artwork_closes_valid_regions_and_preserves_strokes_and_closed_curves() {
     let mut value = artwork();
     let closed = json!([[20, 20], [80, 20], [80, 80, 20, 80, 20, 20]]);
@@ -219,16 +231,28 @@ fn pencil_batch_does_not_leave_a_two_second_49th_cue_as_an_independent_scene() {
     assert!(end < 48);
     assert!(102.5 - fast_tail[end].start >= 12.0);
 }
-struct Responses(Mutex<Vec<String>>);
+struct Responses {
+    replies: Mutex<Vec<String>>,
+    requests: Mutex<Vec<TextRequest>>,
+}
+impl Responses {
+    fn new(replies: Vec<String>) -> Self {
+        Self {
+            replies: Mutex::new(replies),
+            requests: Mutex::new(vec![]),
+        }
+    }
+}
 impl TextProvider for Responses {
     fn generate(
         &self,
-        _: TextRequest,
+        request: TextRequest,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<String, crate::ai::AiError>> + Send + '_>,
     > {
         Box::pin(async move {
-            let mut r = self.0.lock().unwrap();
+            self.requests.lock().unwrap().push(request);
+            let mut r = self.replies.lock().unwrap();
             if r.is_empty() {
                 Err(crate::ai::AiError::new("test", "断线"))
             } else {
@@ -271,11 +295,22 @@ async fn pencil_resume_preserves_saved_scene_and_only_closes_pending_regions() {
         key: None,
         system: String::new(),
         user: String::new(),
+        response_format: None,
     };
     let mut value = artwork();
     value["layers"][0]["cue"] = json!(2);
+    let raw = value.to_string();
+    let reviewed = format!(r#"{},"z_end_turn_review":""#, &raw[..raw.len() - 1]);
+    let provider = Responses::new(vec![reviewed]);
+    assert!(generate(&mut p, &provider, &request, |_| panic!(
+        "invalid JSON must not be saved"
+    ))
+    .await
+    .unwrap_err()
+    .contains("z_end_turn_review"));
+    assert_eq!(serde_json::to_value(&p).unwrap(), original);
     value["layers"][0]["mask"] = json!([[[20, 20], [80, 20]]]);
-    let provider = Responses(Mutex::new(vec![value.to_string()]));
+    let provider = Responses::new(vec![value.to_string()]);
     assert!(generate(&mut p, &provider, &request, |_| panic!(
         "invalid artwork must not be saved"
     ))
@@ -284,7 +319,7 @@ async fn pencil_resume_preserves_saved_scene_and_only_closes_pending_regions() {
     assert_eq!(serde_json::to_value(&p).unwrap(), original);
 
     value["layers"][0]["mask"] = json!([[[20, 20], [80, 20], [80, 80]]]);
-    let provider = Responses(Mutex::new(vec![value.to_string()]));
+    let provider = Responses::new(vec![value.to_string()]);
     let mut snapshots = vec![];
     generate(&mut p, &provider, &request, |p| {
         snapshots.push(serde_json::to_string(p).unwrap());
@@ -305,6 +340,7 @@ async fn pencil_resume_preserves_saved_scene_and_only_closes_pending_regions() {
     assert!(reopened.pencil.as_ref().unwrap().pending.is_empty());
     validate_plan(&reopened).unwrap();
 }
+
 #[tokio::test]
 async fn pencil_resume_uses_persisted_queue_and_frozen_heads_without_replanning() {
     let mut p = plan();
@@ -317,8 +353,9 @@ async fn pencil_resume_uses_persisted_queue_and_frozen_heads_without_replanning(
         key: None,
         system: String::new(),
         user: String::new(),
+        response_format: None,
     };
-    let provider = Responses(Mutex::new(vec![manifest]));
+    let provider = Responses::new(vec![manifest]);
     let mut snapshots = vec![];
     assert!(generate(&mut p, &provider, &request, |p| {
         snapshots.push(serde_json::to_string(p).unwrap());
@@ -329,7 +366,7 @@ async fn pencil_resume_uses_persisted_queue_and_frozen_heads_without_replanning(
     assert_eq!(snapshots.len(), 1);
     let mut reopened: VideoPlan = serde_json::from_str(&snapshots[0]).unwrap();
     let frozen = serde_json::to_value(&reopened.pencil.as_ref().unwrap().characters).unwrap();
-    let provider = Responses(Mutex::new(vec![artwork().to_string()]));
+    let provider = Responses::new(vec![artwork().to_string()]);
     generate(&mut reopened, &provider, &request, |_| Ok(()))
         .await
         .unwrap();
@@ -340,4 +377,44 @@ async fn pencil_resume_uses_persisted_queue_and_frozen_heads_without_replanning(
         frozen
     );
     validate_plan(&reopened).unwrap();
+}
+
+#[tokio::test]
+async fn pencil_initial_and_resumed_drawings_request_the_same_strict_schema() {
+    let mut p = plan();
+    let manifest = json!({"characters":[character()],"scenes":[{"first":0,"last":3,"title":"阅读","description":"查阅账簿","characters":["reader"]}]}).to_string();
+    let request = TextRequest {
+        base_url: "http://localhost".into(),
+        model: "test".into(),
+        reasoning_effort: None,
+        response_format: None,
+        key: None,
+        system: String::new(),
+        user: String::new(),
+    };
+    let provider = Responses::new(vec![manifest]);
+    assert!(generate(&mut p, &provider, &request, |_| Ok(()))
+        .await
+        .is_err());
+    let initial = provider.requests.lock().unwrap()[1]
+        .response_format
+        .clone()
+        .unwrap();
+    assert_eq!(initial["type"], "json_schema");
+    assert_eq!(initial["json_schema"]["strict"], true);
+    assert_eq!(
+        initial["json_schema"]["schema"]["additionalProperties"],
+        false
+    );
+    let provider = Responses::new(vec![artwork().to_string()]);
+    generate(&mut p, &provider, &request, |_| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(
+        provider.requests.lock().unwrap()[0]
+            .response_format
+            .as_ref(),
+        Some(&initial)
+    );
+    validate_plan(&p).unwrap();
 }

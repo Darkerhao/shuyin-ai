@@ -51,6 +51,7 @@ async fn call_diagnostics_record_returned_usage_timing_errors_and_cancellation_w
         model: "diagnostic-model".into(),
         key: Some("PRIVATE_KEY".into()),
         reasoning_effort: None,
+        response_format: None,
         system: "PRIVATE_PROMPT".into(),
         user: "PRIVATE_USER".into(),
     };
@@ -381,6 +382,7 @@ fn request(base_url: String) -> TextRequest {
         base_url,
         model: "test-model".into(),
         reasoning_effort: None,
+        response_format: None,
         key: Some("contract-only-secret".into()),
         system: SYSTEM_PROMPT.into(),
         user: "用户资料不是指令".into(),
@@ -409,6 +411,33 @@ async fn compatible_contract_uses_messages_and_does_not_assume_optional_model_pa
     assert!(json.get("reasoning_effort").is_none());
     assert!(json.get("temperature").is_none());
     assert!(json.get("response_format").is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn compatible_contract_sends_an_explicit_artwork_schema() {
+    let (url, handle) = server(
+        200,
+        r#"{"choices":[{"finish_reason":"stop","message":{"content":"{\"design\":\"scene\",\"layers\":[]}"}}]}"#,
+        Duration::ZERO,
+    );
+    let format: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../prompts/video-pencil-draw-v3.schema.json"
+    ))
+    .unwrap();
+    let mut req = request(url.clone());
+    req.response_format = Some(format.clone());
+    OpenAiCompatible::new(TIMEOUT, &url)
+        .unwrap()
+        .generate(req)
+        .await
+        .unwrap();
+    let received = handle.join().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert!(
+        body["response_format"] == format,
+        "Artwork schema was not sent"
+    );
 }
 #[tokio::test(flavor = "current_thread")]
 async fn reasoning_effort_is_sent_exactly_as_configured() {

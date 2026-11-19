@@ -21,7 +21,7 @@ const stopping = ref(false)
 const taskId = ref('')
 const error = ref('')
 const candidate = ref<VideoScene>()
-const original = props.input.scenes[props.input.sceneIndex]!
+const original = props.input.scene
 const cues = subtitleRows(props.input.subtitles)
 const comparisons = computed(() => [{ label: '当前分镜', scene: original }, ...(candidate.value ? [{ label: '候选分镜', scene: candidate.value }] : [])])
 let disposed = false
@@ -111,7 +111,7 @@ onBeforeUnmount(() => { disposed = true; if (taskId.value) void cancelGeneration
           />
         </div>
         <p class="muted">
-          将发送本镜与相邻字幕、分镜和修改要求，调用一次所选文本模型；不发送音频或图片。{{ original.artwork ? '精绘沿用已保存人物，单次最多等待20分钟。' : '单次最多等待5分钟。' }}
+          {{ original.artwork ? '将发送本镜字幕、画面设计、原有人物设定和修改要求，单次最多等待20分钟。' : '将发送本镜与相邻字幕、分镜和修改要求，单次最多等待5分钟。' }}调用一次所选文本模型，不发送音频或图片。
         </p>
         <p
           v-if="error"

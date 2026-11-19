@@ -9,8 +9,8 @@ import { chooseSelect, dialog } from './ui'
 
 vi.mock('../src/services/video', () => ({ startSceneRevision: vi.fn(), executeSceneRevision: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ cancelGeneration: vi.fn() }))
-const input: VideoSceneRevisionInput = { jobId: 'job', runId: 2, providerId: 'm1', sceneIndex: 0, instruction: '', subtitles: '1\n00:00:00,000 --> 00:00:03,000\n本镜字幕\n', scenes: [{ first: 0, last: 0, kind: 'focus', title: '原观点', beats: [{ cue: 0, object: 'book', action: 'draw', label: '阅读' }] }] }
-const candidate: VideoScene = { ...input.scenes[0]!, title: '新观点', beats: [{ cue: 0, object: 'pen', action: 'draw', label: '思考' }] }
+const input: VideoSceneRevisionInput = { jobId: 'job', runId: 2, providerId: 'm1', sceneIndex: 0, instruction: '', subtitles: '1\n00:00:00,000 --> 00:00:03,000\n本镜字幕\n', scene: { first: 0, last: 0, kind: 'focus', title: '原观点', beats: [{ cue: 0, object: 'book', action: 'draw', label: '阅读' }] } }
+const candidate: VideoScene = { ...input.scene, title: '新观点', beats: [{ cue: 0, object: 'pen', action: 'draw', label: '思考' }] }
 let wrapper: ReturnType<typeof mount>
 beforeEach(() => {
   vi.resetAllMocks()

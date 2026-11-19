@@ -233,6 +233,13 @@ test('preview windows reject invalid times, mid-scene starts and durations over 
   assert.throws(() => buildEpisode({ ...plan, duration: 90 }, { start: 0, end: 61 }), /preview/i);
 });
 
+test('a nonzero scene boundary accepts exactly 60 seconds at subtitle precision', () => {
+  const source = { ...plan, duration: 90, cues: [plan.cues[0], { ...plan.cues[1], start: 4.01 }] };
+  const start = source.cues[1].start, end = start + 60;
+  assert.equal(buildEpisode(source, { start, end }).pages[0].sourceIndex, 1);
+  assert.throws(() => buildEpisode(source, { start, end: end + .001 }), /preview/i);
+});
+
 function drawing(input, index = 0, range, images) {
   const result = buildEpisode(input, range, images);
   const page = result.pages.find(p => p.sourceIndex === index);
@@ -694,7 +701,7 @@ for (let i = 1; i <= 400; i++) writeProgress(process.argv[2], { completed: i, to
   assert.throws(() => renderer.writeProgress(path.join(directory, 'missing/child/progress.json'), {}), { code: 'ENOENT' });
 });
 
-function renderEpisodeFixture(t, extraInput = {}, engineFiles = {}) {
+function renderEpisodeFixture(t, extraInput = {}, engineFiles = {}, prepare = () => {}) {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-stage-error-')));
   assert.equal(path.dirname(directory), fs.realpathSync(os.tmpdir()));
   t.after(() => fs.rmSync(directory, { recursive: true }));
@@ -704,12 +711,13 @@ function renderEpisodeFixture(t, extraInput = {}, engineFiles = {}) {
   fs.mkdirSync(modules);
   fs.writeFileSync(path.join(engine, 'package.json'), JSON.stringify({ name: '@frametell/engine', version: '0.7.3' }));
   fs.writeFileSync(path.join(engine, 'tools/bins.mjs'), 'export const FFMPEG = process.execPath; export const findChrome = () => true; export const probe = () => ({ duration: 12 });');
-  fs.writeFileSync(path.join(engine, 'tools/project.mjs'), `import fs from 'node:fs'; import path from 'node:path'; export function linkProject(dir) { fs.symlinkSync(${JSON.stringify(modules)}, path.join(dir, 'engine_modules'), process.platform === 'win32' ? 'junction' : 'dir'); }`);
+  fs.writeFileSync(path.join(engine, 'tools/project.mjs'), `import fs from 'node:fs'; import path from 'node:path'; export function linkProject(dir) { for (const [name, target] of Object.entries(${JSON.stringify({ engine, engine_modules: modules })})) { const at = path.join(dir, name); if (!fs.existsSync(at)) fs.symlinkSync(target, at, process.platform === 'win32' ? 'junction' : 'dir'); } }`);
   fs.writeFileSync(path.join(engine, 'tools/lib.mjs'), `export async function openStage() { setInterval(() => {}, 1000); throw new Error('fixture stage initialization failed'); } export const closeStage = async () => {}; export const loadEpisode = () => ({});`);
   fs.writeFileSync(path.join(engine, 'tools/checks.mjs'), 'export const lintPages = async () => [];');
   for (const [name, source] of Object.entries(engineFiles)) fs.writeFileSync(path.join(engine, 'tools', name), source);
   const input = path.join(directory, 'input.json');
   fs.writeFileSync(input, JSON.stringify({ action: 'render', engineRoot: engine, audioPath: 'fixture.mp3', plan, ...extraInput }));
+  prepare({ directory, engine, modules });
   const script = fileURLToPath(new URL('../src-tauri/video/render.mjs', import.meta.url));
   const result = spawnSync(process.execPath, [script, input, path.join(directory, 'output.json')], { encoding: 'utf8', windowsHide: true, timeout: 4000 });
   const html = fs.readFileSync(path.join(directory, 'episode/index.html'), 'utf8');
@@ -744,6 +752,56 @@ test('stage initialization errors exit promptly and browser dependencies use can
   assert.match(result.stderr, /fixture stage initialization failed/);
   assert(html.includes(`content="${pathToFileURL(modules + path.sep).href.replaceAll('&', '&amp;')}"`));
   assert(html.includes(`src="${pathToFileURL(path.join(engine, 'boot.js')).href.replaceAll('&', '&amp;')}"`));
+});
+
+test('retry repairs missing engine links and pages without replacing completed cache files', async t => {
+  for (const existing of ['engine', 'engine_modules']) {
+    await t.test(`keeps the ${existing} link`, subtest => {
+      let fragment;
+      const { result } = renderEpisodeFixture(subtest, {}, {}, ({ directory, engine, modules }) => {
+        const episode = path.join(directory, 'episode');
+        const chunks = path.join(episode, 'out/chunks');
+        fs.mkdirSync(chunks, { recursive: true });
+        fragment = path.join(chunks, 'seg-0000000000000000.mp4');
+        fs.writeFileSync(fragment, 'previous finished fragment');
+        fs.symlinkSync(existing === 'engine' ? engine : modules, path.join(episode, existing), process.platform === 'win32' ? 'junction' : 'dir');
+      });
+      assert.match(result.stderr, /fixture stage initialization failed/);
+      assert.equal(fs.readFileSync(fragment, 'utf8'), 'previous finished fragment');
+      assert(fs.statSync(path.join(path.dirname(fragment), '../../pages')).isDirectory());
+    });
+  }
+});
+
+test('Frametell joins picture and subtitles under a work path with an apostrophe and reuses fragments after a missing link', { skip: !process.env.SHUYIN_TEST_FRAMETELL, timeout: 100_000 }, t => {
+  const temp = fs.realpathSync(os.tmpdir());
+  const directory = fs.mkdtempSync(path.join(temp, "shuyin 作者's 书-"));
+  assert.equal(path.dirname(directory), temp);
+  t.after(() => fs.rmSync(directory, { recursive: true }));
+  const script = fileURLToPath(new URL('../src-tauri/video/render.mjs', import.meta.url));
+  const audioPath = fileURLToPath(new URL('../src/assets/voice/video.wav', import.meta.url));
+  const cacheRoot = path.join(directory, 'cache');
+  const source = { ...plan, duration: 3.79, cues: [{ start: .3, end: 1.5, text: '开场字幕' }, { start: 1.7, end: 3.45, text: '结尾字幕' }] };
+  const manifest = JSON.stringify({ action: 'render', engineRoot: process.env.SHUYIN_TEST_FRAMETELL, cacheRoot, audioPath, plan: source });
+  const render = attempt => {
+    const runDirectory = path.join(directory, attempt);
+    fs.mkdirSync(runDirectory);
+    const input = path.join(runDirectory, 'input.json'), output = path.join(runDirectory, 'output.json');
+    fs.writeFileSync(input, manifest);
+    const result = spawnSync(process.execPath, [script, input, output], { encoding: 'utf8', windowsHide: true, timeout: 80_000 });
+    assert.equal(result.status, 0, result.error?.message || `${result.stdout}\n${result.stderr}`);
+    const metadata = JSON.parse(fs.readFileSync(output, 'utf8'));
+    assert.deepEqual([metadata.width, metadata.height], [1920, 1080]);
+    assert(Math.abs(metadata.duration - source.duration) < .2);
+    assert.match(result.stdout, /subtitle frames: 2/);
+    return result.stdout;
+  };
+  assert.match(render('initial'), /segments: 0\/2 reused/);
+  const [key] = fs.readdirSync(cacheRoot);
+  const link = path.join(cacheRoot, key, 'engine_modules');
+  assert(fs.lstatSync(link).isSymbolicLink());
+  fs.unlinkSync(link);
+  assert.match(render('retry'), /segments: 2\/2 reused/);
 });
 
 test('episode readiness waits for the initial paint before checks or frame capture', async t => {

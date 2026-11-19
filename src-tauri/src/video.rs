@@ -314,6 +314,17 @@ pub struct PreviewWindow {
     pub end: f64,
 }
 
+impl PreviewWindow {
+    pub fn is_valid(self, duration: f64) -> bool {
+        self.start.is_finite()
+            && self.end.is_finite()
+            && self.start >= 0.0
+            && self.end <= duration
+            && self.end > self.start
+            && milliseconds(self.end - self.start) <= 60_000
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum VideoWork {
     Prepare,
@@ -361,10 +372,14 @@ impl VideoWork {
             } else {
                 plan.cues[scene.first].start
             };
-            return Ok(Some(PreviewWindow {
+            let window = PreviewWindow {
                 start,
                 end: (start + f64::from(request.seconds)).min(plan.duration),
-            }));
+            };
+            if !window.is_valid(plan.duration) {
+                return Err("该分镜没有可生成试片的音频范围。".into());
+            }
+            return Ok(Some(window));
         }
         Ok(None)
     }
@@ -594,7 +609,8 @@ fn timestamp(text: &str) -> Result<f64, String> {
     if numbers[1] >= 60 || numbers[2] >= 60 {
         return Err("字幕时间无效。".into());
     }
-    Ok((numbers[0] * 3600 + numbers[1] * 60 + numbers[2]) as f64 + numbers[3] as f64 / 1000.0)
+    let millis = (numbers[0] * 3600 + numbers[1] * 60 + numbers[2]) * 1000 + numbers[3];
+    Ok(f64::from(millis) / 1000.0)
 }
 
 pub fn parse_srt(text: &str, duration: f64) -> Result<Vec<Cue>, String> {
@@ -623,8 +639,12 @@ pub fn parse_srt(text: &str, duration: f64) -> Result<Vec<Cue>, String> {
     Ok(cues)
 }
 
+pub fn milliseconds(seconds: f64) -> u64 {
+    (seconds * 1000.0).round() as u64
+}
+
 fn srt_time(seconds: f64) -> String {
-    let millis = (seconds * 1000.0).round() as u64;
+    let millis = milliseconds(seconds);
     format!(
         "{:02}:{:02}:{:02},{:03}",
         millis / 3_600_000,
