@@ -564,7 +564,7 @@ impl Database {
                 let super::audio::AudioSourceInput::Asset {
  asset_id }=&input.source else { return Err("原书来源无效。".into()); };
                 let path:String=transaction.query_row("SELECT file_path FROM assets WHERE id=?1 AND project_id=?2 AND chapter_id IS NULL AND asset_type='document'",params![asset_id,input.project_id],|row|row.get(0)).map_err(|_|"请选择本书已保存的原书文件。")?;
-                if !super::audio::supported_source_name(Path::new(&path)) { return Err("自动制作支持 PDF、EPUB、TXT、Markdown 原书。".into()); }
+                if !super::audio::supported_source_name(Path::new(&path)) { return Err("自动制作支持 PDF、EPUB、TXT、Markdown 或 DOCX 原书。".into()); }
                 super::audio::hash_file(Path::new(&path))?.1
             };
             let text=ai::provider(&transaction,&input.text_provider_id)?;

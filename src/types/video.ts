@@ -61,5 +61,6 @@ export interface VideoJob {
   preview?: VideoPreview | null
   draftUpdatedAt?: string | null
 }
+export type VideoJobSummary = Omit<VideoJob, 'plan' | 'preview' | 'draftUpdatedAt'> & { progress?: VideoProgress | null }
 export const videoStatuses: Record<VideoJob['status'], string> = { draft: '待开始', running: '制作中', awaiting_confirmation: '等待确认分镜', succeeded: '成片已保存', failed: '处理失败', cancelled: '已停止' }
 export const videoStages: Record<string, string> = { preparing: '检查音频与运行环境', transcribing: '识别原声字幕', proofreading: 'AI 校对原声字幕', transcript_ready: '字幕已就绪，自动流程正在准备文案和封面', storyboard: '生成分镜', painting: '逐镜绘制精细水墨画作', previewing: '渲染原声试片', rendering: '绘制画面与合入原声', validating: '校验成片并归档', complete: '制作完成' }

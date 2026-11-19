@@ -1,15 +1,16 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
-import ProjectsPage from '../../modules/projects/ProjectsPage.vue'
-import ProjectPage from '../../modules/projects/ProjectPage.vue'
-import SettingsPage from '../../modules/settings/SettingsPage.vue'
-import VerificationPage from '../../modules/verification/VerificationPage.vue'
-import ModelsPage from '../../modules/settings/ModelsPage.vue'
-import WritingPage from '../../modules/writing/WritingPage.vue'
-import CoversPage from '../../modules/covers/CoversPage.vue'
-import PublishingPage from '../../modules/publishing/PublishingPage.vue'
-import PublishQueuePage from '../../modules/publishing/PublishQueuePage.vue'
-import AboutPage from '../../modules/settings/AboutPage.vue'
-import VideoPage from '../../modules/video/VideoPage.vue'
+
+const ProjectsPage = () => import('../../modules/projects/ProjectsPage.vue')
+const ProjectPage = () => import('../../modules/projects/ProjectPage.vue')
+const SettingsPage = () => import('../../modules/settings/SettingsPage.vue')
+const VerificationPage = () => import('../../modules/verification/VerificationPage.vue')
+const ModelsPage = () => import('../../modules/settings/ModelsPage.vue')
+const WritingPage = () => import('../../modules/writing/WritingPage.vue')
+const CoversPage = () => import('../../modules/covers/CoversPage.vue')
+const PublishingPage = () => import('../../modules/publishing/PublishingPage.vue')
+const PublishQueuePage = () => import('../../modules/publishing/PublishQueuePage.vue')
+const AboutPage = () => import('../../modules/settings/AboutPage.vue')
+const VideoPage = () => import('../../modules/video/VideoPage.vue')
 
 export const router = createRouter({
   history: createWebHashHistory(),

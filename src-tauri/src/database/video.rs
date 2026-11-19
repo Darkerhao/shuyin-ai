@@ -51,6 +51,7 @@ fn read_image_file(path: &Path) -> Result<VideoImageSnapshot, String> {
 }
 
 const COLUMNS: &str = "id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,run_id,plan_json,error,subtitle_asset_id,video_asset_id,created_at,updated_at,json_extract(editor_draft_json,'$.updatedAt'),chapter_id";
+const SUMMARY_COLUMNS: &str = "id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,run_id,error,subtitle_asset_id,video_asset_id,created_at,updated_at,chapter_id";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +73,26 @@ pub struct VideoJob {
     pub created_at: String,
     pub updated_at: String,
     pub draft_updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoJobSummary {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_id: Option<String>,
+    pub project_id: String,
+    pub audio_asset_id: Option<String>,
+    pub source_subtitle_id: Option<String>,
+    pub provider_id: Option<String>,
+    pub status: String,
+    pub stage: String,
+    pub run_id: i64,
+    pub error: String,
+    pub subtitle_asset_id: Option<String>,
+    pub video_asset_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Deserialize)]
@@ -112,6 +133,25 @@ fn row(r: &Row<'_>) -> rusqlite::Result<VideoJob> {
         created_at: r.get(12)?,
         updated_at: r.get(13)?,
         draft_updated_at: r.get(14)?,
+    })
+}
+
+fn summary_row(r: &Row<'_>) -> rusqlite::Result<VideoJobSummary> {
+    Ok(VideoJobSummary {
+        id: r.get(0)?,
+        project_id: r.get(1)?,
+        audio_asset_id: r.get(2)?,
+        source_subtitle_id: r.get(3)?,
+        provider_id: r.get(4)?,
+        status: r.get(5)?,
+        stage: r.get(6)?,
+        run_id: r.get(7)?,
+        error: r.get(8)?,
+        subtitle_asset_id: r.get(9)?,
+        video_asset_id: r.get(10)?,
+        created_at: r.get(11)?,
+        updated_at: r.get(12)?,
+        chapter_id: r.get(13)?,
     })
 }
 
@@ -231,6 +271,34 @@ impl Database {
             let mut q = c.prepare(&format!("SELECT {COLUMNS} FROM video_jobs WHERE project_id=?1 AND chapter_id IS ?2 ORDER BY created_at DESC,id DESC")).map_err(|e| e.to_string())?;
             let rows = q.query_map(params![project_id,chapter_id], row).map_err(|e| e.to_string())?;
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
+        })
+    }
+
+    pub fn video_job_summaries(
+        &self,
+        project_id: &str,
+        chapter_id: Option<&str>,
+    ) -> Result<Vec<VideoJobSummary>, String> {
+        self.with_connection(|c| {
+            super::chapters::require_scope(c, project_id, chapter_id)?;
+            let mut q = c.prepare(&format!("SELECT {SUMMARY_COLUMNS} FROM video_jobs WHERE project_id=?1 AND chapter_id IS ?2 ORDER BY created_at DESC,id DESC")).map_err(|e| e.to_string())?;
+            let rows = q.query_map(params![project_id, chapter_id], summary_row).map_err(|e| e.to_string())?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
+        })
+    }
+
+    pub fn latest_video_draft_job_id(
+        &self,
+        project_id: &str,
+        chapter_id: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        self.with_connection(|c| {
+            super::chapters::require_scope(c, project_id, chapter_id)?;
+            c.query_row(
+                "SELECT id FROM video_jobs WHERE project_id=?1 AND chapter_id IS ?2 AND json_type(editor_draft_json,'$.updatedAt')='text' ORDER BY json_extract(editor_draft_json,'$.updatedAt') DESC,id DESC LIMIT 1",
+                params![project_id, chapter_id],
+                |row| row.get(0),
+            ).optional().map_err(|e| e.to_string())
         })
     }
 
@@ -615,6 +683,89 @@ pub(crate) mod tests {
                 image_provider_id: None,
             })
             .is_err());
+    }
+
+    #[test]
+    fn video_history_summaries_omit_the_full_plan_until_a_job_is_selected() {
+        let (_dir, db, input) = fixture();
+        let first = db.create_video_job(input).unwrap();
+        let mut large_plan = serde_json::to_value(&first.plan).unwrap();
+        large_plan["title"] = serde_json::Value::String("画稿".repeat(300_000));
+        let large_plan = serde_json::to_string(&large_plan).unwrap();
+        assert!(large_plan.len() > 500_000);
+        db.with_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE video_jobs SET plan_json=?1 WHERE id=?2",
+                    params![large_plan, first.id],
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+        let second = db
+            .create_video_job(StartVideoInput {
+                project_id: first.project_id.clone(),
+                chapter_id: None,
+                audio_asset_id: first.audio_asset_id.clone().unwrap(),
+                subtitle_asset_id: None,
+                provider_id: "model".into(),
+                theme: Some("classic".into()),
+                image_provider_id: None,
+            })
+            .unwrap();
+
+        let history = db.video_job_summaries(&first.project_id, None).unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history.iter().any(|job| job.id == first.id));
+        assert!(history.iter().any(|job| job.id == second.id));
+        assert!(history.iter().all(|job| {
+            let serialized = serde_json::to_value(job).unwrap();
+            serialized.get("plan").is_none() && serialized.get("preview").is_none()
+        }));
+        assert!(serde_json::to_vec(&history).unwrap().len() < 2_000);
+        db.with_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE video_jobs SET editor_draft_json=?1 WHERE id=?2",
+                    params![r#"{"updatedAt":"2026-11-18T00:00:00Z"}"#, first.id],
+                )
+                .map_err(|e| e.to_string())?;
+            connection
+                .execute(
+                    "UPDATE video_jobs SET editor_draft_json='{}' WHERE id=?1",
+                    [&second.id],
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            db.latest_video_draft_job_id(&first.project_id, None)
+                .unwrap()
+                .as_deref(),
+            Some(first.id.as_str())
+        );
+        db.with_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE video_jobs SET editor_draft_json=?1 WHERE id=?2",
+                    params![r#"{"updatedAt":"2026-11-19T00:00:00Z"}"#, second.id],
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            db.latest_video_draft_job_id(&first.project_id, None)
+                .unwrap()
+                .as_deref(),
+            Some(second.id.as_str())
+        );
+        assert_eq!(
+            db.video_job(&first.id).unwrap().plan.title,
+            "画稿".repeat(300_000)
+        );
     }
 
     #[test]

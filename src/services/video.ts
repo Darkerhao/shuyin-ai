@@ -1,12 +1,15 @@
 import type { Asset } from '../types/project'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { VideoCue, VideoEnvironmentReport, VideoJob, VideoScene, VideoSceneRevisionInput, VideoSettings, VideoTheme } from '../types/video'
+import type { VideoCue, VideoEnvironmentReport, VideoJob, VideoJobSummary, VideoScene, VideoSceneRevisionInput, VideoSettings, VideoTheme } from '../types/video'
 
 export const settings = () => invoke<VideoSettings>('video_settings')
 export const saveSettings = (settings: VideoSettings) => invoke<void>('save_video_settings', { settings })
 export const checkEnvironment = (settings: VideoSettings, needsTranscription: boolean) => invoke<VideoEnvironmentReport>('check_video_environment', { settings, needsTranscription })
 export const listJobs = (projectId: string, chapterId: string | null = null) => invoke<VideoJob[]>('list_video_jobs', { projectId, ...(chapterId ? { chapterId } : {}) })
+export const listJobSummaries = (projectId: string, chapterId: string | null = null) => invoke<VideoJobSummary[]>('list_video_job_summaries', { projectId, ...(chapterId ? { chapterId } : {}) })
+export const getJob = (id: string) => invoke<VideoJob>('get_video_job', { id })
+export const latestDraftJobId = (projectId: string, chapterId: string | null = null) => invoke<string | null>('latest_video_draft_job_id', { projectId, ...(chapterId ? { chapterId } : {}) })
 export const startJob = (projectId: string, audioAssetId: string, providerId: string, subtitleAssetId: string | null, chapterId: string | null = null, theme: VideoTheme = 'ink', imageProviderId: string | null = null) => invoke<VideoJob>('start_video_job', { input: { projectId, audioAssetId, providerId, subtitleAssetId, theme, ...(imageProviderId ? { imageProviderId } : {}), ...(chapterId ? { chapterId } : {}) } })
 export const continueJob = (id: string, render: boolean, providerId: string | null) => invoke<VideoJob>('continue_video_job', { id, render, providerId })
 export const previewJob = (id: string, firstScene: number, seconds: number) => invoke<VideoJob>('preview_video_job', { id, request: { firstScene, seconds } })

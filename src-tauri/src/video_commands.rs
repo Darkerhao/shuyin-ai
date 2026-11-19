@@ -3,7 +3,7 @@ use crate::{
     ai_commands,
     credentials::SystemCredentials,
     database::{
-        video::{StartVideoInput, VideoJob},
+        video::{StartVideoInput, VideoJob, VideoJobSummary},
         Database,
     },
     video::{self, subtitles, Cue, PreviewRequest, Scene, VideoProgress, VideoSettings, VideoWork},
@@ -37,6 +37,13 @@ pub struct VideoJobView {
     job: VideoJob,
     progress: Option<VideoProgress>,
     preview: Option<VideoPreview>,
+}
+
+#[derive(Serialize)]
+pub struct VideoJobSummaryView {
+    #[serde(flatten)]
+    summary: VideoJobSummary,
+    progress: Option<VideoProgress>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,8 +114,14 @@ fn cached_preview(database: &Database, job: &VideoJob) -> Option<VideoPreview> {
     Some(preview)
 }
 
-fn active_progress(active: &ActiveVideo, job: &VideoJob) -> Option<VideoProgress> {
-    if job.status != "running" || active.id != job.id || active.run_id != job.run_id {
+fn active_progress_for_fields(
+    active: &ActiveVideo,
+    id: &str,
+    status: &str,
+    run_id: i64,
+    stage: &str,
+) -> Option<VideoProgress> {
+    if status != "running" || active.id != id || active.run_id != run_id {
         return None;
     }
     let mut progress = active
@@ -116,11 +129,15 @@ fn active_progress(active: &ActiveVideo, job: &VideoJob) -> Option<VideoProgress
         .as_ref()
         .and_then(|dir| process::read_small(&dir.join("progress.json")).ok())
         .and_then(|raw| serde_json::from_str::<VideoProgress>(&raw).ok())
-        .filter(|progress| progress.stage == job.stage)
+        .filter(|progress| progress.stage == stage)
         .unwrap_or_default();
     progress.started_at = active.started_at;
-    progress.stage.clone_from(&job.stage);
+    progress.stage = stage.to_owned();
     Some(progress)
+}
+
+fn active_progress(active: &ActiveVideo, job: &VideoJob) -> Option<VideoProgress> {
+    active_progress_for_fields(active, &job.id, &job.status, job.run_id, &job.stage)
 }
 
 impl VideoRuntime {
@@ -265,6 +282,58 @@ pub fn list_video_jobs(
             job,
         })
         .collect())
+}
+
+#[tauri::command]
+pub fn list_video_job_summaries(
+    database: State<'_, Database>,
+    runtime: State<'_, VideoRuntime>,
+    project_id: String,
+    chapter_id: Option<String>,
+) -> Result<Vec<VideoJobSummaryView>, String> {
+    let summaries = database.video_job_summaries(&project_id, chapter_id.as_deref())?;
+    let active = runtime.0.lock().map_err(|e| e.to_string())?;
+    Ok(summaries
+        .into_iter()
+        .map(|summary| VideoJobSummaryView {
+            progress: active.as_ref().and_then(|active| {
+                active_progress_for_fields(
+                    active,
+                    &summary.id,
+                    &summary.status,
+                    summary.run_id,
+                    &summary.stage,
+                )
+            }),
+            summary,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn get_video_job(
+    database: State<'_, Database>,
+    runtime: State<'_, VideoRuntime>,
+    id: String,
+) -> Result<VideoJobView, String> {
+    let job = database.video_job(&id)?;
+    let active = runtime.0.lock().map_err(|e| e.to_string())?;
+    Ok(VideoJobView {
+        preview: cached_preview(&database, &job),
+        progress: active
+            .as_ref()
+            .and_then(|active| active_progress(active, &job)),
+        job,
+    })
+}
+
+#[tauri::command]
+pub fn latest_video_draft_job_id(
+    database: State<'_, Database>,
+    project_id: String,
+    chapter_id: Option<String>,
+) -> Result<Option<String>, String> {
+    database.latest_video_draft_job_id(&project_id, chapter_id.as_deref())
 }
 
 #[tauri::command]
