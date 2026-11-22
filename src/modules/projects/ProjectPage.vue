@@ -121,7 +121,7 @@ async function saveAutomaticSource() {
     return { projectId: project.value.id, source: { kind: 'chapter' as const, chapterId: chapter.id } }
   }
   if (!form.value.title.trim() || !form.value.author.trim()) throw new Error('自动制作请填写书名和作者。')
-  if (documents.value.length + sourcePaths.value.length !== 1) throw new Error('自动制作每次需要且仅使用一个原书文件。请保留一份 PDF、EPUB、TXT、Markdown 或 DOCX。')
+  if (documents.value.length + sourcePaths.value.length !== 1) throw new Error('自动制作每次需要且仅使用一个原书文件。请保留一份PDF、EPUB、TXT或Markdown。')
   await autosave.flush()
   const saved = await api.saveProject(project.value?.id ?? props.id ?? null, { ...form.value }, [...sourcePaths.value])
   autosave.reset(); sourcePaths.value = []; accept(saved)
@@ -499,13 +499,6 @@ onBeforeUnmount(() => { disposed = true; unlistenSourceDrop?.() })
     @confirm="remove"
     @cancel="deleting = false"
   >
-    <p>此项目及生成历史将被删除。原始视频、素材文件和工作目录都会保留；有未结束任务时，请先完成或停止。暂停中的任务仍不能删除。</p>
-    <p
-      v-if="error"
-      role="alert"
-      class="text-destructive"
-    >
-      {{ error }}
-    </p>
+    <p>此项目及生成历史将被删除。原始视频、素材文件和工作目录都会保留。</p>
   </ConfirmAction>
 </template>

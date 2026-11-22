@@ -407,7 +407,11 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                             subtitle_asset_id: None,
                             provider_id: run.input.selection.text_provider_id.clone(),
                             theme: Some(run.input.selection.theme.clone()),
-                            image_provider_id: None,
+                            image_provider_id: run
+                                .input
+                                .selection
+                                .detailed_ink
+                                .then(|| run.input.selection.image_provider_id.clone()),
                         },
                         Some(&run.binding(Slot::Video)),
                     )?

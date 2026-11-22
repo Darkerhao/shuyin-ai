@@ -3,7 +3,7 @@ use crate::{
     ai_commands,
     credentials::SystemCredentials,
     database::{
-        video::{StartVideoInput, VideoJob, VideoJobSummary},
+        video::{StartVideoInput, VideoJob},
         Database,
     },
     video::{self, subtitles, Cue, PreviewRequest, Scene, VideoProgress, VideoSettings, VideoWork},
@@ -39,17 +39,10 @@ pub struct VideoJobView {
     preview: Option<VideoPreview>,
 }
 
-#[derive(Serialize)]
-pub struct VideoJobSummaryView {
-    #[serde(flatten)]
-    summary: VideoJobSummary,
-    progress: Option<VideoProgress>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoPreview {
-    #[serde(flatten)]
-    window: video::PreviewWindow,
+    start: f64,
+    end: f64,
     signature: String,
     scenes: Vec<usize>,
 }
@@ -61,9 +54,6 @@ fn preview_signature(plan: &video::VideoPlan) -> Result<String, String> {
     hash.update(include_bytes!("../video/render.mjs"));
     hash.update(include_bytes!("../video/illustrations.js"));
     hash.update(include_bytes!("../video/ink-painting.js"));
-    hash.update(include_bytes!("../video/pencil-style.js"));
-    hash.update(include_bytes!("../video/pencil-drawing.js"));
-    hash.update(include_bytes!("../video/pencil-look.json"));
     hash.update(include_bytes!("../video/visual-catalog.json"));
     Ok(hash
         .finalize()
@@ -102,7 +92,12 @@ fn cached_preview(database: &Database, job: &VideoJob) -> Option<VideoPreview> {
         .video_image_snapshots(&job.project_id, &job.plan.scenes, job.chapter_id.as_deref())
         .is_err()
         || preview.signature != preview_signature(&job.plan).ok()?
-        || !preview.window.is_valid(job.plan.duration)
+        || !preview.start.is_finite()
+        || !preview.end.is_finite()
+        || preview.start < 0.0
+        || preview.end > job.plan.duration
+        || preview.end <= preview.start
+        || preview.end - preview.start > 60.0
         || preview.scenes.len() > 12
         || !directory.join("video.mp4").is_file()
         || preview.scenes.iter().any(|i| {
@@ -114,14 +109,8 @@ fn cached_preview(database: &Database, job: &VideoJob) -> Option<VideoPreview> {
     Some(preview)
 }
 
-fn active_progress_for_fields(
-    active: &ActiveVideo,
-    id: &str,
-    status: &str,
-    run_id: i64,
-    stage: &str,
-) -> Option<VideoProgress> {
-    if status != "running" || active.id != id || active.run_id != run_id {
+fn active_progress(active: &ActiveVideo, job: &VideoJob) -> Option<VideoProgress> {
+    if job.status != "running" || active.id != job.id || active.run_id != job.run_id {
         return None;
     }
     let mut progress = active
@@ -129,15 +118,11 @@ fn active_progress_for_fields(
         .as_ref()
         .and_then(|dir| process::read_small(&dir.join("progress.json")).ok())
         .and_then(|raw| serde_json::from_str::<VideoProgress>(&raw).ok())
-        .filter(|progress| progress.stage == stage)
+        .filter(|progress| progress.stage == job.stage)
         .unwrap_or_default();
     progress.started_at = active.started_at;
-    progress.stage = stage.to_owned();
+    progress.stage.clone_from(&job.stage);
     Some(progress)
-}
-
-fn active_progress(active: &ActiveVideo, job: &VideoJob) -> Option<VideoProgress> {
-    active_progress_for_fields(active, &job.id, &job.status, job.run_id, &job.stage)
 }
 
 impl VideoRuntime {
@@ -180,12 +165,8 @@ pub async fn execute_video_scene_revision(
     let id = id.as_str();
     let scene = ai_commands::run_task(database, active.inner(), id, |mut receiver| async move {
         let prepared = database.prepare_video_scene_revision(id).map_err(AiError::database)?;
-        let prompt = if prepared.pencil { video::pencil::DRAW_PROMPT.to_string() } else { video::revision::prompt(&prepared.theme) };
-        let mut request = ai_commands::request(prepared.provider, vault, &prompt, prepared.user)?;
-        if prepared.pencil {
-            request.response_format = Some(video::pencil::drawing_response_format());
-        }
-        let provider = OpenAiCompatible::new(if prepared.pencil { video::pencil::TIMEOUT } else { TIMEOUT }, &request.base_url)?.observed(database,Some(id),"video_scene_revision");
+        let request = ai_commands::request(prepared.provider, vault, &video::revision::prompt(), prepared.user)?;
+        let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)?.observed(database,Some(id),"video_scene_revision");
         let raw = tokio::select! {
             biased;
             _ = receiver.changed() => return Err(AiError::new("cancelled", "单镜生成已停止，原字幕和分镜保留。")),
@@ -282,58 +263,6 @@ pub fn list_video_jobs(
             job,
         })
         .collect())
-}
-
-#[tauri::command]
-pub fn list_video_job_summaries(
-    database: State<'_, Database>,
-    runtime: State<'_, VideoRuntime>,
-    project_id: String,
-    chapter_id: Option<String>,
-) -> Result<Vec<VideoJobSummaryView>, String> {
-    let summaries = database.video_job_summaries(&project_id, chapter_id.as_deref())?;
-    let active = runtime.0.lock().map_err(|e| e.to_string())?;
-    Ok(summaries
-        .into_iter()
-        .map(|summary| VideoJobSummaryView {
-            progress: active.as_ref().and_then(|active| {
-                active_progress_for_fields(
-                    active,
-                    &summary.id,
-                    &summary.status,
-                    summary.run_id,
-                    &summary.stage,
-                )
-            }),
-            summary,
-        })
-        .collect())
-}
-
-#[tauri::command]
-pub fn get_video_job(
-    database: State<'_, Database>,
-    runtime: State<'_, VideoRuntime>,
-    id: String,
-) -> Result<VideoJobView, String> {
-    let job = database.video_job(&id)?;
-    let active = runtime.0.lock().map_err(|e| e.to_string())?;
-    Ok(VideoJobView {
-        preview: cached_preview(&database, &job),
-        progress: active
-            .as_ref()
-            .and_then(|active| active_progress(active, &job)),
-        job,
-    })
-}
-
-#[tauri::command]
-pub fn latest_video_draft_job_id(
-    database: State<'_, Database>,
-    project_id: String,
-    chapter_id: Option<String>,
-) -> Result<Option<String>, String> {
-    database.latest_video_draft_job_id(&project_id, chapter_id.as_deref())
 }
 
 #[tauri::command]
@@ -655,11 +584,6 @@ async fn execute(
 ) -> Result<(), String> {
     let db = app.state::<Database>();
     let settings = db.video_settings()?;
-    if matches!(work, VideoWork::Prepare) && job.plan.image_provider_id.is_some() {
-        return Err(
-            "这是旧版图片水墨任务。请使用原字幕制作铅笔素描新版，不再生成或补充图片。".into(),
-        );
-    }
     let audio = db.video_asset_path(
         &job.project_id,
         job.audio_asset_id
@@ -714,18 +638,6 @@ async fn execute(
     process::write_new(
         &directory.join("illustrations.js"),
         include_bytes!("../video/illustrations.js"),
-    )?;
-    process::write_new(
-        &directory.join("pencil-style.js"),
-        include_bytes!("../video/pencil-style.js"),
-    )?;
-    process::write_new(
-        &directory.join("pencil-drawing.js"),
-        include_bytes!("../video/pencil-drawing.js"),
-    )?;
-    process::write_new(
-        &directory.join("pencil-look.json"),
-        include_bytes!("../video/pencil-look.json"),
     )?;
     process::write_new(
         &directory.join("ink-painting.js"),
@@ -915,30 +827,6 @@ async fn execute(
         db.finish_video_transcript(&job.id, job.run_id)?;
         return Ok(());
     }
-    if job.plan.theme == "ink"
-        && job.plan.image_provider_id.is_none()
-        && (job.plan.pencil.is_some() || job.plan.scenes.is_empty())
-        && first < job.plan.cues.len()
-    {
-        let config = config.as_ref().ok_or("分镜模型已被移除，请新建任务。")?;
-        let request = ai_commands::request(
-            config.clone(),
-            app.state::<SystemCredentials>().inner(),
-            "",
-            String::new(),
-        )
-        .map_err(|error| video::model_failure(error.message))?;
-        let provider = OpenAiCompatible::new(video::pencil::TIMEOUT, &request.base_url)
-            .map_err(|error| video::model_failure(error.message))?
-            .observed(&db, Some(&job.id), "storyboard");
-        let id = job.id.clone();
-        let run_id = job.run_id;
-        tokio::select! { biased;
-            _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()),
-            response = video::pencil::generate(&mut job.plan, &provider, &request, |plan| db.save_video_progress(&id,run_id,plan,"storyboard")) => response?,
-        }
-        first = job.plan.cues.len();
-    }
     while first < job.plan.cues.len() {
         let config = config.as_ref().ok_or("分镜模型已被移除，请新建任务。")?;
         if flag.load(Ordering::SeqCst) {
@@ -949,22 +837,64 @@ async fn execute(
         let request = ai_commands::request(
             config.clone(),
             app.state::<SystemCredentials>().inner(),
-            &video::storyboard_prompt(&job.plan.theme),
-            user,
+            &if job.plan.image_provider_id.is_some() {
+                video::ink::prompt()
+            } else {
+                video::storyboard_prompt()
+            },
+            if job.plan.image_provider_id.is_some() {
+                video::ink::input(&job.plan, first, end)
+            } else {
+                user
+            },
         )
         .map_err(|error| video::model_failure(error.message))?;
         let provider = OpenAiCompatible::new(TIMEOUT, &request.base_url)
             .map_err(|error| video::model_failure(error.message))?
             .observed(&db, Some(&job.id), "storyboard");
         let raw = tokio::select! { biased; _ = cancelled(flag.clone()) => return Err("视频任务已停止。".into()), response = provider.generate(request) => response.map_err(|error| video::model_failure(error.message))? };
-        let scenes = video::parse_storyboard(&raw, first, end).map_err(video::model_failure)?;
-        video::require_drawings(&scenes).map_err(video::model_failure)?;
+        let scenes = if job.plan.image_provider_id.is_some() {
+            video::ink::parse(&raw, first, end)
+        } else {
+            video::parse_storyboard(&raw, first, end)
+        }
+        .map_err(video::model_failure)?;
         job.plan.scenes.extend(scenes);
         db.save_video_progress(&job.id, job.run_id, &job.plan, "storyboard")?;
         first = end;
     }
     if flag.load(Ordering::SeqCst) {
         return Err("视频任务已停止。".into());
+    }
+    if job.plan.image_provider_id.is_some() {
+        for index in 0..job.plan.scenes.len() {
+            if flag.load(Ordering::SeqCst) {
+                return Err("视频任务已停止。".into());
+            }
+            if job.plan.scenes[index].image.is_some() {
+                continue;
+            }
+            let task = db.prepare_video_painting(&job.id, job.run_id, index)?;
+            crate::cover_commands::execute_image_task(
+                None,
+                &db,
+                app.state::<SystemCredentials>().inner(),
+                app.state::<crate::ai::ActiveTasks>().inner(),
+                &task,
+                "video_ink",
+                Some(flag.clone()),
+            )
+            .await
+            .map_err(|e| {
+                format!(
+                    "第{}镜水墨画作生成失败：{} 已完成画作保留，继续时只处理未完成镜头。",
+                    index + 1,
+                    e.message
+                )
+            })?;
+            job = db.video_job(&job.id)?;
+        }
+        db.video_image_snapshots(&job.project_id, &job.plan.scenes, job.chapter_id.as_deref())?;
     }
     db.end_video_job(&job.id, job.run_id, "awaiting_confirmation", "")?;
     crate::completion::notify(
@@ -1070,7 +1000,6 @@ mod tests {
             base_url: "http://localhost/v1".into(),
             model: "selected-model".into(),
             reasoning_effort: Some("high".into()),
-            response_format: None,
             key: None,
             system: String::new(),
             user: String::new(),
@@ -1215,47 +1144,6 @@ mod tests {
         job.id = "job".into();
         job.status = "cancelled".into();
         assert!(active_progress(&active, &job).is_none());
-    }
-
-    #[test]
-    fn cached_preview_accepts_a_sixty_second_window_from_a_fractional_scene_boundary() {
-        let (_dir, db, input) = crate::database::video::tests::fixture();
-        let job = db.create_video_job(input).unwrap();
-        let running = db
-            .claim_video_job(&job.id, VideoWork::Prepare, None)
-            .unwrap();
-        let plan = serde_json::from_value(serde_json::json!({
-            "title":"计时", "audioSha256":"hash", "duration":70,
-            "cues":[{"start":0,"end":2,"text":"第一句"},{"start":4.01,"end":6,"text":"第二句"}],
-            "scenes":[
-                {"first":0,"last":0,"kind":"opening","title":"开场","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]},
-                {"first":1,"last":1,"kind":"focus","title":"正文","beats":[{"cue":1,"object":"pen","action":"draw","label":"笔"}]}
-            ]
-        })).unwrap();
-        db.save_video_progress(&job.id, running.run_id, &plan, "storyboard")
-            .unwrap();
-        db.end_video_job(&job.id, running.run_id, "awaiting_confirmation", "")
-            .unwrap();
-        let work = VideoWork::Preview(PreviewRequest {
-            first_scene: 1,
-            seconds: 60,
-        });
-        let running = db.claim_video_job(&job.id, work, None).unwrap();
-        let window = work.window(&running.plan).unwrap().unwrap();
-        assert!(window.end - window.start > 60.0);
-        db.end_video_job(&job.id, running.run_id, "awaiting_confirmation", "")
-            .unwrap();
-        let job = db.video_job(&job.id).unwrap();
-        let directory = preview_directory(&db, &job).unwrap();
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(directory.join("video.mp4"), b"fixture").unwrap();
-        let mut preview = serde_json::json!({"preview": {"start":window.start,"end":window.end,"signature":preview_signature(&job.plan).unwrap(),"scenes":[]}});
-        let output = directory.join("render-output.json");
-        std::fs::write(&output, preview.to_string()).unwrap();
-        assert!(cached_preview(&db, &job).is_some());
-        preview["preview"]["end"] = serde_json::json!(window.end + 0.001);
-        std::fs::write(&output, preview.to_string()).unwrap();
-        assert!(cached_preview(&db, &job).is_none());
     }
 
     #[test]

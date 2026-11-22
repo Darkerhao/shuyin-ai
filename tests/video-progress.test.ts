@@ -60,7 +60,7 @@ it('shows progress from saved storyboard coverage, including the saved scene pre
   expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('25')
   expect(wrapper.text()).toContain('已编排 1 / 4 条字幕')
   expect(wrapper.text()).toContain('已保存的第一镜')
-  expect(wrapper.get('[aria-current="step"]').text()).toContain('手绘分镜')
+  expect(wrapper.get('[aria-current="step"]').text()).toContain('动画分镜')
 })
 
 it('keeps subtitle proofreading in the first step and reports only saved reviewed cues', async () => {

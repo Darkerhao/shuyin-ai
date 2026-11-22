@@ -96,7 +96,6 @@ pub(crate) fn request(
             .map_err(|s| AiError::new("configuration", &s))?,
         model: config.input.model_name,
         reasoning_effort: config.input.reasoning_effort,
-        response_format: None,
         key,
         system: system.into(),
         user,

@@ -105,22 +105,6 @@ test('the saved theme reaches every page and unknown themes are rejected', () =>
   assert.equal(context.SCRIPT.META.theme, 'ink');
   assert.throws(() => buildEpisode({ ...plan, theme: 'watercolor' }), /Unknown video theme/);
 });
-test('local pencil uses a monochrome look without scene images and leaves classic and saved paintings on their original style', () => {
-  const context = { TIMING: {} };
-  vm.runInNewContext(buildEpisode({ ...plan, theme: 'ink' }).script, context);
-  assert.equal(context.SCRIPT.META.style, 'study');
-  assert(context.SCRIPT.META.look.line.sw < 2);
-  for (const [name, color] of Object.entries(context.SCRIPT.META.look.palette)) {
-    if (name === 'paper') continue;
-    const channels = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16));
-    assert(Math.max(...channels) - Math.min(...channels) <= 8, `${name} must be a graphite grey`);
-  }
-  assert.equal(Object.keys(context.SCRIPT.INK_IMAGES).length, 0);
-  const classic = { TIMING: {} };
-  vm.runInNewContext(buildEpisode(plan).script, classic);
-  assert.equal(classic.SCRIPT.META.style, 'study');
-  assert.equal(classic.SCRIPT.META.look, undefined);
-});
 test('detailed ink scenes keep their original drawing clock in previews and require completed paintings', () => {
   const sha256 = 'a'.repeat(64);
   const painting = { description: '近景书页有细密皴擦和纸边纤维，中景阅读人物的侧影与书桌保持清楚，衣袖笔触细腻；远景江岸和山峰以浓淡墨色层层展开，细节丰富并留出呼吸空间。人物手势和书页方向清楚对应叙述。', motion: 'push_in', taskId: 'paint1' };
@@ -134,9 +118,6 @@ test('detailed ink scenes keep their original drawing clock in previews and requ
   assert.equal(short.pages[0].image.at, 0);
   assert.equal(full.pages[0].image.src, 'ink-image:art');
   assert.equal(full.script.match(/data:image\/png;base64,Zg==/g)?.length, 1, 'Each painting is embedded once under the frozen asset ID.');
-  const legacy = { TIMING: {} };
-  vm.runInNewContext(full.script, legacy);
-  assert.equal(legacy.SCRIPT.META.look, undefined, 'Saved image paintings must not become pencil drawings.');
   assert.throws(() => buildEpisode(input, undefined, { art: { src: `assets/${sha256}.png`, sha256 } }), /host-verified/i);
   assert.throws(() => buildEpisode({ ...input, scenes: input.scenes.map(scene => ({ ...scene, image: undefined })) }), /painting|画作/i);
   const tooShort = input.scenes.map(scene => ({ ...scene, painting: { ...scene.painting, description: '水墨'.repeat(39) } }));
@@ -233,97 +214,21 @@ test('preview windows reject invalid times, mid-scene starts and durations over 
   assert.throws(() => buildEpisode({ ...plan, duration: 90 }, { start: 0, end: 61 }), /preview/i);
 });
 
-test('a nonzero scene boundary accepts exactly 60 seconds at subtitle precision', () => {
-  const source = { ...plan, duration: 90, cues: [plan.cues[0], { ...plan.cues[1], start: 4.01 }] };
-  const start = source.cues[1].start, end = start + 60;
-  assert.equal(buildEpisode(source, { start, end }).pages[0].sourceIndex, 1);
-  assert.throws(() => buildEpisode(source, { start, end: end + .001 }), /preview/i);
-});
-
 function drawing(input, index = 0, range, images) {
   const result = buildEpisode(input, range, images);
   const page = result.pages.find(p => p.sourceIndex === index);
   const calls = [], moves = [], live = [], cameras = [];
-  const sh = { acts: [] };
   let layers = 0;
-  const builder = (layer = 0) => new Proxy({ page, sh, svg: {}, wrap: { style: {} }, c: i => page.cues[i].start - page.start, layer: () => builder(++layers), move: (_, fn) => moves.push(fn), liveRough: fn => live.push(fn), cam: keys => cameras.push(keys) }, {
-    get(target, key) { return key in target ? target[key] : (...args) => {
-      calls.push({ layer, method: key, args });
-      if (['path', 'line', 'box', 'circle', 'ellipse'].includes(key)) {
-        const options = args.at(-1);
-        sh.acts.push({ layer, kind: 'draw', at: options.at ?? 0, dur: options.dur ?? .9, pen: options.pen !== false, g: { querySelectorAll: () => [{ getTotalLength: () => 100 }] } });
-      }
-    }; },
+  const builder = (layer = 0) => new Proxy({ page, wrap: { style: {} }, c: i => page.cues[i].start - page.start, layer: () => builder(++layers), move: (_, fn) => moves.push(fn), liveRough: fn => live.push(fn), cam: keys => cameras.push(keys) }, {
+    get(target, key) { return key in target ? target[key] : (...args) => { calls.push({ layer, method: key, args }); }; },
   });
-  const context = { SCRIPT: { META: { title: input.title } }, PV: { K: (t, at, duration) => Math.max(0, Math.min(1, (t - at) / duration)), col: () => '#FBF8F1', ease: { lin: t => t }, s: () => ({ style: {} }) }, window: {}, document: { createElement: () => ({}), head: { appendChild() {} } } };
+  const context = { SCRIPT: { META: { title: input.title } }, PV: { K: (t, at, duration) => Math.max(0, Math.min(1, (t - at) / duration)), col: () => '#FBF8F1' }, window: {}, document: { createElement: () => ({}), head: { appendChild() {} } } };
   vm.runInNewContext(result.visuals, context);
   const root = builder();
   root.hud = builder(-1);
   context.window.EPISODE.draw(root);
-  return { calls: JSON.parse(JSON.stringify(calls)), strokes: sh.acts.map(({ layer, at, dur }) => ({ layer, at, dur })), cameras: JSON.parse(JSON.stringify(cameras)), at: t => JSON.parse(JSON.stringify([...moves.map(fn => fn(t)), ...live.map(fn => fn(t, { line: (...args) => args }))])) };
+  return { calls: JSON.parse(JSON.stringify(calls)), cameras: JSON.parse(JSON.stringify(cameras)), at: t => JSON.parse(JSON.stringify([...moves.map(fn => fn(t)), ...live.map(fn => fn(t, { line: (...args) => args }))])) };
 }
-
-test('free scene drawings support new subjects, many objects, exact positions and source-time previews', () => {
-  const beats = Array.from({ length: 7 }, (_, i) => ({ cue: i < 4 ? 0 : 1, object: `长枪与营寨${i}`, action: 'draw', label: '', drawing: { strokes: [[[50 + i * 120, 30], [65 + i * 120, 220]], [[50 + i * 120, 30], [60 + i * 120, 10], [65 + i * 120, 35]]] } }));
-  const input = { ...plan, theme: 'ink', scenes: [{ first: 0, last: 1, kind: 'focus', title: '营前', beats }] };
-  const full = drawing(input), preview = drawing(input, 0, { start: 0, end: 4 });
-  const classic = drawing({ ...input, theme: 'classic' });
-  assert.equal(classic.calls.filter(c => c.method === 'path' && c.layer > 0).length, 14);
-  assert.deepEqual(full.strokes, preview.strokes);
-  const paths = full.calls.filter(c => c.method === 'path' && c.layer > 0);
-  assert.equal(paths.length, 14);
-  assert.equal(paths[0].args[0], 'M258 336.8 L281.4 633.2');
-  assert.equal(full.strokes.filter(s => s.layer > 0).length, 14);
-  const later = full.strokes.filter(s => s.layer >= 5);
-  assert(later.every(s => s.at >= 5 && s.at + s.dur <= 12));
-  assert(full.at(6).every(p => p.x == null)); // No object positioning overwrites the drawn scene.
-  for (const bad of [[], [[[0, 0]]], [[[0, 0], [1001, 5]]], [[[0, 0], [0, 301]]], [[[0, 0], [0, 0]]]]) {
-    const invalid = globalThis.structuredClone(input); invalid.scenes[0].beats[0].drawing.strokes = bad;
-    assert.throws(() => buildEpisode(invalid));
-  }
-  const tooLarge = globalThis.structuredClone(input);
-  tooLarge.scenes[0].beats[0].drawing.strokes = Array.from({ length: 2001 }, () => [[0, 0], [1, 1]]);
-  assert.throws(() => buildEpisode(tooLarge), /resource/);
-});
-
-test('catalog scenes with more than three objects receive finite positions', () => {
-  for (const kind of ['focus', 'route', 'compare', 'wall']) {
-    const input = { ...plan, scenes: [{ first: 0, last: 1, kind, title: '多人', beats: Array.from({ length: 8 }, () => ({ cue: 0, object: 'person', action: 'draw', label: '人' })) }] };
-    const positions = drawing(input).at(8).filter(p => p.x != null);
-    assert.equal(positions.length, 8);
-    assert(positions.every(p => Number.isFinite(p.x) && Number.isFinite(p.y) && p.s > 0));
-  }
-});
-
-test('pencil subjects draw one stroke at a time within the real scene window, including ordinary catalog objects', () => {
-  for (const object of ['book', 'scroll', 'person', 'tree', 'mountain', 'crown']) {
-    const input = { ...plan, theme: 'ink', scenes: [{ first: 0, last: 1, kind: 'focus', title: '素描', beats: [{ cue: 0, object, action: 'draw', label: '主体' }] }] };
-    const result = drawing(input);
-    const strokes = result.strokes.filter(stroke => stroke.at >= .5);
-    assert(strokes.length >= 3, object);
-    assert.equal(strokes[0].at, .5, `${object} starts at its subtitle anchor`);
-    for (let i = 1; i < strokes.length; i++) assert(strokes[i].at >= strokes[i - 1].at + strokes[i - 1].dur, `${object} must finish a stroke before the next`);
-    assert(strokes.at(-1).at + strokes.at(-1).dur < input.duration);
-    const filled = result.calls.filter(call => call.args.at(-1)?.fill);
-    assert(filled.every(call => call.args.at(-1).fillStyle === 'hachure'), `${object} uses pencil hatching rather than solid washes`);
-  }
-});
-
-test('same-cue pencil subjects share one drawing interval and future subjects never appear before their subtitle', () => {
-  const input = { ...plan, theme: 'ink', scenes: [{ first: 0, last: 1, kind: 'focus', title: '逐笔成形', beats: [
-    { cue: 0, object: 'book', action: 'draw', label: '书页' },
-    { cue: 0, object: 'person', action: 'draw', label: '读者' },
-    { cue: 1, object: 'tree', action: 'draw', label: '树木' },
-  ] }] };
-  const full = drawing(input), preview = drawing(input, 0, { start: 0, end: 8 });
-  const strokes = full.strokes.filter(stroke => stroke.at >= .5);
-  for (let i = 1; i < strokes.length; i++) assert(strokes[i].at >= strokes[i - 1].at + strokes[i - 1].dur);
-  const treeLayer = full.calls.find(call => call.method === 'path' && call.args[0].startsWith('M-28 148')).layer;
-  assert.equal(strokes.find(stroke => stroke.layer === treeLayer).at, 5);
-  assert.deepEqual(preview.strokes, full.strokes, 'A short preview must not speed up the drawing.');
-  assert.deepEqual(preview.calls, full.calls);
-  assert.deepEqual(full.at(6), preview.at(6));
-});
 
 test('P1 compiles controlled environments and framings while old plans keep plain/reference without being rewritten', () => {
   const original = JSON.stringify(plan);
@@ -536,7 +441,7 @@ test('every catalog object has the reference drawing and every action is finite 
   const normalized = source.replaceAll('\r\n', '\n');
   const geometry = normalized.slice(normalized.indexOf('  function sketch('), normalized.indexOf('  function draw('));
   const reference = geometry.replace(/ {6}\/\/ P1 objects[^\n]*\n[\s\S]*?(?= {6}default: throw)/, '');
-  assert.equal(createHash('sha256').update(reference).digest('hex'), 'd295019dea5412d8f073ba30b3da1d95f697ffb301c8fe30b5be9716296f41fc', 'Keep the 85 reference cases and their shared theme options fixed, excluding only the appended P1 cases.');
+  assert.equal(createHash('sha256').update(reference).digest('hex'), '96a6bc4e09c4440682d68e97f417b1357cf38c7a0a327482084d8f590b36fe9b', 'Keep all 85 reference cases and primitives byte-for-byte, excluding only the appended P1 cases.');
   assert.deepEqual(new Set([...geometry.matchAll(/case '([^']+)'/g)].map(match => match[1])), new Set(Object.keys(catalog.objects)));
   assert.equal(Object.keys(catalog.objects).length, 93);
   for (const object of Object.keys(catalog.objects)) {
@@ -701,7 +606,7 @@ for (let i = 1; i <= 400; i++) writeProgress(process.argv[2], { completed: i, to
   assert.throws(() => renderer.writeProgress(path.join(directory, 'missing/child/progress.json'), {}), { code: 'ENOENT' });
 });
 
-function renderEpisodeFixture(t, extraInput = {}, engineFiles = {}, prepare = () => {}) {
+function renderEpisodeFixture(t, extraInput = {}, engineFiles = {}) {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-stage-error-')));
   assert.equal(path.dirname(directory), fs.realpathSync(os.tmpdir()));
   t.after(() => fs.rmSync(directory, { recursive: true }));
@@ -711,13 +616,12 @@ function renderEpisodeFixture(t, extraInput = {}, engineFiles = {}, prepare = ()
   fs.mkdirSync(modules);
   fs.writeFileSync(path.join(engine, 'package.json'), JSON.stringify({ name: '@frametell/engine', version: '0.7.3' }));
   fs.writeFileSync(path.join(engine, 'tools/bins.mjs'), 'export const FFMPEG = process.execPath; export const findChrome = () => true; export const probe = () => ({ duration: 12 });');
-  fs.writeFileSync(path.join(engine, 'tools/project.mjs'), `import fs from 'node:fs'; import path from 'node:path'; export function linkProject(dir) { for (const [name, target] of Object.entries(${JSON.stringify({ engine, engine_modules: modules })})) { const at = path.join(dir, name); if (!fs.existsSync(at)) fs.symlinkSync(target, at, process.platform === 'win32' ? 'junction' : 'dir'); } }`);
+  fs.writeFileSync(path.join(engine, 'tools/project.mjs'), `import fs from 'node:fs'; import path from 'node:path'; export function linkProject(dir) { fs.symlinkSync(${JSON.stringify(modules)}, path.join(dir, 'engine_modules'), process.platform === 'win32' ? 'junction' : 'dir'); }`);
   fs.writeFileSync(path.join(engine, 'tools/lib.mjs'), `export async function openStage() { setInterval(() => {}, 1000); throw new Error('fixture stage initialization failed'); } export const closeStage = async () => {}; export const loadEpisode = () => ({});`);
   fs.writeFileSync(path.join(engine, 'tools/checks.mjs'), 'export const lintPages = async () => [];');
   for (const [name, source] of Object.entries(engineFiles)) fs.writeFileSync(path.join(engine, 'tools', name), source);
   const input = path.join(directory, 'input.json');
   fs.writeFileSync(input, JSON.stringify({ action: 'render', engineRoot: engine, audioPath: 'fixture.mp3', plan, ...extraInput }));
-  prepare({ directory, engine, modules });
   const script = fileURLToPath(new URL('../src-tauri/video/render.mjs', import.meta.url));
   const result = spawnSync(process.execPath, [script, input, path.join(directory, 'output.json')], { encoding: 'utf8', windowsHide: true, timeout: 4000 });
   const html = fs.readFileSync(path.join(directory, 'episode/index.html'), 'utf8');
@@ -752,56 +656,6 @@ test('stage initialization errors exit promptly and browser dependencies use can
   assert.match(result.stderr, /fixture stage initialization failed/);
   assert(html.includes(`content="${pathToFileURL(modules + path.sep).href.replaceAll('&', '&amp;')}"`));
   assert(html.includes(`src="${pathToFileURL(path.join(engine, 'boot.js')).href.replaceAll('&', '&amp;')}"`));
-});
-
-test('retry repairs missing engine links and pages without replacing completed cache files', async t => {
-  for (const existing of ['engine', 'engine_modules']) {
-    await t.test(`keeps the ${existing} link`, subtest => {
-      let fragment;
-      const { result } = renderEpisodeFixture(subtest, {}, {}, ({ directory, engine, modules }) => {
-        const episode = path.join(directory, 'episode');
-        const chunks = path.join(episode, 'out/chunks');
-        fs.mkdirSync(chunks, { recursive: true });
-        fragment = path.join(chunks, 'seg-0000000000000000.mp4');
-        fs.writeFileSync(fragment, 'previous finished fragment');
-        fs.symlinkSync(existing === 'engine' ? engine : modules, path.join(episode, existing), process.platform === 'win32' ? 'junction' : 'dir');
-      });
-      assert.match(result.stderr, /fixture stage initialization failed/);
-      assert.equal(fs.readFileSync(fragment, 'utf8'), 'previous finished fragment');
-      assert(fs.statSync(path.join(path.dirname(fragment), '../../pages')).isDirectory());
-    });
-  }
-});
-
-test('Frametell joins picture and subtitles under a work path with an apostrophe and reuses fragments after a missing link', { skip: !process.env.SHUYIN_TEST_FRAMETELL, timeout: 100_000 }, t => {
-  const temp = fs.realpathSync(os.tmpdir());
-  const directory = fs.mkdtempSync(path.join(temp, "shuyin 作者's 书-"));
-  assert.equal(path.dirname(directory), temp);
-  t.after(() => fs.rmSync(directory, { recursive: true }));
-  const script = fileURLToPath(new URL('../src-tauri/video/render.mjs', import.meta.url));
-  const audioPath = fileURLToPath(new URL('../src/assets/voice/video.wav', import.meta.url));
-  const cacheRoot = path.join(directory, 'cache');
-  const source = { ...plan, duration: 3.79, cues: [{ start: .3, end: 1.5, text: '开场字幕' }, { start: 1.7, end: 3.45, text: '结尾字幕' }] };
-  const manifest = JSON.stringify({ action: 'render', engineRoot: process.env.SHUYIN_TEST_FRAMETELL, cacheRoot, audioPath, plan: source });
-  const render = attempt => {
-    const runDirectory = path.join(directory, attempt);
-    fs.mkdirSync(runDirectory);
-    const input = path.join(runDirectory, 'input.json'), output = path.join(runDirectory, 'output.json');
-    fs.writeFileSync(input, manifest);
-    const result = spawnSync(process.execPath, [script, input, output], { encoding: 'utf8', windowsHide: true, timeout: 80_000 });
-    assert.equal(result.status, 0, result.error?.message || `${result.stdout}\n${result.stderr}`);
-    const metadata = JSON.parse(fs.readFileSync(output, 'utf8'));
-    assert.deepEqual([metadata.width, metadata.height], [1920, 1080]);
-    assert(Math.abs(metadata.duration - source.duration) < .2);
-    assert.match(result.stdout, /subtitle frames: 2/);
-    return result.stdout;
-  };
-  assert.match(render('initial'), /segments: 0\/2 reused/);
-  const [key] = fs.readdirSync(cacheRoot);
-  const link = path.join(cacheRoot, key, 'engine_modules');
-  assert(fs.lstatSync(link).isSymbolicLink());
-  fs.unlinkSync(link);
-  assert.match(render('retry'), /segments: 2\/2 reused/);
 });
 
 test('episode readiness waits for the initial paint before checks or frame capture', async t => {

@@ -53,20 +53,6 @@ fn account() -> Account {
 }
 
 #[test]
-fn automatic_creation_accepts_docx_source() {
-    let (directory, database, mut input) = setup();
-    let source = directory.path().join("自动制作来源.docx");
-    fs::write(&source, "DOCX 原书测试资料。").unwrap();
-    let asset_id = database
-        .link_asset(&input.project_id, source.to_str().unwrap(), None, None)
-        .unwrap();
-    input.source = audio::AudioSourceInput::Asset { asset_id };
-
-    let run = database.create_automation(input, account()).unwrap();
-    assert_eq!(run.status, "running");
-}
-
-#[test]
 fn automation_account_reuse_is_enabled_by_default_and_survives_restart_and_backup() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.sqlite3");
@@ -1779,7 +1765,11 @@ fn transcript_fixture_with_theme(
                 subtitle_asset_id: None,
                 provider_id: run.input.selection.text_provider_id.clone(),
                 theme: Some(run.input.selection.theme.clone()),
-                image_provider_id: None,
+                image_provider_id: run
+                    .input
+                    .selection
+                    .detailed_ink
+                    .then(|| run.input.selection.image_provider_id.clone()),
             },
             Some(&run.binding(Slot::Video)),
         )
@@ -2247,9 +2237,6 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
             )
             .unwrap();
         let mut plan = job.plan;
-        if detailed_ink {
-            plan.image_provider_id = Some(run.input.selection.image_provider_id.clone());
-        }
         plan.scenes = vec![serde_json::from_value(if detailed_ink {
             serde_json::json!({"first":0,"last":0,"kind":"opening","title":"阅读","painting":{"description":"近景以细密的毛笔线条刻画书页的边缘和木桌的纹理，中景是安静阅读的人物侧影，以浓淡变化描绘衣褶与手势，远景用淡墨铺开室内空间，留出适当呼吸和层次。画面保持清楚的主体关系，不加入旁白之外的情节。","motion":"push_in"}})
         } else {

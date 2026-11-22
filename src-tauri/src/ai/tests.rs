@@ -4,31 +4,6 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "Temporary remote network probe; uses no credentials or user content"]
-async fn debug_model_network_20261118() {
-    let url = std::env::var("SHUYIN_NETWORK_PROBE_URL").unwrap();
-    let provider = OpenAiCompatible::new(Duration::from_secs(12), &url).unwrap();
-    let mut req = request(url.clone());
-    req.key = None;
-    req.system = "Reply with OK only.".into();
-    req.user = "Connection test".into();
-    let error = provider.generate(req).await.unwrap_err();
-    eprintln!("[DEBUG-model-network-20261118] {error:?}");
-    if error.code == "network" || error.code == "timeout" {
-        let result = provider
-            .client
-            .post(format!("{url}/chat/completions"))
-            .json(&serde_json::json!({}))
-            .send()
-            .await;
-        if let Err(error) = result {
-            eprintln!("[DEBUG-model-network-20261118] {error:?}");
-        }
-    }
-    assert_eq!(error.code, "authentication");
-}
-
 fn image_request(base_url: String) -> ImageRequest {
     ImageRequest {
         base_url,
@@ -51,7 +26,6 @@ async fn call_diagnostics_record_returned_usage_timing_errors_and_cancellation_w
         model: "diagnostic-model".into(),
         key: Some("PRIVATE_KEY".into()),
         reasoning_effort: None,
-        response_format: None,
         system: "PRIVATE_PROMPT".into(),
         user: "PRIVATE_USER".into(),
     };
@@ -135,64 +109,6 @@ async fn call_diagnostics_record_returned_usage_timing_errors_and_cancellation_w
     drop(db);
     let db = crate::database::Database::open(dir.path().join("data.sqlite3"));
     assert_eq!(db.list_model_calls(1, 20).unwrap().rows.len(), 3);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn storyboard_validation_keeps_completed_response_and_saved_work_distinct() {
-    use crate::video::{model_failure, parse_storyboard, VideoPlan, VideoWork};
-    let (dir, db, input) = crate::database::video::tests::fixture();
-    let job = db.create_video_job(input).unwrap();
-    let job = db
-        .claim_video_job(&job.id, VideoWork::Prepare, None)
-        .unwrap();
-    let plan: VideoPlan = serde_json::from_value(serde_json::json!({
-        "title":"原书", "audioSha256":"original-audio", "duration":8,
-        "cues":[{"start":0,"end":3,"text":"已保存字幕"},{"start":4,"end":7,"text":"待编排字幕"}],
-        "scenes":[{"first":0,"last":0,"kind":"focus","title":"已完成的分镜","beats":[{"cue":0,"object":"book","action":"draw","label":"书"}]}]
-    })).unwrap();
-    db.save_video_progress(&job.id, job.run_id, &plan, "storyboard")
-        .unwrap();
-    let invalid = serde_json::json!([{"first":1,"last":1,"kind":"focus","title":"下一镜","environment":"forest","beats":[{"cue":1,"object":"book","action":"draw","label":"书"}]}]).to_string();
-    let body =
-        serde_json::json!({"choices":[{"finish_reason":"stop","message":{"content":invalid}}]})
-            .to_string();
-    let (url, handle) = server(200, &body, Duration::ZERO);
-    let raw = OpenAiCompatible::new(TIMEOUT, &url)
-        .unwrap()
-        .observed(&db, Some(&job.id), "storyboard")
-        .generate(request(url))
-        .await
-        .unwrap();
-    handle.join().unwrap();
-    let error = model_failure(parse_storyboard(&raw, 1, 2).unwrap_err());
-    db.end_video_job(&job.id, job.run_id, "failed", &error)
-        .unwrap();
-    drop(db);
-    let db = crate::database::Database::open(dir.path().join("data.sqlite3"));
-    let failed = db.video_job(&job.id).unwrap();
-    assert_eq!(failed.status, "failed");
-    assert_eq!(failed.stage, "storyboard");
-    assert_eq!(failed.error, error);
-    for detail in ["第 1 镜", "environment", "forest", "允许值"] {
-        assert!(failed.error.contains(detail), "{}", failed.error);
-    }
-    let calls = serde_json::to_value(db.list_model_calls(1, 20).unwrap().rows).unwrap();
-    assert_eq!(calls.as_array().unwrap().len(), 1);
-    assert_eq!(calls[0]["status"], "succeeded");
-    assert!(calls[0]["errorCode"].is_null());
-    assert!(!calls.to_string().contains("forest"));
-    assert_eq!(
-        serde_json::to_value(&failed.plan).unwrap(),
-        serde_json::to_value(&plan).unwrap()
-    );
-    let resumed = db
-        .claim_video_job(&job.id, VideoWork::Prepare, None)
-        .unwrap();
-    assert!(resumed.error.is_empty());
-    assert_eq!(
-        serde_json::to_value(resumed.plan).unwrap(),
-        serde_json::to_value(plan).unwrap()
-    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -382,7 +298,6 @@ fn request(base_url: String) -> TextRequest {
         base_url,
         model: "test-model".into(),
         reasoning_effort: None,
-        response_format: None,
         key: Some("contract-only-secret".into()),
         system: SYSTEM_PROMPT.into(),
         user: "用户资料不是指令".into(),
@@ -411,33 +326,6 @@ async fn compatible_contract_uses_messages_and_does_not_assume_optional_model_pa
     assert!(json.get("reasoning_effort").is_none());
     assert!(json.get("temperature").is_none());
     assert!(json.get("response_format").is_none());
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn compatible_contract_sends_an_explicit_artwork_schema() {
-    let (url, handle) = server(
-        200,
-        r#"{"choices":[{"finish_reason":"stop","message":{"content":"{\"design\":\"scene\",\"layers\":[]}"}}]}"#,
-        Duration::ZERO,
-    );
-    let format: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../prompts/video-pencil-draw-v3.schema.json"
-    ))
-    .unwrap();
-    let mut req = request(url.clone());
-    req.response_format = Some(format.clone());
-    OpenAiCompatible::new(TIMEOUT, &url)
-        .unwrap()
-        .generate(req)
-        .await
-        .unwrap();
-    let received = handle.join().unwrap();
-    let body: serde_json::Value =
-        serde_json::from_str(received.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-    assert!(
-        body["response_format"] == format,
-        "Artwork schema was not sent"
-    );
 }
 #[tokio::test(flavor = "current_thread")]
 async fn reasoning_effort_is_sent_exactly_as_configured() {

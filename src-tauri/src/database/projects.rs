@@ -283,38 +283,23 @@ impl Database {
     }
     pub fn delete_project(&self, id: &str) -> Result<(), String> {
         self.with_connection(|c| {
-            let transaction = c.transaction().map_err(|e| e.to_string())?;
-            get(&transaction, id)?;
-            let mut blockers = Vec::new();
-            for (query, label) in [
-                ("SELECT id,stage,status FROM audio_jobs WHERE project_id=?1 AND status NOT IN ('succeeded','cancelled')", "音频任务"),
-                ("SELECT id,stage,status FROM automation_runs WHERE project_id=?1 AND status NOT IN ('completed','cancelled')", "自动流程"),
-                ("SELECT id,kind,status FROM ai_tasks WHERE project_id=?1 AND status IN ('pending','running')", "AI 生成任务"),
-                ("SELECT id,stage,status FROM video_jobs WHERE project_id=?1 AND status='running'", "视频任务"),
-            ] {
-                let mut statement = transaction.prepare(query).map_err(|e| e.to_string())?;
-                let rows = statement.query_map([id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-                }).map_err(|e| e.to_string())?;
-                for row in rows {
-                    let (task_id, detail, status) = row.map_err(|e| e.to_string())?;
-                    blockers.push(format!("{label} {task_id}（{detail}，{status}）"));
-                }
+            get(c, id)?;
+            if c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM video_jobs WHERE project_id=?1 AND status='running')",
+                [id],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(|e| e.to_string())?
+            {
+                return Err("请先停止本书正在执行的视频任务。".into());
             }
-            if !blockers.is_empty() {
-                return Err(format!(
-                    "本书仍有未结束任务：{}。请到对应页面完成或结束任务后再删除；暂停中的任务仍未结束。停止音频本地跟进不代表远端生成已取消；原文件会保留。",
-                    blockers.join("；")
-                ));
-            }
-            transaction.execute(
+            c.execute(
                 "DELETE
                 FROM book_projects
                 WHERE id=?1",
                 [id],
             )
             .map_err(|e| e.to_string())?;
-            transaction.commit().map_err(|e| e.to_string())?;
             Ok(()) // ON DELETE CASCADE removes references, never files.
         })
     }

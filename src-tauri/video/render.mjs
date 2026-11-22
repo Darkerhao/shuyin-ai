@@ -5,14 +5,12 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { assertNodeRuntime, enginePackage } from './runtime.mjs';
-import './pencil-drawing.js';
 export { assertNodeRuntime } from './runtime.mjs';
 
 const catalog = JSON.parse(fs.readFileSync(new URL('./visual-catalog.json', import.meta.url), 'utf8'));
-const pencilLook = JSON.parse(fs.readFileSync(new URL('./pencil-look.json', import.meta.url), 'utf8'));
-const visuals = ['ink-painting.js', 'pencil-style.js', 'pencil-drawing.js', 'illustrations.js'].map(file => fs.readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n');
+const visuals = fs.readFileSync(new URL('./ink-painting.js', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('./illustrations.js', import.meta.url), 'utf8');
 
-// Models supply numeric strokes; the host builds paths and never executes model code.
+// The model selects trusted drawings and subtitle anchors; it never supplies code.
 export function buildEpisode(plan, range, images = {}) {
   const shortText = (value, limit) => typeof value === 'string' && value.trim() && [...value].length <= limit && !/[\p{Cc}{}*`]/u.test(value);
   const theme = plan.theme ?? 'classic';
@@ -20,11 +18,7 @@ export function buildEpisode(plan, range, images = {}) {
   let next = 0;
   for (const scene of plan.scenes) {
     const { environment = 'plain', framing = 'reference' } = scene;
-    if (Object.keys(scene).some(key => !['first', 'last', 'title', 'kind', 'labels', 'beats', 'environment', 'framing', 'image', 'painting', 'artwork'].includes(key))) throw new Error('Unknown scene field.');
-    if (scene.artwork) {
-      if (theme !== 'ink' || scene.image || scene.painting || scene.beats?.length) throw new Error('Pencil artwork cannot mix with old images or objects.');
-      globalThis.SHUYIN_PENCIL_DRAWING.validate(scene.artwork, plan.pencil?.characters ?? [], scene.first, scene.last);
-    }
+    if (Object.keys(scene).some(key => !['first', 'last', 'title', 'kind', 'labels', 'beats', 'environment', 'framing', 'image', 'painting'].includes(key))) throw new Error('Unknown scene field.');
     if (scene.painting) {
       const painting = scene.painting;
       if (theme !== 'ink' || !scene.image || scene.beats?.length
@@ -36,10 +30,11 @@ export function buildEpisode(plan, range, images = {}) {
     if (plan.imageProviderId && !scene.painting) throw new Error('Detailed ink video requires a painting for every scene.');
     if (!Object.hasOwn(catalog.environments, environment)) throw new Error('Unknown scene environment.');
     if (!Object.hasOwn(catalog.framings, framing)) throw new Error('Unknown scene framing.');
-    if (!scene.beats?.length && !scene.image && !scene.artwork) throw new Error('旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。');
+    if (!scene.beats?.length && !scene.image) throw new Error('旧版文字图解分镜：请保留字幕并重新生成分镜，升级为同款手绘动画。');
     if (!Object.hasOwn(catalog.kinds, scene.kind)) throw new Error('Unknown scene kind.');
     if (!shortText(scene.title, catalog.limits.titleChars) || scene.labels?.length) throw new Error('Invalid scene title or legacy labels.');
-    if (!Number.isInteger(scene.first) || scene.first !== next || !Number.isInteger(scene.last) || scene.last < scene.first || scene.last >= plan.cues.length || (!scene.artwork && scene.last - scene.first >= catalog.limits.maxSceneCues)) throw new Error('Invalid scene cue coverage.');
+    if (!Number.isInteger(scene.first) || scene.first !== next || !Number.isInteger(scene.last) || scene.last < scene.first || scene.last >= plan.cues.length || scene.last - scene.first >= catalog.limits.maxSceneCues) throw new Error('Invalid scene cue coverage.');
+    if ((scene.beats?.length ?? 0) > catalog.limits.maxBeats) throw new Error('A scene supports at most three objects.');
     if (scene.image) {
       const im = scene.image, frozen = images[im.assetId];
       const text = (v, n) => typeof v === 'string' && v.trim() && [...v].length <= n && !/[\p{Cc}]/u.test(v.replaceAll('\n', ''));
@@ -50,38 +45,23 @@ export function buildEpisode(plan, range, images = {}) {
         || !new RegExp('^assets/' + im.sha256 + '\\.(png|jpg|webp)$').test(frozen.src)) throw new Error('Invalid or missing frozen scene image.');
     }
     let previous = scene.first;
-    let points = 0, strokes = 0;
     for (const beat of scene.beats ?? []) {
-      if (Object.keys(beat).some(key => !['cue', 'object', 'action', 'label', 'drawing'].includes(key))) throw new Error('Unknown object field.');
-      if (beat.drawing != null) {
-        const drawing = beat.drawing;
-        if (!shortText(beat.object, catalog.limits.objectChars) || typeof drawing !== 'object' || Object.keys(drawing).some(key => key !== 'strokes') || !Array.isArray(drawing.strokes) || !drawing.strokes.length) throw new Error('Invalid free drawing.');
-        strokes += drawing.strokes.length;
-        for (const stroke of drawing.strokes) {
-          if (!Array.isArray(stroke) || stroke.length < 2) throw new Error('A stroke needs at least two different points.');
-          points += stroke.length;
-          if (points > catalog.limits.maxDrawingPoints || strokes > catalog.limits.maxDrawingStrokes) throw new Error('Scene drawing resource budget exceeded.');
-          if (stroke.some(point => !Array.isArray(point) || point.length !== 2 || point.some(v => !Number.isFinite(v)) || point[0] < 0 || point[0] > catalog.limits.drawingWidth || point[1] < 0 || point[1] > catalog.limits.drawingHeight)) throw new Error('Drawing coordinates exceed the scene canvas.');
-          if (!stroke.some(point => point[0] !== stroke[0][0] || point[1] !== stroke[0][1])) throw new Error('A stroke needs at least two different points.');
-        }
-      } else if (!Object.hasOwn(catalog.objects, beat.object)) throw new Error('Unknown drawing object.');
+      if (!Object.hasOwn(catalog.objects, beat.object)) throw new Error('Unknown drawing object.');
       if (!Object.hasOwn(catalog.actions, beat.action ?? 'draw')) throw new Error('Unknown drawing action.');
-      if (!(beat.drawing && beat.label === '') && !shortText(beat.label, catalog.limits.labelChars)) throw new Error('Invalid object label.');
+      if (!shortText(beat.label, catalog.limits.labelChars)) throw new Error('Invalid object label.');
       if (!Number.isInteger(beat.cue) || beat.cue < previous || beat.cue > scene.last) throw new Error('Invalid object cue anchor.');
       previous = beat.cue;
     }
     next = scene.last + 1;
   }
   if (!plan.scenes.length || next !== plan.cues.length) throw new Error('Incomplete scene cue coverage.');
-  if (range && (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.start < 0 || range.end <= range.start || range.end > plan.duration || Math.round((range.end - range.start) * 1000) > 60_000 || !plan.scenes.some((s, i) => (i === 0 ? 0 : plan.cues[s.first].start) === range.start))) throw new Error('Invalid preview window: choose a scene boundary and at most 60 seconds.');
+  if (range && (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.start < 0 || range.end <= range.start || range.end > plan.duration || range.end - range.start > 60 || !plan.scenes.some((s, i) => (i === 0 ? 0 : plan.cues[s.first].start) === range.start))) throw new Error('Invalid preview window: choose a scene boundary and at most 60 seconds.');
   const from = range?.start ?? 0, to = range?.end ?? plan.duration;
   const pages = plan.scenes.map((scene, index) => {
     const start = index === 0 ? 0 : plan.cues[scene.first].start;
     const end = index + 1 === plan.scenes.length ? plan.duration : plan.cues[plan.scenes[index + 1].first].start;
     return {
       id: `p${String(index + 1).padStart(4, '0')}`, index, title: scene.title, kind: scene.kind, theme,
-      ...(scene.artwork ? { artwork: scene.artwork, characters: plan.pencil?.characters ?? [], first: scene.first, last: scene.last,
-        pencilCues: plan.cues.slice(scene.first, scene.last + 1).map((c, i) => ({ index: scene.first + i, start: c.start - start })) } : {}),
       environment: scene.environment ?? 'plain', framing: scene.framing ?? 'reference', ...(scene.painting ? { painting: scene.painting } : {}),
       // Keep the full drawing clock even when the preview ends before this scene does.
       drawDuration: end - start, ...(scene.image ? { image: { ...scene.image, src: scene.painting ? `ink-image:${scene.image.assetId}` : images[scene.image.assetId].src, at: plan.cues[scene.first].start - start } } : {}), beats: (scene.beats ?? []).map(b => ({ ...b, at: plan.cues[b.cue].start - start })),
@@ -90,7 +70,7 @@ export function buildEpisode(plan, range, images = {}) {
     };
   }).filter(p => p.start >= 0 && p.start < to - from).map((p, index) => ({ ...p, sourceIndex: p.index, index }));
   const inkImages = Object.fromEntries(plan.scenes.filter(scene => scene.painting).map(scene => [scene.image.assetId, images[scene.image.assetId].dataUri]).filter(([,uri]) => !!uri));
-  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style: 'study', ...(theme === 'ink' && !plan.imageProviderId ? { look: pencilLook } : {}), theme, extras: ['timeline.js', 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, INK_IMAGES: inkImages, duration: to - from };
+  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style: 'study', theme, extras: ['timeline.js', 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, INK_IMAGES: inkImages, duration: to - from };
   const script = `(function(root) {
 root.SCRIPT = ${JSON.stringify(data)};
 root.applyVideoTimeline = function() {
@@ -313,23 +293,20 @@ async function main(inputFile, outputFile) {
   };
   report('checking_layout');
   if (Math.abs(metadata.duration - plan.duration) > 0.15) throw new Error('The audio duration changed. Create a new video task.');
-  const key = createHash('sha256').update(JSON.stringify({ plan, range, pencilLook })).update(engine).update(fs.readFileSync(fileURLToPath(import.meta.url))).update(visuals).update(JSON.stringify(catalog)).digest('hex').slice(0, 24);
+  const key = createHash('sha256').update(JSON.stringify({ plan, range })).update(engine).update(fs.readFileSync(fileURLToPath(import.meta.url))).update(visuals).update(JSON.stringify(catalog)).digest('hex').slice(0, 24);
   const episode = input.cacheRoot ? path.join(path.resolve(input.cacheRoot), key) : path.join(path.dirname(inputFile), 'episode');
-  const engineLink = path.join(episode, 'engine');
-  const modulesLink = path.join(episode, 'engine_modules');
-  if (fs.existsSync(engineLink) && fs.realpathSync(engineLink) !== fs.realpathSync(engine)) throw new Error('The render cache belongs to a different engine.');
-  fs.mkdirSync(path.join(episode, 'pages'), { recursive: true });
-  if (!fs.existsSync(engineLink) || !fs.existsSync(modulesLink)) {
-    const { linkProject } = await import(pathToFileURL(path.join(engine, 'tools/project.mjs')));
-    linkProject(episode);
-  }
+  const fresh = !fs.existsSync(episode);
+  if (fresh) fs.mkdirSync(path.join(episode, 'pages'), { recursive: true });
+  const { linkProject } = await import(pathToFileURL(path.join(engine, 'tools/project.mjs')));
+  if (fresh) linkProject(episode);
+  else if (fs.realpathSync(path.join(episode, 'engine')) !== fs.realpathSync(engine)) throw new Error('The render cache belongs to a different engine.');
   const images = freezeImages(plan, input.images, episode);
   const result = buildEpisode(plan, range, images);
   fs.writeFileSync(path.join(episode, 'script.js'), result.script);
   fs.writeFileSync(path.join(episode, 'timeline.js'), 'window.applyVideoTimeline();');
   fs.writeFileSync(path.join(episode, 'illustrations.js'), result.visuals);
   // Chromium cannot read some Windows file URLs through deeply nested junctions.
-  const modulesUrl = pathToFileURL(fs.realpathSync(modulesLink) + path.sep).href.replaceAll('&', '&amp;');
+  const modulesUrl = pathToFileURL(fs.realpathSync(path.join(episode, 'engine_modules')) + path.sep).href.replaceAll('&', '&amp;');
   const bootUrl = pathToFileURL(path.join(engine, 'boot.js')).href.replaceAll('&', '&amp;');
   // Engine readiness covers DOM/fonts, not paint. All capture workers must await the initial paint too.
   fs.writeFileSync(path.join(episode, 'index.html'), `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="engine-modules" content="${modulesUrl}"><script src="script.js"></script><script src="${bootUrl}"></script>
@@ -380,26 +357,12 @@ async function main(inputFile, outputFile) {
     else console.log(line);
   });
   const { segments } = JSON.parse(planJson);
-  if (!segments.length) throw new Error('The video has no frames to render.');
-  const chunkDirectory = path.join(episode, 'out/chunks');
   const startedAt = Date.now();
-  const updateFrames = () => report('rendering_frames', { ...measureRenderProgress(segments, chunkDirectory, startedAt), unit: 'frames' });
+  const updateFrames = () => report('rendering_frames', { ...measureRenderProgress(segments, path.join(episode, 'out/chunks'), startedAt), unit: 'frames' });
   updateFrames();
   const clock = setInterval(updateFrames, 1000);
-  try {
-    // Frametell draws and caches the segments. Join them here with relative filenames
-    // so the workspace path never enters FFmpeg's quoted concat file syntax.
-    // Bound the selection passed to each Windows command line for long films.
-    for (let i = 0; i < segments.length; i += 3000) {
-      const ids = segments.slice(i, i + 3000).map(segment => segment.i).join(',');
-      await run(process.execPath, [...renderArgs, '--segments', ids, '--skip-subs'], episode);
-    }
-    updateFrames();
-  } finally { clearInterval(clock); }
-  const pictureList = path.join(chunkDirectory, 'list.txt');
-  const picture = path.join(episode, 'out/film-无字幕.mp4');
-  fs.writeFileSync(pictureList, segments.map(segment => `file '${segment.file}'`).join('\n'));
-  await run(FFMPEG, ['-nostdin', '-y', '-loglevel', 'error', '-f', 'concat', '-i', pictureList, '-c', 'copy', '-movflags', '+faststart', picture], episode);
+  try { await run(process.execPath, [...renderArgs, '--skip-subs'], episode); }
+  finally { clearInterval(clock); }
   const subtitleDirectory = path.join(episode, 'out/subs');
   const cueCount = result.pages.reduce((total, page) => total + page.cues.length, 0);
   const subtitleStartedAt = Date.now();
@@ -408,10 +371,8 @@ async function main(inputFile, outputFile) {
   // Reuse the engine's exact subtitle images; own the encode invocation to read FFmpeg's progress stream.
   try { await run(process.execPath, [path.join(engine, 'tools/subs.mjs'), '0', String(duration)], episode); }
   finally { clearInterval(subtitleClock); }
-  const subtitleList = path.join(subtitleDirectory, 'list.txt');
-  fs.writeFileSync(subtitleList, fs.readFileSync(subtitleList, 'utf8').replace(/^file '(.*)'$/gm, (_, file) => `file '${path.basename(file)}'`));
   const subtitled = path.join(episode, 'out/film-有字幕.mp4');
-  await encode('rendering_subtitles', ['-nostdin', '-y', '-loglevel', 'error', '-i', picture, '-f', 'concat', '-i', subtitleList,
+  await encode('rendering_subtitles', ['-nostdin', '-y', '-loglevel', 'error', '-i', path.join(episode, 'out/film-无字幕.mp4'), '-f', 'concat', '-safe', '0', '-i', path.join(subtitleDirectory, 'list.txt'),
     '-filter_complex', '[1:v]fps=24,format=rgba[s];[0:v][s]overlay=0:0:format=auto:shortest=1,format=yuv420p[v]',
     '-map', '[v]', '-map', '0:a?', '-c:a', 'copy', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-r', '24', '-movflags', '+faststart', subtitled]);
   const video = path.join(path.dirname(inputFile), 'video.mp4');

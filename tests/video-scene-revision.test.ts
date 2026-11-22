@@ -9,8 +9,8 @@ import { chooseSelect, dialog } from './ui'
 
 vi.mock('../src/services/video', () => ({ startSceneRevision: vi.fn(), executeSceneRevision: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ cancelGeneration: vi.fn() }))
-const input: VideoSceneRevisionInput = { jobId: 'job', runId: 2, providerId: 'm1', sceneIndex: 0, instruction: '', subtitles: '1\n00:00:00,000 --> 00:00:03,000\n本镜字幕\n', scene: { first: 0, last: 0, kind: 'focus', title: '原观点', beats: [{ cue: 0, object: 'book', action: 'draw', label: '阅读' }] } }
-const candidate: VideoScene = { ...input.scene, title: '新观点', beats: [{ cue: 0, object: 'pen', action: 'draw', label: '思考' }] }
+const input: VideoSceneRevisionInput = { jobId: 'job', runId: 2, providerId: 'm1', sceneIndex: 0, instruction: '', subtitles: '1\n00:00:00,000 --> 00:00:03,000\n本镜字幕\n', scenes: [{ first: 0, last: 0, kind: 'focus', title: '原观点', beats: [{ cue: 0, object: 'book', action: 'draw', label: '阅读' }] }] }
+const candidate: VideoScene = { ...input.scenes[0]!, title: '新观点', beats: [{ cue: 0, object: 'pen', action: 'draw', label: '思考' }] }
 let wrapper: ReturnType<typeof mount>
 beforeEach(() => {
   vi.resetAllMocks()
@@ -47,15 +47,6 @@ it('discards candidates without changing input or emitting adoption', async () =
   expect(wrapper.emitted('close')).toHaveLength(1)
   expect(wrapper.emitted('adopt')).toBeUndefined()
   expect(wrapper.props()).toHaveProperty('input', input)
-})
-it('previews and adopts the full multi-object drawing without replacing it with catalog symbols', async () => {
-  const free: VideoScene = { ...candidate, beats: Array.from({ length: 6 }, (_, i) => ({ cue: 0, object: `长枪${i}`, action: 'draw', label: '', drawing: { strokes: [[[i * 100, 10], [i * 100 + 20, 200]]] } })) }
-  vi.mocked(api.executeSceneRevision).mockResolvedValue(free)
-  await render(); await generate()
-  expect(dialog().get('[aria-label="候选分镜"]').findAll('polyline')).toHaveLength(6)
-  expect(dialog().get('[aria-label="候选分镜"]').text()).toContain('长枪5')
-  await dialog().findAll('button').find(b => b.text() === '采用这一镜')!.trigger('click')
-  expect(wrapper.emitted('adopt')![0]).toEqual([free])
 })
 it('preserves original content after a model failure and allows an explicit retry', async () => {
   vi.mocked(api.executeSceneRevision).mockRejectedValueOnce({ message: '模型返回了两镜，已拒绝' })
