@@ -1,5 +1,5 @@
 {
-  "limits": { "maxSceneCues": 16, "labelChars": 8, "titleChars": 20, "objectChars": 80, "drawingWidth": 1000, "drawingHeight": 300, "maxDrawingPoints": 12000, "maxDrawingStrokes": 2000 },
+  "limits": { "maxSceneCues": 16, "maxBeats": 3, "labelChars": 8, "titleChars": 20 },
   "environments": {
     "plain": "空纸",
     "study": "书房案头",

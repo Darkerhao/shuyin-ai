@@ -42,6 +42,7 @@ const requestKey = ref(globalThis.crypto.randomUUID())
 const textModels = computed(() => providers.value.filter(provider => provider.modelKind === 'text' && provider.isEnabled))
 const imageModels = computed(() => providers.value.filter(provider => provider.modelKind === 'image' && provider.isEnabled))
 const activeRun = computed(() => automationRuns.value.find(run => !['completed', 'cancelled'].includes(run.status)))
+const detailedInk = computed(() => activeRun.value ? !!activeRun.value.input.selection.detailedInk : theme.value === 'ink')
 const active = computed(() => !!activeRun.value)
 watch([activeRun, providers], ([current]) => {
   textProvider.value = current?.input.selection.textProviderId ?? (textProvider.value || textModels.value.find(provider => provider.isDefault)?.id || textModels.value[0]?.id || '')
@@ -94,7 +95,7 @@ async function start() {
   busy.value = true; error.value = ''
   try {
     const source = await props.saveSource()
-    await startAutomation({ ...source, textProviderId: textProvider.value, imageProviderId: imageProvider.value, format: 'deep_dive', requestKey: requestKey.value, theme: theme.value, detailedInk: false, collectionName: collectionName.value?.trim() ?? null })
+    await startAutomation({ ...source, textProviderId: textProvider.value, imageProviderId: imageProvider.value, format: 'deep_dive', requestKey: requestKey.value, theme: theme.value, detailedInk: detailedInk.value, collectionName: collectionName.value?.trim() ?? null })
     requestKey.value = globalThis.crypto.randomUUID()
     await refreshAutomation()
   } catch (cause) { error.value = String(cause) }
@@ -298,7 +299,7 @@ async function start() {
         :disabled="busy || active"
         aria-label="允许自动制作和上传"
       />
-      <span>允许将本次书名、作者及整书资料或章节正文发送至文本模型，生成创作方案；将原书文件或章节文字及完整音频指导发送至 Notebook，再根据实际字幕校核并渲染视频。视频按所选铅笔素描或书卷手绘画风在本地逐笔绘制，不调用逐镜图片生成；图片模型仅用于下述封面背景。允许三种比例背景生成、封面导出和按上方账号与合集准备上传，最终发布由我完成。模型失败后最多自动重试3次，再切换其他已启用的同类模型，可能产生额外费用；已完成成果保留。</span>
+      <span>允许将本次书名、作者及整书资料或章节正文发送至文本模型，生成创作方案；将原书文件或章节文字及完整音频指导发送至 Notebook，再根据实际字幕校核并渲染视频。{{ detailedInk ? '水墨主题将按实际字幕逐镜生成一张精细水墨画作，使用上方图片模型，费用与镜头张数有关；画作失败时暂停，继续只处理未完成画面。' : '' }}允许三种比例背景生成、封面导出和按上方账号与合集准备上传，最终发布由我完成。模型失败后最多自动重试3次，再切换其他已启用的同类模型，可能产生额外费用；已完成成果保留。</span>
     </label>
     <p
       v-if="error"

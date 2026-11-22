@@ -4,8 +4,7 @@ use super::{
     Database,
 };
 use crate::video::{
-    milliseconds, validate_cues, validate_scenes, validate_theme, Cue, Scene, VideoPlan,
-    VideoSettings, VideoWork,
+    validate_cues, validate_scenes, validate_theme, Cue, Scene, VideoPlan, VideoSettings, VideoWork,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -17,7 +16,6 @@ use std::{
 };
 
 mod editor;
-#[allow(dead_code)]
 pub(super) mod ink;
 mod revision;
 
@@ -51,7 +49,6 @@ fn read_image_file(path: &Path) -> Result<VideoImageSnapshot, String> {
 }
 
 const COLUMNS: &str = "id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,run_id,plan_json,error,subtitle_asset_id,video_asset_id,created_at,updated_at,json_extract(editor_draft_json,'$.updatedAt'),chapter_id";
-const SUMMARY_COLUMNS: &str = "id,project_id,audio_asset_id,source_subtitle_id,provider_id,status,stage,run_id,error,subtitle_asset_id,video_asset_id,created_at,updated_at,chapter_id";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,26 +72,6 @@ pub struct VideoJob {
     pub draft_updated_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VideoJobSummary {
-    pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chapter_id: Option<String>,
-    pub project_id: String,
-    pub audio_asset_id: Option<String>,
-    pub source_subtitle_id: Option<String>,
-    pub provider_id: Option<String>,
-    pub status: String,
-    pub stage: String,
-    pub run_id: i64,
-    pub error: String,
-    pub subtitle_asset_id: Option<String>,
-    pub video_asset_id: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartVideoInput {
@@ -107,7 +84,6 @@ pub struct StartVideoInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)]
     pub image_provider_id: Option<String>,
 }
 
@@ -133,25 +109,6 @@ fn row(r: &Row<'_>) -> rusqlite::Result<VideoJob> {
         created_at: r.get(12)?,
         updated_at: r.get(13)?,
         draft_updated_at: r.get(14)?,
-    })
-}
-
-fn summary_row(r: &Row<'_>) -> rusqlite::Result<VideoJobSummary> {
-    Ok(VideoJobSummary {
-        id: r.get(0)?,
-        project_id: r.get(1)?,
-        audio_asset_id: r.get(2)?,
-        source_subtitle_id: r.get(3)?,
-        provider_id: r.get(4)?,
-        status: r.get(5)?,
-        stage: r.get(6)?,
-        run_id: r.get(7)?,
-        error: r.get(8)?,
-        subtitle_asset_id: r.get(9)?,
-        video_asset_id: r.get(10)?,
-        created_at: r.get(11)?,
-        updated_at: r.get(12)?,
-        chapter_id: r.get(13)?,
     })
 }
 
@@ -274,34 +231,6 @@ impl Database {
         })
     }
 
-    pub fn video_job_summaries(
-        &self,
-        project_id: &str,
-        chapter_id: Option<&str>,
-    ) -> Result<Vec<VideoJobSummary>, String> {
-        self.with_connection(|c| {
-            super::chapters::require_scope(c, project_id, chapter_id)?;
-            let mut q = c.prepare(&format!("SELECT {SUMMARY_COLUMNS} FROM video_jobs WHERE project_id=?1 AND chapter_id IS ?2 ORDER BY created_at DESC,id DESC")).map_err(|e| e.to_string())?;
-            let rows = q.query_map(params![project_id, chapter_id], summary_row).map_err(|e| e.to_string())?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
-        })
-    }
-
-    pub fn latest_video_draft_job_id(
-        &self,
-        project_id: &str,
-        chapter_id: Option<&str>,
-    ) -> Result<Option<String>, String> {
-        self.with_connection(|c| {
-            super::chapters::require_scope(c, project_id, chapter_id)?;
-            c.query_row(
-                "SELECT id FROM video_jobs WHERE project_id=?1 AND chapter_id IS ?2 AND json_type(editor_draft_json,'$.updatedAt')='text' ORDER BY json_extract(editor_draft_json,'$.updatedAt') DESC,id DESC LIMIT 1",
-                params![project_id, chapter_id],
-                |row| row.get(0),
-            ).optional().map_err(|e| e.to_string())
-        })
-    }
-
     pub fn video_job(&self, id: &str) -> Result<VideoJob, String> {
         self.with_connection(|c| get(c, id))
     }
@@ -388,8 +317,12 @@ impl Database {
             let id = projects::new_id(&tx)?;
             let theme = input.theme.as_deref().unwrap_or("ink");
             validate_theme(theme)?;
-            if input.image_provider_id.is_some() { return Err("新视频使用本地绘制，不接受逐镜图片模型。".into()); }
-            let mut plan = VideoPlan { title: book.input.title, theme: theme.into(), ..Default::default() };
+            if theme == "ink" && input.image_provider_id.is_none() && binding.is_none() { return Err("细致水墨视频需要选择图片模型，将按分镜逐张生成画作。".into()); }
+            if let Some(id) = &input.image_provider_id {
+                let image = super::ai::provider(&tx,id)?;
+                if theme != "ink" || image.input.model_kind != "image" || !image.input.is_enabled { return Err("水墨视频请选择已启用的图片模型。".into()); }
+            }
+            let mut plan = VideoPlan { title: book.input.title, theme: theme.into(), image_provider_id: input.image_provider_id, ..Default::default() };
             if let Some(binding) = binding {
                 plan.audio_sha256 = tx.query_row("SELECT a.output_sha256 FROM automation_runs r JOIN audio_jobs a ON a.id=r.audio_job_id WHERE r.id=?1 AND a.asset_id=?2 AND a.status='succeeded'",params![binding.id,input.audio_asset_id],|row|row.get::<_,String>(0)).map_err(|_|"自动视频缺少对应音频的归档摘要。")?;
                 if plan.audio_sha256.is_empty() { return Err("自动视频缺少音频摘要。".into()); }
@@ -509,16 +442,7 @@ impl Database {
             let mut job = get(c, id)?;
             if matches!(job.status.as_str(), "running" | "succeeded") { return Err("执行中或已完成的视频不能改写。".into()); }
             validate_cues(&cues, job.plan.duration)?;
-            // The editor round-trips through SRT, whose timeline has millisecond precision.
-            let cues_changed = cues.len() != job.plan.cues.len() || cues.iter().zip(&job.plan.cues).any(|(edited, saved)| {
-                milliseconds(edited.start) != milliseconds(saved.start)
-                    || milliseconds(edited.end) != milliseconds(saved.end)
-                    || edited.text.trim() != saved.text.trim()
-            });
-            if job.plan.pencil.is_some() && cues_changed && !scenes.is_empty() {
-                return Err("精绘字幕已改变，请使用“保存字幕并重新生成分镜”；已有画稿保留。".into());
-            }
-            if job.plan.image_provider_id.is_some() && cues_changed {
+            if job.plan.image_provider_id.is_some() && cues != job.plan.cues {
                 scenes.clear();
             }
             if !scenes.is_empty() { validate_scenes(&scenes, 0, cues.len())?; }
@@ -544,10 +468,8 @@ impl Database {
                 }
                 image.sha256.clone_from(&snapshots[&image.asset_id].sha256);
             }
-            if cues_changed || scenes.is_empty() { job.plan.subtitle_review = None; job.plan.pencil = None; }
-            if cues_changed { job.plan.cues = cues; }
-            job.plan.scenes = scenes;
-            crate::video::pencil::validate_plan(&job.plan)?;
+            if cues != job.plan.cues || scenes.is_empty() { job.plan.subtitle_review = None; }
+            job.plan.cues = cues; job.plan.scenes = scenes;
             c.execute(&format!("UPDATE video_jobs SET plan_json=?1,editor_draft_json=NULL,status='awaiting_confirmation',stage='storyboard',updated_at={NOW} WHERE id=?2"), params![serde_json::to_string(&job.plan).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
             Ok(())
         })
@@ -657,7 +579,7 @@ pub(crate) mod tests {
         let (_dir, db, mut input) = fixture();
         alternative_models(&db);
         input.theme = None;
-        input.image_provider_id = None;
+        input.image_provider_id = Some("image".into());
         let ink = db.create_video_job(input).unwrap();
         assert_eq!(ink.plan.theme, "ink");
         let classic = db
@@ -683,89 +605,6 @@ pub(crate) mod tests {
                 image_provider_id: None,
             })
             .is_err());
-    }
-
-    #[test]
-    fn video_history_summaries_omit_the_full_plan_until_a_job_is_selected() {
-        let (_dir, db, input) = fixture();
-        let first = db.create_video_job(input).unwrap();
-        let mut large_plan = serde_json::to_value(&first.plan).unwrap();
-        large_plan["title"] = serde_json::Value::String("画稿".repeat(300_000));
-        let large_plan = serde_json::to_string(&large_plan).unwrap();
-        assert!(large_plan.len() > 500_000);
-        db.with_connection(|connection| {
-            connection
-                .execute(
-                    "UPDATE video_jobs SET plan_json=?1 WHERE id=?2",
-                    params![large_plan, first.id],
-                )
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })
-        .unwrap();
-        let second = db
-            .create_video_job(StartVideoInput {
-                project_id: first.project_id.clone(),
-                chapter_id: None,
-                audio_asset_id: first.audio_asset_id.clone().unwrap(),
-                subtitle_asset_id: None,
-                provider_id: "model".into(),
-                theme: Some("classic".into()),
-                image_provider_id: None,
-            })
-            .unwrap();
-
-        let history = db.video_job_summaries(&first.project_id, None).unwrap();
-        assert_eq!(history.len(), 2);
-        assert!(history.iter().any(|job| job.id == first.id));
-        assert!(history.iter().any(|job| job.id == second.id));
-        assert!(history.iter().all(|job| {
-            let serialized = serde_json::to_value(job).unwrap();
-            serialized.get("plan").is_none() && serialized.get("preview").is_none()
-        }));
-        assert!(serde_json::to_vec(&history).unwrap().len() < 2_000);
-        db.with_connection(|connection| {
-            connection
-                .execute(
-                    "UPDATE video_jobs SET editor_draft_json=?1 WHERE id=?2",
-                    params![r#"{"updatedAt":"2026-11-18T00:00:00Z"}"#, first.id],
-                )
-                .map_err(|e| e.to_string())?;
-            connection
-                .execute(
-                    "UPDATE video_jobs SET editor_draft_json='{}' WHERE id=?1",
-                    [&second.id],
-                )
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(
-            db.latest_video_draft_job_id(&first.project_id, None)
-                .unwrap()
-                .as_deref(),
-            Some(first.id.as_str())
-        );
-        db.with_connection(|connection| {
-            connection
-                .execute(
-                    "UPDATE video_jobs SET editor_draft_json=?1 WHERE id=?2",
-                    params![r#"{"updatedAt":"2026-11-19T00:00:00Z"}"#, second.id],
-                )
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(
-            db.latest_video_draft_job_id(&first.project_id, None)
-                .unwrap()
-                .as_deref(),
-            Some(second.id.as_str())
-        );
-        assert_eq!(
-            db.video_job(&first.id).unwrap().plan.title,
-            "画稿".repeat(300_000)
-        );
     }
 
     #[test]
@@ -800,45 +639,6 @@ pub(crate) mod tests {
             Ok(())
         })
         .unwrap();
-    }
-
-    #[test]
-    fn free_drawing_plans_survive_save_reopen_and_resume_without_subject_loss() {
-        let (dir, db, input) = fixture();
-        let job = db.create_video_job(input).unwrap();
-        let running = db
-            .claim_video_job(&job.id, VideoWork::Prepare, None)
-            .unwrap();
-        let mut plan = running.plan.clone();
-        plan.duration = 10.0;
-        plan.cues = vec![
-            Cue {
-                start: 0.0,
-                end: 4.0,
-                text: "营前有人持枪".into(),
-            },
-            Cue {
-                start: 4.0,
-                end: 9.0,
-                text: "旗帜立在营寨旁".into(),
-            },
-        ];
-        plan.scenes=serde_json::from_value(serde_json::json!([{"first":0,"last":0,"kind":"focus","title":"营前","beats":(0..6).map(|i|serde_json::json!({"cue":0,"object":format!("长枪{i}"),"action":"draw","label":"","drawing":{"strokes":[[[i*100,20],[i*100+10,230]]]}})).collect::<Vec<_>>()}])).unwrap();
-        db.save_video_progress(&job.id, running.run_id, &plan, "storyboard")
-            .unwrap();
-        db.end_video_job(&job.id, running.run_id, "failed", "后续分镜未完成")
-            .unwrap();
-        drop(db);
-        let db = Database::open(dir.path().join("data.sqlite3"));
-        let resumed = db
-            .claim_video_job(&job.id, VideoWork::Prepare, None)
-            .unwrap();
-        assert_eq!(
-            serde_json::to_value(&resumed.plan).unwrap(),
-            serde_json::to_value(&plan).unwrap()
-        );
-        assert_eq!(resumed.plan.scenes[0].beats.len(), 6);
-        assert_eq!(resumed.plan.scenes.last().unwrap().last + 1, 1);
     }
 
     #[test]

@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { Buffer } from 'node:buffer'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import VideoPage from '../src/modules/video/VideoPage.vue'
@@ -9,20 +8,17 @@ import * as ai from '../src/services/ai'
 import { loadWaveform } from '../src/services/audioWaveform'
 import { emptyProject } from '../src/types/project'
 import { emptyProvider } from '../src/types/ai'
-import { chooseSelect, mockResizeObserver, openSelect } from './ui'
-import type { VideoJob, VideoJobSummary } from '../src/types/video'
+import { chooseSelect, mockResizeObserver } from './ui'
+import type { VideoJob } from '../src/types/video'
 import VideoSceneRevision from '../src/modules/video/VideoSceneRevision.vue'
 import VideoSubtitleEditor from '../src/modules/video/VideoSubtitleEditor.vue'
-import VideoDrawingPreview from '../src/modules/video/VideoDrawingPreview.vue'
 import * as drafts from '../src/services/drafts'
 vi.mock('../src/services/drafts', () => ({ readDraft: vi.fn(), saveDraft: vi.fn() }))
-vi.mock('../src/services/video', () => ({ originalCues: vi.fn(), settings: vi.fn(), saveSettings: vi.fn(), checkEnvironment: vi.fn(), listJobs: vi.fn(), listJobSummaries: vi.fn(), getJob: vi.fn(), latestDraftJobId: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), chooseRuntimePath: vi.fn(), chooseImage: vi.fn(), importImage: vi.fn(), readImage: vi.fn(), startIllustration: vi.fn(), executeIllustration: vi.fn() }))
+vi.mock('../src/services/video', () => ({ originalCues: vi.fn(), settings: vi.fn(), saveSettings: vi.fn(), checkEnvironment: vi.fn(), listJobs: vi.fn(), startJob: vi.fn(), continueJob: vi.fn(), previewJob: vi.fn(), previewSource: vi.fn(), cancelJob: vi.fn(), savePlan: vi.fn(), subtitles: vi.fn(), exportSubtitles: vi.fn(), chooseRuntimePath: vi.fn(), chooseImage: vi.fn(), importImage: vi.fn(), readImage: vi.fn(), startIllustration: vi.fn(), executeIllustration: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: () => true, getChapter: vi.fn(), listChapters: vi.fn(), getProject: vi.fn(), listAssets: vi.fn(), mediaSource: vi.fn(), openAsset: vi.fn(), openProjectDirectory: vi.fn() }))
 vi.mock('../src/services/ai', () => ({ listProviders: vi.fn() }))
 vi.mock('../src/services/audioWaveform', () => ({ loadWaveform: vi.fn().mockResolvedValue([.2, .6, .8, .1]) }))
 const job: VideoJob = { id: 'j1', projectId: 'p1', audioAssetId: 'a1', sourceSubtitleId: null, providerId: 'm1', status: 'awaiting_confirmation', stage: 'storyboard', runId: 1, plan: { title: '原书', audioSha256: 'hash', duration: 8, cues: [{ start: 0, end: 7, text: '原声字幕' }], scenes: [{ first: 0, last: 0, kind: 'opening', title: '观点', beats: [{ cue: 0, object: 'book', action: 'draw', label: '一本书' }] }] }, error: '', subtitleAssetId: 's1', videoAssetId: null, createdAt: '', updatedAt: '' }
-const summary = (value: VideoJob): VideoJobSummary => ({ id: value.id, chapterId: value.chapterId, projectId: value.projectId, audioAssetId: value.audioAssetId, sourceSubtitleId: value.sourceSubtitleId, providerId: value.providerId, status: value.status, stage: value.stage, runId: value.runId, error: value.error, subtitleAssetId: value.subtitleAssetId, videoAssetId: value.videoAssetId, createdAt: value.createdAt, updatedAt: value.updatedAt, progress: value.progress })
-const artwork = { design: '逐笔展开同一场景', layers: [{ cue: 0, name: '主体', mask: [], strokes: [{ p: [[10, 20], [40, 60]], w: 1.2, a: .6 }], shades: [], texts: [] }] }
 const mounted: ReturnType<typeof mount>[] = []
 beforeEach(() => {
   vi.resetAllMocks()
@@ -36,16 +32,13 @@ beforeEach(() => {
   vi.mocked(ai.listProviders).mockResolvedValue([{ id: 'm1', modelKind: 'text', name: '文本模型', modelName: 'text', reasoningEffort: null, baseUrl: 'http://localhost', isDefault: true, isEnabled: true, credentialStatus: 'available' }, { ...emptyProvider(), id: 'im1', modelKind: 'image', name: '水墨图片模型', modelName: 'ink-model', isEnabled: true, credentialStatus: 'available' }])
   vi.mocked(api.settings).mockResolvedValue({ engineRoot: 'D:/engine', nodePath: 'D:/node.exe', pythonPath: 'D:/python.exe', modelPath: 'D:/model' })
   vi.mocked(api.listJobs).mockResolvedValue([structuredClone(job)])
-  vi.mocked(api.listJobSummaries).mockImplementation(async () => (await api.listJobs('p1', null)).map(summary))
-  vi.mocked(api.getJob).mockImplementation(async id => (await api.listJobs('p1', null)).find(item => item.id === id) ?? structuredClone(job))
-  vi.mocked(api.latestDraftJobId).mockResolvedValue(null)
   vi.mocked(api.subtitles).mockResolvedValue('1\n00:00:00,000 --> 00:00:07,000\n原声字幕\n')
   vi.mocked(projects.mediaSource).mockResolvedValue('http://asset.localhost/audio.m4a')
 })
 afterEach(() => { mounted.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals() })
-async function render(onStoryboardUpdate?: () => void, openSetup = true, query = 'job=j1') {
+async function render(onStoryboardUpdate?: () => void, openSetup = true) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/projects/:id/video', component: VideoPage, props: true }, { path: '/:pathMatch(.*)*', component: { template: '<p>其他页面</p>' } }] })
-  await router.push(`/projects/p1/video?${query}`); await router.isReady()
+  await router.push('/projects/p1/video?audio=a1'); await router.isReady()
   const wrapper = mount({ template: '<router-view />' }, { attachTo: document.body, global: { plugins: [router], mixins: [{ updated() { if (this.$options.name === 'UiSelect' && this.$el.parentElement?.closest('.video-scenes')) onStoryboardUpdate?.() } }] } }); mounted.push(wrapper)
   await flushPromises()
   if (openSetup && wrapper.get('.video-setup-trigger').attributes('aria-expanded') === 'false') {
@@ -54,60 +47,6 @@ async function render(onStoryboardUpdate?: () => void, openSetup = true, query =
   }
   return wrapper
 }
-it('accepts detailed pencil scenes as complete plans and keeps their frozen cast in editor previews', async () => {
-  const detailed = structuredClone(job)
-  detailed.plan.theme = 'ink'
-  detailed.plan.pencil = { characters: [], pending: [] }
-  detailed.plan.scenes[0]!.beats = []
-  detailed.plan.scenes[0]!.artwork = { design: '保持人物基准，在同一画面解释观点', layers: [{ cue: 0, name: '书页', mask: [], strokes: [{ p: [[100, 200], [600, 600]], w: 1.2, a: .6 }], shades: [], texts: [] }] }
-  vi.mocked(api.listJobs).mockResolvedValue([detailed])
-  const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
-  try {
-    const wrapper = await render()
-    expect(wrapper.find('canvas[aria-label="观点精绘场景预览"]').exists()).toBe(true)
-    expect(wrapper.text()).not.toContain('保留字幕并升级手绘分镜')
-    expect(wrapper.text()).toContain('角色外观沿用本任务的固定画稿')
-    expect(wrapper.text()).not.toContain('保持人物基准，在同一画面解释观点')
-  } finally { context.mockRestore() }
-})
-it('plays, pauses and seeks the same compiled pencil preview', async () => {
-  const renderDrawing = vi.spyOn(globalThis.SHUYIN_PENCIL_DRAWING, 'render')
-  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
-  const frames = new Map<number, FrameRequestCallback>()
-  let nextFrame = 0
-  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { const id = ++nextFrame; frames.set(id, callback); return id })
-  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
-  const wrapper = mount(VideoDrawingPreview, { props: { beats: [], title: '精绘', scene: { first: 0, last: 0, kind: 'focus', title: '精绘', beats: [], artwork }, cues: [{ start: 0, end: 7, text: '原声字幕' }] } })
-  mounted.push(wrapper)
-  await flushPromises()
-  const canvas = wrapper.get('canvas').element
-  const compiled = expect.anything()
-  expect(renderDrawing).toHaveBeenLastCalledWith(canvas, compiled, 7, false)
-  const start = globalThis.performance.now()
-  await wrapper.get('[aria-label="播放精绘预览"]').trigger('click')
-  const firstFrame = frames.values().next().value as FrameRequestCallback
-  frames.clear()
-  firstFrame(start + 1000)
-  await flushPromises()
-  expect(renderDrawing.mock.calls.at(-1)?.[2]).toBeCloseTo(1, 1)
-  await wrapper.get('[aria-label="暂停精绘预览"]').trigger('click')
-  await wrapper.get('[aria-label="精绘预览进度"]').setValue('3')
-  await flushPromises()
-  expect(renderDrawing).toHaveBeenLastCalledWith(canvas, compiled, 3, false)
-  expect(wrapper.find('[aria-label="播放精绘预览"]').exists()).toBe(true)
-})
-it('keeps the finished pencil preview static when reduced motion is requested', async () => {
-  const renderDrawing = vi.spyOn(globalThis.SHUYIN_PENCIL_DRAWING, 'render')
-  vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
-  const request = vi.fn()
-  vi.stubGlobal('requestAnimationFrame', request)
-  const wrapper = mount(VideoDrawingPreview, { props: { beats: [], title: '精绘', scene: { first: 0, last: 0, kind: 'focus', title: '精绘', beats: [], artwork }, cues: [{ start: 0, end: 7, text: '原声字幕' }] } })
-  mounted.push(wrapper)
-  await flushPromises()
-  expect(renderDrawing).toHaveBeenLastCalledWith(wrapper.get('canvas').element, expect.anything(), 7, false)
-  expect(wrapper.get('[aria-label="播放精绘预览"]').attributes('disabled')).toBeDefined()
-  expect(request).not.toHaveBeenCalled()
-})
 it('keeps existing tasks foremost and preserves setup choices and editor changes when collapsing settings', async () => {
   const wrapper = await render(undefined, false)
   expect(wrapper.get('.video-setup-trigger').attributes('aria-expanded')).toBe('false')
@@ -127,52 +66,11 @@ it('keeps existing tasks foremost and preserves setup choices and editor changes
 })
 it('opens creation settings for a book without video tasks', async () => {
   vi.mocked(api.listJobs).mockResolvedValue([])
-  const wrapper = await render(undefined, false, 'audio=a1')
+  const wrapper = await render(undefined, false)
   expect(wrapper.get('.video-setup-trigger').attributes('aria-expanded')).toBe('true')
   expect(wrapper.find('#video-audio').exists()).toBe(true)
   expect(wrapper.text()).toContain('还没有视频任务')
   expect(wrapper.find('[aria-label="视频编辑分区"]').exists()).toBe(false)
-})
-it('keeps an audio deep link focused on new production and does not select an older video task', async () => {
-  const wrapper = await render(undefined, false, 'audio=a1')
-  expect(wrapper.get('.video-setup-trigger').attributes('aria-expanded')).toBe('true')
-  expect(wrapper.text()).toContain('已从原声入口选中「原声.m4a」')
-  expect(wrapper.get('.video-job h2').text()).toBe('历史制作任务')
-  expect(wrapper.find('[aria-label="选择视频历史任务"]').text()).toBe('选择视频任务')
-  expect(api.getJob).not.toHaveBeenCalled()
-})
-it('disambiguates same-state video tasks created at the same time', async () => {
-  const createdAt = '2026-11-19T12:00:00Z'
-  vi.mocked(api.listJobs).mockResolvedValue([
-    { ...structuredClone(job), id: 'job-first', createdAt },
-    { ...structuredClone(job), id: 'job-second', createdAt },
-  ])
-  const wrapper = await render(undefined, false, 'audio=a1')
-  const listbox = await openSelect(wrapper, '[aria-label="选择视频历史任务"]')
-  const labels = listbox.findAll('[role="option"]').map(option => option.text())
-  expect(labels).toHaveLength(2)
-  expect(new Set(labels).size).toBe(2)
-  expect(labels[0]).toContain('job-firs')
-  expect(labels[1]).toContain('job-seco')
-})
-it('asks before starting from a different audio than the one in the deep link', async () => {
-  vi.mocked(projects.listAssets).mockResolvedValue([
-    { id: 'a1', projectId: 'p1', assetType: 'audio', filePath: 'D:/原声.m4a', originalName: '原声.m4a', fileSize: 100, modifiedAt: 1, existsStatus: 'available', createdAt: '' },
-    { id: 'a2', projectId: 'p1', assetType: 'audio', filePath: 'D:/另一段.m4a', originalName: '另一段.m4a', fileSize: 100, modifiedAt: 1, existsStatus: 'available', createdAt: '' },
-  ])
-  const wrapper = await render(undefined, false, 'audio=a1')
-  const audioSelect = wrapper.findAllComponents({ name: 'UiSelect' }).find(select => select.find('#video-audio').exists())!
-  audioSelect.vm.$emit('update:modelValue', 'a2'); await flushPromises()
-  await wrapper.get('.video-primary-action').trigger('click')
-  expect(api.startJob).not.toHaveBeenCalled()
-  expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('确认更换本次原声？')
-  expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('另一段.m4a」制作新视频')
-  vi.mocked(api.startJob).mockResolvedValue({ ...structuredClone(job), id: 'j2', audioAssetId: 'a2', status: 'running', plan: { ...job.plan, cues: [], scenes: [] } })
-  vi.mocked(api.listJobs).mockResolvedValue([structuredClone(job), { ...structuredClone(job), id: 'j2', audioAssetId: 'a2', status: 'running', plan: { ...job.plan, cues: [], scenes: [] } }])
-  const confirmation = document.querySelectorAll('[role="alertdialog"] button')
-  const confirmButton = [...confirmation].find(button => button.textContent === '使用新原声')!
-  ;(confirmButton as HTMLButtonElement).click(); await flushPromises()
-  expect(api.startJob).toHaveBeenCalledWith('p1', 'a2', 'm1', null, null, 'ink', null)
 })
 it('retains the chosen environment check purpose and report when settings are collapsed', async () => {
   const wrapper = await render()
@@ -223,14 +121,13 @@ it('adopts only the selected scene into its existing automatic draft without cha
   await wrapper.get('[aria-label="重新生成第2镜"]').trigger('click'); await flushPromises()
   const dialog = wrapper.getComponent(VideoSceneRevision)
   expect(dialog.props('input').sceneIndex).toBe(1)
-  expect(dialog.props('input').previousScene?.title).toBe('其他镜头未保存的修改')
+  expect(dialog.props('input').scenes[0]!.title).toBe('其他镜头未保存的修改')
   const revised = { ...current.plan.scenes[1]!, title: '只替换第二镜' }
   dialog.vm.$emit('adopt', revised); await flushPromises()
   await vi.advanceTimersByTimeAsync(400)
-  const draft = vi.mocked(drafts.saveDraft).mock.lastCall![2]!.content
-  expect(draft).toMatchObject({ sceneEdits: [{ index: 0, scene: { ...current.plan.scenes[0], title: '其他镜头未保存的修改' } }, { index: 1, scene: revised }] })
-  expect(draft).not.toHaveProperty('subtitles')
-  expect(draft).not.toHaveProperty('scenes')
+  const draft = vi.mocked(drafts.saveDraft).mock.lastCall![2]!.content as { subtitles: string; scenes: string }
+  expect(draft.subtitles).toBe(srt)
+  expect(JSON.parse(draft.scenes)).toEqual([{ ...current.plan.scenes[0], title: '其他镜头未保存的修改' }, revised, current.plan.scenes[2]])
   expect(api.savePlan).not.toHaveBeenCalled()
   expect(api.continueJob).not.toHaveBeenCalled()
   expect(api.startJob).not.toHaveBeenCalled()
@@ -290,25 +187,12 @@ it.each(['running', 'succeeded'] as const)('refreshes an externally advanced tra
   expect(api.startJob).not.toHaveBeenCalled()
   expect(api.continueJob).not.toHaveBeenCalled()
 })
-it('overlays a compact draft on the current saved storyboard and retains untouched scenes', async () => {
-  const current = structuredClone(job)
-  current.plan.cues.push({ start: 7, end: 8, text: '收尾' })
-  current.plan.scenes.push({ ...current.plan.scenes[0]!, first: 1, last: 1, title: '未改的收尾', beats: [{ cue: 1, object: 'book', action: 'draw', label: '收尾' }] })
-  const srt = '1\n00:00:00,000 --> 00:00:07,000\n原声字幕\n\n2\n00:00:07,000 --> 00:00:08,000\n收尾\n'
-  vi.mocked(api.listJobs).mockResolvedValue([current]); vi.mocked(api.subtitles).mockResolvedValue(srt)
-  vi.mocked(drafts.readDraft).mockResolvedValue({ basedOn: '1', content: { sceneEdits: [{ index: 0, scene: { ...current.plan.scenes[0], title: '恢复首镜' } }], position: { section: 'subtitles', index: 0, onlyChanges: false, cursor: 0 } } })
-  const wrapper = await render(undefined, false)
-  expect((wrapper.get('[aria-label="第1镜标题"]').element as HTMLInputElement).value).toBe('恢复首镜')
-  expect((wrapper.get('[aria-label="第2镜标题"]').element as HTMLInputElement).value).toBe('未改的收尾')
-  expect((wrapper.get('#video-subtitles').element as HTMLTextAreaElement).value).toBe(srt)
-  expect(api.savePlan).not.toHaveBeenCalled()
-})
 it('keeps unsaved manual edits when polling an unchanged waiting task', async () => {
   vi.useFakeTimers()
   const wrapper = await render()
   await wrapper.get('#video-subtitles').setValue('保留人工修改的字幕')
   await vi.advanceTimersByTimeAsync(1500)
-  expect(api.listJobSummaries).toHaveBeenCalledTimes(2)
+  expect(api.listJobs).toHaveBeenCalledTimes(2)
   expect((wrapper.get('#video-subtitles').element as HTMLTextAreaElement).value).toBe('保留人工修改的字幕')
   expect(api.subtitles).toHaveBeenCalledOnce()
   expect(api.savePlan).not.toHaveBeenCalled()
@@ -410,19 +294,6 @@ it('a failed save keeps the edited subtitles and never starts a render', async (
   expect(api.continueJob).not.toHaveBeenCalled()
 })
 
-it('can save and render explicitly after a failed draft write', async () => {
-  vi.useFakeTimers()
-  vi.mocked(drafts.saveDraft).mockRejectedValue(new Error('视频草稿超过4MB。'))
-  vi.mocked(api.continueJob).mockResolvedValue({ ...job, status: 'running', stage: 'rendering', runId: 2 })
-  const wrapper = await render(undefined, false)
-  wrapper.get('.video-job').element.scrollIntoView = vi.fn()
-  await wrapper.get('[aria-label="第1镜标题"]').setValue('可正式保存的修改')
-  await vi.advanceTimersByTimeAsync(400)
-  expect(wrapper.text()).toContain('视频草稿超过4MB')
-  await wrapper.get('[data-test="render-video"]').trigger('click'); await flushPromises()
-  expect(api.savePlan).toHaveBeenCalledWith(job.id, expect.any(String), [{ ...job.plan.scenes[0], title: '可正式保存的修改' }])
-  expect(api.continueJob).toHaveBeenCalledWith(job.id, true, null)
-})
 it('saves the same storyboard before a preview and never starts final rendering', async () => {
   const wrapper = await render()
   wrapper.get('.video-job').element.scrollIntoView = vi.fn()
@@ -436,38 +307,6 @@ it('saves the same storyboard before a preview and never starts final rendering'
   expect(wrapper.text()).toContain('试片')
 })
 
-it('can preview a pencil plan larger than 4 MiB without writing its unchanged artwork to the draft', async () => {
-  const current = structuredClone(job)
-  const count = 240
-  current.plan.theme = 'ink'
-  current.plan.duration = 20 * count
-  current.plan.pencil = { characters: [], pending: [] }
-  current.plan.cues = Array.from({ length: count }, (_, i) => ({ start: 20 * i, end: 20 * i + 3, text: '原声字幕' }))
-  const design = '线'.repeat(5900)
-  current.plan.scenes = current.plan.cues.map((_, i) => ({ first: i, last: i, kind: 'focus', title: `书页${i + 1}`, artwork: { design, layers: [{ cue: i, name: '书页', mask: [], strokes: [{ p: [[20, 20], [80, 80]], w: 1.2, a: .6 }], shades: [], texts: [] }] } }))
-  expect(Buffer.byteLength(JSON.stringify(current.plan.scenes))).toBeGreaterThan(4 * 1024 * 1024)
-  const srt = current.plan.cues.map((cue, i) => `${i + 1}\n${new Date(cue.start * 1000).toISOString().slice(11, 23).replace('.', ',')} --> ${new Date(cue.end * 1000).toISOString().slice(11, 23).replace('.', ',')}\n${cue.text}\n\n`).join('')
-  vi.mocked(api.listJobs).mockResolvedValue([current]); vi.mocked(api.subtitles).mockResolvedValue(srt)
-  vi.mocked(drafts.saveDraft).mockImplementation(async (_id, _kind, draft) => {
-    if (Buffer.byteLength(JSON.stringify(draft)) > 4 * 1024 * 1024) throw new Error('视频草稿超过4MB。')
-  })
-  vi.mocked(api.previewJob).mockResolvedValue({ ...current, status: 'running', stage: 'previewing', runId: 2 })
-  const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
-  try {
-    const wrapper = await render(undefined, false)
-    wrapper.get('.video-job').element.scrollIntoView = vi.fn()
-    await wrapper.get('[aria-label="第1镜标题"]').setValue('仅修改本镜')
-    await wrapper.get('[aria-label="重新生成第1镜"]').trigger('click'); await flushPromises()
-    const dialog = wrapper.getComponent(VideoSceneRevision)
-    expect(dialog.props('input').scene.title).toBe('仅修改本镜')
-    expect(JSON.stringify(dialog.props('input')).length).toBeLessThan(100_000)
-    expect(drafts.saveDraft).toHaveBeenLastCalledWith(current.id, 'video', expect.objectContaining({ content: expect.objectContaining({ sceneEdits: [{ index: 0, scene: expect.objectContaining({ title: '仅修改本镜' }) }] }) }))
-    dialog.vm.$emit('close'); await flushPromises()
-    await wrapper.get('[data-test="preview-video"]').trigger('click'); await flushPromises()
-    expect(api.savePlan).toHaveBeenCalledExactlyOnceWith(current.id, srt, [{ ...current.plan.scenes[0], title: '仅修改本镜' }, ...current.plan.scenes.slice(1)])
-    expect(api.previewJob).toHaveBeenCalledExactlyOnceWith(current.id, 0, 30)
-  } finally { context.mockRestore() }
-}, 30_000)
 it('shows renderer thumbnails and a clearly marked preview, then hides them as soon as edits are made', async () => {
   vi.mocked(api.listJobs).mockResolvedValue([{ ...job, stage: 'previewing', runId: 2, preview: { start: 0, end: 8, signature: 'saved', scenes: [0] } }])
   vi.mocked(api.previewSource).mockImplementation(async (_project, _id, _run, scene) => scene === undefined ? 'http://asset.localhost/preview.mp4' : 'http://asset.localhost/scene-0.png')
@@ -598,7 +437,7 @@ it('makes a separate version from the completed task audio and saved subtitles',
   const wrapper = await render()
   const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版'))!
   await remake.trigger('click'); await flushPromises()
-  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'ink', null)
+  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'ink', 'im1')
   expect(api.savePlan).not.toHaveBeenCalled()
 })
 
@@ -606,20 +445,21 @@ it('lets a new version use the selected classic theme', async () => {
   vi.mocked(api.listJobs).mockResolvedValue([{ ...job, status: 'succeeded', videoAssetId: 'v1' }])
   vi.mocked(api.startJob).mockResolvedValue({ ...job, id: 'j3', status: 'running', plan: { ...job.plan, cues: [], scenes: [] } })
   const wrapper = await render()
-  await wrapper.get('input[name="video-theme"][value="classic"]').setValue(true)
+  await chooseSelect(wrapper, '#video-theme', '书卷手绘')
   const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版'))!
   await remake.trigger('click'); await flushPromises()
   expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'classic', null)
 })
 
-it('creates an ink video without any enabled image provider', async () => {
+it('requires a painting model for a new ink video and explains the per-scene cost', async () => {
   vi.mocked(api.listJobs).mockResolvedValue([])
   vi.mocked(ai.listProviders).mockResolvedValue([{ ...emptyProvider(), id: 'm1', modelKind: 'text', name: '文本模型', isEnabled: true, credentialStatus: 'available' }])
-  const wrapper = await render(undefined, true, 'audio=a1')
-  expect(wrapper.text()).toContain('不自动生成图片')
+  const wrapper = await render()
+  expect(wrapper.text()).toContain('每镜调用所选图片模型')
+  expect(wrapper.get('.video-primary-action').attributes('disabled')).toBeDefined()
+  await chooseSelect(wrapper, '#video-theme', '书卷手绘')
   expect(wrapper.get('.video-primary-action').attributes('disabled')).toBeUndefined()
-  await wrapper.get('.video-primary-action').trigger('click'); await flushPromises()
-  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', null, null, 'ink', null)
+  expect(api.startJob).not.toHaveBeenCalled()
 })
 
 it('shows unfinished ink directions without treating them as legacy drawings or allowing render', async () => {
@@ -631,12 +471,12 @@ it('shows unfinished ink directions without treating them as legacy drawings or 
   vi.mocked(api.listJobs).mockResolvedValue([current])
   const wrapper = await render()
   expect(wrapper.find('[aria-label="第1镜水墨画面描述"]').exists()).toBe(true)
-  expect(wrapper.findAll('button').some(button => button.text() === '继续准备字幕、分镜与水墨画作')).toBe(false)
+  expect(wrapper.findAll('button').some(button => button.text() === '继续准备字幕、分镜与水墨画作')).toBe(true)
   expect(wrapper.findAll('button').find(button => button.text().includes('确认并生成视频'))?.attributes('disabled')).toBeDefined()
   expect(wrapper.get('[data-test="preview-video"]').attributes('disabled')).toBeDefined()
 })
 
-it('keeps unfinished old paintings readable without offering paid continuation', async () => {
+it('continues missing ink paintings without requiring an available text model', async () => {
   const current = structuredClone(job)
   current.status = 'failed'
   current.stage = 'painting'
@@ -649,9 +489,10 @@ it('keeps unfinished old paintings readable without offering paid continuation',
   vi.mocked(api.listJobs).mockResolvedValue([current])
   vi.mocked(api.continueJob).mockResolvedValue({ ...current, status: 'running', stage: 'painting', runId: 2 })
   const wrapper = await render()
-  expect(wrapper.text()).toContain('不再补图')
-  expect(wrapper.findAll('button').some(button => button.text() === '继续准备字幕、分镜与水墨画作')).toBe(false)
-  expect(api.continueJob).not.toHaveBeenCalled()
+  const resume = wrapper.findAll('button').find(button => button.text() === '继续准备字幕、分镜与水墨画作')!
+  expect(resume.attributes('disabled')).toBeUndefined()
+  await resume.trigger('click'); await flushPromises()
+  expect(api.continueJob).toHaveBeenCalledExactlyOnceWith('j1', false, null)
 })
 
 it('saves an image scene as a complete plan without treating it as a legacy text storyboard', async () => {
