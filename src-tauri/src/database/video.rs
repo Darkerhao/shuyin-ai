@@ -89,7 +89,7 @@ pub struct StartVideoInput {
 
 fn row(r: &Row<'_>) -> rusqlite::Result<VideoJob> {
     let raw: String = r.get(8)?;
-    let plan = serde_json::from_str(&raw).map_err(|e| {
+    let plan = crate::video::parse_saved_plan(&raw).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
     })?;
     Ok(VideoJob {
@@ -1062,6 +1062,66 @@ pub(crate) mod tests {
         assert_eq!(recovered["scenes"][0]["environment"], "path");
         assert_eq!(recovered["scenes"][0]["framing"], "detail");
         assert_eq!(recovered["scenes"][0]["beats"][0]["object"], "compass");
+    }
+
+    #[test]
+    fn history_list_loads_retired_pencil_plans_without_rewriting_their_json() {
+        let (_dir, db, input) = fixture();
+        let job = db.create_video_job(input).unwrap();
+        let old = serde_json::json!({
+            "title": "原书",
+            "audioSha256": "source",
+            "duration": 5.0,
+            "theme": "ink",
+            "cues": [{"start": 0.5, "end": 4.0, "text": "寻找方向"}],
+            "pencil": {"characters": [], "pending": []},
+            "scenes": [{
+                "first": 0,
+                "last": 0,
+                "kind": "focus",
+                "title": "旧画稿",
+                "beats": [],
+                "artwork": {"design": "旧画稿", "layers": []}
+            }, {
+                "first": 0,
+                "last": 0,
+                "kind": "focus",
+                "title": "旧笔画",
+                "beats": [{
+                    "cue": 0,
+                    "object": "营门与长枪",
+                    "action": "draw",
+                    "label": "营门",
+                    "drawing": {"strokes": [[[0, 0], [1, 1]]]}
+                }]
+            }]
+        })
+        .to_string();
+        db.with_connection(|c| {
+            c.execute(
+                "UPDATE video_jobs SET plan_json=?1 WHERE id=?2",
+                params![old, job.id],
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+
+        let history = db.video_jobs(&job.project_id, None).unwrap();
+        let saved = history.iter().find(|saved| saved.id == job.id).unwrap();
+        assert!(saved.plan.scenes.iter().all(|scene| scene.beats.is_empty()));
+        db.with_connection(|c| {
+            let raw: String = c
+                .query_row(
+                    "SELECT plan_json FROM video_jobs WHERE id=?1",
+                    [&job.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(raw, old);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

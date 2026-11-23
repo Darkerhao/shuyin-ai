@@ -153,6 +153,25 @@ it('restores the last edited task, unsaved SRT, storyboard and cursor after remo
   expect((wrapper.get('[aria-label="第1镜标题"]').element as HTMLInputElement).value).toBe('暂存镜头')
   expect(api.savePlan).not.toHaveBeenCalled()
 })
+it('loads retired pencil plans without replaying their obsolete scene edits', async () => {
+  const legacy = structuredClone(job)
+  legacy.status = 'failed'
+  legacy.stage = 'rendering'
+  legacy.plan.scenes = [{ first: 0, last: 0, kind: 'focus', title: '旧画稿', beats: [] }]
+  vi.mocked(api.listJobs).mockResolvedValue([legacy])
+  vi.mocked(drafts.readDraft).mockResolvedValue({
+    basedOn: '1',
+    content: {
+      position: { section: 'scene', index: 0, onlyChanges: false, cursor: 0 },
+      sceneEdits: [{ index: 0, scene: { ...legacy.plan.scenes[0], title: '旧草稿镜头' } }],
+    },
+  } as never)
+  const wrapper = await render()
+  expect(drafts.readDraft).toHaveBeenCalledWith('j1', 'video')
+  expect((wrapper.get('[aria-label="第1镜标题"]').element as HTMLInputElement).value).toBe('旧画稿')
+  expect(wrapper.text()).toContain('当前是旧版文字图解分镜')
+  expect(api.savePlan).not.toHaveBeenCalled()
+})
 it('autosaves incomplete text and blocks navigation on failure until a successful retry', async () => {
   vi.useFakeTimers()
   const wrapper = await render()

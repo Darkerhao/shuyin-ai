@@ -124,16 +124,16 @@ async function adopt(job: VideoJob | undefined, restoreDraft = true) {
   position.value = initialPosition(); originalCues.value = []; originalError.value = ''
   if (!job) { subtitleText.value = ''; scenes.value = []; savedEditor.value = editorValue(); return }
   const projectId = props.id
-  const [text, draft] = await Promise.all([api.subtitles(job.id), restoreDraft && !['running', 'succeeded'].includes(job.status) ? readDraft<VideoEditorDraft>(job.id, 'video') : null])
+  const [text, draft] = await Promise.all([api.subtitles(job.id), restoreDraft && !['running', 'succeeded'].includes(job.status) ? readDraft<Partial<VideoEditorDraft>>(job.id, 'video') : null])
   if (disposed || selectedId.value !== job.id || projectId !== props.id) return
   subtitleText.value = text
   scenes.value = JSON.parse(JSON.stringify(job.plan.scenes))
   savedEditor.value = editorValue()
   if (draft && draft.basedOn === String(job.runId)) {
-    subtitleText.value = draft.content.subtitles
-    scenes.value = JSON.parse(draft.content.scenes)
-    position.value = draft.content.position
-    autosave.status.value = '已恢复上次暂存的编辑位置和内容'
+    subtitleText.value = typeof draft.content.subtitles === 'string' ? draft.content.subtitles : text
+    if (typeof draft.content.scenes === 'string') scenes.value = JSON.parse(draft.content.scenes)
+    position.value = draft.content.position ?? initialPosition()
+    autosave.status.value = typeof draft.content.scenes === 'string' ? '已恢复上次暂存的编辑位置和内容' : '已恢复上次暂存的编辑位置'
   }
   editorJobId.value = job.id
   if (job.plan.cues.length) {
