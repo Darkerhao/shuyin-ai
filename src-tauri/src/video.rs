@@ -68,6 +68,41 @@ pub fn parse_storyboard(raw: &str, first: usize, end: usize) -> Result<Vec<Scene
     Ok(scenes)
 }
 
+pub fn parse_saved_plan(raw: &str) -> Result<VideoPlan, serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_str(raw)?;
+    if let Some(plan) = value.as_object_mut() {
+        plan.remove("pencil");
+        if let Some(scenes) = plan
+            .get_mut("scenes")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for scene in scenes {
+                let Some(scene) = scene.as_object_mut() else {
+                    continue;
+                };
+                let artwork = scene
+                    .remove("artwork")
+                    .is_some_and(|value| !value.is_null());
+                let mut drawn = false;
+                if let Some(beats) = scene
+                    .get_mut("beats")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for beat in beats {
+                        if let Some(beat) = beat.as_object_mut() {
+                            drawn |= beat.remove("drawing").is_some_and(|value| !value.is_null());
+                        }
+                    }
+                }
+                if artwork || drawn {
+                    scene.insert("beats".into(), serde_json::Value::Array(Vec::new()));
+                }
+            }
+        }
+    }
+    serde_json::from_value(value)
+}
+
 pub fn storyboard_input(plan: &VideoPlan, first: usize, end: usize) -> String {
     let cues = |from: usize, to: usize| {
         plan.cues[from..to].iter().enumerate().map(|(offset, c)| serde_json::json!({"index": from + offset, "start": c.start, "end": c.end, "text": c.text})).collect::<Vec<_>>()
@@ -681,6 +716,68 @@ mod tests {
             r#"{"first":0,"last":0,"kind":"book","title":"x","labels":["x"],"code":"evil"}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn saved_pencil_plans_load_as_legacy_scenes_but_unknown_fields_stay_rejected() {
+        let raw = serde_json::json!({
+            "title": "书",
+            "audioSha256": "source",
+            "duration": 3,
+            "theme": "ink",
+            "cues": [
+                {"start": 0, "end": 1, "text": "第一句"},
+                {"start": 1, "end": 2, "text": "第二句"},
+                {"start": 2, "end": 3, "text": "第三句"}
+            ],
+            "pencil": {"characters": [], "pending": []},
+            "scenes": [
+                {
+                    "first": 0,
+                    "last": 0,
+                    "kind": "focus",
+                    "title": "自由笔画",
+                    "beats": [{
+                        "cue": 0,
+                        "object": "营门与长枪",
+                        "action": "draw",
+                        "label": "营门",
+                        "drawing": {"strokes": [[[0, 0], [1, 1]]]}
+                    }]
+                },
+                {
+                    "first": 1,
+                    "last": 2,
+                    "kind": "focus",
+                    "title": "精绘画稿",
+                    "beats": [],
+                    "artwork": {"design": "旧画稿", "layers": []}
+                }
+            ]
+        });
+
+        let plan = parse_saved_plan(&raw.to_string()).unwrap();
+        assert_eq!(plan.scenes.len(), 2);
+        assert!(plan.scenes.iter().all(|scene| scene.beats.is_empty()));
+        let saved = serde_json::to_value(plan).unwrap();
+        assert!(saved.get("pencil").is_none());
+        assert!(saved["scenes"][0].get("artwork").is_none());
+        assert!(saved["scenes"][0]["beats"].as_array().unwrap().is_empty());
+        assert!(validate_scenes(
+            &serde_json::from_value::<Vec<Scene>>(saved["scenes"].clone()).unwrap(),
+            0,
+            3
+        )
+        .unwrap_err()
+        .contains("重新生成分镜"));
+
+        let mut unknown_plan = raw.clone();
+        unknown_plan["scenes"][0]["code"] = "evil".into();
+        assert!(parse_saved_plan(&unknown_plan.to_string()).is_err());
+        let mut unknown_beat = raw;
+        unknown_beat["scenes"][0]["beats"][0]["drawing"] = serde_json::Value::Null;
+        unknown_beat["scenes"][0]["beats"][0]["anchor"] = "evil".into();
+        assert!(parse_saved_plan(&unknown_beat.to_string()).is_err());
     }
 
     #[test]
