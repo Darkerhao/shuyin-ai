@@ -1,6 +1,10 @@
 # 书引 AI 技术设计文档
 
-## 水墨主题下线（2026-11-26，当前规则）
+## 42 种视频画面风格（2026-11-26，当前规则）
+
+`src-tauri/video/themes.json` 是 Vue、Rust 和 Node 共用的新任务风格白名单，共 42 项。沿用 `VideoPlan.theme` 与自动制作 `selection.theme`；`classic` 对应引擎 `study`，其余键直接对应 `engine/styles/<key>`。历史 `ink` 仅恢复原任务，继续使用原 `study` 加水墨绘图层。编译器将风格写入 `META.style`，原声时钟及绘图分镜共用一条渲染路径。`scene-kits.json` 为八种原生组件主题增加26个受控物体；编译器按主题设置 extras/vendor/webgl，`scene-kits.js` 调用原引擎，普通/原生主体共用Beat。缓存键覆盖style/kit/world/vendor，环境检查验证WebGL2及资源，Rust嵌入所需文件。无新增依赖、IPC、权限或数据库迁移；不复制外部引擎。详见[视频主题](VIDEO-THEMES.md)和[专属场景](VIDEO-NATIVE-SCENES.md)。
+
+## 水墨主题下线（2026-11-26，历史记录）
 
 `videoThemes` 只列出新任务可选的 `classic`，`videoThemeLabel` 单独识别历史 `ink`；手动页面、服务默认值和 Rust 新任务默认值统一为 `classic`。手动新建及自动新建拒绝 `ink`，自动新建同时拒绝 `detailedInk=true`。自动任务展示冻结主题，新任务选择不从历史任务继承。已有任务继续复用原计划、逐镜续作和渲染流程，内部绑定的视频创建保留对历史自动任务的支持。无依赖、IPC、权限或 schema 变更。详见[视频主题](VIDEO-THEMES.md)。
 

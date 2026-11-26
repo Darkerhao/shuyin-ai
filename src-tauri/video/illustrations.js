@@ -404,6 +404,7 @@
   }
 
   function draw(P) {
+    if (window.SCENE_KITS?.draw(P, sketch)) return;
     if (P.page.painting) { window.INK_PAINTING.mount(P); return; }
     const pg = P.page, span = pg.drawDuration, H = P.hud, reference = pg.framing === 'reference';
     pageTheme = pg.theme === 'ink' ? 'ink' : 'classic';

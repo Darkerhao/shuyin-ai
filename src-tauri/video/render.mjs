@@ -4,17 +4,17 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { assertNodeRuntime, enginePackage } from './runtime.mjs';
+import { assertNodeRuntime, enginePackage, videoStyle, readVideoStyle, sceneKits, videoBrowserArgs } from './runtime.mjs';
 export { assertNodeRuntime } from './runtime.mjs';
 
 const catalog = JSON.parse(fs.readFileSync(new URL('./visual-catalog.json', import.meta.url), 'utf8'));
-const visuals = fs.readFileSync(new URL('./ink-painting.js', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('./illustrations.js', import.meta.url), 'utf8');
+const visuals = ['ink-painting.js', 'scene-kits.js', 'illustrations.js'].map(file => fs.readFileSync(new URL('./' + file, import.meta.url), 'utf8')).join('\n');
 
 // The model selects trusted drawings and subtitle anchors; it never supplies code.
 export function buildEpisode(plan, range, images = {}) {
   const shortText = (value, limit) => typeof value === 'string' && value.trim() && [...value].length <= limit && !/[\p{Cc}{}*`]/u.test(value);
   const theme = plan.theme ?? 'classic';
-  if (!['classic', 'ink'].includes(theme)) throw new Error('Unknown video theme.');
+  const style = videoStyle(theme);
   let next = 0;
   for (const scene of plan.scenes) {
     const { environment = 'plain', framing = 'reference' } = scene;
@@ -46,11 +46,17 @@ export function buildEpisode(plan, range, images = {}) {
     }
     let previous = scene.first;
     for (const beat of scene.beats ?? []) {
-      if (!Object.hasOwn(catalog.objects, beat.object)) throw new Error('Unknown drawing object.');
+      if (!Object.hasOwn(catalog.objects, beat.object) && !Object.hasOwn(sceneKits[theme]?.objects ?? {}, beat.object)) throw new Error('Unknown drawing object for this video theme.');
+      if (sceneKits[theme]?.webgl && !Object.hasOwn(catalog.objects, beat.object) && !['draw', 'check', 'cross'].includes(beat.action ?? 'draw')) throw new Error('Unknown action for a native 3D subject.');
       if (!Object.hasOwn(catalog.actions, beat.action ?? 'draw')) throw new Error('Unknown drawing action.');
       if (!shortText(beat.label, catalog.limits.labelChars)) throw new Error('Invalid object label.');
       if (!Number.isInteger(beat.cue) || beat.cue < previous || beat.cue > scene.last) throw new Error('Invalid object cue anchor.');
       previous = beat.cue;
+    }
+    if (theme === 'globe' && (scene.beats ?? []).filter(beat => beat.object === 'world_globe').length > 1) throw new Error('A scene supports only one native globe.');
+    if (theme === 'exploded') {
+      const products = (scene.beats ?? []).filter(beat => Object.hasOwn(sceneKits.exploded.objects, beat.object));
+      if (products.some((beat, i) => i > 0 && beat.cue === products[i - 1].cue)) throw new Error('Native products must have separate cue anchors.');
     }
     next = scene.last + 1;
   }
@@ -70,7 +76,8 @@ export function buildEpisode(plan, range, images = {}) {
     };
   }).filter(p => p.start >= 0 && p.start < to - from).map((p, index) => ({ ...p, sourceIndex: p.index, index }));
   const inkImages = Object.fromEntries(plan.scenes.filter(scene => scene.painting).map(scene => [scene.image.assetId, images[scene.image.assetId].dataUri]).filter(([,uri]) => !!uri));
-  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style: 'study', theme, extras: ['timeline.js', 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, INK_IMAGES: inkImages, duration: to - from };
+  const kit = sceneKits[theme];
+  const data = { META: { title: plan.title, name: 'film', lang: 'zh', style, theme, ...(kit?.webgl ? { vendor: ['three'], webgl: true } : {}), extras: ['timeline.js', ...(kit ? [`engine/styles/${style}/kit.js`] : []), 'illustrations.js'], fadeDelay: 0, fadeOut: 0, pageMotion: false }, PAGES: pages, INK_IMAGES: inkImages, duration: to - from };
   const script = `(function(root) {
 root.SCRIPT = ${JSON.stringify(data)};
 root.applyVideoTimeline = function() {
@@ -279,6 +286,7 @@ async function main(inputFile, outputFile) {
     return;
   }
   const plan = input.plan;
+  process.env.FRAMETELL_CHROME_ARGS = videoBrowserArgs(plan.theme, process.platform, process.env.FRAMETELL_CHROME_ARGS);
   const range = input.action === 'preview' ? input.window : undefined;
   if (input.action === 'preview' && (!range || typeof input.signature !== 'string')) throw new Error('A preview requires its source window and snapshot signature.');
   const duration = range ? range.end - range.start : plan.duration;
@@ -293,7 +301,8 @@ async function main(inputFile, outputFile) {
   };
   report('checking_layout');
   if (Math.abs(metadata.duration - plan.duration) > 0.15) throw new Error('The audio duration changed. Create a new video task.');
-  const key = createHash('sha256').update(JSON.stringify({ plan, range })).update(engine).update(fs.readFileSync(fileURLToPath(import.meta.url))).update(visuals).update(JSON.stringify(catalog)).digest('hex').slice(0, 24);
+  const styleSource = readVideoStyle(engine, plan.theme);
+  const key = createHash('sha256').update(JSON.stringify({ plan, range })).update(engine).update(styleSource).update(fs.readFileSync(fileURLToPath(import.meta.url))).update(visuals).update(JSON.stringify(catalog)).digest('hex').slice(0, 24);
   const episode = input.cacheRoot ? path.join(path.resolve(input.cacheRoot), key) : path.join(path.dirname(inputFile), 'episode');
   const fresh = !fs.existsSync(episode);
   if (fresh) fs.mkdirSync(path.join(episode, 'pages'), { recursive: true });
@@ -318,6 +327,10 @@ async function main(inputFile, outputFile) {
   }));
   if (window.INK_PAINTING?.ready.length) {
     await Promise.all(window.INK_PAINTING.ready);
+    window.ENGINE.renderAt(0);
+  }
+  if (window.SCENE_KITS?.ready.length) {
+    await Promise.all(window.SCENE_KITS.ready);
     window.ENGINE.renderAt(0);
   }
   return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(duration))));

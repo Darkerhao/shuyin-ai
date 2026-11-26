@@ -293,13 +293,7 @@ impl Database {
     }
 
     pub fn create_video_job(&self, input: StartVideoInput) -> Result<VideoJob, String> {
-        if input
-            .theme
-            .as_deref()
-            .is_some_and(|theme| theme != "classic")
-        {
-            return Err("该视频主题已下线，请使用书卷手绘。".into());
-        }
+        crate::video::validate_new_theme(input.theme.as_deref().unwrap_or("classic"))?;
         self.create_bound_video_job(input, None)
     }
 
@@ -452,6 +446,7 @@ impl Database {
                 scenes.clear();
             }
             if !scenes.is_empty() { validate_scenes(&scenes, 0, cues.len())?; }
+            crate::video::scene_kits::validate(&job.plan.theme, &scenes)?;
             if job.plan.image_provider_id.is_some() && scenes.iter().any(|scene|scene.painting.is_none()) { return Err("水墨视频的每一镜都须保留画面描述。".into()); }
             for scene in &mut scenes {
                 if let Some(painting) = &mut scene.painting {
@@ -587,11 +582,59 @@ pub(crate) mod tests {
         let classic = db.create_video_job(input).unwrap();
         assert_eq!(classic.plan.theme, "classic");
         assert!(classic.plan.image_provider_id.is_none());
-        for theme in ["classic", "ink", "watercolor"] {
+        for theme in crate::video::video_themes()
+            .keys()
+            .map(String::as_str)
+            .chain(["ink", "../study", "unknown"])
+        {
             let (_dir, db, mut input) = fixture();
             input.theme = Some(theme.into());
-            assert_eq!(db.create_video_job(input).is_ok(), theme == "classic");
+            let result = db.create_video_job(input);
+            if theme == "ink" || theme == "../study" || theme == "unknown" {
+                assert!(result.is_err());
+            } else {
+                assert_eq!(result.unwrap().plan.theme, theme);
+            }
         }
+    }
+
+    #[test]
+    fn native_subject_edits_round_trip_and_reject_foreign_themes_without_changing_the_plan() {
+        let (_dir, db, mut input) = fixture();
+        input.theme = Some("cosmos".into());
+        let job = db.create_video_job(input).unwrap();
+        let mut active = db
+            .claim_video_job(&job.id, VideoWork::Prepare, None)
+            .unwrap();
+        active.plan.duration = 6.0;
+        active.plan.cues = vec![Cue {
+            start: 0.0,
+            end: 6.0,
+            text: "讲述地球".into(),
+        }];
+        active.plan.scenes = serde_json::from_value(serde_json::json!([{"first":0,"last":0,"kind":"focus","title":"地球示意","beats":[{"cue":0,"object":"space_earth","action":"draw","label":"地球"}]}])).unwrap();
+        db.save_video_progress(&job.id, active.run_id, &active.plan, "storyboard")
+            .unwrap();
+        db.end_video_job(&job.id, active.run_id, "awaiting_confirmation", "")
+            .unwrap();
+        db.edit_video_plan(
+            &job.id,
+            active.plan.cues.clone(),
+            active.plan.scenes.clone(),
+        )
+        .unwrap();
+        let saved = db.video_job(&job.id).unwrap();
+        assert_eq!(saved.plan.theme, "cosmos");
+        assert_eq!(saved.plan.scenes[0].beats[0].object, "space_earth");
+        let mut foreign = saved.plan.scenes.clone();
+        foreign[0].beats[0].object = "micro_water".into();
+        assert!(db
+            .edit_video_plan(&job.id, saved.plan.cues.clone(), foreign)
+            .is_err());
+        assert_eq!(
+            db.video_job(&job.id).unwrap().plan.scenes[0].beats[0].object,
+            "space_earth"
+        );
     }
 
     #[test]

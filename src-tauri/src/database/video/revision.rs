@@ -34,6 +34,7 @@ impl Database {
         self.with_connection(|c| {
             let job = editable(c, &input)?;
             input.validate(job.plan.duration, &job.plan.scenes)?;
+            crate::video::scene_kits::validate(&job.plan.theme, &input.scenes)?;
             let provider = super::super::ai::provider(c, &input.provider_id)?;
             if !provider.input.is_enabled || provider.input.model_kind != "text" { return Err("请选择已启用的文本模型。".into()); }
             let provider_id = input.provider_id.clone();
@@ -66,7 +67,11 @@ impl Database {
             if !provider.input.is_enabled || provider.input.model_kind != "text" {
                 return Err("请选择已启用的文本模型。".into());
             }
-            let user = snapshot.input.user(&job.plan.title, &cues);
+            let mut user: serde_json::Value =
+                serde_json::from_str(&snapshot.input.user(&job.plan.title, &cues))
+                    .map_err(|e| e.to_string())?;
+            user["theme"] = serde_json::json!(job.plan.theme);
+            let user = user.to_string();
             c.execute(
                 "UPDATE ai_tasks SET status='running',model_name=?2 WHERE id=?1",
                 params![id, provider.input.model_name],
@@ -91,6 +96,7 @@ impl Database {
                 return Err("正式分镜已变化，候选已过期。".into());
             }
             let candidate = snapshot.input.candidate(raw)?;
+            crate::video::scene_kits::validate(&job.plan.theme, std::slice::from_ref(&candidate))?;
             c.execute(
                 &format!("UPDATE ai_tasks SET status='succeeded',completed_at={NOW} WHERE id=?1"),
                 [id],
@@ -151,6 +157,29 @@ mod tests {
         db.end_video_job(&input.job_id, input.run_id, "awaiting_confirmation", "")
             .unwrap();
         (dir, db, input)
+    }
+
+    #[test]
+    fn native_scene_revision_uses_the_saved_theme_and_rejects_foreign_subjects() {
+        let (_dir, db, input) = fixture_for(false);
+        db.with_connection(|c| { c.execute("UPDATE video_jobs SET plan_json=json_set(plan_json,'$.theme','cosmos') WHERE id=?1", [&input.job_id]).map_err(|e| e.to_string())?; Ok(()) }).unwrap();
+        let task = db.start_video_scene_revision(input.clone()).unwrap();
+        let prepared = db.prepare_video_scene_revision(&task).unwrap();
+        let user: serde_json::Value = serde_json::from_str(&prepared.user).unwrap();
+        assert_eq!(user["theme"], "cosmos");
+        let mut candidate = crate::video::revision::tests::candidate();
+        candidate[0]["beats"][0]["object"] = serde_json::json!("micro_water");
+        assert!(db
+            .finish_video_scene_revision(&task, &candidate.to_string())
+            .is_err());
+        candidate[0]["beats"][0]["object"] = serde_json::json!("space_earth");
+        assert_eq!(
+            db.finish_video_scene_revision(&task, &candidate.to_string())
+                .unwrap()
+                .beats[0]
+                .object,
+            "space_earth"
+        );
     }
 
     #[test]

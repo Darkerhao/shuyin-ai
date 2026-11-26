@@ -174,6 +174,9 @@ async function start() {
             </SelectItem>
           </SelectContent>
         </Select>
+        <p class="text-xs text-muted-foreground">
+          像素、漫画使用专属画布与分格；三维主题按字幕选用专属主体，普通物体保留原图解。
+        </p>
       </div>
     </div>
     <p class="text-sm text-muted-foreground">

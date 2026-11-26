@@ -9,7 +9,7 @@ import { loadWaveform } from '../src/services/audioWaveform'
 import { emptyProject } from '../src/types/project'
 import { emptyProvider } from '../src/types/ai'
 import { chooseSelect, mockResizeObserver, openSelect } from './ui'
-import type { VideoJob } from '../src/types/video'
+import { videoThemes, themeObjects, themeActions, type VideoJob } from '../src/types/video'
 import VideoSceneRevision from '../src/modules/video/VideoSceneRevision.vue'
 import VideoSubtitleEditor from '../src/modules/video/VideoSubtitleEditor.vue'
 import * as drafts from '../src/services/drafts'
@@ -304,6 +304,23 @@ it('mounts beat selectors only when expanded and preserves edits after closing a
   await flushPromises()
   expect(api.savePlan).toHaveBeenCalledWith('j1', expect.any(String), [expect.objectContaining({ beats: [expect.objectContaining({ object: 'pen' })] })])
 })
+it('edits a native subject from the saved theme and keeps its action valid when saving', async () => {
+  const native = structuredClone(job)
+  native.plan.theme = 'cosmos'
+  native.plan.scenes[0]!.beats![0]!.action = 'slide'
+  vi.mocked(api.listJobs).mockResolvedValue([native])
+  const wrapper = await render()
+  await wrapper.get('.video-beat-settings .disclosure-trigger').trigger('click'); await flushPromises()
+  expect(themeObjects('cosmos')).toHaveProperty('space_earth', '地球三维示意')
+  expect(themeObjects('cosmos')).not.toHaveProperty('pixel_robot')
+  const objectSelect = wrapper.findAllComponents({ name: 'UiSelect' }).find(select => select.find('#scene-0-object-0').exists())!
+  objectSelect.vm.$emit('update:modelValue', 'space_earth'); await flushPromises()
+  expect(wrapper.get('#scene-0-action-0').text()).toContain('逐笔绘制')
+  expect(Object.keys(themeActions('cosmos', 'space_earth'))).toEqual(['draw', 'check', 'cross'])
+  await wrapper.findAll('button').find(button => button.text() === '保存校对')!.trigger('click'); await flushPromises()
+  expect(api.savePlan).toHaveBeenCalledWith('j1', expect.any(String), [expect.objectContaining({ beats: [expect.objectContaining({ object: 'space_earth', action: 'draw' })] })])
+})
+
 it('a failed save keeps the edited subtitles and never starts a render', async () => {
   const wrapper = await render()
   await wrapper.get('#video-subtitles').setValue('未保存的校对')
@@ -474,21 +491,22 @@ it('remakes a historical ink video with the available classic theme without chan
   expect(api.savePlan).not.toHaveBeenCalled()
 })
 
-it('offers only classic for new videos and can start without an image model', async () => {
+it('offers all 42 styles and starts a new watercolor video without an image model', async () => {
   vi.mocked(api.listJobs).mockResolvedValue([])
   vi.mocked(ai.listProviders).mockResolvedValue([{ ...emptyProvider(), id: 'm1', modelKind: 'text', name: '文本模型', isEnabled: true, credentialStatus: 'available' }])
   vi.mocked(api.startJob).mockResolvedValue({ ...structuredClone(job), status: 'running' })
   const wrapper = await render()
   expect(wrapper.get('#video-theme').text()).toBe('书卷手绘')
   const options = await openSelect(wrapper, '#video-theme')
-  expect(options.findAll('[role="option"]').map(option => option.text())).toEqual(['书卷手绘'])
-  await options.get('[role="option"]').trigger('keydown', { key: 'Enter' }); await flushPromises()
+  expect(options.findAll('[role="option"]').map(option => option.text())).toEqual(Object.values(videoThemes))
+  expect(options.findAll('[role="option"]')).toHaveLength(42)
+  await options.findAll('[role="option"]').find(option => option.text() === '水彩绘画')!.trigger('keydown', { key: 'Enter' }); await flushPromises()
   expect(wrapper.find('#video-image-provider').exists()).toBe(false)
   expect(wrapper.text()).not.toContain('每镜调用所选图片模型')
   expect(wrapper.text()).not.toContain('水墨宣纸')
   expect(wrapper.get('.video-primary-action').attributes('disabled')).toBeUndefined()
   await wrapper.get('.video-primary-action').trigger('click'); await flushPromises()
-  expect(api.startJob).toHaveBeenCalledExactlyOnceWith('p1', 'a1', 'm1', null, null, 'classic')
+  expect(api.startJob).toHaveBeenCalledExactlyOnceWith('p1', 'a1', 'm1', null, null, 'watercolor')
 })
 
 it('shows unfinished ink directions without treating them as legacy drawings or allowing render', async () => {

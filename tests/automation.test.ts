@@ -8,6 +8,7 @@ import { readBackground } from '../src/services/covers'
 import { coverPng, decodeBackground } from '../src/services/coverRenderer'
 import { newCover } from '../src/types/cover'
 import { listProviders } from '../src/services/ai'
+import { videoThemes } from '../src/types/video'
 import { douyinCollectionOptions, saveDouyinCollectionOptions } from '../src/services/publishing'
 import { mockResizeObserver, openSelect } from './ui'
 
@@ -201,7 +202,7 @@ describe('automatic workflow setup', () => {
     wrapper.unmount()
   })
 
-  it('offers only classic for automatic creation without requesting per-scene ink paintings', async () => {
+  it('offers all 42 styles and freezes engine ink wash without requesting per-scene paintings', async () => {
     automationConsent.value = true
     automationAccount.value = { id: null, name: '精讲账号', key: 'classic-account' }
     vi.mocked(invoke).mockImplementation(async command => command === 'automation_snapshot' ? [] : run())
@@ -210,12 +211,13 @@ describe('automatic workflow setup', () => {
     await flushPromises()
     expect(wrapper.get('#automation-theme').text()).toBe('书卷手绘')
     const options = await openSelect(wrapper, '#automation-theme')
-    expect(options.findAll('[role="option"]').map(option => option.text())).toEqual(['书卷手绘'])
-    await options.get('[role="option"]').trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(options.findAll('[role="option"]').map(option => option.text())).toEqual(Object.values(videoThemes))
+    expect(options.findAll('[role="option"]')).toHaveLength(42)
+    await options.findAll('[role="option"]').find(option => option.text() === '水墨宣纸')!.trigger('keydown', { key: 'Enter' }); await flushPromises()
     expect(wrapper.text()).not.toContain('逐镜生成一张精细水墨画作')
     const start = wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!
     await start.trigger('click'); await flushPromises()
-    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, theme: 'classic' }) })
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, theme: 'ink-wash' }) })
     const input = vi.mocked(invoke).mock.calls.find(call => call[0] === 'start_automation')![1] as { input: automation.AutomationInput }
     expect(input.input.detailedInk).toBeUndefined()
   })

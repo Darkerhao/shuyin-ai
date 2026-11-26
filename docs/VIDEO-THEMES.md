@@ -1,6 +1,53 @@
 # 视频主题
 
-## 当前规则：水墨宣纸下线（2026-11-26）
+## 当前规则：42 种引擎画面风格（2026-11-26）
+
+手动视频制作与自动制作均提供 42 项选择，默认书卷手绘。选择在创建时保存；历史任务不随下拉框变化，已有成片可用原音频、原字幕与新风格制作独立新版。
+
+### 接入方式与边界
+
+- 直接使用用户现有 `whiteboard-teacher-video/engine/styles`，不复制引擎，不增加依赖。视频运行环境继续配置该项目的 `engine` 目录；实际 Frametell 0.7.3 安装需含完整 42 套风格及字体资源。
+- `src-tauri/video/themes.json` 为前后端与渲染器唯一新建目录。原 `classic` 对应引擎 `study`，另外 41 个键与引擎目录一致；因此没有重复的 `study` 选项。
+- 引擎 `style.js` 与 `style.css` 提供配色、笔触、字体、背景及滤镜。后续同日已接入 pixel、manga、pop 和五套三维原生 kit，复用同一分镜与字幕链路，详见[专属场景](VIDEO-NATIVE-SCENES.md)。`free` 沿用引擎基础外观，没有单片自定义外观编辑器。
+- 新 `ink-wash`（水墨宣纸）为本地引擎风格；历史 `ink` 显示“水墨宣纸（历史主题）”，保留原逐镜画作与恢复授权，不接受新建。新风格均不追加逐镜图片费用；自动制作原三尺寸封面生成仍按原规则执行。
+- 试片和成片使用同一编译器及 `META.style`。原声、字幕时间码、画面元素的时间锚点、响度和最终人工发布流程沿用现有实现。
+- 所选风格源文件进入 Node 缓存键；缺少风格文件时明确说明路径。环境检查校验全部 42 套风格的 JS/CSS，拒绝将缺失资源静默显示为书卷主题。
+- 无数据库结构/迁移、权限或版本号变更；主题复用已有 JSON 字段。新增能力按 `feat`/minor 判断，发布版本由现有流水线处理。
+
+### 风格目录
+
+完整目录以 [themes.json](../src-tauri/video/themes.json) 为准，包括书卷手绘、白板马克笔、黑板粉笔、暖色插画、科技深色、水墨宣纸、水彩绘画、中国剪纸、像素游戏、黑白漫画、黏土动画、工程蓝图、宇宙星空、复古地图等 42 套。
+
+### 本次验证
+
+以下为基础42风格接入时的记录，后续原生组件迁移的范围和新验证见[专属场景](VIDEO-NATIVE-SCENES.md)。
+
+以下命令从书引 AI 仓库根目录执行。Node 使用 `D:/MyWork/software/shuyin-video-node/v24.22.2/node.exe`；Rust 命令前执行 `. ./.tools/env.ps1`；媒体命令将 `D:/MyWork/software/ffmpeg/current/bin` 加入 PATH。样片、截图和隔离浏览器夹具仅位于忽略目录 `output/video-styles-20261126/`。
+
+| 实际命令 | 结果 |
+| --- | --- |
+| `node node_modules/vitest/vitest.mjs run tests/video.test.ts tests/automation.test.ts tests/automation-tasks.test.ts --maxWorkers=2` | 最终文案调整后复跑：3 文件、67 项通过。覆盖两个完整风格目录、所选风格提交、历史水墨标签和恢复 |
+| `$env:SHUYIN_TEST_FFMPEG='D:/MyWork/software/ffmpeg/current/bin/ffmpeg.exe'; npm run test:video` | 52 项通过、0 跳过；覆盖 42 套风格的完整/试片编译、原时间轴、未知路径拒绝、旧水墨和实际音轨合成 |
+| `npm run lint` | 通过 |
+| `npm run build` | 类型检查及生产构建通过；保留本机 npm 配置和既有 Vite 大分块提示 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib -- --quiet` | 335 通过、2 项原有忽略、0 失败；覆盖全部风格的新建与持久化、自动冻结、历史逐镜水墨继续 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `node output/video-styles-20261126/prepare.mjs` | 核对实际引擎风格目录与共享目录逐项相等，共 42 项；生成隔离夹具 |
+| `ego-browser nodejs -e "await import('file:///D:/MyWork/project/JIAZI-PROJECT/shuyin-ai/output/video-styles-20261126/round-02.mjs')"` | 实际 Chromium 加载全部 42 套引擎风格，逐项核对 STYLE.id、6 秒时钟、字幕、路径元素、资源响应及字体状态：42/42，无缺失资源、无字体错误 |
+| `ego-browser nodejs -e "await import('file:///D:/MyWork/project/JIAZI-PROJECT/shuyin-ai/output/video-styles-20261126/round-07.mjs')"` | 两个入口均有完整 42 项，选中自动水墨与手动矢量；1440/900 宽度和深浅色 4 组合无横溢；手动创建准确提交 vector，无逐镜图片模型，未知 IPC 为 0 |
+| `node src-tauri/video/render.mjs output/video-styles-20261126/preview-watercolor/input.json output/video-styles-20261126/preview-watercolor/result.json` | 真实水彩试片：1920×1080、24fps、72 帧、视频 3 秒，音轨/容器 3.008 秒；布局检查 `[]` |
+| `node src-tauri/video/render.mjs output/video-styles-20261126/render-tech-dark/input.json output/video-styles-20261126/render-tech-dark/result.json` | 真实科技深色成片：1920×1080、24fps、144 帧、6 秒；布局检查 `[]` |
+| `python C:/Users/haozi/.agents/skills/ffmpeg-skill/scripts/probe.py output/video-styles-20261126/render-tech-dark/video.mp4 --json-brief`，对水彩试片执行相同 probe | 两份均 H.264、AAC 双声道、48000Hz，时长/尺寸符合输入 |
+| `python C:/Users/haozi/.agents/skills/ffmpeg-skill/scripts/look.py output/video-styles-20261126/render-tech-dark/video.mp4 --tiles 3x2 --width 1200 --json-brief`，对水彩试片执行相同 look | 两份联系表生成并实际查看；逐笔绘制、两种底色和字幕可见，3 秒试片保留本镜原绘制速度 |
+| `python C:/Users/haozi/.agents/skills/ffmpeg-skill/scripts/check.py output/video-styles-20261126/render-tech-dark/video.mp4 --platform custom --json-brief` | 5 项 PASS，0 失败，1 个预期提醒：采用烧录字幕，无独立软字幕轨；工具 `ok=true`、`verified=false`，不将提醒忽略为全通过 |
+| `git diff --check` | 通过 |
+
+首轮视频 Node 套件在两个样片同时编码时出现原有 4 秒子进程夹具超时（status=null），停止编码负载后单项 0.6 秒通过，完整含音频复跑 52/52；未加长超时或弱化断言。浏览器首轮 Vite 导航等待 15 秒超时，但页面已提交，后续在同页确认完成加载；长列表 End 后焦点异步变更，按实际选项状态完成选择，未改产品键盘逻辑。最终 UI 夹具选择和提交均已核验。
+
+浏览器页面为真实组件加隔离 IPC，渲染样片为本机真实引擎与 FFmpeg，音轨为合成测试音；不接正式书库，不调用付费模型，不宣称真实书籍内容、原生安装版完整链路或 42 套主题全部长片编码已验收。未制作安装包、替换正式桌面程序、提交、推送或发布。建议下一步在开发版用真实短音频试听，再按现有流程打包发布。
+
+## 历史规则：水墨宣纸新建下线（2026-11-26，已由上述范围更新）
 
 - 手动视频制作和自动制作只提供「书卷手绘」，默认 `classic`；新视频不再选择水墨画作模型或追加逐镜水墨图片请求。自动制作的图片模型仍用于三尺寸封面。
 - 使用原音频、原字幕制作新版也使用书卷手绘；新建 API 拒绝水墨输入，自动新建拒绝逐镜水墨标志。

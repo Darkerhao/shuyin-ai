@@ -165,6 +165,14 @@ pub fn inspect(
     let directory = workspace.join(format!(".video-check-{stamp}"));
     std::fs::create_dir_all(&workspace).map_err(|e| e.to_string())?;
     std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
+    process::write_new(
+        &directory.join("themes.json"),
+        include_bytes!("../../video/themes.json"),
+    )?;
+    process::write_new(
+        &directory.join("scene-kits.json"),
+        include_bytes!("../../video/scene-kits.json"),
+    )?;
     let mut items = match check_script(
         &directory,
         "runtime.mjs",

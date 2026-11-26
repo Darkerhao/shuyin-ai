@@ -429,7 +429,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
         </CollapsibleTrigger>
         <CollapsibleContent class="video-inputs">
           <p class="muted">
-            横屏 1920 × 1080 · 24 fps · 书卷手绘按实际字幕编排分镜、逐笔绘制画面，全程使用原声音频与字幕时间轴。
+            横屏 1920 × 1080 · 24 fps · 按实际字幕编排分镜，以所选画面风格绘制，全程使用原声音频与字幕时间轴。
           </p>
           <div class="video-form-grid">
             <div class="video-field">
@@ -494,7 +494,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   </SelectItem>
                 </SelectContent>
               </Select><p class="muted">
-                新视频使用书卷手绘；已有成片可用原字幕重新制作新版。
+                42 种画面风格，创建时保存；已有成片可选风格，用原字幕制作新版。像素、漫画有专属画布与分格，三维主题可在分镜中选择专属主体。
               </p>
             </div>
             <div class="video-field video-subtitle-source">
@@ -900,6 +900,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   :chapter-id="chapterId"
                   :scene-index="index"
                   :scene="scene"
+                  :theme="selected.plan.theme ?? 'classic'"
                   :cues="selected.plan.cues"
                   :assets="assets"
                   :providers="imageProviders"
@@ -920,7 +921,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                 v-if="!selected.plan.imageProviderId"
                 class="muted"
               >
-                共{{ Object.keys(visualCatalog.objects).length }}种手绘物体，每镜最多3个主体。场景只作环境示意，特写突出首个主体，对照保持等权；“重点物体＋特写”在时长允许时轻推近一次。
+                共{{ Object.keys(visualCatalog.objects).length }}种通用物体，主题专属主体列在物体目录中，每镜最多3个。三维主题的普通物体保留原图解；天体、分子、产品与城市场景只作示意，不代表真实比例或历史复原。
               </p>
             </section>
             <section

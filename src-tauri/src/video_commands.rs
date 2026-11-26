@@ -55,6 +55,9 @@ fn preview_signature(plan: &video::VideoPlan) -> Result<String, String> {
     hash.update(include_bytes!("../video/illustrations.js"));
     hash.update(include_bytes!("../video/ink-painting.js"));
     hash.update(include_bytes!("../video/visual-catalog.json"));
+    hash.update(include_bytes!("../video/themes.json"));
+    hash.update(include_bytes!("../video/scene-kits.json"));
+    hash.update(include_bytes!("../video/scene-kits.js"));
     Ok(hash
         .finalize()
         .iter()
@@ -636,6 +639,18 @@ async fn execute(
         include_bytes!("../video/runtime.mjs"),
     )?;
     process::write_new(
+        &directory.join("themes.json"),
+        include_bytes!("../video/themes.json"),
+    )?;
+    process::write_new(
+        &directory.join("scene-kits.json"),
+        include_bytes!("../video/scene-kits.json"),
+    )?;
+    process::write_new(
+        &directory.join("scene-kits.js"),
+        include_bytes!("../video/scene-kits.js"),
+    )?;
+    process::write_new(
         &directory.join("illustrations.js"),
         include_bytes!("../video/illustrations.js"),
     )?;
@@ -859,6 +874,7 @@ async fn execute(
             video::parse_storyboard(&raw, first, end)
         }
         .map_err(video::model_failure)?;
+        video::scene_kits::validate(&job.plan.theme, &scenes).map_err(video::model_failure)?;
         job.plan.scenes.extend(scenes);
         db.save_video_progress(&job.id, job.run_id, &job.plan, "storyboard")?;
         first = end;
