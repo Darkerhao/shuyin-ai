@@ -2,7 +2,9 @@
 
 ## AI 整图封面（2026-11-26）
 
-现有 cover 图片任务增加可选 `coverText`，冻结标题、副标题及品牌，选择 `cover-complete-v1`；缺省仍走 `cover-background-v2`。采用时将原请求文案与素材绑定到对应尺寸，`CoverConfig.textMode=embedded` 让预览与 PNG 导出共用的 `renderCover` 直接绘制整图，跳过本地文字、蒙层和裁切。旧配置缺省 `overlay`。自动制作的 `selection.coverTextMode` 复用同一枚举；`CoverStep.image_input` 用校核后的文案构造三比例请求，导出配置按任务冻结模式交给原渲染器。续作和重试继续复用原任务及已生成图片，不增加执行器。详见[数据流与验证](COVER-COMPLETE.md)。
+现有 cover 图片任务增加可选 `coverText`，冻结标题、副标题及品牌，选择 `cover-complete-v2`；缺省仍走 `cover-background-v2`。采用时将原请求文案与素材绑定到对应尺寸，`CoverConfig.textMode=embedded` 让预览与 PNG 导出共用的 `renderCover` 直接绘制整图，跳过本地文字、蒙层和裁切。旧配置缺省 `overlay`。自动制作的 `selection.coverTextMode` 复用同一枚举；`CoverStep.image_input` 用校核后的文案构造三比例请求，导出配置按任务冻结模式交给原渲染器。续作和重试继续复用原任务及已生成图片，不增加执行器。详见[数据流与验证](COVER-COMPLETE.md)。
+
+同日修复上下游提示词冲突：`publishing-v12`、`publishing-revision-v11`、`content-check-v5` 仅生成与模式无关的视觉参考，不再要求所有图片禁字。整图请求先列书籍与视觉参考，再给整图要求、目标比例和必须绘制的文字清单，避免历史背景描述成为请求最后的生成要求；发送时记录实际整图提示词版本。背景及视频插画的提示词组装保持原行为。
 
 ## 42 种视频画面风格（2026-11-26，当前规则）
 

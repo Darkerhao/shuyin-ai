@@ -2225,7 +2225,7 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
         for step in &COVER_STEPS {
             let run = db.automation_run(&run.id).unwrap();
             db.set_automation_stage(&run, step.image_stage).unwrap();
-            let input = step
+            let mut input = step
                 .image_input(&run, &db.automation_publish_writing(&run).unwrap().content)
                 .unwrap();
             assert_eq!(input.chapter_id, run.chapter_id);
@@ -2234,7 +2234,13 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
                 assert_eq!(text.title, "校核后的标题");
                 assert_eq!(text.subtitle, "校核后的副标题");
                 assert_eq!(text.brand, "甲子 · 读书");
+                input.description =
+                    "水墨田野。只生成无字背景，不生成汉字、标题，主副标题由后期排版添加。".into();
             }
+            let lettering = input
+                .cover_text
+                .as_ref()
+                .map(|text| serde_json::to_string(text).unwrap());
             let image = db
                 .start_bound_cover_generation(input, &run.binding(step.image_slot))
                 .unwrap();
@@ -2262,6 +2268,14 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
             if mode == Embedded {
                 assert!(prepared.prompt.contains("校核后的标题"));
                 assert!(prepared.prompt.contains("校核后的副标题"));
+                assert!(
+                    prepared.prompt.find("后期排版添加").unwrap()
+                        < prepared.prompt.find("可直接发布的完整封面").unwrap()
+                );
+                assert!(prepared
+                    .prompt
+                    .trim_end()
+                    .ends_with(lettering.as_ref().unwrap()));
             }
             let mut background = std::io::Cursor::new(Vec::new());
             let (width, height) = if mode == Embedded {

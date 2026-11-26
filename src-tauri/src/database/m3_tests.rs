@@ -74,6 +74,65 @@ fn cover_generation_freezes_and_validates_each_target_size() {
 }
 
 #[test]
+fn complete_cover_finishes_with_required_lettering_after_legacy_visual_references() {
+    use super::image_generation::CoverText;
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::open(dir.path().join("db.sqlite3"));
+    let p = project(&db);
+    let provider = image_model(&db);
+    let description =
+        "水墨田野，暖色光线。只生成无字背景，不生成汉字、标题、标志；主副标题由后期排版添加。";
+    for (width, height) in [(1440, 1080), (1080, 1440), (1920, 1080)] {
+        let text = CoverText {
+            title: "轮回几世，何时放下".into(),
+            subtitle: "《生死疲劳》里的人间执念".into(),
+            brand: "甲子 · 读书".into(),
+        };
+        let lettering = serde_json::to_string(&text).unwrap();
+        let id = db
+            .start_cover_generation(ImageGenerationInput {
+                project_id: p.id.clone(),
+                chapter_id: None,
+                provider_id: provider.id.clone(),
+                description: description.into(),
+                width,
+                height,
+                cover_text: Some(text),
+            })
+            .unwrap();
+        db.with_connection(|c| {
+            c.execute(
+                "UPDATE ai_tasks SET prompt_version='cover-complete-v1' WHERE id=?1",
+                [&id],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        let prepared = db.prepare_cover_generation(&id).unwrap();
+        let reference = prepared.prompt.find(description).unwrap();
+        let requirements = prepared.prompt.find("可直接发布的完整封面").unwrap();
+        assert!(reference < requirements, "旧描述之后必须明确最终整图要求");
+        assert!(prepared.prompt.contains("本次必须绘制的文字"));
+        assert!(prepared.prompt.trim_end().ends_with(&lettering));
+        db.with_connection(|c| {
+            let version: String = c
+                .query_row(
+                    "SELECT prompt_version FROM ai_tasks WHERE id=?1",
+                    [&id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(version, "cover-complete-v2");
+            Ok(())
+        })
+        .unwrap();
+        db.end_generation(&id, "cancelled", "cancelled", "取消")
+            .unwrap();
+    }
+}
+
+#[test]
 fn complete_cover_freezes_text_prompt_and_restores_embedded_export() {
     use super::covers::CoverTextMode;
     use super::image_generation::CoverText;
@@ -119,7 +178,7 @@ fn complete_cover_freezes_text_prompt_and_restores_embedded_export() {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "cover-complete-v1");
+        assert_eq!(version, "cover-complete-v2");
         Ok(())
     })
     .unwrap();

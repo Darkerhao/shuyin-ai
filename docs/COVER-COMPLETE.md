@@ -70,3 +70,47 @@ Rust 重启回归首次为 53 通过 / 1 失败：测试直接重开数据库后
 浏览器使用 `npm run dev -- --port 18597` 和 `ego-browser nodejs -e "await import('file:///D:/MyWork/project/JIAZI-PROJECT/shuyin-ai/output/automation-cover-20261126/round-02.mjs')"`，随后依次运行同目录 `round-03.mjs`、`round-04.mjs`、`round-05.mjs`。隔离内存 IPC 验证真实组件下拉选择、章节启动请求的 `coverTextMode=embedded`、组件重挂恢复并锁定该选项、旧任务默认背景；深浅色及 1366/1024/800 三宽度无横向溢出，页面错误为空。布局与交互证据分别为该目录 `layout-report.json`、`interaction-report.json`，截图为 `dark.png`、`light.png`。首次导航等待 load 超时，但页面已加载完成，在同一页面继续检查通过。
 
 上述验收标准在源码测试、隔离数据库及浏览器组件夹具范围通过；未调用真实付费图片模型，未打安装包或更新已安装桌面版，未执行真实 NotebookLM / 抖音全链路。下一步在包含改动的桌面构建中选择整图模式，用一次实际创作检查三张封面中的文字及最终发布预览。
+
+## 整图提示词冲突修复（2026-11-26）
+
+用户反馈选择整图后仍没有标题、副标题。实际调用链为工坊 `coverText` / 自动制作 `CoverStep.image_input` → `start_cover_generation` → `prepare_image_generation` → `ImageProvider`。两条入口已有文字传递和独立整图提示词，并非只增加了界面选项；但全量创作 `publishing-v11`、按项调整 `publishing-revision-v10` 及自动内容校核 `content-check-v4` 仍要求画面描述包含「只生成无字背景」「主副标题由后期排版添加」。这些描述原样出现在整图要求之后，导致同一个图片请求包含互相冲突的要求。
+
+这是源码及最终请求组装层面确认的缺陷。本次未取得用户这张图片对应的最新远端请求或模型输出，不能仅根据请求文本断言它是该样张漏字的唯一原因，也不能用测试通过代替真实模型的中文质量验收。
+
+修复保持原有流程，未增加模型调用、依赖、执行器或本地补字路径：
+
+- 新的 `publishing-v12`、`publishing-revision-v11`、`content-check-v5` 仅描述视觉主题、构图和风格；是否绘制文字由实际图片模式决定。字段及返回格式保持兼容，历史模板保留版本记录。
+- `cover-complete-v2` 将完整封面要求放在书籍及视觉参考之后，最后单独列出必须逐字绘制的 `title/subtitle/brand`；主标题及非空可选文案必须出现，空字段省略。旧画面描述只作为视觉参考，不批量改写旧数据或删除用户描述。
+- 待处理封面真正发送时记录实际提示词版本。普通背景继续使用 `cover-background-v2`，视频插画维持原提示词及组装方式；已生成图片和封面不会自动重做。
+
+修改文件：
+
+- 提示词：新增 `prompts/{publishing-v12,publishing-revision-v11,content-check-v5,cover-complete-v2}.md`。
+- 业务：`src-tauri/src/ai.rs`、`src-tauri/src/ai/{revision,content_check}.rs`、`src-tauri/src/database/image_generation.rs`。
+- 测试：`src-tauri/src/ai/tests.rs`、`src-tauri/src/database/{m3_tests,automation_tests}.rs`。
+- 文档：`docs/{PRD,TECHNICAL-DESIGN,DATABASE,AI-RULES,DEVELOPMENT-PLAN,COVER-COMPLETE}.md`。
+
+数据库 schema 仍为 v25，无 SQL 迁移。沿用原任务、版本、输入和素材结构，仅发送待处理请求时更新其提示词版本；不修改正式书库中的历史作品。
+
+回归验收：
+
+1. 全量创作、按项调整与内容校核的当前模板不再强制无字背景。
+2. 历史描述在三种比例整图中先作为参考出现，之后明确完整封面要求及精确文案清单。
+3. 整书与章节自动制作均使用校核后的主副标题和品牌，保留有限重试与已完成导出。
+4. 空副标题、旧输入、待处理任务提示词版本、普通背景、保存恢复和整图直接导出继续通过。
+5. 安装版更新及真实图片模型中文样张仍待单独验收；修复按 `fix` / patch 处理，不手动改版本、提交、推送或替换运行中的应用。
+
+先增加两条回归再修复：`cargo test --manifest-path src-tauri/Cargo.toml --locked cover_ -- --nocapture` 首次为 15 通过、2 失败，分别暴露上游强制禁字和旧参考位于最终要求之后；修复后该组 17 通过。随后扩展自动制作夹具，验证历史禁字描述、整书/章节及三种比例的最终文案清单。
+
+实际验证命令与最终结果见下表；Rust 命令均先执行 `. ./.tools/env.ps1`。
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 342 通过，2 项原有手动环境验证忽略 |
+| `npx vitest run tests/covers.test.ts tests/coverRenderer.test.ts tests/generation.test.ts tests/automation.test.ts tests/automation-tasks.test.ts --maxWorkers=2` | 5 文件、116 项通过 |
+| `npm run lint` | 通过 |
+| `npm run build` | TypeScript 与 Vite 构建通过，保留已有大于 500 kB 分包提示 |
+| `npm run check:rust` | rustfmt / Clippy（所有 targets、警告视为错误）通过 |
+| `git diff --check` | 通过 |
+
+构建另有本机 npm 旧 `python` / `msvs_version` 配置提示，未修改用户全局配置。未运行付费图片请求、安装包构建、桌面人工验收或真实发布流程。验收 1—4 在源码与隔离夹具范围通过；验收 5 的真实图片质量仍保留待验收边界。下一步将修复纳入桌面构建，用当前标题、副标题及品牌实际生成一张并核对中文，再确认三比例最终画面。

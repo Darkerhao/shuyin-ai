@@ -4,8 +4,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "publishing-revision-v10";
-pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v10.md");
+pub const PROMPT_VERSION: &str = "publishing-revision-v11";
+pub const SYSTEM_PROMPT: &str = include_str!("../../../prompts/publishing-revision-v11.md");
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
