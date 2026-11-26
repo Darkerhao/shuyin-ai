@@ -12,6 +12,14 @@ use std::{
 
 const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum CoverTextMode {
+    #[default]
+    Overlay,
+    Embedded,
+}
+
 pub(super) fn cover_file_stem(title: &str, width: u32, height: u32) -> String {
     let (mut divisor, mut remainder) = (width, height);
     while remainder != 0 {
@@ -73,6 +81,8 @@ pub struct CoverConfig {
     pub background_zoom: f64,
     #[serde(default)]
     pub background_prompt: String,
+    #[serde(default)]
+    pub text_mode: CoverTextMode,
 }
 fn center() -> f64 {
     0.5
@@ -83,6 +93,9 @@ fn one() -> f64 {
 
 impl CoverConfig {
     fn validate(&self) -> Result<(), String> {
+        if self.text_mode == CoverTextMode::Embedded && self.background_asset_id.is_none() {
+            return Err("完整封面需要选择图片。".into());
+        }
         if self.schema_version != 1
             || !matches!(
                 self.template_id.as_str(),

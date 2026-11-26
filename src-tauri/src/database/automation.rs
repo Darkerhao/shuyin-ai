@@ -814,6 +814,7 @@ impl Database {
         };
         let design = cover_design.ok_or("缺少封面排版配置。")?;
         Ok(CoverConfig {
+            text_mode: super::covers::CoverTextMode::Overlay,
             schema_version: 1,
             template_id: "spotlight".into(),
             width: step.width,

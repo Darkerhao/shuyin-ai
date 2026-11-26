@@ -4,6 +4,7 @@ import * as covers from './covers'
 import { errorMessage } from './verification'
 import type { GenerationInput, GenerationResult, GenerationTextPreview, RevisionInput } from '../types/ai'
 import type { Asset } from '../types/project'
+import type { CoverText } from '../types/cover'
 
 export interface GenerationJob {
   projectId: string
@@ -19,6 +20,7 @@ export interface GenerationJob {
   result?: GenerationResult | Asset
   error: string
   size?: { width: number; height: number }
+  coverText?: CoverText
   revision?: RevisionInput
 }
 
@@ -62,11 +64,12 @@ export function startWritingGeneration(input: GenerationInput, title: string) {
   }))
 }
 
-export function startBackgroundGeneration(projectId: string, title: string, providerId: string, description: string, width: number, height: number, chapterId: string | null = null) {
+export function startBackgroundGeneration(projectId: string, title: string, providerId: string, description: string, width: number, height: number, chapterId: string | null = null, coverText?: CoverText) {
   const job = newJob(projectId, title, 'cover', 'cover')
   job.chapterId = chapterId
   job.size = { width, height }
-  return start(job, () => covers.startCoverGeneration(projectId, providerId, description, width, height, chapterId), covers.executeCoverGeneration)
+  job.coverText = coverText ? { ...coverText } : undefined
+  return start(job, () => covers.startCoverGeneration(projectId, providerId, description, width, height, chapterId, job.coverText), covers.executeCoverGeneration)
 }
 
 export async function cancelGenerationJob(job: GenerationJob) {

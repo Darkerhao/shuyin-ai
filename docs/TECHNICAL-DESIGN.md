@@ -1,5 +1,9 @@
 # 书引 AI 技术设计文档
 
+## AI 整图封面（2026-11-26）
+
+现有 cover 图片任务增加可选 `coverText`，冻结标题、副标题及品牌，选择 `cover-complete-v1`；缺省仍走 `cover-background-v2`。采用时将原请求文案与素材绑定到对应尺寸，`CoverConfig.textMode=embedded` 让预览与 PNG 导出共用的 `renderCover` 直接绘制整图，跳过本地文字、蒙层和裁切。旧配置缺省 `overlay`；自动制作仍使用现有背景流程。详见[数据流与验证](COVER-COMPLETE.md)。
+
 ## 42 种视频画面风格（2026-11-26，当前规则）
 
 `src-tauri/video/themes.json` 是 Vue、Rust 和 Node 共用的新任务风格白名单，共 42 项。沿用 `VideoPlan.theme` 与自动制作 `selection.theme`；`classic` 对应引擎 `study`，其余键直接对应 `engine/styles/<key>`。历史 `ink` 仅恢复原任务，继续使用原 `study` 加水墨绘图层。编译器将风格写入 `META.style`，原声时钟及绘图分镜共用一条渲染路径。`scene-kits.json` 为八种原生组件主题增加26个受控物体；编译器按主题设置 extras/vendor/webgl，`scene-kits.js` 调用原引擎，普通/原生主体共用Beat。缓存键覆盖style/kit/world/vendor，环境检查验证WebGL2及资源，Rust嵌入所需文件。无新增依赖、IPC、权限或数据库迁移；不复制外部引擎。详见[视频主题](VIDEO-THEMES.md)和[专属场景](VIDEO-NATIVE-SCENES.md)。

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { backgroundRect, renderCover, wrapText } from '../src/services/coverRenderer'
-import { coverSizes, newCover } from '../src/types/cover'
+import { coverSizes, coverWorkspace, normalizeCover, newCover, type CoverVersion } from '../src/types/cover'
 
 function canvas() {
   const ctx = { font: '', fillStyle: '', textAlign: '', textBaseline: '', fillRect: vi.fn(), drawImage: vi.fn(), fillText: vi.fn(), measureText(text: string) {
@@ -10,6 +10,26 @@ function canvas() {
   return { ctx, canvas: { width: 0, height: 0, getContext: () => ctx } as unknown as HTMLCanvasElement }
 }
 describe('cover text layout', () => {
+  it.each(coverSizes)('exports an embedded cover without text, masks, decorations or cropping at $width × $height', size => {
+    const target = canvas()
+    const config = { ...newCover('图片里的标题'), ...size, textMode: 'embedded' as const, backgroundAssetId: 'complete', overlayOpacity: 0.85, backgroundZoom: 2, backgroundX: 0 }
+    const image = { naturalWidth: size.width, naturalHeight: size.height } as HTMLImageElement
+    expect(renderCover(target.canvas, config, image).bounds).toBeNull()
+    expect(target.ctx.drawImage).toHaveBeenCalledExactlyOnceWith(image, 0, 0, size.width, size.height)
+    expect(target.ctx.fillText).not.toHaveBeenCalled()
+    expect(target.ctx.fillRect).not.toHaveBeenCalled()
+    expect(() => renderCover(target.canvas, config, null)).toThrow('完整封面图片不可用')
+    expect(() => renderCover(target.canvas, config, { naturalWidth: 100, naturalHeight: 100 } as HTMLImageElement)).toThrow('比例')
+  })
+  it('defaults old covers to local text and never copies embedded lettering into another ratio', () => {
+    const legacy = newCover('旧标题')
+    Reflect.deleteProperty(legacy, 'textMode')
+    expect(normalizeCover(legacy).textMode).toBe('overlay')
+    const config = { ...newCover('整图标题'), textMode: 'embedded' as const, backgroundAssetId: 'complete' }
+    const workspace = coverWorkspace([{ config } as CoverVersion])
+    expect(workspace.covers[0]).toMatchObject({ textMode: 'embedded', backgroundAssetId: 'complete' })
+    expect(workspace.covers.slice(1).every(cover => cover.textMode === 'overlay' && cover.backgroundAssetId === null)).toBe(true)
+  })
   it.each(coverSizes)('draws title, subtitle and accents with independent colors at $width × $height', size => {
     const target = canvas()
     const colors: Record<string, string> = {}

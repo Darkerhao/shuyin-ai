@@ -583,6 +583,7 @@ fn automation_model_retry_switches_only_enabled_images_and_skips_local_export() 
     let task = database
         .start_bound_cover_generation(
             image_generation::ImageGenerationInput {
+                cover_text: None,
                 chapter_id: None,
 
                 project_id: run.project_id.clone(),
@@ -1304,6 +1305,7 @@ fn automatic_image_binding_rolls_back_after_pause_and_preserves_single_task() {
     let (_directory, database, input) = setup();
     let run = database.create_automation(input, account()).unwrap();
     let image = || image_generation::ImageGenerationInput {
+        cover_text: None,
         chapter_id: None,
 
         project_id: run.project_id.clone(),
@@ -2180,6 +2182,7 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
             let image = db
                 .start_bound_cover_generation(
                     image_generation::ImageGenerationInput {
+                        cover_text: None,
                         chapter_id: run.chapter_id.clone(),
 
                         project_id: run.project_id.clone(),

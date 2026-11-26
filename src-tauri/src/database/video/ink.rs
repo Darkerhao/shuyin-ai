@@ -51,6 +51,7 @@ impl Database {
             if !provider.input.is_enabled || provider.input.model_kind != "image" { return Err("水墨图片模型已停用或不存在，请在模型设置中恢复。".into()); }
             let task = painting.task_id.clone().unwrap_or(projects::new_id(&tx)?);
             let mut input = serde_json::to_value(ImageGenerationInput {
+                cover_text: None,
                 project_id:job.project_id.clone(),chapter_id:job.chapter_id.clone(),provider_id:provider_id.into(),
                 description:ink::image_description(&job.plan,index),width:1920,height:1080,
             }).map_err(|e|e.to_string())?;

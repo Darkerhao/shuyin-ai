@@ -21,7 +21,9 @@ export interface CoverConfig {
   backgroundY: number
   backgroundZoom: number
   backgroundPrompt: string
+  textMode: 'overlay' | 'embedded'
 }
+export type CoverText = Pick<CoverConfig, 'title' | 'subtitle' | 'brand'>
 export type CoverDesign = Pick<CoverConfig, 'titleSize' | 'subtitleSize' | 'backgroundColor' | 'textColor' | 'subtitleColor' | 'accentColor' | 'overlayOpacity'>
 export type CoverStyle = Pick<CoverConfig, 'templateId' | 'brand' | 'fontFamily' | 'align' | 'position'> & CoverDesign
 export interface CoverPreset { id: string; name: string; style: CoverStyle }
@@ -57,7 +59,11 @@ export function coverWorkspace(versions: CoverVersion[], fallback = newCover()):
   return {
     schemaVersion: 2,
     activeSize: coverSizeIndex(latest),
-    covers: coverSizes.map((size, index) => normalizeCover(versions.find(v => v.config.width === size.width && v.config.height === size.height)?.config ?? latest, index)),
+    covers: coverSizes.map((size, index) => {
+      const saved = versions.find(v => v.config.width === size.width && v.config.height === size.height)?.config
+      // An embedded title belongs to its original composition; do not crop it into a missing ratio.
+      return normalizeCover(saved ?? (latest.textMode === 'embedded' ? { ...latest, textMode: 'overlay', backgroundAssetId: null } : latest), index)
+    }),
   }
 }
 export function recoverCoverWorkspace(content: CoverWorkspace | CoverConfig): CoverWorkspace {
@@ -72,5 +78,5 @@ export const coverTemplates = {
   ocean: { label: '蓝调纪实', description: '清晰利落 · 历史新知', style: { backgroundColor: '#102c46', textColor: '#ffffff', subtitleColor: '#a8e5ff', accentColor: '#ffcf66', titleSize: 144, subtitleSize: 52, overlayOpacity: 0.7, fontFamily: 'sans', align: 'left', position: 'center' } },
 } as const
 export function newCover(title = ''): CoverConfig {
-  return { schemaVersion: 1, templateId: 'spotlight', width: 1440, height: 1080, title, subtitle: '读懂一本书', brand: '甲子 · 读书', backgroundAssetId: null, backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1, backgroundPrompt: '', ...coverTemplates.spotlight.style }
+  return { schemaVersion: 1, templateId: 'spotlight', width: 1440, height: 1080, title, subtitle: '读懂一本书', brand: '甲子 · 读书', backgroundAssetId: null, backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1, backgroundPrompt: '', textMode: 'overlay', ...coverTemplates.spotlight.style }
 }
