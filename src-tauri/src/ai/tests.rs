@@ -4,6 +4,22 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
+#[test]
+fn cover_visual_references_leave_lettering_to_the_image_generation_mode() {
+    for prompt in [
+        SYSTEM_PROMPT,
+        revision::SYSTEM_PROMPT,
+        content_check::PROMPT,
+    ] {
+        assert!(
+            !prompt.contains("只生成无字背景"),
+            "视觉参考不能强制所有封面生成模式禁字"
+        );
+        assert!(!prompt.contains("主副标题由后期排版添加"));
+        assert!(prompt.contains("是否绘制文字由封面生成模式决定"));
+    }
+}
+
 fn image_request(base_url: String) -> ImageRequest {
     ImageRequest {
         base_url,

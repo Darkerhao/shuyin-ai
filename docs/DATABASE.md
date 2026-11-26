@@ -2,7 +2,7 @@
 
 ## AI 整图封面（2026-11-26，仍为 v25）
 
-无表结构变化、无 SQL 迁移。`ai_tasks.input_json.coverText` 可选，保存请求时的 `title/subtitle/brand`；整图任务 `prompt_version=cover-complete-v1`。`cover_versions.config_json` 及封面草稿中的 `textMode` 为 `overlay/embedded`，读取缺省为 `overlay`，沿用原版本、素材及草稿表。整图素材名称标为「AI整图封面」，未采用时不改历史封面。新程序兼容旧 JSON；旧程序不识别新字段，回退须使用更新前备份。
+无表结构变化、无 SQL 迁移。`ai_tasks.input_json.coverText` 可选，保存请求时的 `title/subtitle/brand`；整图任务当前 `prompt_version=cover-complete-v2`，发送旧待处理任务时同步记录实际使用版本，已完成任务及原输入保持不变。`cover_versions.config_json` 及封面草稿中的 `textMode` 为 `overlay/embedded`，读取缺省为 `overlay`，沿用原版本、素材及草稿表。整图素材名称标为「AI整图封面」，未采用时不改历史封面。新程序兼容旧 JSON；旧程序不识别新字段，回退须使用更新前备份。
 
 自动制作模式保存到 `automation_runs.input_json.selection.coverTextMode`，取值同为 `overlay/embedded`，旧任务缺省 `overlay`。按任务冻结、重启恢复，复用现有 JSON，不新增全局偏好或迁移。
 
