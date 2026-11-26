@@ -5,7 +5,6 @@ use crate::{
     credentials::SystemCredentials,
     database::{
         automation::{cover_step, AutomationRun, Slot, StartAutomationInput},
-        image_generation::ImageGenerationInput,
         publishing::PublishInput,
         video::StartVideoInput,
         Database,
@@ -470,15 +469,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                 None => {
                     let content = database.automation_publish_writing(run)?.content;
                     database.start_bound_cover_generation(
-                        ImageGenerationInput {
-                            cover_text: None,
-                            chapter_id: run.chapter_id.clone(),
-                            project_id: run.project_id.clone(),
-                            provider_id: run.input.selection.image_provider_id.clone(),
-                            description: step.prompt(&content)?.into(),
-                            width: step.width,
-                            height: step.height,
-                        },
+                        step.image_input(run, &content)?,
                         &run.binding(step.image_slot),
                     )?
                 }

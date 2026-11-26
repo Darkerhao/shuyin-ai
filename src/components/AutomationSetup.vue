@@ -6,6 +6,7 @@ import { douyinCollectionOptions, saveDouyinCollectionOptions } from '../service
 import { automationRuns, automationConsent, automationAccount, startAutomation, refreshAutomation, prepareAccount, confirmAccount, type AutomationAccount } from '../services/automation'
 import type { ModelProvider } from '../types/ai'
 import type { AudioSourceInput } from '../types/audio'
+import type { CoverConfig } from '../types/cover'
 import { videoThemes, videoThemeLabel } from '../types/video'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -20,6 +21,7 @@ const providers = ref<ModelProvider[]>([])
 const textProvider = ref('')
 const imageProvider = ref('')
 const theme = ref<keyof typeof videoThemes>('classic')
+const coverTextMode = ref<CoverConfig['textMode']>('overlay')
 const account = ref<AutomationAccount | null>(automationAccount.value ? { ...automationAccount.value } : null)
 const accountReady = computed(() => !!account.value && !!automationAccount.value
   && account.value.id === automationAccount.value.id && account.value.key === automationAccount.value.key
@@ -43,6 +45,8 @@ const textModels = computed(() => providers.value.filter(provider => provider.mo
 const imageModels = computed(() => providers.value.filter(provider => provider.modelKind === 'image' && provider.isEnabled))
 const activeRun = computed(() => automationRuns.value.find(run => !['completed', 'cancelled'].includes(run.status)))
 const active = computed(() => !!activeRun.value)
+const selectedCoverTextMode = computed(() => activeRun.value?.input.selection.coverTextMode ?? (active.value ? 'overlay' : coverTextMode.value))
+const coverImageLabel = computed(() => selectedCoverTextMode.value === 'embedded' ? 'AI 整图封面' : 'AI 背景')
 watch([activeRun, providers], ([current]) => {
   textProvider.value = current?.input.selection.textProviderId ?? (textProvider.value || textModels.value.find(provider => provider.isDefault)?.id || textModels.value[0]?.id || '')
   imageProvider.value = current?.input.selection.imageProviderId ?? (imageProvider.value || imageModels.value.find(provider => provider.isDefault)?.id || imageModels.value[0]?.id || '')
@@ -93,7 +97,7 @@ async function start() {
   busy.value = true; error.value = ''
   try {
     const source = await props.saveSource()
-    await startAutomation({ ...source, textProviderId: textProvider.value, imageProviderId: imageProvider.value, format: 'deep_dive', requestKey: requestKey.value, theme: theme.value, collectionName: collectionName.value?.trim() ?? null })
+    await startAutomation({ ...source, textProviderId: textProvider.value, imageProviderId: imageProvider.value, format: 'deep_dive', requestKey: requestKey.value, theme: theme.value, coverTextMode: coverTextMode.value, collectionName: collectionName.value?.trim() ?? null })
     requestKey.value = globalThis.crypto.randomUUID()
     await refreshAutomation()
   } catch (cause) { error.value = String(cause) }
@@ -178,9 +182,37 @@ async function start() {
           像素、漫画使用专属画布与分格；三维主题按字幕选用专属主体，普通物体保留原图解。
         </p>
       </div>
+      <div class="grid gap-2">
+        <label for="automation-cover-mode">封面生成方式</label>
+        <Select
+          v-model="coverTextMode"
+          :disabled="busy || active"
+        >
+          <SelectTrigger
+            id="automation-cover-mode"
+            aria-describedby="automation-cover-mode-hint"
+          >
+            <SelectValue>{{ selectedCoverTextMode === 'embedded' ? 'AI 整图封面' : 'AI 背景 + 本地排字' }}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="overlay">
+              AI 背景 + 本地排字
+            </SelectItem>
+            <SelectItem value="embedded">
+              AI 整图封面
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <p
+          id="automation-cover-mode-hint"
+          class="text-xs text-muted-foreground"
+        >
+          {{ selectedCoverTextMode === 'embedded' ? '按校核后的主标题、副标题和品牌文字生成完整封面，自动采用并导出，不再叠字。AI 中文可能有误，发布前请检查三张封面。' : 'AI 生成无字背景，再由本地排版叠加标题、副标题和品牌文字。' }}
+        </p>
+      </div>
     </div>
     <p class="text-sm text-muted-foreground">
-      根据整书或章节内容自然展开，不设目标时长；制作按实际音频完整时长继续。4:3、3:4与16:9各一张AI背景，北京时间最近未来01:11定时，不允许保存视频。
+      根据整书或章节内容自然展开，不设目标时长；制作按实际音频完整时长继续。4:3、3:4与16:9各一张{{ coverImageLabel }}，北京时间最近未来01:11定时，不允许保存视频。
     </p>
     <div class="grid min-w-0 gap-4 rounded-lg border border-border bg-background/40 p-4">
       <div>
@@ -300,7 +332,7 @@ async function start() {
         :disabled="busy || active"
         aria-label="允许自动制作和上传"
       />
-      <span>允许将本次书名、作者及整书资料或章节正文发送至文本模型，生成创作方案；将原书文件或章节文字及完整音频指导发送至 Notebook，再根据实际字幕校核并渲染视频。{{ activeRun?.input.selection.detailedInk ? '本历史任务仍按原授权逐镜生成水墨画作，费用与镜头张数有关；继续时只处理未完成画面。' : '' }}允许三种比例背景生成、封面导出和按上方账号与合集准备上传，最终发布由我完成。模型失败后最多自动重试3次，再切换其他已启用的同类模型，可能产生额外费用；已完成成果保留。</span>
+      <span>允许将本次书名、作者及整书资料或章节正文发送至文本模型，生成创作方案；将原书文件或章节文字及完整音频指导发送至 Notebook，再根据实际字幕校核并渲染视频。{{ activeRun?.input.selection.detailedInk ? '本历史任务仍按原授权逐镜生成水墨画作，费用与镜头张数有关；继续时只处理未完成画面。' : '' }}允许按所选方式生成并采用三种比例的{{ coverImageLabel }}、导出封面和按上方账号与合集准备上传，最终发布由我完成。模型失败后最多自动重试3次，再切换其他已启用的同类模型，可能产生额外费用；已完成成果保留。</span>
     </label>
     <p
       v-if="error"

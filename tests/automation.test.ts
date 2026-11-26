@@ -38,6 +38,13 @@ beforeEach(() => {
 })
 
 describe('automatic cover execution outside the cover page', () => {
+  it.each(['landscape_cover', 'portrait_cover', 'widescreen_cover'])('passes embedded text mode to the shared renderer for %s', async stage => {
+    const config = { ...newCover('整图标题'), textMode: 'embedded' as const, backgroundAssetId: 'complete-cover' }
+    vi.mocked(invoke).mockResolvedValue(config)
+    await renderAutomationCover(run({ stage }))
+    expect(coverPng).toHaveBeenCalledWith(config, expect.anything())
+    expect(invoke).toHaveBeenCalledWith('complete_automation_cover', expect.objectContaining({ stage, png: [1, 2, 3] }))
+  })
   it('exports the widescreen cover with the existing renderer and skips an already saved output', async () => {
     vi.mocked(invoke).mockResolvedValue({ ...newCover('宽屏'), width: 1920, height: 1080, backgroundAssetId: 'wide-background' })
     await renderAutomationCover(run({ stage: 'widescreen_cover', widescreenTaskId: 'wide-task' }))
@@ -73,6 +80,39 @@ describe('automatic cover execution outside the cover page', () => {
 })
 
 describe('automatic workflow setup', () => {
+  it.each([
+    { kind: 'asset' as const, assetId: 'source1' },
+    { kind: 'chapter' as const, chapterId: 'chapter1' },
+  ])('starts $kind creation using the selected complete-cover mode', async source => {
+    automationConsent.value = true
+    automationAccount.value = { id: null, name: '已确认账号', key: 'identity' }
+    vi.mocked(invoke).mockImplementation(async command => command === 'automation_snapshot' ? [] : run())
+    const wrapper = mount(AutomationSetup, { props: { saveSource: vi.fn().mockResolvedValue({ projectId: 'book1', source }) } })
+    await flushPromises()
+    expect(wrapper.get('#automation-cover-mode').text()).toBe('AI 背景 + 本地排字')
+    const options = await openSelect(wrapper, '#automation-cover-mode')
+    await options.findAll('[role="option"]').find(option => option.text() === 'AI 整图封面')!.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(wrapper.get('#automation-cover-mode-hint').text()).toContain('自动采用并导出，不再叠字')
+    expect(wrapper.text()).toContain('4:3、3:4与16:9各一张AI 整图封面')
+    expect(wrapper.text()).toContain('AI 中文可能有误')
+    await wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!.trigger('click')
+    await flushPromises()
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ source, coverTextMode: 'embedded' }) })
+    wrapper.unmount()
+  })
+
+  it.each(['embedded', undefined] as const)('restores and locks the frozen cover mode %s for an unfinished run', async mode => {
+    const saved = run({ status: 'paused' })
+    saved.input.selection.coverTextMode = mode
+    automationRuns.value = [saved]
+    const wrapper = mount(AutomationSetup, { props: { saveSource: vi.fn() } })
+    await flushPromises()
+    expect(wrapper.get('#automation-cover-mode').text()).toBe(mode === 'embedded' ? 'AI 整图封面' : 'AI 背景 + 本地排字')
+    expect(wrapper.get('#automation-cover-mode').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
   it('waits for account reuse settings to finish saving before starting a new automatic task', async () => {
     automationConsent.value = true
     automationAccount.value = { id: null, name: '已确认账号', key: 'identity' }

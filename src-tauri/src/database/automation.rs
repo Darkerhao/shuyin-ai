@@ -1,6 +1,7 @@
 use super::{
     ai,
-    covers::CoverConfig,
+    covers::{CoverConfig, CoverTextMode},
+    image_generation::{CoverText, ImageGenerationInput},
     projects::{get, new_id, NOW},
     publishing::PublishInput,
     Database,
@@ -12,6 +13,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 pub const CONTENT_CHECK_PROMPT: &str = crate::ai::content_check::VERSION;
+const COVER_BRAND: &str = "甲子 · 读书";
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -24,6 +26,8 @@ pub struct StartAutomationInput {
     pub request_key: String,
     #[serde(default = "classic_theme")]
     pub theme: String,
+    #[serde(default)]
+    pub cover_text_mode: CoverTextMode,
     #[serde(default)]
     pub detailed_ink: bool,
     #[serde(default)]
@@ -223,6 +227,36 @@ pub fn cover_step(stage: &str) -> Option<&'static CoverStep> {
         .find(|step| stage == step.image_stage || stage == step.cover_stage)
 }
 impl CoverStep {
+    pub fn image_input(
+        &self,
+        run: &AutomationRun,
+        content: &WritingContent,
+    ) -> Result<ImageGenerationInput, String> {
+        let WritingContent::Publishing {
+            cover_title,
+            cover_subtitle,
+            ..
+        } = content
+        else {
+            return Err("文案类型无效。".into());
+        };
+        Ok(ImageGenerationInput {
+            project_id: run.project_id.clone(),
+            chapter_id: run.chapter_id.clone(),
+            provider_id: run.input.selection.image_provider_id.clone(),
+            description: self.prompt(content)?.into(),
+            width: self.width,
+            height: self.height,
+            cover_text: (run.input.selection.cover_text_mode == CoverTextMode::Embedded).then(
+                || CoverText {
+                    title: cover_title.clone(),
+                    subtitle: cover_subtitle.clone(),
+                    brand: COVER_BRAND.into(),
+                },
+            ),
+        })
+    }
+
     pub fn prompt<'a>(&self, content: &'a WritingContent) -> Result<&'a str, String> {
         let WritingContent::Publishing {
             cover_prompt_landscape,
@@ -814,14 +848,14 @@ impl Database {
         };
         let design = cover_design.ok_or("缺少封面排版配置。")?;
         Ok(CoverConfig {
-            text_mode: super::covers::CoverTextMode::Overlay,
+            text_mode: run.input.selection.cover_text_mode.clone(),
             schema_version: 1,
             template_id: "spotlight".into(),
             width: step.width,
             height: step.height,
             title: cover_title,
             subtitle: cover_subtitle,
-            brand: "甲子 · 读书".into(),
+            brand: COVER_BRAND.into(),
             font_family: "sans".into(),
             title_size: design.title_size,
             subtitle_size: design.subtitle_size,
