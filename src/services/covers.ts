@@ -1,9 +1,9 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { CoverConfig, CoverVersion, CoverPreset } from '../types/cover'
+import type { CoverConfig, CoverVersion, CoverPreset, CoverText } from '../types/cover'
 import type { Asset } from '../types/project'
 
-export const startCoverGeneration = (projectId: string, providerId: string, description: string, width: number, height: number, chapterId: string | null = null) => invoke<string>('start_cover_generation', { input: { projectId, providerId, description, width, height, ...(chapterId ? { chapterId } : {}) } })
+export const startCoverGeneration = (projectId: string, providerId: string, description: string, width: number, height: number, chapterId: string | null = null, coverText?: CoverText) => invoke<string>('start_cover_generation', { input: { projectId, providerId, description, width, height, ...(chapterId ? { chapterId } : {}), ...(coverText ? { coverText } : {}) } })
 export const executeCoverGeneration = (id: string) => invoke<Asset>('execute_cover_generation', { id })
 
 export const listCovers = (projectId: string, chapterId: string | null = null) => invoke<CoverVersion[]>('list_cover_versions', { projectId, ...(chapterId ? { chapterId } : {}) })

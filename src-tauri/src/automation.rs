@@ -471,6 +471,7 @@ async fn advance(app: &AppHandle, run: &AutomationRun) -> Result<(), String> {
                     let content = database.automation_publish_writing(run)?.content;
                     database.start_bound_cover_generation(
                         ImageGenerationInput {
+                            cover_text: None,
                             chapter_id: run.chapter_id.clone(),
                             project_id: run.project_id.clone(),
                             provider_id: run.input.selection.image_provider_id.clone(),

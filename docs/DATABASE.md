@@ -1,5 +1,9 @@
 # 书引 AI 数据库设计文档
 
+## AI 整图封面（2026-11-26，仍为 v25）
+
+无表结构变化、无 SQL 迁移。`ai_tasks.input_json.coverText` 可选，保存请求时的 `title/subtitle/brand`；整图任务 `prompt_version=cover-complete-v1`。`cover_versions.config_json` 及封面草稿中的 `textMode` 为 `overlay/embedded`，读取缺省为 `overlay`，沿用原版本、素材及草稿表。整图素材名称标为「AI整图封面」，未采用时不改历史封面。新程序兼容旧 JSON；旧程序不识别新字段，回退须使用更新前备份。
+
 ## 视频专属场景组件（2026-11-26，仍为v25）
 
 26个原生主体继续保存到 `plan_json.scenes[].beats[].object`；主题沿用原字段，无表、列、设置、迁移或批量改写。Rust用共享目录校验主题与主体；编辑/单镜/自动交接均保留原代次与过期结果检查。历史图片和水墨资产不改写，详见[专属场景](VIDEO-NATIVE-SCENES.md)。

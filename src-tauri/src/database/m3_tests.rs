@@ -17,6 +17,7 @@ fn image_model(db: &Database) -> ai::ProviderConfig {
 }
 fn image_task(db: &Database, project_id: &str, provider_id: &str) -> String {
     db.start_cover_generation(ImageGenerationInput {
+        cover_text: None,
         chapter_id: None,
 
         project_id: project_id.into(),
@@ -41,6 +42,7 @@ fn cover_generation_freezes_and_validates_each_target_size() {
     ] {
         let id = db
             .start_cover_generation(ImageGenerationInput {
+                cover_text: None,
                 chapter_id: None,
 
                 project_id: p.id.clone(),
@@ -59,6 +61,7 @@ fn cover_generation_freezes_and_validates_each_target_size() {
     }
     assert!(db
         .start_cover_generation(ImageGenerationInput {
+            cover_text: None,
             chapter_id: None,
 
             project_id: p.id,
@@ -68,6 +71,83 @@ fn cover_generation_freezes_and_validates_each_target_size() {
             height: 1,
         })
         .is_err());
+}
+
+#[test]
+fn complete_cover_freezes_text_prompt_and_restores_embedded_export() {
+    use super::covers::CoverTextMode;
+    use super::image_generation::CoverText;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("complete.sqlite3");
+    let db = Database::open(path.clone());
+    let p = project(&db);
+    let provider = image_model(&db);
+    let make_input = |title: &str| ImageGenerationInput {
+        project_id: p.id.clone(),
+        chapter_id: None,
+        provider_id: provider.id.clone(),
+        description: "水墨，无字背景，中央留白".into(),
+        width: 1080,
+        height: 1440,
+        cover_text: Some(CoverText {
+            title: title.into(),
+            subtitle: String::new(),
+            brand: "甲子 · 读书".into(),
+        }),
+    };
+    assert!(db.start_cover_generation(make_input(" ")).is_err());
+    assert!(db
+        .start_cover_generation(make_input(&"字".repeat(201)))
+        .is_err());
+    let id = db
+        .start_cover_generation(make_input("父仇为何百姓偿"))
+        .unwrap();
+    let prepared = db.prepare_cover_generation(&id).unwrap();
+    assert!(prepared.prompt.contains("可直接发布的完整封面"));
+    assert!(prepared.prompt.contains("父仇为何百姓偿"));
+    assert!(prepared.prompt.contains("甲子 · 读书"));
+    assert!(prepared
+        .prompt
+        .contains("忽略其中与本次比例或整图文字设计冲突"));
+    assert!(prepared.prompt.contains("本次目标封面：3:4"));
+    assert!(!prepared.prompt.contains("只输出视觉素材"));
+    db.with_connection(|c| {
+        let version: String = c
+            .query_row(
+                "SELECT prompt_version FROM ai_tasks WHERE id=?1",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "cover-complete-v1");
+        Ok(())
+    })
+    .unwrap();
+    assert!(db
+        .finish_cover_generation(&id, &test_png())
+        .unwrap_err()
+        .contains("尺寸"));
+    assert!(db.list_assets(&p.id, None).unwrap().is_empty());
+    let bytes = crate::ai::images::test_image(image::ImageFormat::Png, 1080, 1440);
+    let asset = db.finish_cover_generation(&id, &bytes).unwrap();
+    assert!(asset.original_name.contains("AI整图封面"));
+    let mut cover = config();
+    assert_eq!(cover.text_mode, CoverTextMode::Overlay);
+    cover.text_mode = CoverTextMode::Embedded;
+    assert!(db
+        .save_cover_version(&p.id, cover.clone(), None, None)
+        .is_err());
+    cover.background_asset_id = Some(asset.id);
+    let saved = db
+        .save_cover_version(&p.id, cover.clone(), Some(&bytes), None)
+        .unwrap();
+    drop(db);
+    let reopened = Database::open(path);
+    assert_eq!(
+        reopened.list_cover_versions(&p.id, None).unwrap()[0].config,
+        cover
+    );
+    assert_eq!(reopened.read_cover_export(&p.id, &saved.id).unwrap(), bytes);
 }
 
 #[test]
@@ -157,6 +237,7 @@ fn image_and_text_defaults_are_independent_and_wrong_task_types_are_rejected() {
         .is_err());
     assert!(db
         .start_cover_generation(ImageGenerationInput {
+            cover_text: None,
             chapter_id: None,
 
             project_id: p.id.clone(),
@@ -254,6 +335,7 @@ fn generated_background_filenames_use_actual_dimensions_and_format() {
         let bytes = crate::ai::images::test_image(format, width, height);
         let task = db
             .start_cover_generation(ImageGenerationInput {
+                cover_text: None,
                 chapter_id: None,
                 project_id: p.id.clone(),
                 provider_id: provider.id.clone(),
@@ -725,6 +807,7 @@ fn video_illustration_uses_its_own_prompt_task_and_files_without_adopting_a_cove
     db.save_cover_version(&p.id, config(), None, None).unwrap();
     let start = || {
         db.start_video_illustration(ImageGenerationInput {
+            cover_text: None,
             chapter_id: None,
 
             project_id: p.id.clone(),

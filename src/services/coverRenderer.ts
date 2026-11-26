@@ -66,6 +66,12 @@ export function renderCover(canvas: globalThis.HTMLCanvasElement, config: CoverC
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('当前环境无法创建封面画布。')
   const { width, height } = config
+  if (config.textMode === 'embedded') {
+    if (!config.backgroundAssetId || !background) throw new Error('完整封面图片不可用，请重新选择或生成。')
+    if (background.naturalWidth * height !== background.naturalHeight * width) throw new Error('完整封面图片比例与当前尺寸不一致，请为该尺寸单独生成，避免裁掉文字。')
+    ctx.drawImage(background, 0, 0, width, height)
+    return { titleSize: config.titleSize, subtitleSize: config.subtitleSize, bounds: null }
+  }
   ctx.fillStyle = config.backgroundColor; ctx.fillRect(0, 0, width, height)
   if (config.backgroundAssetId) {
     if (!background) throw new Error('背景图不可用，请重新选择图片或使用纯色背景。')

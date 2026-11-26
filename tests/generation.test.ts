@@ -64,6 +64,17 @@ it('retains an image candidate and the requested size without applying it to an 
   expect(job.status).toBe('succeeded')
 })
 
+it('freezes complete-cover lettering with the job instead of retaining mutable editor fields', async () => {
+  vi.mocked(covers.startCoverGeneration).mockResolvedValue('complete-task')
+  vi.mocked(covers.executeCoverGeneration).mockResolvedValue({ id: 'image', assetType: 'image' } as Awaited<ReturnType<typeof covers.executeCoverGeneration>>)
+  const text = { title: '主标题', subtitle: '副标题', brand: '甲子' }
+  await startBackgroundGeneration('book', '书', 'model', '山水', 1080, 1440, 'chapter', text)
+  text.title = '后来编辑'
+  await flushPromises()
+  expect(generationJobs.get(generationKey('book', 'cover', 'chapter'))?.coverText).toEqual({ title: '主标题', subtitle: '副标题', brand: '甲子' })
+  expect(covers.startCoverGeneration).toHaveBeenCalledWith('book', 'model', '山水', 1080, 1440, 'chapter', { title: '主标题', subtitle: '副标题', brand: '甲子' })
+})
+
 it('keeps simultaneous chapters of the same book separate when results arrive out of order', async () => {
   const finish = new Map<string, (result: GenerationResult) => void>()
   vi.mocked(ai.startGeneration).mockImplementation(async input => `task-${input.chapterId ?? 'book'}`)

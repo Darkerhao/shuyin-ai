@@ -31,6 +31,7 @@ import { requestConfirmation } from '../../composables/useConfirmation'
 import { useQueryState } from '../../composables/useQueryState'
 import CoverDesignPreview from '../../components/CoverDesignPreview.vue'
 import CoverThumbnail from '../../components/CoverThumbnail.vue'
+import CoverTextFields from '../../components/CoverTextFields.vue'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -41,6 +42,8 @@ const bookTitle = ref('')
 const workspace = ref('')
 const editor = ref(coverWorkspace([]))
 const draft = computed(() => editor.value.covers[editor.value.activeSize]!)
+const embeddedText = computed(() => draft.value.textMode === 'embedded')
+const generationMode = ref<'background' | 'complete'>('background')
 const currentSize = computed(() => coverSizes[editor.value.activeSize]!)
 const original = ref(JSON.stringify(editor.value.covers))
 const dirty = computed(() => original.value !== JSON.stringify(editor.value.covers))
@@ -88,7 +91,7 @@ function positionInline() {
   inlineStyle.value = { left: `${left}px`, top: `${rect.top - stage.top + bounds.y * rect.height / draft.value.height}px`, width: `${width}px` }
 }
 async function editInline(field: 'title' | 'subtitle') {
-  if (busy.value) return
+  if (busy.value || embeddedText.value) return
   inlineField.value = field; inlineOriginal = draft.value[field]; drag = null
   positionInline()
   await nextTick()
@@ -134,6 +137,10 @@ const generatedImage = computed(() => {
   return result && 'assetType' in result ? result : null
 })
 const activeTab = useQueryState('tab', 'background', ['text', 'style', 'background'])
+watch(() => [draft.value, draft.value.textMode], () => {
+  generationMode.value = embeddedText.value ? 'complete' : 'background'
+  if (embeddedText.value && activeTab.value === 'style') activeTab.value = 'background'
+})
 const useAi = ref(activeTab.value === 'background')
 const coverView = ref('edit')
 const tabs = [{ value: 'text', label: '文字内容' }, { value: 'style', label: '排版样式' }, { value: 'background', label: '背景图片' }]
@@ -254,8 +261,13 @@ function paint() {
   if (!canvas.value || !fontsReady || disposed) return
   previewError.value = ''
   try {
-    actualSizes.value = renderCover(canvas.value, draft.value, background.value)
-    positionInline()
+    if (backgroundLoading.value) {
+      canvas.value.width = draft.value.width; canvas.value.height = draft.value.height
+      actualSizes.value.bounds = null
+    } else {
+      actualSizes.value = renderCover(canvas.value, draft.value, background.value)
+      positionInline()
+    }
   }
   catch (cause) { previewError.value = cause instanceof Error ? cause.message : String(cause) }
   editor.value.covers.forEach((config, index) => {
@@ -270,7 +282,7 @@ function setPreviewCanvas(el: globalThis.Element | ComponentPublicInstance | nul
 }
 let drag: { x: number; y: number; positionX: number; positionY: number; overflowX: number; overflowY: number } | null = null
 function startDrag(event: globalThis.PointerEvent) {
-  if (busy.value || inlineField.value || textAtPointer(event) || !background.value || !canvas.value || event.button !== 0) return
+  if (busy.value || embeddedText.value || inlineField.value || textAtPointer(event) || !background.value || !canvas.value || event.button !== 0) return
   const rect = backgroundRect(draft.value, background.value)
   const bounds = canvas.value.getBoundingClientRect()
   drag = { x: event.clientX, y: event.clientY, positionX: draft.value.backgroundX, positionY: draft.value.backgroundY, overflowX: (rect.width - draft.value.width) * bounds.width / draft.value.width, overflowY: (rect.height - draft.value.height) * bounds.height / draft.value.height }
@@ -321,10 +333,11 @@ function changeSize(index: number) {
   drag = null
 }
 async function shareCover(backgroundOnly: boolean) {
+  if (embeddedText.value) return
   if (!await requestConfirmation(backgroundOnly ? '将当前背景和裁切应用到其他尺寸？其他尺寸的文字、排版和提示词保持不变。' : '将当前封面的文字、排版、背景、裁切和画面描述应用到其他尺寸？将替换其他尺寸的编辑，可继续分别调整；历史版本保留。')) return
   const source = { ...draft.value }
   editor.value.covers = editor.value.covers.map((config, index) => normalizeCover(backgroundOnly
-    ? { ...config, backgroundAssetId: source.backgroundAssetId, backgroundColor: source.backgroundColor, overlayOpacity: source.overlayOpacity, backgroundX: source.backgroundX, backgroundY: source.backgroundY, backgroundZoom: source.backgroundZoom }
+    ? { ...config, textMode: source.textMode, backgroundAssetId: source.backgroundAssetId, backgroundColor: source.backgroundColor, overlayOpacity: source.overlayOpacity, backgroundX: source.backgroundX, backgroundY: source.backgroundY, backgroundZoom: source.backgroundZoom }
     : source, index))
   message.value = backgroundOnly ? '全部尺寸已共用当前背景，仍可分别调整。' : '已应用到全部尺寸，仍可分别调整；导出时按各自尺寸裁切排版。'
 }
@@ -336,8 +349,17 @@ const chooseImage = () => run(async () => {
   if (!path) return
   const id = await linkAsset(props.id, path, null, chapterId.value)
   images.value = (await listAssets(props.id, chapterId.value)).filter(a => a.assetType === 'image')
-  draft.value.backgroundAssetId = id
+  selectBackground(id)
 })
+function selectBackground(id: string | null) {
+  endInline()
+  Object.assign(draft.value, { backgroundAssetId: id, textMode: 'overlay', backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1 })
+}
+function setEmbeddedText(checked: boolean) {
+  endInline()
+  draft.value.textMode = checked ? 'embedded' : 'overlay'
+  if (checked) { generationMode.value = 'complete'; activeTab.value = 'background' }
+}
 const loadImageModels = () => run(async () => {
   imageModels.value = (await listProviders()).filter(p => p.isEnabled && p.modelKind === 'image')
   providerId.value = imageModels.value.find(p => p.id === providerId.value)?.id ?? imageModels.value.find(p => p.isDefault)?.id ?? imageModels.value[0]?.id ?? ''
@@ -350,8 +372,11 @@ function toggleAi() {
   }
 }
 const generateBackground = () => run(async () => {
+  const { title, subtitle, brand, width, height } = draft.value
+  const coverText = generationMode.value === 'complete' ? { title, subtitle, brand } : undefined
+  if (coverText && !title.trim()) throw new Error('请填写要生成在图片上的主标题。')
   await autosave.flush()
-  await startBackgroundGeneration(props.id, bookTitle.value, providerId.value, description.value, draft.value.width, draft.value.height, chapterId.value)
+  await startBackgroundGeneration(props.id, bookTitle.value, providerId.value, description.value, width, height, chapterId.value, coverText)
 })
 watch([ready, () => generation.value?.status], () => {
   const job = generation.value
@@ -368,10 +393,12 @@ const applyGeneratedImage = () => run(async () => {
   await loadBackground(asset.id)
   if (!backgrounds.value[asset.id]?.image) throw new Error('生成背景读取失败，请重试，当前封面保持不变。')
   const target = editor.value.covers.find(config => config.width === job.size!.width && config.height === job.size!.height)!
-  Object.assign(target, { backgroundAssetId: asset.id, backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1 })
+  Object.assign(target, job.coverText, { textMode: job.coverText ? 'embedded' : 'overlay', backgroundAssetId: asset.id, backgroundX: 0.5, backgroundY: 0.5, backgroundZoom: 1 })
+  endInline()
+  if (embeddedText.value) activeTab.value = 'background'
   await autosave.flush()
   dismissGeneration(job)
-  message.value = '已采用生成背景到原请求尺寸，其他尺寸保持不变。'
+  message.value = job.coverText ? '已采用 AI 整图封面，文字已融入图片，可直接导出。' : '已采用生成背景到原请求尺寸，其他尺寸保持不变。'
 })
 async function cancelImage() {
   if (!generation.value) return
@@ -505,14 +532,17 @@ onMounted(async () => {
       class="panel"
       aria-label="生成的封面背景"
     >
-      <h2>背景已生成 · {{ generation.size?.width }} × {{ generation.size?.height }}</h2>
+      <h2>{{ generation.coverText ? 'AI 整图封面已生成' : '背景已生成' }} · {{ generation.size?.width }} × {{ generation.size?.height }}</h2>
       <p class="muted">
         当前封面保持原样，采用后只修改本次请求的尺寸。生成图片已保存在本书素材中。
+        <template v-if="generation.coverText">
+          请核对图片中的标题、副标题和品牌文字，确认无错字后采用。
+        </template>
       </p>
       <img
         v-if="backgrounds[generatedImage.id]?.image"
         :src="backgrounds[generatedImage.id]!.image!.src"
-        alt="生成的封面背景候选"
+        :alt="generation.coverText ? 'AI 整图封面候选' : '生成的封面背景候选'"
         class="my-3 max-h-48 max-w-full rounded-lg object-contain"
       >
       <div class="actions">
@@ -536,7 +566,7 @@ onMounted(async () => {
       class="notice"
       role="status"
     >
-      背景正在生成，可切换页面继续创作，请保持应用运行。完成后可在此采用背景。
+      {{ generation?.coverText ? '整图封面' : '背景' }}正在生成，可切换页面继续创作，请保持应用运行。完成后可在此核对并采用。
     </p>
     <OperationFeedback
       :message="writingError"
@@ -593,14 +623,14 @@ onMounted(async () => {
           </Select>
 
           <p class="muted">
-            文字、排版、背景和画面描述只修改当前尺寸。需要共用时主动应用，之后仍可分别调整。
+            {{ embeddedText ? '当前为整图封面，文字已融入图片。其他比例请分别生成，确保文字完整。' : '文字、排版、背景和画面描述只修改当前尺寸。需要共用时主动应用，之后仍可分别调整。' }}
           </p>
         </div>
         <div class="actions wrap">
           <Button
             type="button"
             variant="outline"
-            :disabled="busy"
+            :disabled="busy || embeddedText"
             @click="shareCover(true)"
           >
             仅共用当前背景
@@ -608,7 +638,7 @@ onMounted(async () => {
           <Button
             type="button"
             variant="outline"
-            :disabled="busy"
+            :disabled="busy || embeddedText"
             @click="shareCover(false)"
           >
             将当前封面应用到全部尺寸
@@ -670,6 +700,7 @@ onMounted(async () => {
                 v-for="tab in tabs"
                 :key="tab.value"
                 :value="tab.value"
+                :disabled="embeddedText && tab.value === 'style'"
               >
                 {{ tab.label }}
               </TabsTrigger>
@@ -680,26 +711,17 @@ onMounted(async () => {
             >
               <fieldset :disabled="busy">
                 <TabsContent value="text">
-                  <label for="cover-title">主标题 *</label><Textarea
-                    id="cover-title"
-                    v-model="draft.title"
-                    rows="2"
-                    maxlength="200"
-                    required
-                    placeholder="一句话，让人想了解这本书"
-                  />
-                  <label for="cover-subtitle">副标题</label><Textarea
-                    id="cover-subtitle"
-                    v-model="draft.subtitle"
-                    rows="2"
-                    maxlength="300"
-                    placeholder="补充书名或这一期的看点"
-                  />
-                  <label for="cover-brand">品牌标识</label><Input
-                    id="cover-brand"
-                    v-model="draft.brand"
-                    maxlength="60"
-                    placeholder="你的名字或栏目名称"
+                  <p
+                    v-if="embeddedText"
+                    class="notice"
+                  >
+                    当前文字已融入图片。下方修改用于下一次 AI 整图生成，已有图片不会随文字输入改变。
+                  </p>
+                  <CoverTextFields
+                    v-model:title="draft.title"
+                    v-model:subtitle="draft.subtitle"
+                    v-model:brand="draft.brand"
+                    id-prefix="cover"
                   />
                   <Collapsible
                     class="cover-suggestions"
@@ -992,8 +1014,9 @@ onMounted(async () => {
               <div class="background-source">
                 <label for="cover-background">背景来源</label>
                 <Select
-                  v-model="draft.backgroundAssetId"
+                  :model-value="draft.backgroundAssetId"
                   :disabled="busy"
+                  @update:model-value="selectBackground"
                 >
                   <SelectTrigger
                     id="cover-background"
@@ -1032,8 +1055,20 @@ onMounted(async () => {
               >
                 <AppIcon name="download" />选择本地图片替换
               </Button>
-              <div
+              <label
                 v-if="draft.backgroundAssetId"
+                class="flex items-center gap-2 text-sm"
+              >
+                <Checkbox
+                  aria-label="图片已包含文字，直接作为完整封面"
+                  :model-value="embeddedText"
+                  :disabled="busy"
+                  @update:model-value="setEmbeddedText($event === true)"
+                />
+                图片已包含文字，直接作为完整封面
+              </label>
+              <div
+                v-if="draft.backgroundAssetId && !embeddedText"
                 class="cover-mask"
               >
                 <div class="studio-field-heading">
@@ -1067,7 +1102,7 @@ onMounted(async () => {
                   :aria-expanded="useAi"
                   @click="toggleAi"
                 >
-                  <AppIcon name="sparkle" />{{ useAi ? '收起 AI 背景' : '使用 AI 生成背景（可选）' }}
+                  <AppIcon name="sparkle" />{{ useAi ? '收起 AI 生图' : '使用 AI 生成封面' }}
                 </Button>
               </div>
               <section
@@ -1080,17 +1115,17 @@ onMounted(async () => {
                     <i
                       class="status-dot animate-pulse"
                       aria-hidden="true"
-                    />AI 神经生图终端
+                    />AI 封面生成
                   </h3>
                   <Button
                     type="button"
                     variant="outline"
                     class="ai-collapse"
-                    aria-label="收起 AI 背景面板"
+                    aria-label="收起 AI 生图面板"
                     :disabled="busy"
                     @click="useAi = false"
                   >
-                    <AppIcon name="sparkle" />收起 AI 背景
+                    <AppIcon name="sparkle" />收起 AI 生图
                   </Button>
                 </div>
                 <p
@@ -1103,6 +1138,54 @@ onMounted(async () => {
                 </p>
                 <form @submit.prevent="generateBackground">
                   <fieldset :disabled="busy || !imageModels.length">
+                    <div class="mb-4 space-y-2">
+                      <span class="text-sm font-medium">生成方式</span>
+                      <div
+                        class="ai-generation-modes grid grid-cols-2 gap-2"
+                        role="group"
+                        aria-label="AI 封面生成方式"
+                      >
+                        <Button
+                          type="button"
+                          :variant="generationMode === 'background' ? 'secondary' : 'outline'"
+                          :aria-pressed="generationMode === 'background'"
+                          @click="generationMode = 'background'"
+                        >
+                          仅生成背景
+                        </Button>
+                        <Button
+                          type="button"
+                          :variant="generationMode === 'complete' ? 'secondary' : 'outline'"
+                          :aria-pressed="generationMode === 'complete'"
+                          @click="generationMode = 'complete'"
+                        >
+                          AI 整图封面
+                        </Button>
+                      </div>
+                      <p class="muted text-sm">
+                        {{ generationMode === 'complete' ? '背景、标题、副标题和品牌文字一起设计，无需再设置字体和排版。' : '生成无文字背景，标题和品牌文字由本地叠加，可随时调整。' }}
+                      </p>
+                    </div>
+                    <div
+                      v-if="generationMode === 'complete'"
+                      class="mb-4 rounded-lg border p-3"
+                    >
+                      <p class="muted text-sm">
+                        已带入当前封面文案，可直接生成；副标题和品牌可留空。
+                      </p>
+                      <CoverTextFields
+                        v-model:title="draft.title"
+                        v-model:subtitle="draft.subtitle"
+                        v-model:brand="draft.brand"
+                        id-prefix="cover-ai"
+                      />
+                      <p
+                        v-if="embeddedText"
+                        class="muted text-sm"
+                      >
+                        修改文字后需要重新生成，当前图片保持原样。
+                      </p>
+                    </div>
                     <div class="ai-model-field">
                       <label for="cover-model">图片模型</label>
                       <Select
@@ -1149,19 +1232,20 @@ onMounted(async () => {
                         rows="4"
                         maxlength="2000"
                         required
-                        :placeholder="suggestedPrompt || '描述画面主体、场景、氛围和文字留白区域'"
+                        :placeholder="suggestedPrompt || (generationMode === 'complete' ? '描述画面主题、风格与希望的文字视觉效果' : '描述画面主体、场景、氛围和文字留白区域')"
                       />
                     </div>
                     <p class="ai-usage">
-                      按 <strong>{{ currentSize.label }}</strong> 请求无文字背景，中文由本地排版。背景图片、文件名和封面输出使用相同的比例与尺寸；服务返回尺寸不符时保留原背景并提示错误。书名、作者和画面描述会发送至所选服务，可能产生模型费用。
+                      按 <strong>{{ currentSize.label }}</strong> {{ generationMode === 'complete' ? '生成完整封面，文字直接融入图片。采用前请核对中文是否准确；修改图片内的文字需要重新生成。' : '请求无文字背景，中文由本地排版。' }}
+                      服务返回尺寸不符时保留原封面并提示错误。书名、作者、画面描述{{ generationMode === 'complete' ? '及上方封面文字' : '' }}会发送至所选服务，可能产生模型费用。
                     </p>
                     <div class="ai-generate-actions">
                       <Button
                         type="submit"
                         class="generate-background"
-                        :disabled="!description.trim() || !providerId"
+                        :disabled="!description.trim() || !providerId || (generationMode === 'complete' && !draft.title.trim())"
                       >
-                        <AppIcon name="bolt" />生成当前尺寸背景
+                        <AppIcon name="bolt" />{{ generationMode === 'complete' ? '生成当前尺寸整图封面' : '生成当前尺寸背景' }}
                       </Button>
                     </div>
                   </fieldset>
@@ -1180,7 +1264,7 @@ onMounted(async () => {
                   class="notice"
                   role="status"
                 >
-                  正在生成背景，最多等待 180 秒…<Button
+                  正在生成{{ generation?.coverText ? '整图封面' : '背景' }}，最多等待 180 秒…<Button
                     type="button"
                     :disabled="cancelling"
                     variant="outline"
@@ -1226,7 +1310,7 @@ onMounted(async () => {
                   :disabled="busy || !suggestedPrompt.trim()"
                   @click="usePrompt"
                 >
-                  用于 AI 背景
+                  用于 AI 生图
                 </Button>
               </section>
             </TabsContent>
@@ -1259,7 +1343,7 @@ onMounted(async () => {
               :style="{ width: `${previewWidth}px`, aspectRatio: `${draft.width} / ${draft.height}` }"
               aria-label="当前封面画布"
               role="img"
-              :class="{ 'cursor-grab touch-none': !!background && !busy && !inlineField }"
+              :class="{ 'cursor-grab touch-none': !!background && !embeddedText && !busy && !inlineField }"
               @dblclick="editAtPointer"
               @pointerdown="startDrag"
               @pointermove="moveDrag"
@@ -1283,9 +1367,18 @@ onMounted(async () => {
               v-if="!inlineField && !busy"
               class="canvas-hint"
               aria-hidden="true"
-            >双击文字可直接在画布修改{{ background ? ' · 拖拽调整背景' : '' }}</span>
+            >{{ embeddedText ? '整图封面 · 文字已融入图片' : `双击文字可直接在画布修改${background ? ' · 拖拽调整背景' : ''}` }}</span>
           </div>
-          <div class="cover-inline-actions">
+          <p
+            v-if="embeddedText"
+            class="notice"
+          >
+            当前按完整图片预览和导出，不叠加本地文字或蒙层。调整文案后，请在 AI 生图中重新生成。
+          </p>
+          <div
+            v-else
+            class="cover-inline-actions"
+          >
             <div>
               <Button
                 variant="ghost"
@@ -1303,7 +1396,10 @@ onMounted(async () => {
             </div>
             <span>可双击文字 · Enter 完成 · Esc 撤销</span>
           </div>
-          <div class="background-adjustments">
+          <div
+            v-if="!embeddedText"
+            class="background-adjustments"
+          >
             <div class="studio-field-heading">
               <strong>拖动画布调整背景，也可用下方滑块精确微调</strong><Button
                 type="button"
@@ -1500,7 +1596,13 @@ onMounted(async () => {
             </CollapsibleTrigger>
             <CollapsibleContent>
               <p class="muted">
-                文字自动换行，过长时缩小字号。当前标题 {{ actualSizes.titleSize }} px，副标题 {{ actualSizes.subtitleSize }} px。每次保存或导出都会新建版本。
+                <template v-if="embeddedText">
+                  整图按当前尺寸完整导出，文字和版式以图片为准。
+                </template>
+                <template v-else>
+                  文字自动换行，过长时缩小字号。当前标题 {{ actualSizes.titleSize }} px，副标题 {{ actualSizes.subtitleSize }} px。
+                </template>
+                每次保存或导出都会新建版本。
               </p><p class="file-path">
                 导出目录：{{ displayPath(workspace) }} / covers
               </p><Button
@@ -1620,6 +1722,7 @@ onMounted(async () => {
 .ai-heading > .ai-collapse { gap: 6px; padding: 4px 10px; font-weight: 600; border-radius: 8px; color: var(--cover-accent); background: color-mix(in srgb, var(--cover-accent) 10%, transparent); border-color: color-mix(in srgb, var(--cover-accent) 30%, transparent); box-shadow: 0 1px 2px #0000000d; }
 .ai-heading .app-icon { width: 12px; height: 12px; color: var(--cover-accent); }
 .ai-background form { margin-top: 14px; }
+.ai-generation-modes [aria-pressed='true'] { border-color: var(--cover-accent); color: var(--cover-accent); background: color-mix(in srgb, var(--cover-accent) 12%, var(--card)); }
 .ai-background fieldset > * + * { margin-top: 14px; }
 .ai-background label { font: 400 11px/16.5px var(--font-mono); margin: 0 0 6px; }
 .ai-model-field :deep([data-slot='select-trigger']) { height: 34px; padding: 8px 12px; }
