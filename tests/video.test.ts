@@ -8,7 +8,7 @@ import * as ai from '../src/services/ai'
 import { loadWaveform } from '../src/services/audioWaveform'
 import { emptyProject } from '../src/types/project'
 import { emptyProvider } from '../src/types/ai'
-import { chooseSelect, mockResizeObserver } from './ui'
+import { chooseSelect, mockResizeObserver, openSelect } from './ui'
 import type { VideoJob } from '../src/types/video'
 import VideoSceneRevision from '../src/modules/video/VideoSceneRevision.vue'
 import VideoSubtitleEditor from '../src/modules/video/VideoSubtitleEditor.vue'
@@ -456,29 +456,39 @@ it('makes a separate version from the completed task audio and saved subtitles',
   const wrapper = await render()
   const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版'))!
   await remake.trigger('click'); await flushPromises()
-  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'ink', 'im1')
+  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'classic')
   expect(api.savePlan).not.toHaveBeenCalled()
 })
 
-it('lets a new version use the selected classic theme', async () => {
-  vi.mocked(api.listJobs).mockResolvedValue([{ ...job, status: 'succeeded', videoAssetId: 'v1' }])
+it('remakes a historical ink video with the available classic theme without changing its saved plan', async () => {
+  const historical = { ...structuredClone(job), status: 'succeeded' as const, videoAssetId: 'v1', plan: { ...structuredClone(job.plan), theme: 'ink' as const } }
+  vi.mocked(api.listJobs).mockResolvedValue([historical])
   vi.mocked(api.startJob).mockResolvedValue({ ...job, id: 'j3', status: 'running', plan: { ...job.plan, cues: [], scenes: [] } })
   const wrapper = await render()
+  expect(wrapper.get('[aria-label="选择视频历史任务"]').text()).toContain('水墨宣纸（历史主题）')
   await chooseSelect(wrapper, '#video-theme', '书卷手绘')
   const remake = wrapper.findAll('button').find(button => button.text().includes('用原字幕制作新版'))!
   await remake.trigger('click'); await flushPromises()
-  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'classic', null)
+  expect(api.startJob).toHaveBeenCalledWith('p1', 'a1', 'm1', 's1', null, 'classic')
+  expect(historical.plan.theme).toBe('ink')
+  expect(api.savePlan).not.toHaveBeenCalled()
 })
 
-it('requires a painting model for a new ink video and explains the per-scene cost', async () => {
+it('offers only classic for new videos and can start without an image model', async () => {
   vi.mocked(api.listJobs).mockResolvedValue([])
   vi.mocked(ai.listProviders).mockResolvedValue([{ ...emptyProvider(), id: 'm1', modelKind: 'text', name: '文本模型', isEnabled: true, credentialStatus: 'available' }])
+  vi.mocked(api.startJob).mockResolvedValue({ ...structuredClone(job), status: 'running' })
   const wrapper = await render()
-  expect(wrapper.text()).toContain('每镜调用所选图片模型')
-  expect(wrapper.get('.video-primary-action').attributes('disabled')).toBeDefined()
-  await chooseSelect(wrapper, '#video-theme', '书卷手绘')
+  expect(wrapper.get('#video-theme').text()).toBe('书卷手绘')
+  const options = await openSelect(wrapper, '#video-theme')
+  expect(options.findAll('[role="option"]').map(option => option.text())).toEqual(['书卷手绘'])
+  await options.get('[role="option"]').trigger('keydown', { key: 'Enter' }); await flushPromises()
+  expect(wrapper.find('#video-image-provider').exists()).toBe(false)
+  expect(wrapper.text()).not.toContain('每镜调用所选图片模型')
+  expect(wrapper.text()).not.toContain('水墨宣纸')
   expect(wrapper.get('.video-primary-action').attributes('disabled')).toBeUndefined()
-  expect(api.startJob).not.toHaveBeenCalled()
+  await wrapper.get('.video-primary-action').trigger('click'); await flushPromises()
+  expect(api.startJob).toHaveBeenCalledExactlyOnceWith('p1', 'a1', 'm1', null, null, 'classic')
 })
 
 it('shows unfinished ink directions without treating them as legacy drawings or allowing render', async () => {

@@ -6,7 +6,7 @@ import { douyinCollectionOptions, saveDouyinCollectionOptions } from '../service
 import { automationRuns, automationConsent, automationAccount, startAutomation, refreshAutomation, prepareAccount, confirmAccount, type AutomationAccount } from '../services/automation'
 import type { ModelProvider } from '../types/ai'
 import type { AudioSourceInput } from '../types/audio'
-import { videoThemes, type VideoTheme } from '../types/video'
+import { videoThemes, videoThemeLabel } from '../types/video'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -19,7 +19,7 @@ const emit = defineEmits<{ busy: [value: boolean] }>()
 const providers = ref<ModelProvider[]>([])
 const textProvider = ref('')
 const imageProvider = ref('')
-const theme = ref<VideoTheme>('ink')
+const theme = ref<keyof typeof videoThemes>('classic')
 const account = ref<AutomationAccount | null>(automationAccount.value ? { ...automationAccount.value } : null)
 const accountReady = computed(() => !!account.value && !!automationAccount.value
   && account.value.id === automationAccount.value.id && account.value.key === automationAccount.value.key
@@ -42,7 +42,6 @@ const requestKey = ref(globalThis.crypto.randomUUID())
 const textModels = computed(() => providers.value.filter(provider => provider.modelKind === 'text' && provider.isEnabled))
 const imageModels = computed(() => providers.value.filter(provider => provider.modelKind === 'image' && provider.isEnabled))
 const activeRun = computed(() => automationRuns.value.find(run => !['completed', 'cancelled'].includes(run.status)))
-const detailedInk = computed(() => activeRun.value ? !!activeRun.value.input.selection.detailedInk : theme.value === 'ink')
 const active = computed(() => !!activeRun.value)
 watch([activeRun, providers], ([current]) => {
   textProvider.value = current?.input.selection.textProviderId ?? (textProvider.value || textModels.value.find(provider => provider.isDefault)?.id || textModels.value[0]?.id || '')
@@ -51,7 +50,6 @@ watch([activeRun, providers], ([current]) => {
 watch(activeRun, current => {
   if (!current) return
   account.value = current.input.account ? { ...current.input.account } : null
-  theme.value = current.input.selection.theme ?? 'classic'
   collectionName.value = current.input.selection.collectionName ?? null
 }, { immediate: true })
 onMounted(async () => {
@@ -95,7 +93,7 @@ async function start() {
   busy.value = true; error.value = ''
   try {
     const source = await props.saveSource()
-    await startAutomation({ ...source, textProviderId: textProvider.value, imageProviderId: imageProvider.value, format: 'deep_dive', requestKey: requestKey.value, theme: theme.value, detailedInk: detailedInk.value, collectionName: collectionName.value?.trim() ?? null })
+    await startAutomation({ ...source, textProviderId: textProvider.value, imageProviderId: imageProvider.value, format: 'deep_dive', requestKey: requestKey.value, theme: theme.value, collectionName: collectionName.value?.trim() ?? null })
     requestKey.value = globalThis.crypto.randomUUID()
     await refreshAutomation()
   } catch (cause) { error.value = String(cause) }
@@ -165,7 +163,7 @@ async function start() {
           :disabled="busy || active"
         >
           <SelectTrigger id="automation-theme">
-            <SelectValue />
+            <SelectValue>{{ videoThemeLabel(activeRun?.input.selection.theme ?? theme) }}</SelectValue>
           </SelectTrigger><SelectContent>
             <SelectItem
               v-for="(name, key) in videoThemes"
@@ -299,7 +297,7 @@ async function start() {
         :disabled="busy || active"
         aria-label="允许自动制作和上传"
       />
-      <span>允许将本次书名、作者及整书资料或章节正文发送至文本模型，生成创作方案；将原书文件或章节文字及完整音频指导发送至 Notebook，再根据实际字幕校核并渲染视频。{{ detailedInk ? '水墨主题将按实际字幕逐镜生成一张精细水墨画作，使用上方图片模型，费用与镜头张数有关；画作失败时暂停，继续只处理未完成画面。' : '' }}允许三种比例背景生成、封面导出和按上方账号与合集准备上传，最终发布由我完成。模型失败后最多自动重试3次，再切换其他已启用的同类模型，可能产生额外费用；已完成成果保留。</span>
+      <span>允许将本次书名、作者及整书资料或章节正文发送至文本模型，生成创作方案；将原书文件或章节文字及完整音频指导发送至 Notebook，再根据实际字幕校核并渲染视频。{{ activeRun?.input.selection.detailedInk ? '本历史任务仍按原授权逐镜生成水墨画作，费用与镜头张数有关；继续时只处理未完成画面。' : '' }}允许三种比例背景生成、封面导出和按上方账号与合集准备上传，最终发布由我完成。模型失败后最多自动重试3次，再切换其他已启用的同类模型，可能产生额外费用；已完成成果保留。</span>
     </label>
     <p
       v-if="error"

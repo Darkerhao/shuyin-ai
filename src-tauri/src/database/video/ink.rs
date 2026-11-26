@@ -109,14 +109,17 @@ mod tests {
     use serde_json::json;
 
     fn fixture() -> (tempfile::TempDir, Database, VideoJob) {
-        let (dir, db, mut input) = super::super::tests::fixture();
+        let (dir, db, input) = super::super::tests::fixture();
         db.with_connection(|c| {
             c.execute("INSERT INTO model_providers(id,name,provider_type,base_url,model_name,is_default,is_enabled,model_kind,created_at,updated_at) VALUES('ink-image','test','openai-compatible','http://localhost/v1','ink-model',0,1,'image','now','now')",[]).unwrap();
             Ok(())
         }).unwrap();
-        input.theme = Some("ink".into());
-        input.image_provider_id = Some("ink-image".into());
         let job = db.create_video_job(input).unwrap();
+        // Reproduce a saved ink plan; new jobs no longer offer this theme.
+        db.with_connection(|c| {
+            c.execute("UPDATE video_jobs SET plan_json=json_set(plan_json,'$.theme','ink','$.imageProviderId','ink-image') WHERE id=?1",[&job.id]).map_err(|e|e.to_string())?;
+            Ok(())
+        }).unwrap();
         let mut job = db
             .claim_video_job(&job.id, VideoWork::Prepare, None)
             .unwrap();

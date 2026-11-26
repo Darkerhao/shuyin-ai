@@ -2,7 +2,8 @@ import visualCatalog from '../../src-tauri/video/visual-catalog.json'
 
 export { visualCatalog }
 export type VideoTheme = 'classic' | 'ink'
-export const videoThemes: Record<VideoTheme, string> = { ink: '水墨宣纸', classic: '书卷手绘' }
+export const videoThemes = { classic: '书卷手绘' }
+export const videoThemeLabel = (theme: VideoTheme = 'classic') => theme === 'ink' ? '水墨宣纸（历史主题）' : videoThemes[theme]
 export interface VideoBeat {
   cue: number
   object: keyof typeof visualCatalog.objects

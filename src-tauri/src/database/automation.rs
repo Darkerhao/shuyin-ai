@@ -537,9 +537,8 @@ impl Database {
         {
             return Err("自动任务标识或音频形式无效。".into());
         }
-        crate::video::validate_theme(&input.theme)?;
-        if input.detailed_ink && input.theme != "ink" {
-            return Err("逐镜水墨画作仅用于水墨主题。".into());
+        if input.theme != "classic" || input.detailed_ink {
+            return Err("该视频主题已下线，请使用书卷手绘。".into());
         }
         if let Some(name) = &mut input.collection_name {
             *name = super::publishing::normalize_collection_name(name)?;

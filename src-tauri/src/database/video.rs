@@ -293,6 +293,13 @@ impl Database {
     }
 
     pub fn create_video_job(&self, input: StartVideoInput) -> Result<VideoJob, String> {
+        if input
+            .theme
+            .as_deref()
+            .is_some_and(|theme| theme != "classic")
+        {
+            return Err("该视频主题已下线，请使用书卷手绘。".into());
+        }
         self.create_bound_video_job(input, None)
     }
 
@@ -315,9 +322,8 @@ impl Database {
             let provider = super::ai::provider(&tx, &input.provider_id)?;
             if provider.input.model_kind != "text" || !provider.input.is_enabled { return Err("请选择已启用的文本模型生成分镜。".into()); }
             let id = projects::new_id(&tx)?;
-            let theme = input.theme.as_deref().unwrap_or("ink");
+            let theme = input.theme.as_deref().unwrap_or("classic");
             validate_theme(theme)?;
-            if theme == "ink" && input.image_provider_id.is_none() && binding.is_none() { return Err("细致水墨视频需要选择图片模型，将按分镜逐张生成画作。".into()); }
             if let Some(id) = &input.image_provider_id {
                 let image = super::ai::provider(&tx,id)?;
                 if theme != "ink" || image.input.model_kind != "image" || !image.input.is_enabled { return Err("水墨视频请选择已启用的图片模型。".into()); }
@@ -575,36 +581,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn new_jobs_default_to_ink_and_accept_the_classic_theme() {
+    fn new_jobs_default_to_classic_and_reject_retired_themes() {
         let (_dir, db, mut input) = fixture();
-        alternative_models(&db);
         input.theme = None;
-        input.image_provider_id = Some("image".into());
-        let ink = db.create_video_job(input).unwrap();
-        assert_eq!(ink.plan.theme, "ink");
-        let classic = db
-            .create_video_job(StartVideoInput {
-                project_id: ink.project_id.clone(),
-                chapter_id: None,
-                audio_asset_id: ink.audio_asset_id.clone().unwrap(),
-                subtitle_asset_id: None,
-                provider_id: "model".into(),
-                theme: Some("classic".into()),
-                image_provider_id: None,
-            })
-            .unwrap();
+        let classic = db.create_video_job(input).unwrap();
         assert_eq!(classic.plan.theme, "classic");
-        assert!(db
-            .create_video_job(StartVideoInput {
-                project_id: ink.project_id.clone(),
-                chapter_id: None,
-                audio_asset_id: ink.audio_asset_id.clone().unwrap(),
-                subtitle_asset_id: None,
-                provider_id: "model".into(),
-                theme: Some("watercolor".into()),
-                image_provider_id: None,
-            })
-            .is_err());
+        assert!(classic.plan.image_provider_id.is_none());
+        for theme in ["classic", "ink", "watercolor"] {
+            let (_dir, db, mut input) = fixture();
+            input.theme = Some(theme.into());
+            assert_eq!(db.create_video_job(input).is_ok(), theme == "classic");
+        }
     }
 
     #[test]
