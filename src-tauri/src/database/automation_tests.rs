@@ -276,6 +276,25 @@ fn chapter_automation_uses_the_full_workflow_and_freezes_only_its_own_source() {
 }
 
 #[test]
+fn new_automations_reject_retired_ink_themes_and_painting_requests() {
+    let (_directory, database, input) = setup();
+    for (theme, detailed_ink) in [
+        ("ink", false),
+        ("ink", true),
+        ("classic", true),
+        ("watercolor", false),
+    ] {
+        let mut retired = input.clone();
+        retired.theme = theme.into();
+        retired.detailed_ink = detailed_ink;
+        assert!(database.create_automation(retired, account()).is_err());
+    }
+    let run = database.create_automation(input, account()).unwrap();
+    assert_eq!(run.input.selection.theme, "classic");
+    assert!(!run.input.selection.detailed_ink);
+}
+
+#[test]
 fn automation_collection_is_frozen_and_bound_to_the_publish_task_transaction() {
     let (directory, database, mut input) = setup();
     input.collection_name = Some("  甲子读书 | 读懂一本书  ".into());
@@ -1711,10 +1730,6 @@ fn transcript_fixture_with_theme(
     detailed_ink: bool,
 ) -> (tempfile::TempDir, Database, AutomationRun) {
     let (directory, database, mut input) = setup();
-    if detailed_ink {
-        input.theme = "ink".into();
-        input.detailed_ink = true;
-    }
     if chapter {
         let chapter = database
             .save_chapter(
@@ -1731,6 +1746,14 @@ fn transcript_fixture_with_theme(
         };
     }
     let run = database.create_automation(input, account()).unwrap();
+    if detailed_ink {
+        // Reproduce a frozen historical run without reopening ink creation.
+        database.with_connection(|c| {
+            c.execute("UPDATE automation_runs SET input_json=json_set(input_json,'$.selection.theme','ink','$.selection.detailedInk',json('true')) WHERE id=?1",[&run.id]).map_err(|e|e.to_string())?;
+            Ok(())
+        }).unwrap();
+    }
+    let run = database.automation_run(&run.id).unwrap();
     let run = finish_creation(&database, &run);
     let audio = database.start_automatic_audio(&run).unwrap();
     let path = directory.path().join("original.wav");

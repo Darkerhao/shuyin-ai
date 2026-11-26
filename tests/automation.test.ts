@@ -9,7 +9,7 @@ import { coverPng, decodeBackground } from '../src/services/coverRenderer'
 import { newCover } from '../src/types/cover'
 import { listProviders } from '../src/services/ai'
 import { douyinCollectionOptions, saveDouyinCollectionOptions } from '../src/services/publishing'
-import { chooseSelect, mockResizeObserver } from './ui'
+import { mockResizeObserver, openSelect } from './ui'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 vi.mock('../src/services/projects', () => ({ isDesktop: () => true }))
@@ -197,21 +197,43 @@ describe('automatic workflow setup', () => {
     const start = wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!
     expect(start.attributes('disabled')).toBeUndefined()
     await start.trigger('click'); await flushPromises()
-    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, imageProviderId: 'image1', textProviderId: 'text1', theme: 'ink', detailedInk: true, collectionName: null }) })
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, imageProviderId: 'image1', textProviderId: 'text1', theme: 'classic', collectionName: null }) })
     wrapper.unmount()
   })
 
-  it('passes the selected classic video theme to automatic creation', async () => {
+  it('offers only classic for automatic creation without requesting per-scene ink paintings', async () => {
     automationConsent.value = true
     automationAccount.value = { id: null, name: '精讲账号', key: 'classic-account' }
     vi.mocked(invoke).mockImplementation(async command => command === 'automation_snapshot' ? [] : run())
     const source = { projectId: 'book1', source: { kind: 'asset' as const, assetId: 'source1' } }
     const wrapper = mount(AutomationSetup, { props: { saveSource: vi.fn().mockResolvedValue(source) } })
     await flushPromises()
-    await chooseSelect(wrapper, '#automation-theme', '书卷手绘')
+    expect(wrapper.get('#automation-theme').text()).toBe('书卷手绘')
+    const options = await openSelect(wrapper, '#automation-theme')
+    expect(options.findAll('[role="option"]').map(option => option.text())).toEqual(['书卷手绘'])
+    await options.get('[role="option"]').trigger('keydown', { key: 'Enter' }); await flushPromises()
+    expect(wrapper.text()).not.toContain('逐镜生成一张精细水墨画作')
     const start = wrapper.findAll('button').find(button => button.text() === '自动制作并准备发布')!
     await start.trigger('click'); await flushPromises()
-    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, theme: 'classic', detailedInk: false }) })
+    expect(invoke).toHaveBeenCalledWith('start_automation', { input: expect.objectContaining({ ...source, theme: 'classic' }) })
+    const input = vi.mocked(invoke).mock.calls.find(call => call[0] === 'start_automation')![1] as { input: automation.AutomationInput }
+    expect(input.input.detailedInk).toBeUndefined()
+  })
+
+  it('labels a saved ink automation as historical and resets new creation to classic when it ends', async () => {
+    const active = run()
+    active.input.selection.theme = 'ink'
+    active.input.selection.detailedInk = true
+    automationRuns.value = [active]
+    const wrapper = mount(AutomationSetup, { props: { saveSource: vi.fn() } })
+    await flushPromises()
+    expect(wrapper.get('#automation-theme').text()).toBe('水墨宣纸（历史主题）')
+    expect(wrapper.get('#automation-theme').attributes('disabled')).toBeDefined()
+    automationRuns.value = []
+    await flushPromises()
+    expect(wrapper.get('#automation-theme').text()).toBe('书卷手绘')
+    expect(active.input.selection.theme).toBe('ink')
+    wrapper.unmount()
   })
 
   it('shows the active task models after reopening and after an automatic switch', async () => {

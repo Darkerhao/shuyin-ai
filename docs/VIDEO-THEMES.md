@@ -1,4 +1,36 @@
-# 视频主题：细致水墨画与书卷手绘（2026-11-16）
+# 视频主题
+
+## 当前规则：水墨宣纸下线（2026-11-26）
+
+- 手动视频制作和自动制作只提供「书卷手绘」，默认 `classic`；新视频不再选择水墨画作模型或追加逐镜水墨图片请求。自动制作的图片模型仍用于三尺寸封面。
+- 使用原音频、原字幕制作新版也使用书卷手绘；新建 API 拒绝水墨输入，自动新建拒绝逐镜水墨标志。
+- 历史 `ink` 任务标注「水墨宣纸（历史主题）」，原声、字幕、画作、成片、任务冻结输入和原任务续作保留。已有自动流程仍按原冻结主题创建内部视频任务。
+- 不增加新主题、不改数据库结构、不清理用户素材、不手动升版本。
+
+### 本次修改范围
+
+前端：`src/types/video.ts`、`src/services/video.ts`、`src/modules/video/VideoPage.vue`、`src/components/AutomationSetup.vue`。后端：`src-tauri/src/database/video.rs`、`src-tauri/src/database/automation.rs`。回归：`tests/video.test.ts`、`tests/automation.test.ts`、`src-tauri/src/database/video/ink.rs`、`src-tauri/src/database/automation_tests.rs`。本页、`INK-VIDEO.md` 及五份主文档同步记录当前规则，原历史实现和验收记录保留。
+
+### 本次验收（2026-11-26）
+
+所有命令从仓库根目录执行，Node 使用 `D:/MyWork/software/shuyin-video-node/v24.22.2`，Rust 先执行 `. ./.tools/env.ps1`。
+
+| 实际命令 | 结果 |
+| --- | --- |
+| `node node_modules/vitest/vitest.mjs run tests/video.test.ts tests/automation.test.ts tests/automation-tasks.test.ts --maxWorkers=2` | 3 文件、67 项通过；覆盖两个入口、无图片模型创建、旧水墨成片制作经典新版、历史自动任务结束后的默认值、原逐镜续作 |
+| `npm run lint` | 通过；首次发现测试中已不再使用的导入，删除后重跑通过 |
+| `npm run build` | 类型检查和生产构建通过；保留原 npm 本机配置与 Vite 大分块提示 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib -- --quiet` | 334 通过、2 项原有忽略、0 失败；覆盖新任务门禁、经典默认值和历史水墨恢复 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings` | 通过 |
+| `ego-browser nodejs -e "await import('file:///D:/MyWork/project/JIAZI-PROJECT/shuyin-ai/output/theme-removal-20261126/round-04.mjs')"` | 两个下拉仅含书卷手绘；1440/900 宽度与深浅主题 4 组合无横溢；没有水墨模型控件；无图片模型的手动创建仅发送 classic，未识别 IPC 为 0 |
+| `git diff --check` | 通过 |
+
+浏览器为真实 Chromium 加隔离 IPC 夹具，不连接正式书库、不调用付费模型、不渲染真实成片。首轮夹具因直接导入另一份路由模块导致注入失败，改为经 Vite 统一解析模块后通过，产品代码未为此调整。证据在忽略目录 `output/theme-removal-20261126/`，截图已查看，浏览器空间和临时 Vite 服务已关闭。未制作安装包、未替换正式桌面应用、未执行真实模型/发布或跨平台验收。后续新主题确定后另行实施。
+
+以下为原双主题的历史设计和验证，涉及新建主题选项与默认值的描述已由上述规则取代。
+
+## 历史双主题设计（2026-11-16）
 
 ## 1. 需求与范围
 

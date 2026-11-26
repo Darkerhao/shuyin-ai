@@ -26,7 +26,7 @@ import { listProviders } from '../../services/ai'
 import * as api from '../../services/video'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { visualCatalog, videoStatuses, videoThemes, type VideoCue, type VideoJob, type VideoScene, type VideoSceneRevisionInput, type VideoSettings, type VideoTheme } from '../../types/video'
+import { visualCatalog, videoStatuses, videoThemes, videoThemeLabel, type VideoCue, type VideoJob, type VideoScene, type VideoSceneRevisionInput, type VideoSettings } from '../../types/video'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -46,9 +46,8 @@ const jobs = ref<VideoJob[]>([])
 const selectedId = ref('')
 const audioId = ref('')
 const providerId = ref('')
-const imageProviderId = ref('')
 const subtitleId = ref('auto')
-const theme = ref<VideoTheme>('ink')
+const theme = ref<keyof typeof videoThemes>('classic')
 const config = ref<VideoSettings>({ engineRoot: '', nodePath: '', pythonPath: '', modelPath: '' })
 const savedConfig = ref('')
 const subtitleText = ref('')
@@ -78,7 +77,7 @@ const mediaError = ref('')
 const progressError = ref('')
 const jobPanel = ref<globalThis.HTMLElement>()
 const selected = computed(() => jobs.value.find(job => job.id === selectedId.value))
-const selectedTheme = computed(() => videoThemes[selected.value?.plan.theme ?? 'classic'])
+const selectedTheme = computed(() => videoThemeLabel(selected.value?.plan.theme))
 const running = computed(() => jobs.value.some(job => job.status === 'running'))
 const audios = computed(() => assets.value.filter(a => a.assetType === 'audio' && a.existsStatus === 'available'))
 const subtitles = computed(() => assets.value.filter(a => a.assetType === 'subtitle' && /\.srt$/i.test(a.originalName) && a.existsStatus === 'available'))
@@ -90,7 +89,7 @@ const paintingsOnly = computed(() => !!selected.value?.plan.imageProviderId && c
 const storyboardNotes = computed(() => selected.value ? inspectStoryboard({ ...selected.value.plan, scenes: scenes.value }) : [])
 const sceneSnapshot = computed(() => JSON.stringify(scenes.value))
 const editorValue = () => JSON.stringify([subtitleText.value, sceneSnapshot.value])
-const jobLabel = (job: VideoJob) => `${videoStatuses[job.status]} · ${videoThemes[job.plan.theme ?? 'classic']} · ${job.createdAt ? new Date(job.createdAt).toLocaleString() : job.id}`
+const jobLabel = (job: VideoJob) => `${videoStatuses[job.status]} · ${videoThemeLabel(job.plan.theme)} · ${job.createdAt ? new Date(job.createdAt).toLocaleString() : job.id}`
 const dirty = computed(() => loaded.value && !!editable.value && savedEditor.value !== editorValue())
 const draftContent = computed<VideoEditorDraft>(() => ({ subtitles: subtitleText.value, scenes: sceneSnapshot.value, position: position.value }))
 const autosave = useEditorDraft(() => selectedId.value, 'video', draftContent, () => String(selected.value?.runId), dirty, draftReady, canPrepareLeave, true)
@@ -163,7 +162,6 @@ const load = () => run(async () => {
   if (route.query.audio && !files.some(asset => asset.id === route.query.audio && asset.assetType === 'audio')) throw new Error('音频不属于当前书籍或章节，请选择本章音频。')
   title.value = chapter ? `${book.title} · ${chapter.title}` : book.title; assets.value = files; providers.value = models.filter(p => p.modelKind === 'text' && p.isEnabled)
   imageProviders.value = models.filter(p => p.modelKind === 'image' && p.isEnabled)
-  imageProviderId.value = imageProviders.value.find(p => p.isDefault)?.id ?? imageProviders.value[0]?.id ?? ''
   config.value = settings; savedConfig.value = JSON.stringify(settings)
   jobs.value = history
   const recentDraft = history.filter(j => j.draftUpdatedAt).sort((a, b) => b.draftUpdatedAt!.localeCompare(a.draftUpdatedAt!))[0]
@@ -212,8 +210,7 @@ const choosePath = (key: keyof VideoSettings, directory: boolean) => run(async (
 const saveConfig = () => run(async () => { await api.saveSettings(config.value); savedConfig.value = JSON.stringify(config.value); message.value = '视频运行环境已保存，可点击“一键检查环境”验证。' })
 const begin = (sourceAudio: string, sourceSubtitle: string | null) => run(async () => {
   if (dirty.value || configDirty.value) throw new Error('请先保存或还原字幕、分镜和运行环境修改。')
-  if (theme.value === 'ink' && !imageProviderId.value) throw new Error('请选择图片模型，用于按音频逐镜绘制水墨画作。')
-  const job = await api.startJob(props.id, sourceAudio, providerId.value, sourceSubtitle, chapterId.value, theme.value, theme.value === 'ink' ? imageProviderId.value : null)
+  const job = await api.startJob(props.id, sourceAudio, providerId.value, sourceSubtitle, chapterId.value, theme.value)
   put(job); await adopt(job)
   await nextTick()
   jobPanel.value?.scrollIntoView({ block: 'start' })
@@ -432,7 +429,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
         </CollapsibleTrigger>
         <CollapsibleContent class="video-inputs">
           <p class="muted">
-            横屏 1920 × 1080 · 24 fps · 水墨主题按实际旁白逐镜绘制精细画作，配合细线显影、墨色晕染与轻运镜；书卷主题保留逐笔手绘。全程使用原声音频与字幕时间轴。
+            横屏 1920 × 1080 · 24 fps · 书卷手绘按实际字幕编排分镜、逐笔绘制画面，全程使用原声音频与字幕时间轴。
           </p>
           <div class="video-form-grid">
             <div class="video-field">
@@ -497,33 +494,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                   </SelectItem>
                 </SelectContent>
               </Select><p class="muted">
-                主题在创建任务时固定；要更换成另一种风格，请用原字幕重新制作新版。
-              </p>
-            </div>
-            <div
-              v-if="theme === 'ink'"
-              class="video-field"
-            >
-              <label for="video-image-provider">水墨画作模型</label>
-              <Select
-                v-model="imageProviderId"
-                :disabled="running || busy"
-              >
-                <SelectTrigger id="video-image-provider">
-                  <SelectValue placeholder="选择已启用的图片模型" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem
-                    v-for="provider in imageProviders"
-                    :key="provider.id"
-                    :value="provider.id"
-                  >
-                    {{ provider.name }} / {{ provider.modelName }}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <p class="muted">
-                开始后将根据实际字幕编排画面，每镜调用所选图片模型生成一张精细水墨画，张数取决于分镜，会产生额外费用；已完成画作会保留，继续时只生成缺少的画面。
+                新视频使用书卷手绘；已有成片可用原字幕重新制作新版。
               </p>
             </div>
             <div class="video-field video-subtitle-source">
@@ -573,18 +544,12 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
           >
             请先在模型设置中配置可用的文本模型，用于字幕校对和生成分镜。
           </p>
-          <p
-            v-if="theme === 'ink' && !imageProviders.length"
-            class="notice"
-          >
-            细致水墨逐镜画作需要已启用的图片模型；可切换书卷手绘继续制作。
-          </p>
           <Button
             class="video-primary-action"
-            :disabled="running || busy || !audioId || !providerId || (theme === 'ink' && !imageProviderId) || !config.engineRoot || !config.nodePath"
+            :disabled="running || busy || !audioId || !providerId || !config.engineRoot || !config.nodePath"
             @click="create"
           >
-            <AppIcon name="bolt" />{{ theme === 'ink' ? '生成字幕、分镜与水墨画' : '生成字幕与分镜' }}
+            <AppIcon name="bolt" />生成字幕与分镜
           </Button>
           <Collapsible
             class="panel video-runtime"
@@ -732,7 +697,7 @@ onBeforeUnmount(() => { disposed = true; if (timer) globalThis.clearInterval(tim
                 <Button
                   v-if="selected.status === 'succeeded' && selected.audioAssetId && selected.subtitleAssetId"
                   variant="outline"
-                  :disabled="busy || running || !providerId || (theme === 'ink' && !imageProviderId)"
+                  :disabled="busy || running || !providerId"
                   @click="remake"
                 >
                   用原字幕制作新版 · {{ videoThemes[theme] }}
