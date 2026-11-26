@@ -39,6 +39,7 @@ fn setup() -> (tempfile::TempDir, Database, StartAutomationInput) {
             format: "deep_dive".into(),
             request_key: "start-one".into(),
             theme: "classic".into(),
+            cover_text_mode: covers::CoverTextMode::Overlay,
             detailed_ink: false,
             collection_name: None,
         },
@@ -50,6 +51,41 @@ fn account() -> Account {
         name: "测试账号".into(),
         key: "window-account-identity".into(),
     }
+}
+
+#[test]
+fn automation_cover_mode_defaults_for_old_runs_and_survives_restart() {
+    use covers::CoverTextMode;
+    let (directory, database, mut input) = setup();
+    let mut legacy = serde_json::to_value(&input).unwrap();
+    legacy.as_object_mut().unwrap().remove("coverTextMode");
+    assert_eq!(
+        serde_json::from_value::<StartAutomationInput>(legacy.clone())
+            .unwrap()
+            .cover_text_mode,
+        CoverTextMode::Overlay
+    );
+    legacy["coverTextMode"] = serde_json::json!("unknown");
+    assert!(serde_json::from_value::<StartAutomationInput>(legacy).is_err());
+    input.cover_text_mode = CoverTextMode::Embedded;
+    let run = database
+        .create_automation(input.clone(), account())
+        .unwrap();
+    input.cover_text_mode = CoverTextMode::Overlay;
+    assert!(database.create_automation(input, account()).is_err());
+    drop(database);
+    let database = Database::open(directory.path().join("data.sqlite3"));
+    database.recover_automation().unwrap();
+    let restored = database.automation_run(&run.id).unwrap();
+    assert_eq!(
+        restored.input.selection.cover_text_mode,
+        CoverTextMode::Embedded
+    );
+    let resumed = database.control_automation(&run.id, "resume").unwrap();
+    assert_eq!(
+        resumed.input.selection.cover_text_mode,
+        CoverTextMode::Embedded
+    );
 }
 
 #[test]
@@ -1745,14 +1781,16 @@ fn transcript_fixture() -> (tempfile::TempDir, Database, AutomationRun) {
 }
 
 fn transcript_fixture_for(chapter: bool) -> (tempfile::TempDir, Database, AutomationRun) {
-    transcript_fixture_with_theme(chapter, false)
+    transcript_fixture_with_theme(chapter, false, covers::CoverTextMode::Overlay)
 }
 
 fn transcript_fixture_with_theme(
     chapter: bool,
     detailed_ink: bool,
+    cover_text_mode: covers::CoverTextMode,
 ) -> (tempfile::TempDir, Database, AutomationRun) {
     let (directory, database, mut input) = setup();
+    input.cover_text_mode = cover_text_mode;
     if chapter {
         let chapter = database
             .save_chapter(
@@ -2164,8 +2202,16 @@ fn automatic_schedule_renews_only_before_hand_off_and_preserves_same_task() {
 #[test]
 fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
     use super::automation::COVER_STEPS;
-    for (chapter, detailed_ink) in [(false, false), (true, false), (false, true), (true, true)] {
-        let (_dir, db, run) = transcript_fixture_with_theme(chapter, detailed_ink);
+    use covers::CoverTextMode::{Embedded, Overlay};
+    for (chapter, detailed_ink, mode) in [
+        (false, false, Overlay),
+        (true, false, Overlay),
+        (false, true, Overlay),
+        (true, true, Overlay),
+        (false, false, Embedded),
+        (true, false, Embedded),
+    ] {
+        let (_dir, db, run) = transcript_fixture_with_theme(chapter, detailed_ink, mode.clone());
         let check = db.create_content_check_task(&run).unwrap();
         db.prepare_content_check_task(&check).unwrap();
         let warnings = if chapter {
@@ -2173,29 +2219,24 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
         } else {
             Vec::new()
         };
-        let response = serde_json::json!({"verified":true,"reason":"发布材料一致","changes":{},"warnings":warnings});
+        let response = serde_json::json!({"verified":true,"reason":"发布材料一致","changes":{"coverTitle":"校核后的标题","coverSubtitle":"校核后的副标题"},"warnings":warnings});
         db.finish_content_check_task(&check, &response.to_string())
             .unwrap();
         for step in &COVER_STEPS {
             let run = db.automation_run(&run.id).unwrap();
             db.set_automation_stage(&run, step.image_stage).unwrap();
+            let input = step
+                .image_input(&run, &db.automation_publish_writing(&run).unwrap().content)
+                .unwrap();
+            assert_eq!(input.chapter_id, run.chapter_id);
+            assert_eq!(input.cover_text.is_some(), mode == Embedded);
+            if let Some(text) = &input.cover_text {
+                assert_eq!(text.title, "校核后的标题");
+                assert_eq!(text.subtitle, "校核后的副标题");
+                assert_eq!(text.brand, "甲子 · 读书");
+            }
             let image = db
-                .start_bound_cover_generation(
-                    image_generation::ImageGenerationInput {
-                        cover_text: None,
-                        chapter_id: run.chapter_id.clone(),
-
-                        project_id: run.project_id.clone(),
-                        provider_id: run.input.selection.image_provider_id.clone(),
-                        description: step
-                            .prompt(&db.automation_publish_writing(&run).unwrap().content)
-                            .unwrap()
-                            .into(),
-                        width: step.width,
-                        height: step.height,
-                    },
-                    &run.binding(step.image_slot),
-                )
+                .start_bound_cover_generation(input, &run.binding(step.image_slot))
                 .unwrap();
             if step.width == 1920 {
                 db.end_generation(&image, "failed", "timeout", "第三张背景失败")
@@ -2215,9 +2256,20 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
                 db.retry_automation_generation(&waiting, true).unwrap();
                 db.control_automation(&run.id, "resume").unwrap();
             }
-            db.prepare_cover_generation(&image).unwrap();
+            let prepared = db.prepare_cover_generation(&image).unwrap();
+            assert_eq!((prepared.width, prepared.height), (step.width, step.height));
+            assert_eq!(prepared.prompt.contains("\"coverText\""), mode == Embedded);
+            if mode == Embedded {
+                assert!(prepared.prompt.contains("校核后的标题"));
+                assert!(prepared.prompt.contains("校核后的副标题"));
+            }
             let mut background = std::io::Cursor::new(Vec::new());
-            image::DynamicImage::new_rgb8(512, 512)
+            let (width, height) = if mode == Embedded {
+                (step.width, step.height)
+            } else {
+                (512, 512)
+            };
+            image::DynamicImage::new_rgb8(width, height)
                 .write_to(&mut background, image::ImageFormat::Png)
                 .unwrap();
             db.finish_cover_generation(&image, background.get_ref())
@@ -2226,6 +2278,9 @@ fn automatic_three_covers_retry_locally_then_freeze_the_same_video_plan() {
             db.set_automation_stage(&run, step.cover_stage).unwrap();
             let run = db.automation_run(&run.id).unwrap();
             let config = db.automation_cover_config(&run).unwrap();
+            assert_eq!(config.text_mode, mode);
+            assert_eq!(config.title, "校核后的标题");
+            assert_eq!(config.subtitle, "校核后的副标题");
             assert_eq!((config.width, config.height), (step.width, step.height));
             assert!(db
                 .save_bound_cover_version(

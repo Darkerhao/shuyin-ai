@@ -115,6 +115,7 @@ onBeforeUnmount(() => { disposed = true; globalThis.clearTimeout(timer) })
         </li>
       </ol>
       <div class="automation-summary">
+        <p>封面生成：{{ run.input.selection.coverTextMode === 'embedded' ? 'AI 整图封面 · 发布前请核对图片中的文字' : 'AI 背景 + 本地排字' }}</p>
         <p v-if="run.input.account">
           发布账号：{{ run.input.account.name || '启动时已核对的账号' }}
           · 合集：{{ run.input.selection.collectionName ?? '不加入合集' }}

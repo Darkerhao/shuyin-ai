@@ -14,6 +14,7 @@ export interface AutomationInput {
   format: 'deep_dive' | 'brief'
   requestKey: string
   theme?: VideoTheme
+  coverTextMode?: CoverConfig['textMode']
   detailedInk?: boolean
   collectionName?: string | null
 }
@@ -55,8 +56,8 @@ export const setAutomationAccountReuse = (enabled: boolean) => invoke<void>('set
 export const stages: Record<string, string> = {
   video_prepare: '准备字幕与分镜（旧流程）',
   duration: '准备创作', writing: '生成完整创作方案', audio: '按本次方案制作音频', transcript: '识别并校对实际字幕', content_check: '核对文案与实际音频',
-  landscape_image: '生成横版背景', landscape_cover: '导出横版封面', portrait_image: '生成竖版背景',
-  portrait_cover: '导出竖版封面', widescreen_image: '生成16:9宽屏背景', widescreen_cover: '导出16:9宽屏封面', storyboard: '根据实际字幕生成分镜', render: '渲染成片', publishing: '上传并填写抖音',
+  landscape_image: '生成横版封面图片', landscape_cover: '导出横版封面', portrait_image: '生成竖版封面图片',
+  portrait_cover: '导出竖版封面', widescreen_image: '生成16:9宽屏封面图片', widescreen_cover: '导出16:9宽屏封面', storyboard: '根据实际字幕生成分镜', render: '渲染成片', publishing: '上传并填写抖音',
 }
 export const startAutomation = (input: AutomationInput) => invoke<AutomationRun>('start_automation', { input })
 export const controlAutomation = (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => invoke<AutomationRun>('control_automation', { id, action })
