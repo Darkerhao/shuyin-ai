@@ -1,7 +1,7 @@
 use super::{parse_srt, storyboard_prompt, validate_scenes, Cue, Scene};
 use serde::{Deserialize, Serialize};
 
-pub const PROMPT_VERSION: &str = "video-scene-revision-v1";
+pub const PROMPT_VERSION: &str = "video-scene-revision-v2";
 pub fn prompt() -> String {
     format!(
         "{}\n{}",

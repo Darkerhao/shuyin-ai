@@ -282,7 +282,8 @@ fn new_automations_reject_retired_ink_themes_and_painting_requests() {
         ("ink", false),
         ("ink", true),
         ("classic", true),
-        ("watercolor", false),
+        ("watercolor", true),
+        ("unknown", false),
     ] {
         let mut retired = input.clone();
         retired.theme = theme.into();
@@ -292,6 +293,26 @@ fn new_automations_reject_retired_ink_themes_and_painting_requests() {
     let run = database.create_automation(input, account()).unwrap();
     assert_eq!(run.input.selection.theme, "classic");
     assert!(!run.input.selection.detailed_ink);
+}
+
+#[test]
+fn new_automations_freeze_all_engine_styles() {
+    for theme in crate::video::video_themes().keys() {
+        let (_directory, database, mut input) = setup();
+        input.theme = theme.clone();
+        let run = database.create_automation(input, account()).unwrap();
+        assert_eq!(&run.input.selection.theme, theme);
+        assert!(!run.input.selection.detailed_ink);
+        assert_eq!(
+            database
+                .automation_run(&run.id)
+                .unwrap()
+                .input
+                .selection
+                .theme,
+            *theme
+        );
+    }
 }
 
 #[test]

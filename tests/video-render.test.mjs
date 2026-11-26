@@ -11,7 +11,7 @@ import { setImmediate } from 'node:timers/promises';
 import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 import * as renderer from '../src-tauri/video/render.mjs';
-import { inspectRuntime } from '../src-tauri/video/runtime.mjs';
+import { inspectRuntime, videoStyle, readVideoStyle, sceneKits, videoBrowserArgs } from '../src-tauri/video/runtime.mjs';
 
 test('environment inspection reports every rendering dependency when the selected engine is missing', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-environment-'));
@@ -25,6 +25,7 @@ test('environment inspection reports every rendering dependency when the selecte
 });
 
 const { buildEpisode, measureRenderProgress } = renderer;
+const themes = JSON.parse(fs.readFileSync(new URL('../src-tauri/video/themes.json', import.meta.url), 'utf8'));
 
 test('Windows video rejects Node releases whose rmSync can crash on Chinese paths', () => {
   for (const version of ['23.0.0', '23.11.1', '24.0.0', '24.11.0', '24.12.0', '24.13.0', '25.0.0', '25.3.0']) {
@@ -103,8 +104,85 @@ test('the saved theme reaches every page and unknown themes are rejected', () =>
   const context = { TIMING: {} };
   vm.runInNewContext(result.script, context);
   assert.equal(context.SCRIPT.META.theme, 'ink');
-  assert.throws(() => buildEpisode({ ...plan, theme: 'watercolor' }), /Unknown video theme/);
+  assert.throws(() => buildEpisode({ ...plan, theme: '../watercolor' }), /Unknown video theme/);
 });
+
+test('all 42 styles compile full videos and previews with the same original timing', () => {
+  assert.equal(Object.keys(themes).length, 42);
+  assert.equal(videoStyle(), 'study');
+  assert.equal(videoStyle('ink'), 'study');
+  for (const theme of Object.keys(themes)) {
+    const full = buildEpisode({ ...plan, theme });
+    const preview = buildEpisode({ ...plan, theme }, { start: 5, end: 8 });
+    const context = { TIMING: {} };
+    vm.runInNewContext(full.script, context);
+    assert.equal(context.SCRIPT.META.style, theme === 'classic' ? 'study' : theme);
+    assert.deepEqual(full.pages.map(page => page.theme), [theme, theme]);
+    assert.equal(context.TIMING.layout().duration, plan.duration);
+    assert.equal(preview.pages[0].drawDuration, full.pages[1].drawDuration);
+    assert.equal(preview.pages[0].beats[0].at, full.pages[1].beats[0].at);
+    assert.equal(preview.pages[0].theme, theme);
+  }
+});
+
+test('a missing style fails before render and reports the exact engine file', () => {
+  assert.throws(() => readVideoStyle('missing-engine', 'watercolor'), /styles\/watercolor\/style.js/);
+  for (const theme of ['../study', 'study', '__proto__', 'unknown']) {
+    assert.throws(() => videoStyle(theme), /Unknown video theme/);
+  }
+});
+test('native subjects load only their matching trusted kit and preserve source timing in previews', () => {
+  for (const [theme, kit] of Object.entries(sceneKits)) {
+    for (const object of Object.keys(kit.objects)) {
+      const nativePlan = { ...plan, theme, scenes: plan.scenes.map(scene => ({ ...scene, beats: [{ cue: scene.first, object, action: 'draw', label: '示意主体' }] })) };
+      const full = buildEpisode(nativePlan), preview = buildEpisode(nativePlan, { start: 5, end: 8 });
+      const context = { TIMING: {} }; vm.runInNewContext(full.script, context);
+      assert.deepEqual(JSON.parse(JSON.stringify(context.SCRIPT.META.extras)), ['timeline.js', `engine/styles/${theme}/kit.js`, 'illustrations.js']);
+      assert.equal(context.SCRIPT.META.webgl, kit.webgl ? true : undefined);
+      assert.deepEqual(JSON.parse(JSON.stringify(context.SCRIPT.META.vendor ?? [])), kit.webgl ? ['three'] : []);
+      assert.equal(preview.pages[0].drawDuration, full.pages[1].drawDuration);
+      assert.equal(preview.pages[0].beats[0].at, full.pages[1].beats[0].at);
+      assert.throws(() => buildEpisode({ ...nativePlan, theme: 'classic' }), /object/i);
+      if (kit.webgl) {
+        const invalid = JSON.parse(JSON.stringify(nativePlan)); invalid.scenes[0].beats[0].action = 'slide';
+        assert.throws(() => buildEpisode(invalid), /action/);
+      }
+    }
+  }
+});
+
+test('native Windows capture overrides the engine Metal backend and preserves explicit browser flags', () => {
+  assert.equal(videoBrowserArgs('cosmos', 'win32'), '--use-angle=d3d11');
+  assert.equal(videoBrowserArgs('exploded', 'win32', '--disable-features=Something'), '--disable-features=Something --use-angle=d3d11');
+  assert.equal(videoBrowserArgs('molecule', 'win32', '--use-angle=vulkan'), '--use-angle=vulkan');
+  for (const theme of ['classic', 'pixel', 'manga']) assert.equal(videoBrowserArgs(theme, 'win32'), '');
+  for (const platform of ['darwin', 'linux']) assert.equal(videoBrowserArgs('cosmos', platform), '');
+});
+
+test('native products cannot share one cue and a page cannot claim two globes', () => {
+  for (const [theme, objects] of [['exploded', ['product_phone', 'product_chip']], ['globe', ['world_globe', 'world_globe']]]) {
+    const input = { ...plan, theme, scenes: [{ ...plan.scenes[0], last: 1, beats: objects.map(object => ({ cue: 0, object, action: 'draw', label: '示意' })) }] };
+    assert.throws(() => buildEpisode(input), /native|Native/);
+  }
+});
+
+test('style sources include native kits, globe geography and the exact WebGL vendor', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shuyin-native-kits-'));
+  t.after(() => fs.rmSync(dir, { recursive: true }));
+  const style = path.join(dir, 'styles/globe'); fs.mkdirSync(style, { recursive: true });
+  for (const name of ['style.js', 'style.css']) fs.writeFileSync(path.join(style, name), name);
+  assert.throws(() => readVideoStyle(dir, 'globe'), /kit.js/);
+  fs.writeFileSync(path.join(style, 'kit.js'), 'native-kit');
+  assert.throws(() => readVideoStyle(dir, 'globe'), /world.js/);
+  fs.writeFileSync(path.join(style, 'world.js'), 'coastlines');
+  assert.throws(() => readVideoStyle(dir, 'globe'), /vendor\/three.js/);
+  fs.mkdirSync(path.join(dir, 'vendor')); fs.writeFileSync(path.join(dir, 'vendor/three.js'), 'three-r180');
+  const before = readVideoStyle(dir, 'globe');
+  assert.match(before, /native-kit/); assert.match(before, /coastlines/); assert.match(before, /three-r180/);
+  fs.writeFileSync(path.join(style, 'kit.js'), 'native-kit-updated');
+  assert.notEqual(readVideoStyle(dir, 'globe'), before, 'Editing the actual kit invalidates the render source digest.');
+});
+
 test('detailed ink scenes keep their original drawing clock in previews and require completed paintings', () => {
   const sha256 = 'a'.repeat(64);
   const painting = { description: '近景书页有细密皴擦和纸边纤维，中景阅读人物的侧影与书桌保持清楚，衣袖笔触细腻；远景江岸和山峰以浓淡墨色层层展开，细节丰富并留出呼吸空间。人物手势和书页方向清楚对应叙述。', motion: 'push_in', taskId: 'paint1' };
@@ -613,6 +691,8 @@ function renderEpisodeFixture(t, extraInput = {}, engineFiles = {}) {
   const engine = path.join(directory, 'engine & runtime');
   const modules = path.join(directory, 'dependencies & fonts');
   fs.mkdirSync(path.join(engine, 'tools'), { recursive: true });
+  fs.mkdirSync(path.join(engine, 'styles/study'), { recursive: true });
+  for (const name of ['style.js', 'style.css']) fs.writeFileSync(path.join(engine, 'styles/study', name), '');
   fs.mkdirSync(modules);
   fs.writeFileSync(path.join(engine, 'package.json'), JSON.stringify({ name: '@frametell/engine', version: '0.7.3' }));
   fs.writeFileSync(path.join(engine, 'tools/bins.mjs'), 'export const FFMPEG = process.execPath; export const findChrome = () => true; export const probe = () => ({ duration: 12 });');

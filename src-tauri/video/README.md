@@ -1,5 +1,21 @@
 # Reading-film renderer
 
+Current video themes (2026-11-26): `themes.json` is the shared 42-entry allowlist
+for Vue, Rust and Node. `classic` maps to the external engine's `study` pack;
+the other keys map directly to `styles/<key>`. `META.style` selects the actual
+pack for both previews and full renders. The pack sources participate in the
+render cache key and must exist in the selected engine installation. The same
+trusted drawings and source-audio timeline are retained. `scene-kits.json` adds
+26 controlled subjects for pixel, manga and five 3D kits; pop also uses its native
+panels. `scene-kits.js` adapts the external kits without copying them. Plain
+subjects stay in the original renderer when they do not have a matching 3D
+subject. Kit/world/vendor sources are hashed, and Windows WebGL capture selects
+D3D11 over the engine's unconditional Metal flag unless explicitly configured.
+See `docs/VIDEO-NATIVE-SCENES.md`. Legacy `ink` continues its
+saved renderer and painting recovery, but is unavailable for new jobs.
+New engine `ink-wash` does not invoke an image model. The historical two-theme
+and new-job ink-default descriptions below no longer describe creation.
+
 `illustrations.js` adapts the trusted reading-film drawings actually used by
 `whiteboard-teacher-video`, verified against the local editable film
 `D:/films/视频风格实验/09-我的前半生-溥仪/extras/visuals.js` on 2026-11-01.

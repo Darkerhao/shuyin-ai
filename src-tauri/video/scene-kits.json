@@ -1,0 +1,31 @@
+{
+  "pixel": {
+    "webgl": false,
+    "objects": { "pixel_robot": "像素机器人（叙事向导）", "pixel_bug": "像素小虫", "pixel_chest": "像素宝箱", "pixel_star": "像素星星" }
+  },
+  "manga": {
+    "webgl": false,
+    "objects": { "comic_reader": "漫画读者（虚构角色）", "comic_mentor": "漫画讲解者（虚构角色）" }
+  },
+  "pop": { "webgl": false, "objects": {} },
+  "cosmos": {
+    "webgl": true,
+    "objects": { "space_earth": "地球三维示意", "space_moon": "月球三维示意", "space_sun": "太阳三维示意", "space_mars": "火星三维示意" }
+  },
+  "diorama": {
+    "webgl": true,
+    "objects": { "mini_city": "微缩城市（非具体城市）", "mini_houses": "微缩住宅区", "mini_forest": "微缩森林", "mini_farm": "微缩农田", "mini_factory": "微缩工厂" }
+  },
+  "exploded": {
+    "webgl": true,
+    "objects": { "product_phone": "手机结构示意", "product_motor": "电机结构示意", "product_battery": "电池结构示意", "product_chip": "芯片结构示意", "product_turbofan": "涡扇结构示意" }
+  },
+  "globe": {
+    "webgl": true,
+    "objects": { "world_globe": "三维地球仪（无地点标注）" }
+  },
+  "molecule": {
+    "webgl": true,
+    "objects": { "micro_water": "水分子示意", "micro_oxygen": "氧分子示意", "micro_co2": "二氧化碳分子示意", "micro_dna": "DNA结构示意（非真实序列）", "micro_cell": "细胞结构示意" }
+  }
+}

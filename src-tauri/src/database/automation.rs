@@ -537,8 +537,9 @@ impl Database {
         {
             return Err("自动任务标识或音频形式无效。".into());
         }
-        if input.theme != "classic" || input.detailed_ink {
-            return Err("该视频主题已下线，请使用书卷手绘。".into());
+        crate::video::validate_new_theme(&input.theme)?;
+        if input.detailed_ink {
+            return Err("新任务不支持逐镜水墨图片生成。".into());
         }
         if let Some(name) = &mut input.collection_name {
             *name = super::publishing::normalize_collection_name(name)?;
@@ -740,6 +741,7 @@ impl Database {
             let current=load(c,&run.id)?;
             let video=verify_content(c,&current)?;
             crate::video::validate_scenes(&video.plan.scenes,0,video.plan.cues.len())?;
+            crate::video::scene_kits::validate(&video.plan.theme, &video.plan.scenes)?;
             crate::video::VideoWork::Render.window(&video.plan)?;
             if video.status != "awaiting_confirmation" { return Err("分镜尚未准备完成。".into()); }
             let count=c.execute(&format!("UPDATE automation_runs SET render_plan_sha256=?1,stage='render',updated_at={NOW} WHERE id=?2 AND run_id=?3 AND status='running' AND stage='storyboard'"),params![plan_digest(&video.plan)?,run.id,run.run_id]).map_err(|e|e.to_string())?;

@@ -1,6 +1,12 @@
 # 书引 AI 数据库设计文档
 
+## 视频专属场景组件（2026-11-26，仍为v25）
+
+26个原生主体继续保存到 `plan_json.scenes[].beats[].object`；主题沿用原字段，无表、列、设置、迁移或批量改写。Rust用共享目录校验主题与主体；编辑/单镜/自动交接均保留原代次与过期结果检查。历史图片和水墨资产不改写，详见[专属场景](VIDEO-NATIVE-SCENES.md)。
+
 ## 水墨主题下线（2026-11-26，仍为v25）
+
+后续同日接入 42 种引擎画面风格：新任务主题白名单扩展为 `themes.json` 的 42 项，仍复用 `video_jobs.plan_json.theme` 和 `automation_runs.input_json.selection.theme`，schema 保持 v25，无表、列、设置或迁移变更。缺省仍为 `classic`，历史 `ink` 保留；不改写既有任务。下段为下线逐镜水墨新建时的历史记录，当前主题范围见[视频主题](VIDEO-THEMES.md)。
 
 无表、列、设置或迁移变更。只限制新任务的主题输入并调整默认值；既有 `video_jobs.plan_json`、`automation_runs.input_json`、`ai_tasks` 和图片素材保留，历史 `ink` 的读取、续作、备份和渲染沿用原流程。不批量转换或清理用户数据。详见[视频主题](VIDEO-THEMES.md)。
 

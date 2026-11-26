@@ -1,12 +1,21 @@
 import visualCatalog from '../../src-tauri/video/visual-catalog.json'
+import themeCatalog from '../../src-tauri/video/themes.json'
+import sceneKits from '../../src-tauri/video/scene-kits.json'
 
 export { visualCatalog }
-export type VideoTheme = 'classic' | 'ink'
-export const videoThemes = { classic: '书卷手绘' }
+export const videoThemes = themeCatalog
+export type VideoTheme = keyof typeof videoThemes | 'ink'
+type KitObject = { [K in keyof typeof sceneKits]: keyof typeof sceneKits[K]['objects'] }[keyof typeof sceneKits]
+export const videoObjects = Object.assign({}, visualCatalog.objects, ...Object.values(sceneKits).map(kit => kit.objects)) as typeof visualCatalog.objects & Record<KitObject, string>
+export const themeObjects = (theme: VideoTheme = 'classic'): Partial<typeof videoObjects> => ({ ...(sceneKits[theme as keyof typeof sceneKits]?.objects ?? {}), ...visualCatalog.objects })
+export const themeActions = (theme: VideoTheme, object: keyof typeof videoObjects) =>
+  sceneKits[theme as keyof typeof sceneKits]?.webgl && !Object.hasOwn(visualCatalog.objects, object)
+    ? { draw: visualCatalog.actions.draw, check: visualCatalog.actions.check, cross: visualCatalog.actions.cross }
+    : visualCatalog.actions
 export const videoThemeLabel = (theme: VideoTheme = 'classic') => theme === 'ink' ? '水墨宣纸（历史主题）' : videoThemes[theme]
 export interface VideoBeat {
   cue: number
-  object: keyof typeof visualCatalog.objects
+  object: keyof typeof videoObjects
   action: keyof typeof visualCatalog.actions
   label: string
 }

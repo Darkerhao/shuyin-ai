@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import VideoImageEditor from './VideoImageEditor.vue'
 import AppIcon from '../../components/AppIcon.vue'
 import { Input } from '@/components/ui/input'
@@ -8,17 +9,24 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { Asset } from '../../types/project'
 import type { ModelProvider } from '../../types/ai'
-import { visualCatalog, type VideoCue, type VideoScene, type VideoSceneImage } from '../../types/video'
+import { visualCatalog, videoObjects, themeObjects, themeActions, type VideoTheme, type VideoCue, type VideoScene, type VideoSceneImage } from '../../types/video'
 
-defineProps<{
+const props = withDefaults(defineProps<{
   projectId: string; chapterId?: string | null; sceneIndex: number; cues: VideoCue[]
   assets: Asset[]; providers: ModelProvider[]; disabled: boolean; imageDisabled: boolean
   revisionDisabled: boolean
   playing?: boolean; audioAvailable?: boolean
-}>()
+  theme?: VideoTheme
+}>(), { theme: 'classic', chapterId: null })
+const objects = computed(() => themeObjects(props.theme))
 const scene = defineModel<VideoScene>('scene', { required: true })
 const emit = defineEmits<{ 'refresh-assets': []; working: [value: boolean]; revise: []; play: [] }>()
 const sceneKindLabel = (kind: VideoScene['kind']) => Object.hasOwn(visualCatalog.kinds, kind) ? visualCatalog.kinds[kind as keyof typeof visualCatalog.kinds] : '旧版文字图解'
+function setObject(index: number, value: string) {
+  const beat = scene.value.beats![index]!
+  beat.object = value as typeof beat.object
+  if (!Object.hasOwn(themeActions(props.theme, beat.object), beat.action)) beat.action = 'draw'
+}
 function setSceneImage(image: VideoSceneImage | undefined) {
   if (image) { scene.value.image = image; scene.value.beats = [] }
   else { delete scene.value.image; scene.value.beats = scene.value.painting ? [] : [{ cue: scene.value.first, object: 'book', action: 'draw', label: '书籍' }] }
@@ -192,7 +200,7 @@ function setSceneImage(image: VideoSceneImage | undefined) {
       :key="i"
       class="video-beat"
     >
-      <label :for="`scene-${sceneIndex}-beat-${i}`">字幕 {{ beat.cue + 1 }} · {{ visualCatalog.objects[beat.object] }} · {{ visualCatalog.actions[beat.action] }}</label>
+      <label :for="`scene-${sceneIndex}-beat-${i}`">字幕 {{ beat.cue + 1 }} · {{ videoObjects[beat.object] }} · {{ visualCatalog.actions[beat.action] }}</label>
       <Input
         :id="`scene-${sceneIndex}-beat-${i}`"
         v-model="beat.label"
@@ -209,8 +217,9 @@ function setSceneImage(image: VideoSceneImage | undefined) {
             <div class="video-field">
               <label :for="`scene-${sceneIndex}-object-${i}`">具体物体</label>
               <Select
-                v-model="beat.object"
+                :model-value="beat.object"
                 :disabled="disabled"
+                @update:model-value="setObject(i, String($event))"
               >
                 <SelectTrigger
                   :id="`scene-${sceneIndex}-object-${i}`"
@@ -220,7 +229,7 @@ function setSceneImage(image: VideoSceneImage | undefined) {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem
-                    v-for="(name, key) in visualCatalog.objects"
+                    v-for="(name, key) in objects"
                     :key="key"
                     :value="key"
                   >
@@ -243,7 +252,7 @@ function setSceneImage(image: VideoSceneImage | undefined) {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem
-                    v-for="(name, key) in visualCatalog.actions"
+                    v-for="(name, key) in themeActions(theme, beat.object)"
                     :key="key"
                     :value="key"
                   >

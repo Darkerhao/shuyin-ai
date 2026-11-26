@@ -4,10 +4,10 @@ use std::{collections::BTreeMap, sync::OnceLock};
 pub mod environment;
 pub mod ink;
 pub mod revision;
+pub mod scene_kits;
 pub mod subtitles;
 
 pub const PROMPT: &str = include_str!("../../prompts/video-storyboard-v5.md");
-pub const VIDEO_THEMES: [&str; 2] = ["classic", "ink"];
 pub const BATCH_SIZE: usize = 24;
 pub const MODEL_FAILURE_PREFIX: &str = "模型生成失败：";
 
@@ -44,8 +44,10 @@ fn visual_catalog() -> &'static VisualCatalog {
 
 pub fn storyboard_prompt() -> String {
     format!(
-        "{PROMPT}\n可用绘图目录（仅可选用这些键）：\n{}",
-        include_str!("../video/visual-catalog.json")
+        "{PROMPT}\n可用绘图目录（仅可选用这些键）：\n{}\n主题专属主体目录：\n{}\n{}",
+        include_str!("../video/visual-catalog.json"),
+        include_str!("../video/scene-kits.json"),
+        include_str!("../../prompts/video-scene-kits-v1.md")
     )
 }
 
@@ -109,6 +111,7 @@ pub fn storyboard_input(plan: &VideoPlan, first: usize, end: usize) -> String {
     };
     serde_json::json!({
         "book": plan.title,
+        "theme": plan.theme,
         "duration": plan.duration,
         "opening": cues(0, plan.cues.len().min(6)),
         "ending": cues(plan.cues.len().saturating_sub(6), plan.cues.len()),
@@ -285,10 +288,24 @@ fn is_classic_theme(theme: &str) -> bool {
 }
 
 pub fn validate_theme(theme: &str) -> Result<(), String> {
-    if VIDEO_THEMES.contains(&theme) {
+    if theme == "ink" {
+        return Ok(());
+    }
+    validate_new_theme(theme)
+}
+
+pub fn video_themes() -> &'static BTreeMap<String, String> {
+    static THEMES: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    THEMES.get_or_init(|| {
+        serde_json::from_str(include_str!("../video/themes.json")).expect("bundled video themes")
+    })
+}
+
+pub fn validate_new_theme(theme: &str) -> Result<(), String> {
+    if video_themes().contains_key(theme) {
         Ok(())
     } else {
-        Err("视频主题无效，请选择书卷手绘或水墨宣纸。".into())
+        Err("视频主题不可用，请选择列表中的画面风格。".into())
     }
 }
 
@@ -330,6 +347,7 @@ impl VideoWork {
         validate_theme(&plan.theme)?;
         validate_cues(&plan.cues, plan.duration)?;
         validate_scenes(&plan.scenes, 0, plan.cues.len())?;
+        scene_kits::validate(&plan.theme, &plan.scenes)?;
         if plan.image_provider_id.is_some()
             && plan
                 .scenes
@@ -427,7 +445,8 @@ pub fn validate_scenes(scenes: &[Scene], first: usize, end: usize) -> Result<(),
         for beat in &scene.beats {
             if beat.cue < previous
                 || beat.cue > scene.last
-                || !catalog.objects.contains_key(&beat.object)
+                || !(catalog.objects.contains_key(&beat.object)
+                    || scene_kits::contains(&beat.object))
                 || !catalog.actions.contains_key(&beat.action)
                 || !short_text(&beat.label, catalog.limits.label_chars)
             {
@@ -601,7 +620,14 @@ mod tests {
         assert!(serde_json::to_value(&plan).unwrap().get("theme").is_none());
         assert!(validate_theme("classic").is_ok());
         assert!(validate_theme("ink").is_ok());
-        plan.theme = "watercolor".into();
+        assert_eq!(video_themes().len(), 42);
+        for theme in video_themes().keys() {
+            assert!(validate_new_theme(theme).is_ok());
+            plan.theme = theme.clone();
+            assert!(VideoWork::Render.window(&plan).is_ok());
+        }
+        assert!(validate_new_theme("ink").is_err());
+        plan.theme = "unknown".into();
         assert!(serde_json::to_value(&plan).unwrap().get("theme").is_some());
         assert!(VideoWork::Render.window(&plan).is_err());
     }

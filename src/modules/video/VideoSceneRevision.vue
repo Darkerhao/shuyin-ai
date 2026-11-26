@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cancelGeneration } from '../../services/ai'
 import { errorMessage } from '../../services/verification'
 import * as api from '../../services/video'
-import { visualCatalog, type VideoScene, type VideoSceneRevisionInput } from '../../types/video'
+import { visualCatalog, videoObjects, type VideoScene, type VideoSceneRevisionInput } from '../../types/video'
 import type { ModelProvider } from '../../types/ai'
 import { subtitleRows } from './subtitles'
 
@@ -157,7 +157,7 @@ onBeforeUnmount(() => { disposed = true; if (taskId.value) void cancelGeneration
                 v-for="(beat, index) in entry.scene.beats"
                 :key="index"
               >
-                <strong>{{ visualCatalog.objects[beat.object] }} · {{ visualCatalog.actions[beat.action] }} · {{ beat.label }}</strong>
+                <strong>{{ videoObjects[beat.object] }} · {{ visualCatalog.actions[beat.action] }} · {{ beat.label }}</strong>
                 <p class="muted">
                   字幕 {{ beat.cue + 1 }}：{{ cues[beat.cue]?.text }}
                 </p>

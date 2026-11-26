@@ -4,6 +4,37 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+const themes = JSON.parse(fs.readFileSync(new URL('./themes.json', import.meta.url), 'utf8'));
+export const sceneKits = JSON.parse(fs.readFileSync(new URL('./scene-kits.json', import.meta.url), 'utf8'));
+
+export function videoBrowserArgs(theme, platform = process.platform, flags = '') {
+  // Frametell 0.7.3 selects Metal for every WebGL film. Its trailing override must select a Windows backend.
+  return platform === 'win32' && sceneKits[theme]?.webgl && !/(?:^|\s)--use-angle=/.test(flags)
+    ? [flags, '--use-angle=d3d11'].filter(Boolean).join(' ') : flags;
+}
+
+export function videoStyle(theme = 'classic') {
+  if (theme === 'classic' || theme === 'ink') return 'study';
+  if (!Object.hasOwn(themes, theme)) throw new Error('Unknown video theme.');
+  return theme;
+}
+
+export function readVideoStyle(engine, theme) {
+  const style = videoStyle(theme);
+  const files = ['style.js', 'style.css', ...(Object.hasOwn(sceneKits, theme) ? ['kit.js', ...(theme === 'globe' ? ['world.js'] : [])] : [])];
+  const source = files.map(file => {
+    const source = path.join(engine, 'styles', style, file);
+    if (!fs.existsSync(source)) throw new Error(`引擎缺少视频风格文件：styles/${style}/${file}。请更新所选引擎目录。`);
+    return fs.readFileSync(source, 'utf8');
+  }).join('\n');
+  if (sceneKits[theme]?.webgl) {
+    const vendor = path.join(engine, 'vendor/three.js');
+    if (!fs.existsSync(vendor)) throw new Error('引擎缺少三维资源：vendor/three.js。请更新所选引擎目录。');
+    return source + fs.readFileSync(vendor, 'utf8');
+  }
+  return source;
+}
+
 export function assertNodeRuntime(version = process.versions.node, platform = process.platform) {
   const [major, minor, patch] = version.split('.').map(Number);
   // nodejs/node#61108 fixes native rmSync crashes on Windows non-ASCII paths.
@@ -35,8 +66,9 @@ export async function inspectRuntime(engine, directory) {
     for (const file of ['boot.js', 'runtime/engine.js', 'tools/render.mjs', 'tools/project.mjs', 'template/index.html']) {
       if (!fs.statSync(path.join(engine, file)).isFile()) throw new Error(`引擎文件缺失：${file}`);
     }
+    for (const theme of Object.keys(themes)) readVideoStyle(engine, theme);
     bins = await import(pathToFileURL(path.join(engine, 'tools/bins.mjs')));
-    return { version: pkg.version, path: engine, detail: '引擎版本和必要文件可读取。' };
+    return { version: pkg.version, path: engine, detail: `引擎版本、必要文件与 ${Object.keys(themes).length} 种视频风格可读取。` };
   });
   await record('ffmpeg', () => {
     if (!bins) throw new Error('请先修复引擎目录，再检查引擎使用的 FFmpeg。');
@@ -53,7 +85,11 @@ export async function inspectRuntime(engine, directory) {
     if (!executablePath || !fs.existsSync(executablePath)) throw new Error('未找到可用 Chrome/Edge，请安装浏览器或修正 CHROME_PATH。');
     const { chromium } = createRequire(path.join(engine, 'package.json'))('playwright-core');
     browser = await chromium.launch({ executablePath, headless: true, timeout: 10000 });
-    return { version: browser.version(), path: executablePath, detail: '已通过引擎的 Playwright 启动浏览器。' };
+    const page = await browser.newPage();
+    const webgl = await page.evaluate(() => !!document.createElement('canvas').getContext('webgl2'));
+    await page.close();
+    if (!webgl) throw new Error('浏览器无法启动 WebGL2，三维视频主题不可用。请检查浏览器硬件加速与显卡驱动。');
+    return { version: browser.version(), path: executablePath, detail: '已通过引擎的 Playwright 启动浏览器和 WebGL2。' };
   });
   try {
     await record('fonts', async () => {
